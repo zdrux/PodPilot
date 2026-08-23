@@ -35,6 +35,8 @@ class OwnerEvidence:
     desired_replicas: int | None
     ready_replicas: int | None
     updated_replicas: int | None
+    uid: str = ""
+    resource_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,7 @@ class WorkloadEvidence:
     previous_logs: dict[str, str]
     collected_at: datetime
     failures: tuple[str, ...]
+    pod_resource_version: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.3; Milestone 4 model connection implemented
+Status: Draft v0.4; Milestone 5 typed remediation implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 

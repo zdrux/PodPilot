@@ -161,3 +161,23 @@ the deterministic result remains usable. The base observer policy remains
 read-only; the workload adds a narrow Role that can update but neither create nor
 list exactly one credential Secret. Custom CA upload remains a later internal-
 provider hardening increment.
+
+## 2026-08-23 - Typed single-use remediation instead of generated commands
+
+Context: The PoC service account has cluster-admin, but broad RBAC cannot make a
+model-generated command safe. Approval must bind one actor to one exact observed
+resource and one known operation.
+
+Decision: Milestone 5 registers only controller-owned crash-looping Pod deletion
+and Deployment/StatefulSet/DaemonSet rollout restart. Normal code derives targets
+from normalized evidence, performs server dry-run, persists UID/resourceVersion
+and a ten-minute expiry, and exposes no target or patch input in the approval API.
+Approver-or-higher confirmation atomically claims the proposal once. The executor
+re-reads identity, applies fixed Kubernetes calls, and verifies a genuinely new
+Ready replacement or a completed observed rollout. Completing one proposal
+cancels sibling previews.
+
+Consequences: Arbitrary shell/YAML, standalone Pod deletion, node/system/Secret/
+RBAC mutation, and model authorization remain impossible through the product.
+Unresolved, stale, expired, and failed outcomes are durable rather than silently
+retried. Production still needs a separate narrowly scoped action identity.

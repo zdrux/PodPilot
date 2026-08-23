@@ -1,0 +1,84 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: podpilot-remediation-fixture
+  labels:
+    openshift.io/cluster-monitoring: "true"
+    podpilot.io/fixture: remediation-crashloop
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-mode
+  namespace: podpilot-remediation-fixture
+data:
+  MODE: fail
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-api
+  namespace: podpilot-remediation-fixture
+  labels:
+    app: broken-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broken-api
+  template:
+    metadata:
+      labels:
+        app: broken-api
+    spec:
+      containers:
+        - name: api
+          image: registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-c"]
+          args:
+            - >-
+              import os,sys,time;
+              print('Synthetic PodPilot remediation fixture');
+              sys.exit(1) if os.environ['MODE'] == 'fail' else time.sleep(3600)
+          env:
+            - name: MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: fixture-mode
+                  key: MODE
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: podpilot-remediation-fixture
+  namespace: podpilot-remediation-fixture
+  labels:
+    podpilot.io/fixture: remediation-crashloop
+spec:
+  groups:
+    - name: podpilot-remediation-fixture
+      interval: 15s
+      rules:
+        - alert: KubePodCrashLooping
+          expr: kube_pod_container_status_waiting_reason{namespace="podpilot-remediation-fixture",reason="CrashLoopBackOff"} == 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: Synthetic PodPilot controller-owned crash-loop fixture
+            description: This sanitized lab alert exists only to test previewed and approved remediation.

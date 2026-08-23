@@ -64,6 +64,22 @@ Schema-validated interpretation is displayed separately from deterministic facts
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
+Milestone 5 adds a policy-owned typed action catalog. A crash-loop investigation
+can generate at most two server-built proposals: delete the exact failed,
+controller-owned Pod or restart its Deployment, StatefulSet, or DaemonSet. The
+browser submits only an opaque action ID; it cannot provide a target, patch, or
+command. Each proposal persists its target UID and resourceVersion, fixed API
+operation, risk, expiry, server dry-run, verification query, and recovery note.
+
+Approver-or-higher users must reveal a second confirmation control and press
+**Approve and run** before execution. The API atomically claims the preview once,
+re-reads resource identity, executes through the OpenShift adapter, polls bounded
+postconditions, and stores before/API/verification/after results. Pod verification
+requires a new Ready UID owned by the same direct controller and explicitly
+excludes pre-existing healthy siblings. A rollout verifies its fixed restart
+annotation, observed generation, and desired updated/Ready counts. Executing one
+proposal cancels sibling previews; another mutation requires fresh evidence.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

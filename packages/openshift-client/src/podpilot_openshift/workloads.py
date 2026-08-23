@@ -153,6 +153,7 @@ class KubernetesWorkloadClient:
             previous_logs=previous_logs,
             collected_at=datetime.now(timezone.utc),
             failures=tuple(failures),
+            pod_resource_version=str(pod.metadata.resource_version)[:128],
         )
 
     @staticmethod
@@ -214,6 +215,8 @@ class KubernetesWorkloadClient:
                 None,
                 None,
                 None,
+                str(getattr(reference, "uid", "") or "")[:128],
+                "",
             )
             try:
                 resource = self._dynamic.resources.get(
@@ -239,6 +242,12 @@ class KubernetesWorkloadClient:
                             if status is not None
                             else None
                         ),
+                        uid=str(getattr(current.metadata, "uid", "") or base.uid)[:128],
+                        resource_version=str(
+                            getattr(current.metadata, "resourceVersion", None)
+                            or getattr(current.metadata, "resource_version", "")
+                            or ""
+                        )[:128],
                     )
                 )
             except Exception:

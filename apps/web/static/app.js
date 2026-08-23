@@ -81,4 +81,37 @@
       }
     });
   }
+
+  document.querySelectorAll(".review-action").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = document.querySelector(`#${CSS.escape(button.dataset.reviewTarget || "")}`);
+      if (target) {
+        target.hidden = !target.hidden;
+        button.textContent = target.hidden ? "Review approval" : "Hide approval";
+      }
+    });
+  });
+  document.querySelectorAll(".approve-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!csrf || !button.dataset.actionUrl) return;
+      button.disabled = true;
+      button.textContent = "Executing and verifying…";
+      try {
+        const response = await fetch(button.dataset.actionUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "The remediation could not be executed.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = "Approve and run";
+      }
+    });
+  });
 })();

@@ -44,6 +44,13 @@ provider outage. Live release validation must additionally exercise the real
 OpenShift Secret, OpenAI probe, and browser role boundaries without logging the
 credential.
 
+Milestone 5 adds fixtures for the two-action allowlist, server dry-run, role and
+CSRF denial, preview expiry, atomic single execution, stale UID/resourceVersion
+failure, delete preconditions, new-UID replacement verification, rollout patch
+shape, rollout readiness verification, sibling cancellation, and complete audit
+events. Live QA must use a disposable fixture namespace and must confirm the
+fixture is healthy or removed before release.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

@@ -6,7 +6,7 @@
   <a class="button secondary" href="/">Back to queue</a>
 </header>
 
-<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 4 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 5 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
 
 <section class="investigation-summary panel">
   <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
@@ -33,4 +33,37 @@
   <section class="panel checklist-panel"><div class="panel-header"><h2>Recommended next checks</h2></div><ol>{% for check in investigation.analysis.next_checks %}<li>{{ check }}</li>{% endfor %}</ol></section>
   <section class="panel checklist-panel limitation-panel"><div class="panel-header"><h2>Missing evidence and limits</h2></div><ul>{% for limitation in investigation.analysis.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>
 </div>
+
+{% if actions %}
+<section class="panel action-panel">
+  <div class="panel-header"><div><p class="eyebrow">Typed remediation</p><h2>Approval-gated actions</h2></div><span class="tag">No arbitrary commands</span></div>
+  <div class="action-list">
+  {% for action in actions %}
+    <article class="action-card" id="action-{{ action.id }}">
+      <div class="action-heading"><div><span class="risk risk-{{ action.risk }}">{{ action.risk }} risk</span><h3>{{ action.action_type | replace('_', ' ') | title }}</h3><p>{{ action.proposal.reason }}</p></div><span class="tag status-{{ action.status }}">{{ action.status | replace('_', ' ') }}</span></div>
+      <dl class="action-details">
+        <div><dt>Target</dt><dd>{{ action.proposal.cluster }} · {{ action.target_kind }}/{{ action.target_namespace }}/{{ action.target_name }}</dd></div>
+        <div><dt>May not help when</dt><dd>{{ action.proposal.uncertainty }}</dd></div>
+        <div><dt>Expected impact</dt><dd>{{ action.proposal.expected_impact }}</dd></div>
+        <div><dt>Preconditions</dt><dd>UID {{ action.proposal.target_uid }} · resourceVersion {{ action.proposal.target_resource_version }}</dd></div>
+        <div><dt>Exact operation</dt><dd><code>{{ action.proposal.operation }}</code></dd></div>
+        <div><dt>Server dry-run</dt><dd>{{ action.preview.server_dry_run | replace('_', ' ') }}{% if action.preview.detail %} · {{ action.preview.detail }}{% endif %}</dd></div>
+        <div><dt>Verification</dt><dd>{{ action.proposal.verification }} Timeout: {{ action.proposal.verification_timeout_seconds }} seconds.</dd></div>
+        <div><dt>Recovery</dt><dd>{{ action.proposal.recovery }}</dd></div>
+      </dl>
+      {% if action.result %}
+      <div class="action-result result-{{ action.status }}"><strong>{{ action.result.summary }}</strong><p>Verification: {{ action.result.verification }}</p><p>Approved by {{ action.approved_by }}{% if action.approved_at %} at {{ action.approved_at }}{% endif %}.</p></div>
+      {% elif action.status == 'preview_ready' and not action.expired %}
+        {% if user.role.value >= 30 %}
+        <div class="approval-controls"><button class="button secondary review-action" type="button" data-review-target="approval-{{ action.id }}">Review approval</button><div class="approval-confirm" id="approval-{{ action.id }}" hidden><strong>Confirm this exact {{ action.risk }}-risk operation</strong><p>PodPilot will re-read the UID and resourceVersion immediately before execution. This approval applies only to this action and expires at {{ action.expires_at }}.</p><button class="button primary approve-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/actions/{{ action.id }}/approve">Approve and run</button></div></div>
+        {% else %}<span class="tag">Approver required</span>{% endif %}
+      {% elif action.expired %}<div class="action-result"><strong>Preview expired</strong><p>Create a fresh investigation to re-read the target and generate new preconditions.</p></div>
+      {% endif %}
+    </article>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
 {% endblock %}

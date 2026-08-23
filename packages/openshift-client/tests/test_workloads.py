@@ -23,8 +23,9 @@ class FakeCoreApi:
         return ns(
             metadata=ns(
                 uid="pod-uid",
+                resource_version="pod-rv-1",
                 owner_references=[
-                    ns(controller=True, api_version="apps/v1", kind="ReplicaSet", name="api-abc")
+                    ns(controller=True, api_version="apps/v1", kind="ReplicaSet", name="api-abc", uid="rs-uid")
                 ],
             ),
             status=ns(
@@ -79,7 +80,7 @@ class FakeCoreApi:
 class FakeResource:
     def get(self, *, name, namespace):
         return ns(
-            metadata=ns(ownerReferences=[]),
+            metadata=ns(ownerReferences=[], uid="rs-uid", resourceVersion="rs-rv-1"),
             spec=ns(replicas=1),
             status=ns(readyReplicas=0, updatedReplicas=1),
         )
@@ -114,5 +115,8 @@ def test_workload_client_collects_bounded_redacted_evidence() -> None:
     assert evidence.events[0].message == "token=[REDACTED]"
     assert evidence.previous_logs["api"].endswith("[REDACTED]")
     assert evidence.owners[0].kind == "ReplicaSet"
+    assert evidence.pod_resource_version == "pod-rv-1"
+    assert evidence.owners[0].uid == "rs-uid"
+    assert evidence.owners[0].resource_version == "rs-rv-1"
     assert evidence.nodes[0].allocatable["cpu"] == "8"
     assert evidence.failures == ()

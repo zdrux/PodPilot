@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -25,10 +25,15 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIResponsesProvider,
 )
-from podpilot_api.models import AuditEvent, Investigation, ModelProfile
+from podpilot_api.models import AuditEvent, Investigation, ModelProfile, RemediationAction
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.redaction import redact_mapping
+from podpilot_diagnostics.remediation import (
+    ActionProposal,
+    RemediationExecutor,
+    propose_actions,
+)
 from podpilot_openshift.alerts import (
     AlertRecord,
     AlertSnapshot,
@@ -43,6 +48,7 @@ from podpilot_openshift.credentials import (
     KubernetesSecretCredentialStore,
 )
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
+from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
 from podpilot_openshift.workloads import (
     KubernetesWorkloadClient,
     WorkloadEvidenceError,
@@ -143,6 +149,13 @@ def _redact_alert(alert: AlertRecord) -> AlertRecord:
     )
 
 
+def _proposal_from_json(value: str) -> ActionProposal:
+    payload = json.loads(value)
+    payload["created_at"] = datetime.fromisoformat(payload["created_at"])
+    payload["expires_at"] = datetime.fromisoformat(payload["expires_at"])
+    return ActionProposal(**payload)
+
+
 def create_app(
     settings: Settings | None = None,
     role_resolver: RoleResolver | None = None,
@@ -150,6 +163,7 @@ def create_app(
     workload_source: WorkloadEvidenceSource | None = None,
     credential_store: CredentialStore | None = None,
     model_provider: ModelProvider | None = None,
+    remediation_executor: RemediationExecutor | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
@@ -159,6 +173,7 @@ def create_app(
     workloads = workload_source or _make_workload_source(app_settings)
     credentials = credential_store or _make_credential_store(app_settings)
     provider = model_provider or OpenAIResponsesProvider()
+    executor = remediation_executor or KubernetesRemediationExecutor()
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
 
     @asynccontextmanager
@@ -170,7 +185,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.4.0",
+        version="0.5.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -414,6 +429,14 @@ def create_app(
                     .limit(5)
                 )
             )
+            awaiting_approval_count = db_session.scalar(
+                select(func.count())
+                .select_from(RemediationAction)
+                .where(
+                    RemediationAction.status == "preview_ready",
+                    RemediationAction.expires_at > datetime.now(timezone.utc),
+                )
+            ) or 0
 
         response = templates.TemplateResponse(
             request=request,
@@ -432,6 +455,7 @@ def create_app(
                 "silenced_count": sum(alert.is_silenced for alert in active_alerts),
                 "inhibited_count": sum(alert.is_inhibited for alert in active_alerts),
                 "recent_investigations": recent,
+                "awaiting_approval_count": awaiting_approval_count,
                 "csrf_token": csrf_token,
             },
         )
@@ -542,23 +566,70 @@ def create_app(
                 model_result["detail"] = profile.last_error
         analysis_payload["model"] = model_result
         analysis_json = json.dumps(analysis_payload, default=_json_default, sort_keys=True)
+        proposals = (
+            propose_actions(
+                investigation_id=investigation_id,
+                alert_name=alert.name,
+                cluster=app_settings.cluster_name,
+                workload=workload,
+            )
+            if workload
+            else ()
+        )
+        action_records: list[RemediationAction] = []
+        for proposal in proposals:
+            try:
+                preview = await run_in_threadpool(executor.preview, proposal)
+                action_status = "preview_ready"
+            except RemediationError as exc:
+                preview = {"server_dry_run": "failed", "detail": str(exc)}
+                action_status = "preview_failed"
+            except Exception as exc:
+                preview = {
+                    "server_dry_run": "failed",
+                    "detail": f"The server dry-run failed ({type(exc).__name__}).",
+                }
+                action_status = "preview_failed"
+            action_records.append(
+                RemediationAction(
+                    id=proposal.id,
+                    investigation_id=investigation_id,
+                    created_at=proposal.created_at,
+                    expires_at=proposal.expires_at,
+                    created_by=user.username,
+                    action_type=proposal.action_type,
+                    status=action_status,
+                    risk=proposal.risk,
+                    target_namespace=proposal.namespace,
+                    target_kind=proposal.target_kind,
+                    target_name=proposal.target_name,
+                    proposal_json=json.dumps(proposal.to_dict(), default=_json_default, sort_keys=True),
+                    preview_json=json.dumps(preview, default=_json_default, sort_keys=True),
+                )
+            )
+        investigation_status = (
+            "awaiting_approval"
+            if any(item.status == "preview_ready" for item in action_records)
+            else "recommendation_ready"
+        )
         with Session(request.app.state.engine) as db_session:
             db_session.add(
                 Investigation(
                     id=investigation_id,
                     created_by=user.username,
-                    status="recommendation_ready",
+                    status=investigation_status,
                     alert_fingerprint=alert.fingerprint,
                     alert_name=alert.name,
                     alert_snapshot_json=alert_json,
                     analysis_json=analysis_json,
                 )
             )
+            db_session.add_all(action_records)
             db_session.add(
                 AuditEvent(
                     actor=user.username,
                     action="investigation.create",
-                    outcome="recommendation_ready",
+                    outcome=investigation_status,
                     details_json=json.dumps(
                         {
                             "investigation_id": investigation_id,
@@ -569,6 +640,23 @@ def create_app(
                     ),
                 )
             )
+            for action in action_records:
+                db_session.add(
+                    AuditEvent(
+                        actor=user.username,
+                        action="remediation.preview",
+                        outcome=action.status,
+                        details_json=json.dumps(
+                            {
+                                "action_id": action.id,
+                                "investigation_id": investigation_id,
+                                "action_type": action.action_type,
+                                "target": f"{action.target_kind}/{action.target_namespace}/{action.target_name}",
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+                )
             db_session.commit()
 
         return RedirectResponse(
@@ -582,6 +670,8 @@ def create_app(
         request: Request,
         user: AuthContext = Depends(current_user),
     ):
+        csrf_token, csrf_is_new = _csrf_token(request)
+        now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
             investigation = db_session.get(Investigation, investigation_id)
             if investigation is None:
@@ -595,10 +685,164 @@ def create_app(
                 "alert": json.loads(investigation.alert_snapshot_json),
                 "analysis": json.loads(investigation.analysis_json),
             }
-        return templates.TemplateResponse(
+            actions = []
+            for action in db_session.scalars(
+                select(RemediationAction)
+                .where(RemediationAction.investigation_id == investigation_id)
+                .order_by(RemediationAction.created_at.asc())
+            ):
+                proposal = json.loads(action.proposal_json)
+                actions.append(
+                    {
+                        "id": action.id,
+                        "action_type": action.action_type,
+                        "status": action.status,
+                        "risk": action.risk,
+                        "target_namespace": action.target_namespace,
+                        "target_kind": action.target_kind,
+                        "target_name": action.target_name,
+                        "expires_at": action.expires_at,
+                        "expired": now > action.expires_at.replace(tzinfo=timezone.utc) if action.expires_at.tzinfo is None else now > action.expires_at,
+                        "proposal": proposal,
+                        "preview": json.loads(action.preview_json),
+                        "approved_by": action.approved_by,
+                        "approved_at": action.approved_at,
+                        "result": json.loads(action.result_json) if action.result_json else None,
+                    }
+                )
+        response = templates.TemplateResponse(
             request=request,
             name="investigation.html",
-            context={"user": user, "investigation": view},
+            context={
+                "user": user,
+                "investigation": view,
+                "actions": actions,
+                "csrf_token": csrf_token,
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(
+                CSRF_COOKIE,
+                csrf_token,
+                secure=app_settings.auth_mode == "proxy",
+                httponly=True,
+                samesite="strict",
+                max_age=28_800,
+            )
+        return response
+
+    @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/approve")
+    async def approve_action(
+        investigation_id: str,
+        action_id: str,
+        request: Request,
+        user: AuthContext = Depends(current_user),
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(
+                status_code=403,
+                detail="Executing a remediation requires the Approver role or higher.",
+            )
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            action = db_session.get(RemediationAction, action_id)
+            if investigation is None or action is None or action.investigation_id != investigation_id:
+                raise HTTPException(status_code=404, detail="Remediation action not found.")
+            if action.status != "preview_ready":
+                raise HTTPException(status_code=409, detail="This remediation is no longer awaiting approval.")
+            expires_at = action.expires_at.replace(tzinfo=timezone.utc) if action.expires_at.tzinfo is None else action.expires_at
+            if now > expires_at:
+                action.status = "expired"
+                db_session.add(AuditEvent(
+                    actor=user.username,
+                    action="remediation.approve",
+                    outcome="expired",
+                    details_json=json.dumps({"action_id": action_id, "investigation_id": investigation_id}, sort_keys=True),
+                ))
+                db_session.commit()
+                raise HTTPException(status_code=409, detail="The preview expired. Generate a fresh investigation before approval.")
+            proposal = _proposal_from_json(action.proposal_json)
+            claimed = db_session.execute(
+                update(RemediationAction)
+                .where(
+                    RemediationAction.id == action_id,
+                    RemediationAction.status == "preview_ready",
+                )
+                .values(status="executing", approved_by=user.username, approved_at=now)
+            )
+            if claimed.rowcount != 1:
+                db_session.rollback()
+                raise HTTPException(status_code=409, detail="This remediation was already approved or changed.")
+            investigation.status = "executing"
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="remediation.approve",
+                outcome="executing",
+                details_json=json.dumps(
+                    {
+                        "action_id": action_id,
+                        "investigation_id": investigation_id,
+                        "action_type": action.action_type,
+                        "target": f"{action.target_kind}/{action.target_namespace}/{action.target_name}",
+                    },
+                    sort_keys=True,
+                ),
+            ))
+            db_session.commit()
+
+        result = await run_in_threadpool(executor.execute, proposal)
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            action = db_session.get(RemediationAction, action_id)
+            if investigation is None or action is None:
+                raise HTTPException(status_code=500, detail="The remediation record could not be finalized.")
+            action.status = result.outcome
+            action.result_json = json.dumps(result.to_dict(), default=_json_default, sort_keys=True)
+            investigation.status = result.outcome if result.outcome != "stale" else "unresolved"
+            cancelled = db_session.execute(
+                update(RemediationAction)
+                .where(
+                    RemediationAction.investigation_id == investigation_id,
+                    RemediationAction.id != action_id,
+                    RemediationAction.status == "preview_ready",
+                )
+                .values(status="cancelled")
+            ).rowcount
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="remediation.execute",
+                outcome=result.outcome,
+                details_json=json.dumps(
+                    {
+                        "action_id": action_id,
+                        "investigation_id": investigation_id,
+                        "summary": result.summary,
+                        "verification": result.verification,
+                    },
+                    sort_keys=True,
+                ),
+            ))
+            if cancelled:
+                db_session.add(AuditEvent(
+                    actor=user.username,
+                    action="remediation.cancel_siblings",
+                    outcome="cancelled",
+                    details_json=json.dumps(
+                        {
+                            "investigation_id": investigation_id,
+                            "executed_action_id": action_id,
+                            "cancelled_count": cancelled,
+                            "reason": "A fresh investigation is required before another mutation.",
+                        },
+                        sort_keys=True,
+                    ),
+                ))
+            db_session.commit()
+        return RedirectResponse(
+            url=f"/investigations/{investigation_id}#action-{action_id}",
+            status_code=303,
         )
 
     @app.get("/api/v1/session")

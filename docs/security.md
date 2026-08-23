@@ -75,7 +75,7 @@ the resolved user belongs to a configured PodPilot application-role group. A val
 upstream identity with no application role is an authorization failure (403), not
 an authentication failure (401).
 
-Milestone 3 retains only one state-changing application operation: creating a local
+Milestone 3 introduced one state-changing application operation: creating a local
 investigation record. It requires Investigator-or-higher application role and a
 same-site double-submit CSRF token. The server re-reads the active Alertmanager
 fingerprint instead of accepting alert content from the browser. Alert labels,
@@ -83,7 +83,6 @@ annotations, events, status messages, image references, and bounded Pod logs are
 secret-pattern redacted before investigation persistence and treated as untrusted
 evidence; no model receives them. Secret resources and pull-secret contents are
 never read by the workload collector.
-There are still no cluster mutation endpoints.
 
 Milestone 4 permits Approver-or-higher users to update one fixed model-credential
 Secret through a dedicated settings endpoint. RBAC limits `get`, `patch`, and
@@ -115,3 +114,19 @@ orchestrator must still require explicit human approval, re-read resource versio
 before applying, prefer server-side dry-run, record before/after state, enforce
 timeouts, and present rollback. Production must use a separate action service and
 identity with a small allowlist rather than cluster-admin.
+
+Milestone 5 enables the first workload-mutation endpoint only for two registered
+types: `delete_controller_owned_pod` and `restart_workload_rollout`. Proposals are
+derived from normalized live evidence and are never accepted from model or browser
+payloads. Each stores exact UID/resourceVersion preconditions and expires after ten
+minutes. Creation performs a server dry-run. Execution requires Approver-or-higher,
+same-site CSRF, an atomic single-use claim, and a second explicit UI confirmation.
+
+Immediately before mutation the executor re-reads the target and fails stale if
+UID, resourceVersion, or Pod controller changed. Pod deletion uses Kubernetes
+delete preconditions and applies only to crash-looping controller-owned Pods.
+Rollout restart uses a fixed `podpilot.io/restartedAt` template annotation and
+supports only Deployment, StatefulSet, and DaemonSet. Every attempt records the
+actor, preview, approval, operation result, before/after identities, and bounded
+verification. Shell, arbitrary YAML/patches, Secrets, RBAC, nodes, system-namespace
+targets, and model-created tools remain non-executable.
