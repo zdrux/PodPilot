@@ -66,7 +66,10 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: podpilot-remediation-fixture
-  namespace: podpilot-remediation-fixture
+  # This SNO has user-workload monitoring disabled, so the lab-only rule must
+  # be evaluated by the platform Prometheus. Its workload target remains in
+  # the disposable, non-system fixture namespace.
+  namespace: openshift-monitoring
   labels:
     podpilot.io/fixture: remediation-crashloop
 spec:

@@ -288,9 +288,15 @@ oc apply -f evals/live/remediation-crashloop.yaml
 oc -n podpilot-remediation-fixture wait --for=jsonpath='{.status.containerStatuses[0].state.waiting.reason}'=CrashLoopBackOff pod -l app=broken-api --timeout=180s
 # After PodPilot creates the preview, make the next Pod healthy without changing its Pod/ReplicaSet preconditions:
 oc -n podpilot-remediation-fixture patch configmap fixture-mode --type=merge --patch '{"data":{"MODE":"healthy"}}'
-# Approve only the controller-owned Pod replacement in the UI, verify the new UID is Ready, then remove the fixture:
+# Approve only the controller-owned Pod replacement in the UI, verify the new UID is Ready, then remove the exact lab resources:
+oc delete prometheusrule podpilot-remediation-fixture -n openshift-monitoring
 oc delete namespace podpilot-remediation-fixture
 ```
+
+The fixture rule is installed in `openshift-monitoring` because user-workload
+monitoring is disabled on this SNO. The rule observes only the disposable
+fixture namespace; PodPilot still rejects remediation targets in protected
+system namespaces.
 
 ### Trust the SNO router CA for interactive login
 
