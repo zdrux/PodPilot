@@ -125,6 +125,9 @@ same-site CSRF, an atomic single-use claim, and a second explicit UI confirmatio
 Immediately before mutation the executor re-reads the target and fails stale if
 UID, resourceVersion, or Pod controller changed. Pod deletion uses Kubernetes
 delete preconditions and applies only to crash-looping controller-owned Pods.
+Its preview carries `dryRun: ["All"]` in `DeleteOptions` as well as the API
+query parameter, covering OpenShift DELETE dry-run compatibility without relying
+on a client-side simulation.
 Rollout restart uses a fixed `podpilot.io/restartedAt` template annotation and
 supports only Deployment, StatefulSet, and DaemonSet. Every attempt records the
 actor, preview, approval, operation result, before/after identities, and bounded

@@ -77,6 +77,7 @@ class KubernetesRemediationExecutor:
             proposal.target_name,
             proposal.namespace,
             body=client.V1DeleteOptions(
+                dry_run=["All"],
                 preconditions=client.V1Preconditions(
                     uid=proposal.target_uid,
                     resource_version=proposal.target_resource_version,

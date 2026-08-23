@@ -110,6 +110,7 @@ def test_pod_delete_dry_run_preconditions_and_replacement_verification() -> None
     preview = executor.preview(plan)
     assert preview["server_dry_run"] == "passed"
     assert core.deletes[0]["dry_run"] == "All"
+    assert core.deletes[0]["body"].dry_run == ["All"]
     assert core.deletes[0]["body"].preconditions.uid == "old-uid"
     result = executor.execute(plan)
     assert result.outcome == "resolved"
