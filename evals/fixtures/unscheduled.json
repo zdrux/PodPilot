@@ -1,0 +1,8 @@
+{
+  "fingerprint": "synthetic-unscheduled",
+  "name": "KubePodNotScheduled",
+  "severity": "warning",
+  "namespace": "fixture-scheduling",
+  "labels": {"alertname": "KubePodNotScheduled", "namespace": "fixture-scheduling"},
+  "annotations": {"summary": "Synthetic scheduling fixture"}
+}

@@ -1,6 +1,6 @@
 # PodPilot Decisions
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
 ## 2026-08-22 - PoC cluster-admin with product-level approval gates
@@ -94,3 +94,31 @@ use an OpenShift binary Docker BuildConfig for fast Milestone 1 iteration.
 Consequences: Image data can disappear when the registry Pod is replaced, and
 `:latest` is not a releasable artifact reference. Production promotion must use a
 durable registry, vulnerability scanning, and immutable image digests.
+
+## 2026-08-23 - Live alerts without a second alert store
+
+Context: The work queue needs current Alertmanager state, but duplicating alert
+lifecycle locally would create consistency and retention problems.
+
+Decision: Fetch bounded snapshots from the in-cluster Alertmanager v2 API using
+the projected identity and service CA. Persist an alert snapshot only when a user
+explicitly creates an investigation. Separate Watchdog from actionable alerts and
+show collection errors as degraded state.
+
+Consequences: The dashboard reflects current source-system state and remains
+honest during outages. Historical alert browsing depends on investigation records
+until a separately justified retention design exists.
+
+## 2026-08-23 - Deterministic triage before model integration
+
+Context: The first alert analysis workflow must be useful and testable before
+provider credentials, prompt policy, and full evidence collectors are introduced.
+
+Decision: Milestone 2 creates durable investigations with evidence IDs,
+hypotheses, next checks, and explicit limitations using normal code only. Known
+workload alert types select bounded collection guidance but remain low-confidence
+until resource, event, metric, and log evidence is collected.
+
+Consequences: Watchdog can be classified confidently, while workload alerts
+abstain from claiming root cause. Synthetic fixtures gate regression behavior and
+include adversarial annotation text that must remain inert.

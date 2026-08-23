@@ -22,3 +22,21 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
     details_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class Investigation(Base):
+    __tablename__ = "investigations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    created_by: Mapped[str] = mapped_column(String(253), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    alert_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    alert_name: Mapped[str] = mapped_column(String(253), nullable=False)
+    alert_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_json: Mapped[str] = mapped_column(Text, nullable=False)

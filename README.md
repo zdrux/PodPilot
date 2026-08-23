@@ -4,11 +4,11 @@ PodPilot is an OpenShift-first AI troubleshooting and Day-2 operations companion
 It correlates alerts, metrics, resource state, events, and targeted logs into an
 evidence-backed investigation with ranked hypotheses and approved remediations.
 
-Milestone 1 is deployed on the disposable SNO lab. It provides an authenticated,
-server-rendered dashboard, OpenShift group-to-application-role mapping, persistent
-SQLite state, health probes, and a hardened single-image workload behind the
-OpenShift OAuth proxy. Alert ingestion, model analysis, and remediation remain
-later milestones.
+Milestone 2 is deployed on the disposable SNO lab. It adds live Alertmanager v2
+ingestion, a prioritized alert queue, explicit degraded collection state, durable
+read-only investigations, evidence-linked deterministic triage, and synthetic
+incident evaluations to the authenticated Milestone 1 foundation. Model analysis,
+cluster evidence expansion, chat, and remediation remain later milestones.
 
 ## Start Here
 
@@ -50,7 +50,7 @@ python -m pip install -e . --no-deps
 python -m pytest --cov --cov-report=term-missing
 ```
 
-## Deploy Milestone 1
+## Deploy The Current Milestone
 
 Connect to the disposable SNO lab with a short-lived PoC cluster-admin identity:
 

@@ -1,0 +1,8 @@
+{
+  "fingerprint": "synthetic-image-waiting",
+  "name": "KubeContainerWaiting",
+  "severity": "warning",
+  "namespace": "fixture-image",
+  "labels": {"alertname": "KubeContainerWaiting", "namespace": "fixture-image"},
+  "annotations": {"summary": "Synthetic image waiting fixture"}
+}

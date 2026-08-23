@@ -1,18 +1,18 @@
 # PodPilot Codebase Map
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: top-level structure, core tooling, or verification commands change.
 
 ## Workspaces
 
 | Path | Responsibility | Status |
 | --- | --- | --- |
-| `apps/api/` | AI orchestration and HTTP API | Milestone 1 authenticated shell, readiness, migrations |
-| `apps/web/` | operator investigation UI | Milestone 1 responsive dashboard and local assets |
-| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | OpenShift group-role resolver implemented |
-| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | scaffold only |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 1 deployed on SNO |
-| `evals/` | incident fixtures and expected outcomes | scaffold only |
+| `apps/api/` | AI orchestration and HTTP API | Milestone 2 durable alert investigation flow |
+| `apps/web/` | operator investigation UI | live alert queue and evidence-linked investigation views |
+| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | group resolver and bounded Alertmanager v2 client |
+| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | alert evidence contracts and first triage pack |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 2 deployed on SNO |
+| `evals/` | incident fixtures and expected outcomes | three synthetic workload-alert fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
 Each workspace has a local `AGENTS.md` describing its intended boundary.
@@ -39,6 +39,9 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `apps/api/migrations/`: Alembic schema history.
 - `apps/web/`: local templates, styles, and JavaScript with no CDN dependency.
 - `packages/openshift-client/src/podpilot_openshift/roles.py`: cached OpenShift group-role resolution.
+- `packages/openshift-client/src/podpilot_openshift/alerts.py`: TLS-validated, bounded Alertmanager transport.
+- `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
+- `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
 - `deploy/openshift/rbac.yaml`: read-only observer permissions.
 - `deploy/openshift/workload/`: Deployment, OAuth-protected Service/Route, and NetworkPolicy.
 - `deploy/openshift/build/sno-binary/`: lab ImageStream and binary BuildConfig.

@@ -1,6 +1,6 @@
 # PodPilot Release And QA
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: release surfaces, QA coverage, migrations, rollback, or deployment gates change.
 
 ## Release Surfaces
@@ -31,6 +31,13 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Malicious instructions embedded in logs, events, labels, or annotations.
 - Secret-like text in collected evidence is redacted before model and telemetry egress.
 - Evidence disagreement causes uncertainty or abstention rather than fabrication.
+
+Milestone 2 automates the Watchdog-only healthy view, explicit Alertmanager
+degradation, group-role denial, CSRF denial, durable investigation/audit creation,
+bounded alert normalization, and synthetic CrashLooping, image-waiting, and
+unscheduled triage expectations. Metrics, resource state, events, and log evidence
+remain required before those three capability fixtures can graduate from triage
+to root-cause evaluation.
 
 ## Rollback
 

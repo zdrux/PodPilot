@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ investigation.alert_name }} · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar investigation-header">
+  <div><p class="eyebrow">Investigation {{ investigation.id[:8] }}</p><h1>{{ investigation.alert_name }}</h1><p class="subtitle">Created by {{ investigation.created_by }} · {{ investigation.status | replace('_', ' ') }}</p></div>
+  <a class="button secondary" href="/">Back to queue</a>
+</header>
+
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Deterministic Milestone 2 analysis</strong><p>No model was called. Alert labels and annotations are untrusted evidence, never instructions.</p></div></section>
+
+<section class="investigation-summary panel">
+  <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
+  <div class="alert-meta"><span>{{ investigation.alert.labels.get('severity', 'unknown') }} severity</span><span>{{ investigation.alert.state }}</span><span>{{ investigation.alert.labels.get('namespace', 'cluster-scoped') }}</span></div>
+</section>
+
+<div class="investigation-grid">
+  <section class="panel evidence-panel"><div class="panel-header"><div><p class="eyebrow">Confirmed observations</p><h2>Evidence</h2></div></div><div class="evidence-list">
+    {% for observation in investigation.analysis.observations %}<article><span class="evidence-id">{{ observation.id }}</span><h3>{{ observation.title }}</h3><p>{{ observation.detail }}</p><small>{{ observation.source }} · {{ observation.observed_at }}</small></article>{% endfor %}
+  </div></section>
+  <section class="panel evidence-panel"><div class="panel-header"><div><p class="eyebrow">Ranked hypotheses</p><h2>What may be happening</h2></div></div><div class="evidence-list">
+    {% for hypothesis in investigation.analysis.hypotheses %}<article><span class="confidence confidence-{{ hypothesis.confidence }}">{{ hypothesis.confidence }} confidence</span><h3>{{ hypothesis.title }}</h3><p>{{ hypothesis.rationale }}</p><small>Evidence: {{ hypothesis.evidence_ids | join(', ') }}</small></article>{% endfor %}
+  </div></section>
+</div>
+
+<div class="investigation-grid">
+  <section class="panel checklist-panel"><div class="panel-header"><h2>Recommended next checks</h2></div><ol>{% for check in investigation.analysis.next_checks %}<li>{{ check }}</li>{% endfor %}</ol></section>
+  <section class="panel checklist-panel limitation-panel"><div class="panel-header"><h2>Missing evidence and limits</h2></div><ul>{% for limitation in investigation.analysis.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>
+</div>
+{% endblock %}

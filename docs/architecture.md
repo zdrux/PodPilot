@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -23,7 +23,7 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 - **Model adapter**: presents one internal contract over configured OpenAI-compatible endpoints, capability probes each profile, and turns normalized evidence into explanations while preserving citations and redaction rules.
 - **Evaluation harness**: replays sanitized incidents and scores evidence use, diagnosis quality, safety, and abstention.
 
-## Milestone 1 Runtime
+## Current Runtime
 
 The current single Pod contains two containers. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
@@ -33,10 +33,18 @@ and persists schema state in SQLite on the `podpilot-data` PVC. An init containe
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.
 
-Milestone 1 deliberately contains no model call, alert collection, chat, or
-mutation endpoint. The dashboard labels these capabilities as upcoming so the
-authentication and runtime boundary can be validated before operational features
-arrive.
+Milestone 2 adds a bounded Alertmanager adapter that uses the projected service
+account token and OpenShift service CA to call the in-cluster v2 API. Dashboard
+requests obtain a fresh snapshot; Alertmanager remains the source of truth and
+PodPilot does not create a second alert store. Watchdog is separated from the
+actionable queue, while collection failure produces an explicit degraded state.
+
+An Investigator can create one durable investigation from an active fingerprint.
+The API re-reads Alertmanager before creation, runs a deterministic alert-type
+triage pack, stores the bounded alert snapshot and evidence-linked result, and
+records an audit event. Analyze is protected by both application role and a
+double-submit CSRF token. Milestone 2 contains no model call, cluster mutation,
+chat, PromQL, event, resource-status, or log collector.
 
 ## Investigation Flow
 

@@ -1,9 +1,12 @@
 .git
 .github
 .venv
+.data
+.pytest_cache
 __pycache__
 *.pyc
 *.pyo
+*.egg-info
 *.kubeconfig
 .env
 .env.*

@@ -2,7 +2,7 @@ FROM registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/opt/app-root/src/apps/api/src:/opt/app-root/src/packages/openshift-client/src \
+    PYTHONPATH=/opt/app-root/src/apps/api/src:/opt/app-root/src/packages/openshift-client/src:/opt/app-root/src/packages/diagnostics/src \
     PODPILOT_WEB_DIR=/opt/app-root/src/apps/web
 
 WORKDIR /opt/app-root/src
@@ -14,6 +14,7 @@ COPY pyproject.toml ./pyproject.toml
 COPY apps/api ./apps/api
 COPY apps/web ./apps/web
 COPY packages/openshift-client ./packages/openshift-client
+COPY packages/diagnostics ./packages/diagnostics
 
 USER 0
 

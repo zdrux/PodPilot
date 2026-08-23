@@ -64,7 +64,7 @@ Do not record transient debug output or credentials.
 - `oc apply --dry-run=server -k deploy/openshift`: validate manifests against a connected cluster.
 - `oc apply --dry-run=server -k deploy/openshift/storage/sno-local`: validate the disposable SNO storage fixture.
 - `oc auth can-i --list --as=system:serviceaccount:ai-ops:ai-observer`: audit effective RBAC.
-- `.\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing`: run the Milestone 1 unit suite.
+- `.\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing`: run the model-free unit and synthetic incident suite.
 - `.\.venv\Scripts\python.exe -m alembic -c apps/api/alembic.ini upgrade head`: apply local database migrations.
 - `oc start-build podpilot --from-dir=. --follow -n ai-ops`: run the lab binary image build after applying `deploy/openshift/build/sno-binary`.
 

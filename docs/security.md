@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -67,7 +67,15 @@ so clients cannot directly forge `X-Forwarded-User`. The proxy does not forward
 access tokens or bearer tokens upstream, uses secure same-site cookies, and
 performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
 granting access. The API then reads only the four configured Group objects to
-derive the application role. Milestone 1 has no mutation endpoints.
+derive the application role.
+
+Milestone 2 adds only one state-changing application operation: creating a local
+investigation record. It requires Investigator-or-higher application role and a
+same-site double-submit CSRF token. The server re-reads the active Alertmanager
+fingerprint instead of accepting alert content from the browser. Alert labels and
+annotations are bounded, secret-pattern redacted before investigation persistence,
+and treated as untrusted evidence; no model receives them.
+There are still no cluster mutation endpoints.
 
 ## PoC Storage Exception
 

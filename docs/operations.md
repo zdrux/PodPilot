@@ -1,6 +1,6 @@
 # PodPilot Operations
 
-Last reviewed: 2026-08-22
+Last reviewed: 2026-08-23
 Update when: setup, environment variables, deployment, external services, or runbooks change.
 
 ## Local Setup
@@ -15,7 +15,8 @@ Prerequisites:
 Never use or copy the installer workspace as an application configuration source.
 Use a short-lived developer login locally and the projected service-account token in-cluster.
 
-Create the development environment and run the model-free Milestone 1 tests:
+Create the development environment and run the model-free unit and synthetic
+incident tests:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -122,7 +123,7 @@ backend. PodPilot resolves its application role from the named OpenShift groups.
 
 ## Environment Variables
 
-Milestone 1 uses these variables:
+The current deployment uses these variables:
 
 - `PODPILOT_ENVIRONMENT`
 - `PODPILOT_CLUSTER_NAME`
@@ -130,6 +131,12 @@ Milestone 1 uses these variables:
 - `PODPILOT_DATABASE_URL`, `sqlite:////var/lib/podpilot/podpilot.db` in the SNO overlay
 - `PODPILOT_AUTH_MODE=proxy`
 - `PODPILOT_ROLE_CACHE_SECONDS`, default `30`
+- `PODPILOT_ALERTMANAGER_URL`, defaulting to the in-cluster
+  `https://alertmanager-main.openshift-monitoring.svc:9094`
+- `PODPILOT_SERVICE_ACCOUNT_TOKEN_PATH`, default projected token path
+- `PODPILOT_SERVICE_CA_PATH`, default projected OpenShift service CA path
+- `PODPILOT_ALERTMANAGER_TIMEOUT_SECONDS`, default `8`
+- `PODPILOT_ALERTMANAGER_MAX_ALERTS`, default `250`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
 Later model integration will add:
@@ -277,6 +284,27 @@ deleted after validation.
 - Query active Alertmanager instances at `/api/v2/alerts`.
 - The Alertmanager route root (`/`) is not a supported UI and can report “Application is not available”; use the OpenShift console for the alerting UI.
 - Authenticate with a bearer token and validate the route or service CA.
+
+PodPilot uses the in-cluster Alertmanager Service on port 9094, the projected
+service-account token, and
+`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`. It does not disable
+TLS validation, log the token, or retain a second alert database. Dashboard
+collection failures appear as degraded state rather than zero alerts.
+
+### Verify Milestone 2 alert ingestion
+
+```powershell
+. .\scripts\connect-sno.ps1
+$pod = oc -n ai-ops get pod -l app.kubernetes.io/name=podpilot -o jsonpath='{.items[0].metadata.name}'
+oc -n ai-ops exec $pod -c api -- python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health/ready').read().decode())"
+oc -n ai-ops logs $pod -c migrate
+```
+
+Use an HTPasswd Investigator-or-higher user in the OAuth-protected UI. `Watchdog`
+should appear under Expected heartbeat. Analyze re-checks that the fingerprint is
+still active, creates a durable `recommendation_ready` investigation and audit
+event, and displays only deterministic triage. Viewer users can see results but
+cannot start analysis.
 
 ## Runbooks
 

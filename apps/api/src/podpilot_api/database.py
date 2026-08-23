@@ -23,7 +23,10 @@ def database_is_ready(engine: Engine) -> bool:
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        return inspect(engine).has_table("audit_events")
+        inspector = inspect(engine)
+        return inspector.has_table("audit_events") and inspector.has_table(
+            "investigations"
+        )
     except Exception:
         return False
 

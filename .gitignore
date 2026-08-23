@@ -36,6 +36,7 @@ coverage/
 .pytest_cache/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 
 # Logs and local data
