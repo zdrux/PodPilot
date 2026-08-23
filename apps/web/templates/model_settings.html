@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Model settings · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Manage</p><h1>Model settings</h1><p class="subtitle">Configure one OpenAI-compatible Responses API profile. The saved token is never displayed again.</p></div><a class="button secondary" href="/">Back to cluster health</a></header>
+
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Credential boundary</strong><p>Profile metadata is stored in SQLite. The API token is stored only in the named OpenShift Secret and is never sent back to this page.</p></div></section>
+{% if credential_error %}<section class="notice danger" role="alert"><span class="notice-icon">!</span><div><strong>Credential store unavailable</strong><p>{{ credential_error }}</p></div></section>{% endif %}
+
+<div class="settings-grid">
+  <section class="panel settings-panel">
+    <div class="panel-header"><div><p class="eyebrow">Connection profile</p><h2>Provider endpoint</h2></div><span class="tag">{% if token_configured %}Token configured{% else %}Token required{% endif %}</span></div>
+    <form id="model-settings-form" class="settings-form" data-save-url="/api/v1/model-profile" {% if user.role.value < 30 %}aria-disabled="true"{% endif %}>
+      <label>Provider label<input name="provider_label" maxlength="100" required value="{{ profile.provider_label if profile else 'OpenAI' }}" {% if user.role.value < 30 %}disabled{% endif %}></label>
+      <label>HTTPS base URL<input name="base_url" type="url" maxlength="2048" required value="{{ profile.base_url if profile else 'https://api.openai.com/v1' }}" {% if user.role.value < 30 %}disabled{% endif %}></label>
+      <div class="field-row"><label>Reasoning/chat model<input name="chat_model" maxlength="253" required value="{{ profile.chat_model if profile else 'gpt-5.6-terra' }}" {% if user.role.value < 30 %}disabled{% endif %}></label><label>Embedding model (optional)<input name="embedding_model" maxlength="253" value="{{ profile.embedding_model if profile else 'text-embedding-3-small' }}" {% if user.role.value < 30 %}disabled{% endif %}></label></div>
+      <label>API token<input name="api_token" type="password" autocomplete="new-password" placeholder="{% if token_configured %}Leave blank to keep the saved token{% else %}Required for first save{% endif %}" {% if user.role.value < 30 %}disabled{% endif %}><small>PodPilot never reads this value back into the browser.</small></label>
+      <div class="field-row"><label>Timeout (seconds)<input name="timeout_seconds" type="number" min="3" max="120" step="1" value="{{ profile.timeout_seconds if profile else 30 }}" {% if user.role.value < 30 %}disabled{% endif %}></label><label>Maximum output tokens<input name="max_output_tokens" type="number" min="128" max="16384" step="1" value="{{ profile.max_output_tokens if profile else 1200 }}" {% if user.role.value < 30 %}disabled{% endif %}></label></div>
+      {% if user.role.value >= 30 %}<div class="form-actions"><button class="button primary" type="submit">Save profile</button><button class="button secondary" id="probe-model" type="button" data-probe-url="/api/v1/model-profile/probe" {% if not profile %}disabled{% endif %}>Test connection</button></div>{% else %}<p class="muted-copy">The Approver role or higher is required to change or test this profile.</p>{% endif %}
+    </form>
+  </section>
+  <aside class="panel settings-panel"><div class="panel-header"><div><p class="eyebrow">Capability gate</p><h2>Connection status</h2></div><span class="tag status-{{ profile.status if profile else 'not_tested' }}">{{ (profile.status if profile else 'not_tested') | replace('_', ' ') }}</span></div><div class="capability-list">
+    {% set labels = {'reachable':'Endpoint reachable','tls_valid':'TLS validated','authenticated':'Authenticated','model_available':'Model available','streaming':'Streaming','tool_calls':'Tool calls','structured_output':'Structured output','embeddings':'Embeddings'} %}
+    {% for key, label in labels.items() %}<div><span>{{ label }}</span><strong>{% if profile and key in profile.capabilities %}{% if profile.capabilities[key] is sameas true %}Pass{% elif profile.capabilities[key] is sameas false %}Fail{% else %}Not configured{% endif %}{% else %}Not tested{% endif %}</strong></div>{% endfor %}
+    {% if profile and profile.last_error %}<p class="probe-error">{{ profile.last_error }}</p>{% endif %}
+    {% if profile %}<p class="muted-copy">Updated by {{ profile.updated_by }}. {% if profile.last_probe_at %}Last tested {{ profile.last_probe_at }}.{% endif %}</p>{% endif %}
+  </div></aside>
+</div>
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+{% endblock %}

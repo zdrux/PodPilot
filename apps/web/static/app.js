@@ -39,4 +39,46 @@
       }
     });
   });
+
+  const settingsForm = document.querySelector("#model-settings-form");
+  const probeButton = document.querySelector("#probe-model");
+  const sendSettingsRequest = async (url, body) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
+      credentials: "same-origin",
+      body,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || "The model settings request failed.");
+    return payload;
+  };
+  if (settingsForm?.dataset.saveUrl) {
+    settingsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = settingsForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
+      try {
+        await sendSettingsRequest(settingsForm.dataset.saveUrl, new URLSearchParams(new FormData(settingsForm)));
+        window.location.reload();
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Save profile"; }
+      }
+    });
+  }
+  if (probeButton?.dataset.probeUrl) {
+    probeButton.addEventListener("click", async () => {
+      probeButton.disabled = true;
+      probeButton.textContent = "Testing…";
+      try {
+        await sendSettingsRequest(probeButton.dataset.probeUrl, "");
+        window.location.reload();
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        probeButton.disabled = false;
+        probeButton.textContent = "Test connection";
+      }
+    });
+  }
 })();

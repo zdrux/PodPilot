@@ -6,13 +6,19 @@
   <a class="button secondary" href="/">Back to queue</a>
 </header>
 
-<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Deterministic Milestone 3 analysis</strong><p>No model was called. Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only.</p></div></section>
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 4 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
 
 <section class="investigation-summary panel">
   <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
   <div class="alert-meta"><span>{{ investigation.alert.labels.get('severity', 'unknown') }} severity</span><span>{{ investigation.alert.state }}</span><span>{{ investigation.alert.labels.get('namespace', 'cluster-scoped') }}</span></div>
   {% if investigation.alert.workload %}<div class="alert-meta"><span>Pod {{ investigation.alert.workload.namespace }}/{{ investigation.alert.workload.pod_name }}</span><span>{{ investigation.alert.workload.events | length }} recent events</span><span>{{ investigation.alert.workload.containers | length }} containers</span></div>{% endif %}
 </section>
+
+{% if investigation.analysis.model.status == 'ready' %}
+<section class="panel model-analysis"><div class="panel-header"><div><p class="eyebrow">Model interpretation</p><h2>{{ investigation.analysis.model.summary }}</h2></div><span class="tag">Untrusted interpretation</span></div><div class="model-analysis-body"><p>{{ investigation.analysis.model.operational_context }}</p><h3>Suggested checks</h3><ol>{% for check in investigation.analysis.model.recommended_checks %}<li>{{ check }}</li>{% endfor %}</ol>{% if investigation.analysis.model.caveats %}<h3>Caveats</h3><ul>{% for caveat in investigation.analysis.model.caveats %}<li>{{ caveat }}</li>{% endfor %}</ul>{% endif %}</div></section>
+{% elif investigation.analysis.model.status == 'unavailable' %}
+<section class="notice danger"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Model interpretation unavailable</strong><p>{{ investigation.analysis.model.detail }} Deterministic evidence and checks are still available.</p></div></section>
+{% endif %}
 
 <div class="investigation-grid">
   <section class="panel evidence-panel"><div class="panel-header"><div><p class="eyebrow">Confirmed observations</p><h2>Evidence</h2></div></div><div class="evidence-list">

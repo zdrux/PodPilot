@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     workload_max_events: int = Field(default=30, ge=1, le=100)
     workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)
     workload_max_log_bytes: int = Field(default=16_384, ge=1024, le=65_536)
+    model_credential_store: Literal["environment", "kubernetes"] = "environment"
+    model_secret_namespace: str = "ai-ops"
+    model_secret_name: str = "podpilot-model-credentials"
+    model_secret_key: str = "api_key"
     poc_mode: bool = False
 
 

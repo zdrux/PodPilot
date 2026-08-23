@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app
-from podpilot_api.models import AuditEvent, Base, Investigation
+from podpilot_api.model_provider import CapabilityReport, ModelInterpretation, ModelProviderError
+from podpilot_api.models import AuditEvent, Base, Investigation, ModelProfile
 from podpilot_api.settings import Settings
 from podpilot_diagnostics.workloads import (
     ContainerEvidence,
@@ -48,6 +49,38 @@ class FakeWorkloadSource:
 class FailingWorkloadSource:
     def collect(self, **kwargs) -> WorkloadEvidence:
         raise WorkloadEvidenceError("The Kubernetes API is temporarily unavailable.")
+
+
+class MemoryCredentialStore:
+    def __init__(self, value: str | None = None) -> None:
+        self.value = value
+
+    def get(self) -> str | None:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+class FakeModelProvider:
+    def __init__(self, *, fail_interpretation: bool = False) -> None:
+        self.fail_interpretation = fail_interpretation
+        self.interpret_calls: list[dict[str, object]] = []
+
+    def probe(self, profile, api_key: str) -> CapabilityReport:
+        assert api_key == "test-api-token"
+        return CapabilityReport(True, True, True, True, True, True, True, True)
+
+    def interpret(self, profile, api_key: str, evidence: dict[str, object]) -> ModelInterpretation:
+        if self.fail_interpretation:
+            raise ModelProviderError("Provider request failed (synthetic outage).")
+        self.interpret_calls.append(evidence)
+        return ModelInterpretation(
+            summary="The heartbeat evidence is consistent with expected operation.",
+            operational_context="This interpretation is bounded to the supplied alert observation.",
+            recommended_checks=["Keep the heartbeat visible after monitoring changes."],
+            caveats=["This does not prove every monitoring component is healthy."],
+        )
 
 
 def watchdog() -> AlertRecord:
@@ -132,6 +165,8 @@ def make_app(
     assignments: dict[str, Role],
     source: FakeAlertSource,
     workload_source: FakeWorkloadSource | None = None,
+    credential_store: MemoryCredentialStore | None = None,
+    model_provider: FakeModelProvider | None = None,
 ):
     settings = Settings(
         environment="test",
@@ -151,6 +186,8 @@ def make_app(
             StaticRoleResolver(assignments),
             source,
             workload_source,
+            credential_store or MemoryCredentialStore(),
+            model_provider or FakeModelProvider(),
         ),
         settings,
     )
@@ -168,8 +205,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 3 analysis" in response.text
-        assert "PodPilot 0.3.0" in response.text
+        assert "Milestone 4 adds" in response.text
+        assert "PodPilot 0.4.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -204,7 +241,7 @@ def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "expected monitoring heartbeat" in detail.text
-        assert "No model was called" in detail.text
+        assert "No ready model profile was used" in detail.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -233,7 +270,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Deterministic Milestone 3 analysis" in detail.text
+        assert "Evidence-first Milestone 4 analysis" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -330,3 +367,114 @@ def test_colon_delimited_openshift_identity_can_receive_a_role(tmp_path: Path) -
         )
         assert session.status_code == 200
         assert session.json() == {"username": "system:admin", "role": "viewer"}
+
+
+def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore()
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER, "vic": Role.VIEWER},
+        source=FakeAlertSource((watchdog(),)),
+        credential_store=credentials,
+        model_provider=provider,
+    )
+    with TestClient(app) as client:
+        viewer_page = client.get("/settings/model", headers={"x-forwarded-user": "vic"})
+        assert viewer_page.status_code == 200
+        assert "Approver role or higher" in viewer_page.text
+        viewer_csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', viewer_page.text)
+        assert viewer_csrf is not None
+        denied = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "vic", "x-podpilot-csrf": viewer_csrf.group(1)},
+            data={},
+        )
+        assert denied.status_code == 403
+
+        page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        saved = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "provider_label": "OpenAI",
+                "base_url": "https://api.openai.com/v1",
+                "chat_model": "gpt-5.6-terra",
+                "embedding_model": "text-embedding-3-small",
+                "api_token": "test-api-token",
+                "timeout_seconds": "30",
+                "max_output_tokens": "1200",
+            },
+        )
+        assert saved.json() == {"status": "saved", "token_configured": True}
+        rendered = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
+        assert "Token configured" in rendered.text
+        assert "test-api-token" not in rendered.text
+        probed = client.post(
+            "/api/v1/model-profile/probe",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1), "content-type": "application/x-www-form-urlencoded"},
+            content="",
+        )
+        assert probed.json()["status"] == "ready"
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        profile = db_session.get(ModelProfile, 1)
+        assert profile is not None and profile.status == "ready"
+        assert "test-api-token" not in profile.capabilities_json
+        assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == 2
+    engine.dispose()
+
+
+def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore("test-api-token")
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource((watchdog(),)),
+        credential_store=credentials,
+        model_provider=provider,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="gpt-5.6-terra", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ada",
+        ))
+        db_session.commit()
+    engine.dispose()
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/watchdog-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
+        assert "schema-validated model interpretation" in detail.text
+        assert "heartbeat evidence is consistent" in detail.text
+        assert provider.interpret_calls
+
+    failing_app, _ = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource((watchdog(),)),
+        credential_store=credentials,
+        model_provider=FakeModelProvider(fail_interpretation=True),
+    )
+    with TestClient(failing_app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/watchdog-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
+        assert "Model interpretation unavailable" in detail.text
+        assert "expected monitoring heartbeat" in detail.text

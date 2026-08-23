@@ -158,15 +158,22 @@ The current deployment uses these variables:
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
+- `PODPILOT_MODEL_CREDENTIAL_STORE`, `environment` for local development or
+  `kubernetes` in the OpenShift workload
+- `PODPILOT_MODEL_SECRET_NAMESPACE`, default `ai-ops`
+- `PODPILOT_MODEL_SECRET_NAME`, default `podpilot-model-credentials`
+- `PODPILOT_MODEL_SECRET_KEY`, default `api_key`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
-Later model integration will add:
+Model profile metadata (base URL, model names, timeout, and output-token budget)
+is configured through `/settings/model`, not environment variables. Local
+development reads `OPENAI_API_KEY` without persisting it. OpenShift uses the fixed
+Secret above; the UI never reads the saved value back.
 
-- `OPENAI_API_KEY` from an OpenShift Secret
-- `OPENAI_BASE_URL`, defaulting to `https://api.openai.com/v1`
-- `OPENAI_MODEL`, initially `gpt-5.6-terra`
-- `OPENAI_EMBEDDING_MODEL`, initially `text-embedding-3-small`
+Later integrations may add:
+
 - investigation limits and timeouts
+- optional custom CA Secret reference for internal providers
 - optional OpenShift API override for local development
 - `PODPILOT_BOOTSTRAP_KUBECONFIG` for the external local bootstrap credential path
 - logging and tracing configuration
@@ -209,6 +216,19 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    oc -n ai-ops create secret generic podpilot-oauth-cookie --from-literal=session_secret=$cookie --dry-run=client -o yaml | oc apply -f -
    Remove-Variable cookie
    ```
+
+   Transfer the local OpenAI key directly into the pre-created model Secret
+   without printing it or writing it to disk:
+
+   ```powershell
+   if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "OPENAI_API_KEY is not set" }
+   oc -n ai-ops create secret generic podpilot-model-credentials --from-literal=api_key=$env:OPENAI_API_KEY --dry-run=client -o yaml | oc apply -f -
+   ```
+
+   Open `/settings/model` as an Approver, save the metadata with the token field
+   blank, and run **Test connection**. A profile is used only when every required
+   capability passes. Rotate the provider key if it ever appears in terminal or
+   application output.
 
 5. Validate and deploy the complete SNO overlay, then add the separate PoC
    cluster-admin exception:

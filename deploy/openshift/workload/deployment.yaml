@@ -42,6 +42,8 @@ spec:
               value: sqlite:////var/lib/podpilot/podpilot.db
             - name: PODPILOT_AUTH_MODE
               value: proxy
+            - name: PODPILOT_MODEL_CREDENTIAL_STORE
+              value: kubernetes
             - name: PODPILOT_POC_MODE
               value: "true"
           securityContext: &restricted-context

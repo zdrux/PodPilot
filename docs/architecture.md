@@ -53,6 +53,17 @@ scheduling summaries for unscheduled Pods. Collection failures are retained as
 limitations, and all event, status-message, image, and log text is redacted before
 persistence. It contains no model call, PromQL query, chat, or cluster mutation.
 
+Milestone 4 adds a singleton provider profile and a provider-neutral interpretation
+contract. Metadata and capability results live in SQLite; the token lives only in
+the resourceName-restricted `ai-ops/podpilot-model-credentials` Secret. An
+Approver can save the profile and run an explicit capability probe. Only a profile
+that passes endpoint, TLS, authentication, model, streaming, tool-call, structured
+output, and configured embedding checks is used for investigations. The first
+adapter uses the official OpenAI SDK and Responses API with `store=false`.
+Schema-validated interpretation is displayed separately from deterministic facts.
+Provider failure preserves the deterministic investigation and records a bounded,
+credential-free error.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

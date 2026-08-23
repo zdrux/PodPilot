@@ -85,6 +85,20 @@ evidence; no model receives them. Secret resources and pull-secret contents are
 never read by the workload collector.
 There are still no cluster mutation endpoints.
 
+Milestone 4 permits Approver-or-higher users to update one fixed model-credential
+Secret through a dedicated settings endpoint. RBAC limits `get`, `patch`, and
+`update` to `ai-ops/podpilot-model-credentials`; it cannot create or enumerate
+Secrets. The browser may submit a replacement token over the protected Route, but
+the server never returns it, stores it in SQLite, includes it in audit details, or
+sends it to model prompts. Model profile save and probe operations require the
+same-site CSRF token and create audit events. Provider errors are normalized to
+type and HTTP status without response bodies that may echo sensitive material.
+
+Normalized alert and workload evidence is framed as untrusted JSON for every
+model call. Responses must pass PodPilot's Pydantic schema and remain advisory;
+they cannot register or execute actions. `store=false`, bounded timeouts, disabled
+SDK retries, and output-token limits apply to both probes and investigations.
+
 ## PoC Storage Exception
 
 The SNO overlay uses a static node-local PV at `/var/mnt/podpilot`. It is acceptable

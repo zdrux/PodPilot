@@ -1,7 +1,7 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.2 for product review
-Last reviewed: 2026-08-22
+Status: Draft v0.3; Milestone 4 model connection implemented
+Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
 ## 1. Product Definition

@@ -140,3 +140,24 @@ Consequences: The three initial fixtures can graduate to evidence-backed diagnos
 but alerts missing Pod identity remain low-confidence triage. Cluster collection
 failures are explicit limitations, and model integration still consumes only the
 normalized evidence contract rather than Kubernetes client objects.
+
+## 2026-08-23 - Capability-gated model interpretation with deterministic fallback
+
+Context: URL compatibility alone cannot establish that a provider supports the
+Responses features PodPilot needs, and provider downtime must not erase useful
+cluster evidence.
+
+Decision: Milestone 4 stores one model profile in SQLite and one token in the
+fixed `ai-ops/podpilot-model-credentials` Secret. Approver-or-higher users can
+save metadata and explicitly probe TLS, authentication, model availability,
+streaming, function tools, structured output, and optional embeddings. Only a
+fully ready profile participates in investigations. The OpenAI adapter uses
+`store=false`, no automatic retries, bounded time and output tokens, and returns a
+PodPilot-owned Pydantic contract.
+
+Consequences: Model text remains visually and operationally separate from facts
+and cannot authorize tools. Outages produce an explicit model limitation while
+the deterministic result remains usable. The base observer policy remains
+read-only; the workload adds a narrow Role that can update but neither create nor
+list exactly one credential Secret. Custom CA upload remains a later internal-
+provider hardening increment.

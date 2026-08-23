@@ -32,12 +32,17 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Secret-like text in collected evidence is redacted before model and telemetry egress.
 - Evidence disagreement causes uncertainty or abstention rather than fabrication.
 
-Milestone 3 automates the Watchdog-only healthy view, explicit Alertmanager
+Milestone 4 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,
 bounded alert normalization, workload collection degradation, and evidence-backed
 synthetic CrashLooping, image-waiting, and unscheduled diagnoses. Rule-state and
 PromQL evidence remain a later enhancement; the three workload fixtures no longer
 claim root cause from Alertmanager data alone.
+It also covers Approver-only profile writes, token non-disclosure, capability
+gating, structured model interpretation, and deterministic fallback during a
+provider outage. Live release validation must additionally exercise the real
+OpenShift Secret, OpenAI probe, and browser role boundaries without logging the
+credential.
 
 ## Rollback
 
