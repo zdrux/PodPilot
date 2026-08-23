@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podpilot-data
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  storageClassName: podpilot-local
+  resources:
+    requests:
+      storage: 5Gi

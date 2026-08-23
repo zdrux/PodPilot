@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "podpilot"
+version = "0.1.0"
+description = "OpenShift-first AI operations companion"
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.0.0",
+]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.in"]}
+
+[tool.setuptools.packages.find]
+where = ["apps/api/src", "packages/openshift-client/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/api/tests", "packages/openshift-client/tests"]
+pythonpath = ["apps/api/src", "packages/openshift-client/src"]
+addopts = "-q --strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["podpilot_api", "podpilot_openshift"]

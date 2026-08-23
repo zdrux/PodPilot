@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: podpilot
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+spec:
+  selector:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: application
+  ports:
+    - name: oauth
+      port: 4180
+      targetPort: oauth
+      protocol: TCP

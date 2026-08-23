@@ -1,0 +1,96 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: podpilot-observer
+  labels:
+    app.kubernetes.io/name: podpilot
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - pods
+      - pods/log
+      - services
+      - endpoints
+      - events
+      - persistentvolumeclaims
+      - persistentvolumes
+      - resourcequotas
+      - limitranges
+      - replicationcontrollers
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusteroperators", "clusterversions", "infrastructures", "networks"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigpools"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments", "csidrivers", "csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["user.openshift.io"]
+    resources: ["groups"]
+    resourceNames:
+      - podpilot-viewers
+      - podpilot-investigators
+      - podpilot-approvers
+      - podpilot-breakglass
+    verbs: ["get"]
+  - nonResourceURLs: ["/healthz", "/livez", "/readyz", "/version"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-observer
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: ai-observer
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: podpilot-observer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-cluster-monitoring-view
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: ai-observer
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: podpilot-alertmanager-view
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: ai-observer
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: monitoring-alertmanager-view

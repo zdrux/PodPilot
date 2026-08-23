@@ -1,0 +1,52 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig
+kubeconfig.*
+/auth/
+pull-secret*.json
+install-config.yaml
+agent-config.yaml
+metadata.json
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.token
+
+# OpenShift installer and machine artifacts
+*.iso
+*.vhd
+*.vhdx
+.openshift_install*
+terraform.tfstate
+terraform.tfstate.*
+
+# Dependencies and build output
+node_modules/
+dist/
+/build/
+coverage/
+.coverage
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.venv/
+
+# Logs and local data
+*.log
+tmp/
+temp/
+.data/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

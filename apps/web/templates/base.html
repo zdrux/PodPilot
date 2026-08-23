@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}PodPilot{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="/" aria-label="PodPilot home">
+        <span class="brand-mark" aria-hidden="true">P</span>
+        <span>
+          <strong>PodPilot</strong>
+          <small>OpenShift operations</small>
+        </span>
+      </a>
+
+      <nav class="nav-list">
+        <p class="nav-label">Workspace</p>
+        <a class="nav-link active" href="/">
+          <span class="nav-icon" aria-hidden="true">⌁</span>
+          Cluster health
+        </a>
+        <span class="nav-link disabled" aria-disabled="true">
+          <span class="nav-icon" aria-hidden="true">!</span>
+          Alert queue
+          <span class="soon">Next</span>
+        </span>
+        <span class="nav-link disabled" aria-disabled="true">
+          <span class="nav-icon" aria-hidden="true">◎</span>
+          Investigations
+          <span class="soon">Next</span>
+        </span>
+        <span class="nav-link disabled" aria-disabled="true">
+          <span class="nav-icon" aria-hidden="true">↗</span>
+          Actions
+        </span>
+
+        <p class="nav-label section-gap">Manage</p>
+        <span class="nav-link disabled" aria-disabled="true">
+          <span class="nav-icon" aria-hidden="true">◇</span>
+          Cluster memory
+        </span>
+        <span class="nav-link disabled" aria-disabled="true">
+          <span class="nav-icon" aria-hidden="true">⚙</span>
+          Model settings
+        </span>
+      </nav>
+
+      {% if user is defined %}
+      <div class="identity-card">
+        <div class="avatar" aria-hidden="true">{{ user.username[0] | upper }}</div>
+        <div class="identity-copy">
+          <strong title="{{ user.username }}">{{ user.username }}</strong>
+          <span>{{ user.role.label }}</span>
+        </div>
+        <a class="signout" href="/oauth/sign_in" title="Sign out" aria-label="Sign out">↪</a>
+      </div>
+      {% endif %}
+    </aside>
+
+    <main class="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

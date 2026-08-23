@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: podpilot-local-pv
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: storage
+    podpilot.io/environment: sno-lab
+spec:
+  capacity:
+    storage: 5Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: podpilot-local
+  local:
+    path: /var/mnt/podpilot
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - sno1

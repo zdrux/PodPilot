@@ -1,0 +1,87 @@
+# PodPilot Security Model
+
+Last reviewed: 2026-08-22
+Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
+
+## Trust Boundaries
+
+- Cluster objects, events, logs, annotations, and alert text are untrusted data and may contain prompt injection.
+- Model output is untrusted advice and never authorization.
+- The API is the policy enforcement point for tool scope, budgets, redaction, and future user authorization.
+- OpenShift RBAC is the hard ceiling on cluster capability.
+
+## Credentials That Must Never Be Committed
+
+- Red Hat/OpenShift pull secrets
+- kubeconfig files and kubeadmin passwords
+- service-account bearer tokens
+- SSH private keys
+- installer ISOs or generated installer working directories
+- TLS private keys and raw Kubernetes Secret exports
+- model provider API keys
+
+Use projected service-account tokens in-cluster and short-lived credentials for
+local development. Rotate any credential exposed in source control or chat.
+
+## Initial Authorization Policy
+
+- The reusable base in `deploy/openshift/` remains a read-only observer policy.
+- The disposable SNO development lab deliberately adds `cluster-admin` through
+  `deploy/openshift/overlays/poc-cluster-admin/` so implementation and remediation
+  experiments are not blocked by evolving RBAC.
+- The PoC exception does not relax product-level approval requirements: every
+  proposed mutation must show its target, patch or command, risks, and rollback,
+  then require a fresh explicit approval.
+- Production packaging must not install the PoC overlay. It should use separate
+  read and action identities with a small action allowlist.
+
+## Model Data Policy
+
+- Minimize collected fields before redaction.
+- Remove tokens, authorization headers, credentials, private keys, cookies,
+  connection strings, Secret values, and other configured patterns.
+- Preserve provenance through stable object references and timestamps, not raw credentials.
+- Do not retain raw evidence by default until retention and deletion rules are defined.
+- Evals must use synthetic or explicitly sanitized incident data.
+
+## PoC Authentication And Application Roles
+
+The SNO lab uses the cluster's built-in OAuth server with the
+`podpilot-htpasswd` identity provider. PodPilot places an OAuth-aware proxy in
+front of its Route, accepts identity only from that proxy, and maps these OpenShift
+groups to application permissions:
+
+| Group | PodPilot permission |
+| --- | --- |
+| `podpilot-viewers` | View health, alerts, investigations, and audit history |
+| `podpilot-investigators` | Start analyses and use investigation-scoped chat |
+| `podpilot-approvers` | Approve registered low/moderate-risk actions |
+| `podpilot-breakglass` | Enter future high-risk approval workflows; no direct cluster-admin grant |
+
+The group hierarchy is expressed by placing higher-role test users in each lower
+group. Human users do not receive mutation RBAC; the executor service account
+performs approved changes and the application records the authenticated actor.
+
+The Route and Service expose only the OAuth proxy. FastAPI listens on Pod loopback,
+so clients cannot directly forge `X-Forwarded-User`. The proxy does not forward
+access tokens or bearer tokens upstream, uses secure same-site cookies, and
+performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
+granting access. The API then reads only the four configured Group objects to
+derive the application role. Milestone 1 has no mutation endpoints.
+
+## PoC Storage Exception
+
+The SNO overlay uses a static node-local PV at `/var/mnt/podpilot`. It is acceptable
+only on this disposable single-node development cluster. It has no storage-level
+encryption, capacity enforcement, HA, snapshot, or backup guarantee. Model tokens
+remain in an OpenShift Secret and must never be written to SQLite. Production must
+use a supported CSI-backed block volume, backups, retention controls, and tested
+restore procedures.
+
+## Remediation Boundary
+
+The PoC may execute approved changes through its cluster-admin identity. The
+orchestrator must still require explicit human approval, re-read resource versions
+before applying, prefer server-side dry-run, record before/after state, enforce
+timeouts, and present rollback. Production must use a separate action service and
+identity with a small allowlist rather than cluster-admin.

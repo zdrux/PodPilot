@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Access error · PodPilot{% endblock %}
+{% block content %}
+<section class="error-page">
+  <div class="error-code">{{ status_code }}</div>
+  <p class="eyebrow">PodPilot access boundary</p>
+  <h1>Unable to open this workspace</h1>
+  <p>{{ detail }}</p>
+  <a class="button primary" href="/oauth/sign_in">Return to OpenShift sign-in</a>
+</section>
+{% endblock %}

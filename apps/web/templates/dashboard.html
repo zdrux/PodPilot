@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Cluster health · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar">
+  <div>
+    <p class="eyebrow">{{ environment }} · {{ cluster_name }}</p>
+    <h1>Cluster health</h1>
+    <p class="subtitle">Your investigation workspace for the cluster’s current operational state.</p>
+  </div>
+  <div class="topbar-actions">
+    <div class="live-status"><span class="pulse"></span> Connected</div>
+    <button class="button secondary" type="button" disabled>Refresh signals</button>
+  </div>
+</header>
+
+{% if poc_mode %}
+<section class="notice" aria-label="Proof of concept warning">
+  <span class="notice-icon" aria-hidden="true">i</span>
+  <div>
+    <strong>PoC lab safeguards are active</strong>
+    <p>State is stored on this single node. Cluster mutations remain disabled until the typed-action milestone.</p>
+  </div>
+</section>
+{% endif %}
+
+<section class="metrics" aria-label="Cluster summary">
+  <article class="metric-card">
+    <div class="metric-heading"><span>Cluster operators</span><span class="status-dot neutral"></span></div>
+    <strong class="metric-value">—</strong>
+    <p>Collection arrives in Milestone 2</p>
+  </article>
+  <article class="metric-card">
+    <div class="metric-heading"><span>Actionable alerts</span><span class="status-dot neutral"></span></div>
+    <strong class="metric-value">—</strong>
+    <p>Alertmanager adapter not connected</p>
+  </article>
+  <article class="metric-card">
+    <div class="metric-heading"><span>Unhealthy workloads</span><span class="status-dot neutral"></span></div>
+    <strong class="metric-value">—</strong>
+    <p>Workload checks not started</p>
+  </article>
+  <article class="metric-card healthy">
+    <div class="metric-heading"><span>Application foundation</span><span class="status-dot good"></span></div>
+    <strong class="metric-value compact">Ready</strong>
+    <p>OAuth identity and persistent state</p>
+  </article>
+</section>
+
+<div class="content-grid">
+  <section class="panel activity-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Operational queue</p>
+        <h2>What needs attention</h2>
+      </div>
+      <span class="tag">Read-only foundation</span>
+    </div>
+    <div class="empty-state">
+      <div class="radar" aria-hidden="true"><span></span></div>
+      <h3>Signal collection is the next milestone</h3>
+      <p>PodPilot is authenticated and ready to connect Alertmanager, Thanos, and the OpenShift API.</p>
+      <div class="empty-steps" aria-label="Upcoming integrations">
+        <span>Alertmanager</span><span>Thanos</span><span>Workloads</span><span>Operators</span>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel foundation-panel">
+    <div class="panel-header">
+      <div>
+        <p class="eyebrow">Milestone 1</p>
+        <h2>Foundation status</h2>
+      </div>
+    </div>
+    <ul class="check-list">
+      <li><span class="check">✓</span><div><strong>OpenShift OAuth</strong><small>Authenticated as {{ user.username }}</small></div></li>
+      <li><span class="check">✓</span><div><strong>Application role</strong><small>{{ user.role.label }} permissions resolved</small></div></li>
+      <li><span class="check">✓</span><div><strong>Persistent database</strong><small>SQLite schema is migration-managed</small></div></li>
+      <li><span class="check">✓</span><div><strong>Restricted runtime</strong><small>Non-root container behind OAuth proxy</small></div></li>
+      <li><span class="pending">2</span><div><strong>Cluster signals</strong><small>Scheduled for the next milestone</small></div></li>
+    </ul>
+    <div class="role-scope">
+      <span>Your current scope</span>
+      <strong>{{ user.role.label }}</strong>
+      <p>
+        {% if user.role.value >= 40 %}Break-glass workflows remain disabled until their safety gates exist.
+        {% elif user.role.value >= 30 %}You can approve typed actions once remediation is enabled.
+        {% elif user.role.value >= 20 %}You can start investigations once signal collection is enabled.
+        {% else %}You can view cluster health and completed investigations.{% endif %}
+      </p>
+    </div>
+  </aside>
+</div>
+
+<footer class="page-footer">
+  <span>PodPilot 0.1.0</span>
+  <span>Rendered <time id="render-time" datetime="{{ now.isoformat() }}">{{ now.strftime('%H:%M:%S UTC') }}</time></span>
+</footer>
+{% endblock %}

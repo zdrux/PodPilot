@@ -1,0 +1,14 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: podpilot-local
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: storage
+    podpilot.io/environment: sno-lab
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    podpilot.io/warning: "Single-node development storage; do not use in production"
+provisioner: kubernetes.io/no-provisioner
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer

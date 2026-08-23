@@ -1,0 +1,47 @@
+# Applied manually by the storage smoke-test runbook; intentionally not included
+# in kustomization.yaml.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: podpilot-storage-smoke
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: storage-smoke-test
+spec:
+  restartPolicy: Never
+  securityContext:
+    # The ai-ops namespace's OpenShift-assigned supplemental group. Re-verify if
+    # this manifest is ever applied to a rebuilt or different cluster.
+    fsGroup: 1000740000
+    fsGroupChangePolicy: OnRootMismatch
+  containers:
+    - name: writer
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      command:
+        - /bin/sh
+        - -c
+      args:
+        - >-
+          if [ -f /data/smoke-test.txt ]; then
+          printf 'podpilot-storage-persisted\n';
+          else
+          printf 'podpilot-storage-ok\n' > /data/smoke-test.txt;
+          fi &&
+          cat /data/smoke-test.txt &&
+          sleep 3600
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: podpilot-data

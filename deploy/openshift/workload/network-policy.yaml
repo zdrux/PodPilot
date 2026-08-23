@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: podpilot-ingress
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: podpilot
+      app.kubernetes.io/component: application
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+      ports:
+        - protocol: TCP
+          port: 4180
