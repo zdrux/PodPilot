@@ -168,6 +168,9 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
+        assert "Milestone 3 analysis" in response.text
+        assert "PodPilot 0.3.0" in response.text
+        assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
         assert response.headers["x-frame-options"] == "DENY"

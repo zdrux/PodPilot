@@ -323,7 +323,7 @@ def analyze_alert(
         ),
         next_checks=checks,
         limitations=(
-            "Milestone 2 has not yet collected rule state, metrics, events, resource status, or logs for this investigation.",
+            "This alert type currently has alert evidence only; rule state, metrics, related resource status, events, and logs were not collected.",
             "Alert labels and annotations are untrusted evidence and were not interpreted as instructions.",
         ),
     )
