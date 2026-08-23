@@ -4,5 +4,15 @@
   "severity": "warning",
   "namespace": "fixture-image",
   "labels": {"alertname": "KubeContainerWaiting", "namespace": "fixture-image"},
-  "annotations": {"summary": "Synthetic image waiting fixture"}
+  "annotations": {"summary": "Synthetic image waiting fixture"},
+  "workload": {
+    "pod_name": "missing-image-68b9d",
+    "phase": "Pending",
+    "node_name": "worker-0",
+    "requests": {"cpu": "50m", "memory": "64Mi"},
+    "containers": [{"name": "app", "image": "registry.example.invalid/team/app:missing", "ready": false, "restart_count": 0, "state": "waiting", "reason": "ErrImagePull", "message": "manifest unknown: manifest not found", "last_reason": null, "last_exit_code": null}],
+    "events": [{"id": "event-pull", "reason": "Failed", "message": "Failed to pull image: manifest unknown", "event_type": "Warning", "source": "kubernetes:event/pull"}],
+    "previous_logs": {},
+    "owner": {"api_version": "apps/v1", "kind": "ReplicaSet", "name": "missing-image-68b9d", "desired_replicas": 1, "ready_replicas": 0, "updated_replicas": null}
+  }
 }

@@ -75,12 +75,14 @@ the resolved user belongs to a configured PodPilot application-role group. A val
 upstream identity with no application role is an authorization failure (403), not
 an authentication failure (401).
 
-Milestone 2 adds only one state-changing application operation: creating a local
+Milestone 3 retains only one state-changing application operation: creating a local
 investigation record. It requires Investigator-or-higher application role and a
 same-site double-submit CSRF token. The server re-reads the active Alertmanager
-fingerprint instead of accepting alert content from the browser. Alert labels and
-annotations are bounded, secret-pattern redacted before investigation persistence,
-and treated as untrusted evidence; no model receives them.
+fingerprint instead of accepting alert content from the browser. Alert labels,
+annotations, events, status messages, image references, and bounded Pod logs are
+secret-pattern redacted before investigation persistence and treated as untrusted
+evidence; no model receives them. Secret resources and pull-secret contents are
+never read by the workload collector.
 There are still no cluster mutation endpoints.
 
 ## PoC Storage Exception

@@ -155,6 +155,9 @@ The current deployment uses these variables:
 - `PODPILOT_SERVICE_CA_PATH`, default projected OpenShift service CA path
 - `PODPILOT_ALERTMANAGER_TIMEOUT_SECONDS`, default `8`
 - `PODPILOT_ALERTMANAGER_MAX_ALERTS`, default `250`
+- `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
+- `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
+- `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
 Later model integration will add:
@@ -323,6 +326,28 @@ should appear under Expected heartbeat. Analyze re-checks that the fingerprint i
 still active, creates a durable `recommendation_ready` investigation and audit
 event, and displays only deterministic triage. Viewer users can see results but
 cannot start analysis.
+
+### Verify Milestone 3 workload evidence
+
+Run the unit and sanitized evaluation suite, then confirm the deployed identity's
+read ceiling and application readiness:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing
+. .\scripts\connect-sno.ps1
+oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
+oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
+oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
+oc -n ai-ops rollout status deployment/podpilot --timeout=180s
+```
+
+The reusable observer role should allow Pod, event, controller, node, and Pod-log
+reads but not Secret reads. The separate disposable PoC cluster-admin overlay makes
+the live lab identity broader, so review `deploy/openshift/rbac.yaml` to evaluate
+the production ceiling. A workload investigation must persist collection failures,
+not silently fall back to an empty evidence set. Crash-loop log collection is
+limited to the alert-selected container's current and previous streams; image and
+scheduling investigations do not collect logs.
 
 ## Runbooks
 

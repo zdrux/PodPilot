@@ -122,3 +122,21 @@ until resource, event, metric, and log evidence is collected.
 Consequences: Watchdog can be classified confidently, while workload alerts
 abstain from claiming root cause. Synthetic fixtures gate regression behavior and
 include adversarial annotation text that must remain inert.
+
+## 2026-08-23 - Alert-scoped workload evidence before model analysis
+
+Context: Crash-loop, image-waiting, and scheduling alerts cannot support a root-cause
+claim from Alertmanager labels alone, while broad log or resource harvesting would
+create unnecessary exposure and latency.
+
+Decision: Milestone 3 selects one namespace and Pod from trusted alert-label fields,
+collects bounded status and events, follows at most three controller links, and
+adds only incident-specific evidence: targeted current/previous container logs for
+crash loops, or bounded node capacity and taints for unscheduled Pods. Image-pull
+diagnostics never read pull-secret values. All free text is redacted before it is
+persisted or rendered.
+
+Consequences: The three initial fixtures can graduate to evidence-backed diagnosis,
+but alerts missing Pod identity remain low-confidence triage. Cluster collection
+failures are explicit limitations, and model integration still consumes only the
+normalized evidence contract rather than Kubernetes client objects.

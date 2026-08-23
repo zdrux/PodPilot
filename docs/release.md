@@ -32,12 +32,12 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Secret-like text in collected evidence is redacted before model and telemetry egress.
 - Evidence disagreement causes uncertainty or abstention rather than fabrication.
 
-Milestone 2 automates the Watchdog-only healthy view, explicit Alertmanager
+Milestone 3 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,
-bounded alert normalization, and synthetic CrashLooping, image-waiting, and
-unscheduled triage expectations. Metrics, resource state, events, and log evidence
-remain required before those three capability fixtures can graduate from triage
-to root-cause evaluation.
+bounded alert normalization, workload collection degradation, and evidence-backed
+synthetic CrashLooping, image-waiting, and unscheduled diagnoses. Rule-state and
+PromQL evidence remain a later enhancement; the three workload fixtures no longer
+claim root cause from Alertmanager data alone.
 
 ## Rollback
 

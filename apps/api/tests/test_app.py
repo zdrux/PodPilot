@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,14 @@ from podpilot_api.database import build_engine
 from podpilot_api.main import create_app
 from podpilot_api.models import AuditEvent, Base, Investigation
 from podpilot_api.settings import Settings
+from podpilot_diagnostics.workloads import (
+    ContainerEvidence,
+    EventEvidence,
+    OwnerEvidence,
+    WorkloadEvidence,
+)
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
+from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -25,6 +33,21 @@ class FakeAlertSource:
         if self.error:
             raise AlertSourceError(self.error)
         return AlertSnapshot(self.alerts, datetime.now(timezone.utc))
+
+
+class FakeWorkloadSource:
+    def __init__(self, evidence: WorkloadEvidence) -> None:
+        self.evidence = evidence
+        self.calls: list[dict[str, object]] = []
+
+    def collect(self, **kwargs) -> WorkloadEvidence:
+        self.calls.append(kwargs)
+        return self.evidence
+
+
+class FailingWorkloadSource:
+    def collect(self, **kwargs) -> WorkloadEvidence:
+        raise WorkloadEvidenceError("The Kubernetes API is temporarily unavailable.")
 
 
 def watchdog() -> AlertRecord:
@@ -41,11 +64,74 @@ def watchdog() -> AlertRecord:
     )
 
 
+def crashloop() -> AlertRecord:
+    return AlertRecord(
+        fingerprint="crashloop-1",
+        state="active",
+        labels={
+            "alertname": "KubePodCrashLooping",
+            "severity": "warning",
+            "namespace": "demo",
+            "pod": "api-abc",
+            "container": "api",
+        },
+        annotations={"summary": "Container restarts"},
+        starts_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        ends_at=None,
+        updated_at=None,
+        silenced_by=(),
+        inhibited_by=(),
+    )
+
+
+def crashloop_evidence() -> WorkloadEvidence:
+    now = datetime(2026, 8, 23, tzinfo=timezone.utc)
+    return WorkloadEvidence(
+        namespace="demo",
+        pod_name="api-abc",
+        pod_uid="pod-uid",
+        phase="Running",
+        node_name="worker-0",
+        requests={"memory": "128Mi"},
+        conditions=("Ready=False",),
+        containers=(
+            ContainerEvidence(
+                name="api",
+                image="example.invalid/api:v1",
+                ready=False,
+                restart_count=8,
+                state="waiting",
+                reason="CrashLoopBackOff",
+                message="back-off restarting",
+                last_reason="OOMKilled",
+                last_exit_code=137,
+            ),
+        ),
+        events=(
+            EventEvidence(
+                id="event-backoff",
+                reason="BackOff",
+                message="Back-off restarting container api",
+                event_type="Warning",
+                observed_at=now,
+                source="kubernetes:event/backoff",
+            ),
+        ),
+        owners=(OwnerEvidence("apps/v1", "ReplicaSet", "api-abc", 1, 0, 1),),
+        nodes=(),
+        current_logs={"api": "starting"},
+        previous_logs={"api": "process terminated"},
+        collected_at=now,
+        failures=(),
+    )
+
+
 def make_app(
     tmp_path: Path,
     *,
     assignments: dict[str, Role],
     source: FakeAlertSource,
+    workload_source: FakeWorkloadSource | None = None,
 ):
     settings = Settings(
         environment="test",
@@ -59,7 +145,15 @@ def make_app(
     engine = build_engine(settings)
     Base.metadata.create_all(engine)
     engine.dispose()
-    return create_app(settings, StaticRoleResolver(assignments), source), settings
+    return (
+        create_app(
+            settings,
+            StaticRoleResolver(assignments),
+            source,
+            workload_source,
+        ),
+        settings,
+    )
 
 
 def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
@@ -114,6 +208,68 @@ def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Pa
         assert db_session.scalar(select(func.count()).select_from(Investigation)) == 1
         assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == 1
     engine.dispose()
+
+
+def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Path) -> None:
+    workload_source = FakeWorkloadSource(crashloop_evidence())
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.INVESTIGATOR},
+        source=FakeAlertSource((crashloop(),)),
+        workload_source=workload_source,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
+        assert detail.status_code == 200
+        assert "exceeding its memory limit" in detail.text
+        assert "Deterministic Milestone 3 analysis" in detail.text
+
+    assert workload_source.calls == [{
+        "namespace": "demo",
+        "pod_name": "api-abc",
+        "container_name": "api",
+        "include_logs": True,
+        "include_nodes": False,
+    }]
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        investigation = db_session.scalar(select(Investigation))
+        assert investigation is not None
+        snapshot = json.loads(investigation.alert_snapshot_json)
+        assert snapshot["workload"]["pod_uid"] == "pod-uid"
+        analysis = json.loads(investigation.analysis_json)
+        assert analysis["hypotheses"][0]["confidence"] == "high"
+    engine.dispose()
+
+
+def test_workload_collection_failure_preserves_deterministic_triage(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path,
+        assignments={"ada": Role.INVESTIGATOR},
+        source=FakeAlertSource((crashloop(),)),
+        workload_source=FailingWorkloadSource(),
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
+        assert detail.status_code == 200
+        assert "Kubernetes API is temporarily unavailable" in detail.text
+        assert "low confidence" in detail.text
 
 
 def test_viewer_cannot_start_analysis(tmp_path: Path) -> None:

@@ -33,7 +33,7 @@ and persists schema state in SQLite on the `podpilot-data` PVC. An init containe
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.
 
-Milestone 2 adds a bounded Alertmanager adapter that uses the projected service
+The Alertmanager adapter uses the projected service
 account token and OpenShift service CA to call the in-cluster v2 API. Dashboard
 requests obtain a fresh snapshot; Alertmanager remains the source of truth and
 PodPilot does not create a second alert store. Watchdog is separated from the
@@ -43,8 +43,15 @@ An Investigator can create one durable investigation from an active fingerprint.
 The API re-reads Alertmanager before creation, runs a deterministic alert-type
 triage pack, stores the bounded alert snapshot and evidence-linked result, and
 records an audit event. Analyze is protected by both application role and a
-double-submit CSRF token. Milestone 2 contains no model call, cluster mutation,
-chat, PromQL, event, resource-status, or log collector.
+double-submit CSRF token.
+
+Milestone 3 adds a read-only Kubernetes workload evidence adapter. For the three
+initial workload-alert types it selects exactly one alert-identified Pod, collects
+bounded status and recent events, follows at most three controller owner links,
+and conditionally collects targeted logs for crash loops or at most 50 node
+scheduling summaries for unscheduled Pods. Collection failures are retained as
+limitations, and all event, status-message, image, and log text is redacted before
+persistence. It contains no model call, PromQL query, chat, or cluster mutation.
 
 ## Investigation Flow
 

@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     )
     alertmanager_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     alertmanager_max_alerts: int = Field(default=250, ge=1, le=1000)
+    workload_max_events: int = Field(default=30, ge=1, le=100)
+    workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)
+    workload_max_log_bytes: int = Field(default=16_384, ge=1024, le=65_536)
     poc_mode: bool = False
 
 

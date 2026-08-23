@@ -4,5 +4,16 @@
   "severity": "warning",
   "namespace": "fixture-scheduling",
   "labels": {"alertname": "KubePodNotScheduled", "namespace": "fixture-scheduling"},
-  "annotations": {"summary": "Synthetic scheduling fixture"}
+  "annotations": {"summary": "Synthetic scheduling fixture"},
+  "workload": {
+    "pod_name": "oversized-0",
+    "phase": "Pending",
+    "node_name": null,
+    "requests": {"cpu": "64", "memory": "128Gi"},
+    "containers": [{"name": "worker", "image": "registry.example.invalid/worker:v1", "ready": false, "restart_count": 0, "state": "waiting", "reason": "PodInitializing", "message": null, "last_reason": null, "last_exit_code": null}],
+    "events": [{"id": "event-scheduling", "reason": "FailedScheduling", "message": "0/1 nodes are available: 1 Insufficient cpu.", "event_type": "Warning", "source": "kubernetes:event/scheduling"}],
+    "previous_logs": {},
+    "owner": {"api_version": "apps/v1", "kind": "StatefulSet", "name": "oversized", "desired_replicas": 1, "ready_replicas": 0, "updated_replicas": 1},
+    "nodes": [{"name": "worker-0", "allocatable": {"cpu": "8", "memory": "24Gi", "pods": "250"}, "taints": [], "unschedulable": false}]
+  }
 }

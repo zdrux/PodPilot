@@ -30,6 +30,11 @@ from podpilot_openshift.alerts import (
     AlertmanagerClient,
 )
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
+from podpilot_openshift.workloads import (
+    KubernetesWorkloadClient,
+    WorkloadEvidenceError,
+    WorkloadEvidenceSource,
+)
 
 CSRF_COOKIE = "podpilot_csrf"
 
@@ -47,6 +52,14 @@ def _make_alert_source(settings: Settings) -> AlertSource:
         ca_path=settings.service_ca_path,
         timeout_seconds=settings.alertmanager_timeout_seconds,
         max_alerts=settings.alertmanager_max_alerts,
+    )
+
+
+def _make_workload_source(settings: Settings) -> WorkloadEvidenceSource:
+    return KubernetesWorkloadClient(
+        max_events=settings.workload_max_events,
+        log_tail_lines=settings.workload_log_tail_lines,
+        max_log_bytes=settings.workload_max_log_bytes,
     )
 
 
@@ -92,12 +105,14 @@ def create_app(
     settings: Settings | None = None,
     role_resolver: RoleResolver | None = None,
     alert_source: AlertSource | None = None,
+    workload_source: WorkloadEvidenceSource | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
         cache_seconds=app_settings.role_cache_seconds
     )
     alerts = alert_source or _make_alert_source(app_settings)
+    workloads = workload_source or _make_workload_source(app_settings)
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
 
     @asynccontextmanager
@@ -109,7 +124,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.2.0",
+        version="0.3.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -252,7 +267,36 @@ def create_app(
 
         investigation_id = str(uuid4())
         evidence = _to_evidence(alert)
-        analysis = analyze_alert(evidence)
+        workload = None
+        workload_failure = None
+        pod_name = evidence.labels.get("pod")
+        if alert.name in {
+            "KubePodCrashLooping",
+            "KubeContainerWaiting",
+            "KubePodNotScheduled",
+        }:
+            if not evidence.namespace or not pod_name:
+                workload_failure = (
+                    "The alert did not identify both a namespace and Pod, so live workload evidence was not collected."
+                )
+            else:
+                try:
+                    workload = await run_in_threadpool(
+                        workloads.collect,
+                        namespace=evidence.namespace,
+                        pod_name=pod_name,
+                        container_name=evidence.labels.get("container"),
+                        include_logs=alert.name == "KubePodCrashLooping",
+                        include_nodes=alert.name == "KubePodNotScheduled",
+                    )
+                except WorkloadEvidenceError as exc:
+                    workload_failure = str(exc)
+        analysis = analyze_alert(evidence, workload=workload)
+        if workload_failure:
+            analysis = replace(
+                analysis,
+                limitations=(*analysis.limitations, workload_failure),
+            )
         alert_snapshot = {
             "fingerprint": evidence.fingerprint,
             "state": evidence.state,
@@ -262,6 +306,7 @@ def create_app(
             "collected_at": snapshot.collected_at,
             "silenced": alert.is_silenced,
             "inhibited": alert.is_inhibited,
+            "workload": workload.to_dict() if workload else None,
         }
         alert_json = json.dumps(alert_snapshot, default=_json_default, sort_keys=True)
         analysis_json = json.dumps(analysis.to_dict(), default=_json_default, sort_keys=True)

@@ -7,11 +7,11 @@ Update when: top-level structure, core tooling, or verification commands change.
 
 | Path | Responsibility | Status |
 | --- | --- | --- |
-| `apps/api/` | AI orchestration and HTTP API | Milestone 2 durable alert investigation flow |
+| `apps/api/` | AI orchestration and HTTP API | Milestone 3 durable workload investigation flow |
 | `apps/web/` | operator investigation UI | live alert queue and evidence-linked investigation views |
-| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | group resolver and bounded Alertmanager v2 client |
-| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | alert evidence contracts and first triage pack |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 2 deployed on SNO |
+| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | group, alert, and bounded workload evidence clients |
+| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | alert and workload evidence contracts plus capability pack 1 |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 3 deployed on SNO |
 | `evals/` | incident fixtures and expected outcomes | three synthetic workload-alert fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
@@ -40,7 +40,10 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `apps/web/`: local templates, styles, and JavaScript with no CDN dependency.
 - `packages/openshift-client/src/podpilot_openshift/roles.py`: cached OpenShift group-role resolution.
 - `packages/openshift-client/src/podpilot_openshift/alerts.py`: TLS-validated, bounded Alertmanager transport.
+- `packages/openshift-client/src/podpilot_openshift/workloads.py`: bounded Pod,
+  event, owner-chain, log, and scheduling evidence collection.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
+- `packages/diagnostics/src/podpilot_diagnostics/workloads.py`: portable workload evidence contracts.
 - `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
 - `deploy/openshift/rbac.yaml`: read-only observer permissions.
 - `deploy/openshift/workload/`: Deployment, OAuth-protected Service/Route, and NetworkPolicy.
