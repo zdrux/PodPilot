@@ -286,7 +286,7 @@ The sanitized live fixture is optional and disposable:
 ```powershell
 oc apply -f evals/live/remediation-crashloop.yaml
 oc -n podpilot-remediation-fixture wait --for=jsonpath='{.status.containerStatuses[0].state.waiting.reason}'=CrashLoopBackOff pod -l app=broken-api --timeout=180s
-# After PodPilot creates the preview, make the next Pod healthy without changing its Pod/ReplicaSet preconditions:
+# After PodPilot creates the preview, make the next Pod healthy without changing its Pod/StatefulSet preconditions:
 oc -n podpilot-remediation-fixture patch configmap fixture-mode --type=merge --patch '{"data":{"MODE":"healthy"}}'
 # Approve only the controller-owned Pod replacement in the UI, verify the new UID is Ready, then remove the exact lab resources:
 oc delete prometheusrule podpilot-remediation-fixture -n openshift-monitoring

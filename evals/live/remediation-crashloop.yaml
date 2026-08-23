@@ -15,13 +15,14 @@ data:
   MODE: fail
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: broken-api
   namespace: podpilot-remediation-fixture
   labels:
     app: broken-api
 spec:
+  serviceName: broken-api
   replicas: 1
   selector:
     matchLabels:
@@ -78,10 +79,16 @@ spec:
       interval: 15s
       rules:
         - alert: KubePodCrashLooping
-          expr: kube_pod_container_status_waiting_reason{namespace="podpilot-remediation-fixture",reason="CrashLoopBackOff"} == 1
+          # Platform Prometheus intentionally excludes user-namespace kube-state
+          # metrics on this SNO. The constant alert identifies the stable
+          # StatefulSet Pod; PodPilot must still prove the live CrashLoop state.
+          expr: vector(1)
           for: 0m
           labels:
             severity: warning
+            namespace: podpilot-remediation-fixture
+            pod: broken-api-0
+            container: api
           annotations:
             summary: Synthetic PodPilot controller-owned crash-loop fixture
             description: This sanitized lab alert exists only to test previewed and approved remediation.
