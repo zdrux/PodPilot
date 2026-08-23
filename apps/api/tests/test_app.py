@@ -478,3 +478,34 @@ def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert "Model interpretation unavailable" in detail.text
         assert "expected monitoring heartbeat" in detail.text
+
+
+def test_failed_probe_reason_is_shown_with_deterministic_fallback(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore("test-api-token")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource((watchdog(),)),
+        credential_store=credentials,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.invalid/v1",
+            chat_model="local-model", embedding_model=None, timeout_seconds=3,
+            max_output_tokens=512, status="unavailable", capabilities_json="{}",
+            last_error="Provider request failed (ConnectionError).", updated_by="ada",
+        ))
+        db_session.commit()
+    engine.dispose()
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/watchdog-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
+        assert "Provider request failed (ConnectionError)" in detail.text
+        assert "expected monitoring heartbeat" in detail.text

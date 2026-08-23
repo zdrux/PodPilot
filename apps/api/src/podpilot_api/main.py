@@ -538,6 +538,8 @@ def create_app(
                 model_result = {"status": "unavailable", "detail": str(exc)}
         elif profile is not None:
             model_result = {"status": profile.status}
+            if profile.last_error:
+                model_result["detail"] = profile.last_error
         analysis_payload["model"] = model_result
         analysis_json = json.dumps(analysis_payload, default=_json_default, sort_keys=True)
         with Session(request.app.state.engine) as db_session:
