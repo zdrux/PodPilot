@@ -5,5 +5,4 @@ resources:
   - service.yaml
   - route.yaml
   - network-policy.yaml
-  - model-credentials.yaml
   - model-credentials-rbac.yaml

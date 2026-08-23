@@ -217,7 +217,7 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    Remove-Variable cookie
    ```
 
-   Transfer the local OpenAI key directly into the pre-created model Secret
+   Create or replace the model Secret directly from the local OpenAI key
    without printing it or writing it to disk:
 
    ```powershell
@@ -229,6 +229,10 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    blank, and run **Test connection**. A profile is used only when every required
    capability passes. Rotate the provider key if it ever appears in terminal or
    application output.
+
+   `model-credentials.yaml` documents the fixed Secret identity but is deliberately
+   excluded from the workload kustomization so a later manifest apply cannot erase
+   an existing token.
 
 5. Validate and deploy the complete SNO overlay, then add the separate PoC
    cluster-admin exception:
