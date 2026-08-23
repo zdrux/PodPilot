@@ -6,6 +6,11 @@
   <p class="eyebrow">PodPilot access boundary</p>
   <h1>Unable to open this workspace</h1>
   <p>{{ detail }}</p>
-  <a class="button primary" href="/oauth/sign_in">Return to OpenShift sign-in</a>
+  {% if status_code == 403 %}
+  <p>To use a different OpenShift account, clear this PodPilot session. If OpenShift immediately selects the same account, clear the OAuth site session or retry in a private browser window.</p>
+  <a class="button primary" href="/oauth/sign_out">Clear PodPilot session</a>
+  {% else %}
+  <a class="button primary" href="/oauth/sign_out">Start a new OpenShift sign-in</a>
+  {% endif %}
 </section>
 {% endblock %}

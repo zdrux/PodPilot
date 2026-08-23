@@ -8,7 +8,11 @@ from starlette.concurrency import run_in_threadpool
 
 from podpilot_api.settings import Settings
 
-USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,252}$")
+# OpenShift virtual users and service-account identities commonly contain colons
+# (for example, kube:admin and system:serviceaccount:namespace:name). Keep the
+# header bounded and reject whitespace/control characters without treating valid
+# OpenShift identity syntax as an authentication failure.
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,252}$")
 
 
 class Role(IntEnum):

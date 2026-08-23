@@ -69,6 +69,12 @@ performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
 granting access. The API then reads only the four configured Group objects to
 derive the application role.
 
+OpenShift usernames may contain colons, including virtual users and service-account
+identities. PodPilot accepts that identity syntax but still denies access unless
+the resolved user belongs to a configured PodPilot application-role group. A valid
+upstream identity with no application role is an authorization failure (403), not
+an authentication failure (401).
+
 Milestone 2 adds only one state-changing application operation: creating a local
 investigation record. It requires Investigator-or-higher application role and a
 same-site double-submit CSRF token. The server re-reads the active Alertmanager

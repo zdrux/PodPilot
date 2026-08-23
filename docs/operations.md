@@ -121,6 +121,24 @@ The HTPasswd provider authenticates users to OpenShift. The deployed OAuth proxy
 protects the Route and supplies the authenticated username to the loopback-only
 backend. PodPilot resolves its application role from the named OpenShift groups.
 
+### Troubleshoot an interactive login loop
+
+OpenShift OAuth can reuse an existing browser SSO session. If the PodPilot access
+page identifies an account such as `kube:admin`, clearing only the PodPilot cookie
+can cause OpenShift to select that same account again. This is an authorization
+failure for the selected account, not an HTPasswd password failure.
+
+Use a private browser window, or clear site data for both hosts before retrying:
+
+- `podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io`
+- `oauth-openshift.apps.sno.192-168-0-200.sslip.io`
+
+Then sign in as one of the four `podpilot-*` users. Use
+`copy-poc-user-password.ps1` to copy that user's current lab password without
+printing it. Do not repeatedly follow an access-error sign-in link: reused OAuth
+callbacks can end at the proxy's generic 500 page even though the HTPasswd
+provider and credentials are healthy.
+
 ## Environment Variables
 
 The current deployment uses these variables:

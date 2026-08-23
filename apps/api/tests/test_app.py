@@ -149,6 +149,25 @@ def test_alertmanager_failure_is_explicitly_degraded(tmp_path: Path) -> None:
 def test_unknown_and_malformed_users_fail_closed(tmp_path: Path) -> None:
     app, _ = make_app(tmp_path, assignments={}, source=FakeAlertSource())
     with TestClient(app) as client:
-        assert client.get("/", headers={"x-forwarded-user": "unknown"}).status_code == 403
+        unknown = client.get("/", headers={"x-forwarded-user": "unknown"})
+        assert unknown.status_code == 403
+        assert 'href="/oauth/sign_out"' in unknown.text
+        assert 'href="/oauth/sign_in"' not in unknown.text
+        assert client.get("/", headers={"x-forwarded-user": "kube:admin"}).status_code == 403
         assert client.get("/", headers={"x-forwarded-user": "bad user"}).status_code == 401
         assert client.get("/health/live").json() == {"status": "ok"}
+
+
+def test_colon_delimited_openshift_identity_can_receive_a_role(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path,
+        assignments={"system:admin": Role.VIEWER},
+        source=FakeAlertSource(),
+    )
+    with TestClient(app) as client:
+        session = client.get(
+            "/api/v1/session",
+            headers={"x-forwarded-user": "system:admin"},
+        )
+        assert session.status_code == 200
+        assert session.json() == {"username": "system:admin", "role": "viewer"}
