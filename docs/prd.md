@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.5; Milestone 6 remediation lifecycle reconciliation implemented
+Status: Draft v0.6; Milestone 7 bounded diagnostic plans implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
@@ -272,6 +272,23 @@ preview when a read-only recheck finds the exact target missing or stale. An
 incomplete or unavailable alert snapshot cannot authorize execution and cannot
 be used to infer that an alert resolved. Every closure records actor, time,
 reason, detail, and an audit event.
+
+### 5.9 Bounded diagnostic plan lifecycle
+
+Supported alert packs can persist a server-owned sequence of registered read-only
+checks. An Investigator starts the queued plan with one explicit control; the
+browser sends only the investigation ID. It cannot submit tool names, Kubernetes
+targets, commands, or query text. Each check is atomically claimed once, bounded
+by configured check, Pod, event, and response limits, and records its actor,
+tool, outcome, observations, provenance, and collection limitations.
+
+Milestone 7 first supports `TargetDown` when the normalized alert identifies a
+namespace and Service. PodPilot resolves the Service selector, EndpointSlices,
+bounded matching Pod health, and bounded recent Pod events. Results become
+confirmed observations and are supplied to the configured model for a fresh
+schema-validated interpretation. Provider failure leaves the deterministic
+results usable. Active network probing, arbitrary PromQL, generic Kubernetes
+reads, shell, generated tools, and diagnostic mutation remain out of scope.
 
 ## 6. Cluster Memory
 

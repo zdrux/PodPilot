@@ -6,7 +6,7 @@
   <a class="button secondary" href="/">Back to queue</a>
 </header>
 
-<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 6 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 7 investigation</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Diagnostic tools are registered, bounded, read-only, and audited. {% if investigation.analysis.model.status == 'ready' %}The model interpretation is updated after new checks complete.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so deterministic evidence remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
 
 <section class="investigation-summary panel">
   <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
@@ -14,8 +14,26 @@
   {% if investigation.alert.workload %}<div class="alert-meta"><span>Pod {{ investigation.alert.workload.namespace }}/{{ investigation.alert.workload.pod_name }}</span><span>{{ investigation.alert.workload.events | length }} recent events</span><span>{{ investigation.alert.workload.containers | length }} containers</span></div>{% endif %}
 </section>
 
+{% if checks %}
+{% set queued_checks = checks | selectattr('status', 'equalto', 'queued') | list %}
+<section class="panel investigation-plan" id="investigation-plan">
+  <div class="panel-header"><div><p class="eyebrow">Agent investigation</p><h2>Safe diagnostic plan</h2></div><span class="tag">{{ checks | length }} registered checks</span></div>
+  <div class="plan-intro"><div><strong>PodPilot will perform these checks itself</strong><p>The server selected this plan from the alert type and persisted scope. The model can interpret results, but it cannot add tools, change targets, or execute shell commands.</p></div>{% if queued_checks and user.role.value >= 20 %}<button class="button primary run-checks-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/checks/run">Run {{ queued_checks | length }} safe checks</button>{% elif queued_checks %}<span class="tag">Investigator required</span>{% endif %}</div>
+  <ol class="plan-list">
+  {% for check in checks %}
+    <li class="plan-item status-{{ check.status }}">
+      <div class="plan-marker">{{ check.position }}</div>
+      <div class="plan-content"><div class="plan-heading"><div><h3>{{ check.title }}</h3><p>{{ check.purpose }}</p></div><span class="tag">{{ check.status }}</span></div>
+      {% if check.result %}<div class="check-result"><strong>{{ check.result.summary }}</strong>{% if check.result.observations %}<ul class="check-observation-list">{% for observation in check.result.observations %}<li><span>{{ observation.title }}</span><small>{{ observation.source }}</small></li>{% endfor %}</ul>{% endif %}{% for limitation in check.result.limitations %}<p class="check-limitation">Limit: {{ limitation }}</p>{% endfor %}</div>{% endif %}
+      {% if check.requested_by %}<small class="plan-audit">Requested by {{ check.requested_by }}{% if check.completed_at %} · completed {{ check.completed_at }}{% endif %} · {{ check.tool_name }}</small>{% endif %}</div>
+    </li>
+  {% endfor %}
+  </ol>
+</section>
+{% endif %}
+
 {% if investigation.analysis.model.status == 'ready' %}
-<section class="panel model-analysis"><div class="panel-header"><div><p class="eyebrow">Model interpretation</p><h2>{{ investigation.analysis.model.summary }}</h2></div><span class="tag">Untrusted interpretation</span></div><div class="model-analysis-body"><p>{{ investigation.analysis.model.operational_context }}</p><h3>Suggested checks</h3><ol>{% for check in investigation.analysis.model.recommended_checks %}<li>{{ check }}</li>{% endfor %}</ol>{% if investigation.analysis.model.caveats %}<h3>Caveats</h3><ul>{% for caveat in investigation.analysis.model.caveats %}<li>{{ caveat }}</li>{% endfor %}</ul>{% endif %}</div></section>
+<section class="panel model-analysis"><div class="panel-header"><div><p class="eyebrow">AI evidence interpretation</p><h2>{{ investigation.analysis.model.summary }}</h2></div><span class="tag">{% if investigation.analysis.model.updated_after_checks %}Updated after checks{% else %}Initial interpretation{% endif %}</span></div><div class="model-analysis-body"><p>{{ investigation.analysis.model.operational_context }}</p><h3>AI guidance</h3><ol>{% for check in investigation.analysis.model.recommended_checks %}<li>{{ check }}</li>{% endfor %}</ol>{% if investigation.analysis.model.caveats %}<h3>Caveats</h3><ul>{% for caveat in investigation.analysis.model.caveats %}<li>{{ caveat }}</li>{% endfor %}</ul>{% endif %}</div></section>
 {% elif investigation.analysis.model.status == 'unavailable' %}
 <section class="notice danger"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Model interpretation unavailable</strong><p>{{ investigation.analysis.model.detail }} Deterministic evidence and checks are still available.</p></div></section>
 {% endif %}
@@ -30,7 +48,7 @@
 </div>
 
 <div class="investigation-grid">
-  <section class="panel checklist-panel"><div class="panel-header"><h2>Recommended next checks</h2></div><ol>{% for check in investigation.analysis.next_checks %}<li>{{ check }}</li>{% endfor %}</ol></section>
+  {% if not checks %}<section class="panel checklist-panel"><div class="panel-header"><h2>Manual follow-up guidance</h2></div><ol>{% for check in investigation.analysis.next_checks %}<li>{{ check }}</li>{% endfor %}</ol></section>{% endif %}
   <section class="panel checklist-panel limitation-panel"><div class="panel-header"><h2>Missing evidence and limits</h2></div><ul>{% for limitation in investigation.analysis.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>
 </div>
 

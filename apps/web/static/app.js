@@ -137,4 +137,27 @@
       }
     });
   });
+  document.querySelectorAll(".run-checks-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!csrf || !button.dataset.actionUrl) return;
+      button.disabled = true;
+      button.textContent = "Investigating…";
+      try {
+        const response = await fetch(button.dataset.actionUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "The diagnostic checks could not be completed.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = "Run safe checks";
+      }
+    });
+  });
 })();

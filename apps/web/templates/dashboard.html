@@ -18,7 +18,7 @@
   <span class="notice-icon" aria-hidden="true">i</span>
   <div>
     <strong>PoC lab safeguards are active</strong>
-    <p>State is stored on this single node. Milestone 6 adds explicit cancellation and automatic stale-preview reconciliation to the typed-action safeguards.</p>
+    <p>State is stored on this single node. Milestone 7 adds persisted, bounded read-only diagnostic plans while preserving the typed-action safeguards.</p>
   </div>
 </section>
 {% endif %}
@@ -90,7 +90,7 @@
   </section>
 
   <aside class="panel foundation-panel" id="recent-investigations">
-    <div class="panel-header"><div><p class="eyebrow">Milestone 6</p><h2>Recent investigations</h2></div></div>
+    <div class="panel-header"><div><p class="eyebrow">Milestone 7</p><h2>Recent investigations</h2></div></div>
     {% if recent_investigations %}
     <ul class="investigation-list">
       {% for item in recent_investigations %}
@@ -105,5 +105,5 @@
 </div>
 
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
-<footer class="page-footer"><span>PodPilot 0.6.0</span><span>Rendered <time id="render-time" datetime="{{ now.isoformat() }}">{{ now.strftime('%H:%M:%S UTC') }}</time></span></footer>
+<footer class="page-footer"><span>PodPilot 0.7.0</span><span>Rendered <time id="render-time" datetime="{{ now.isoformat() }}">{{ now.strftime('%H:%M:%S UTC') }}</time></span></footer>
 {% endblock %}

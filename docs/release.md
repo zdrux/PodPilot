@@ -58,6 +58,14 @@ Truncated Alertmanager snapshots must neither cancel previews nor authorize an
 action. Live QA must confirm cancellation performs no Kubernetes mutation and
 that a removed target is closed by `system:reconciler`.
 
+Milestone 7 adds gates for server-owned `TargetDown` planning, missing-scope
+abstention, Viewer denial, CSRF denial, atomic single execution, registered-tool
+enforcement, bounded Service/EndpointSlice/Pod/event reads, event redaction,
+durable failure results, evidence provenance, audit attribution, model
+re-interpretation, and model-free fallback. Live QA uses only the sanitized
+`targetdown-investigation.yaml` fixture and must remove its namespace and platform
+PrometheusRule after verifying the investigation plan.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

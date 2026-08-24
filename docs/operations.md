@@ -158,6 +158,8 @@ The current deployment uses these variables:
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
+- `PODPILOT_DIAGNOSTIC_MAX_CHECKS`, default `4`, with a hard accepted range of
+  `1` through `10`
 - `PODPILOT_MODEL_CREDENTIAL_STORE`, `environment` for local development or
   `kubernetes` in the OpenShift workload
 - `PODPILOT_MODEL_SECRET_NAMESPACE`, default `ai-ops`
@@ -257,6 +259,9 @@ Review `deploy/openshift/rbac.yaml` whenever a diagnostic adds a new API depende
 Production packaging must omit both SNO overlays, use a supported storage class,
 and pin an immutable application image digest.
 
+Milestone 7 adds read-only `get`, `list`, and `watch` access to EndpointSlices in
+the reusable observer role. It adds no mutation or Secret verbs.
+
 ### Typed remediation in the PoC lab
 
 The reusable observer RBAC remains read-only. The disposable SNO lab's explicit
@@ -301,6 +306,30 @@ The fixture rule is installed in `openshift-monitoring` because user-workload
 monitoring is disabled on this SNO. The rule observes only the disposable
 fixture namespace; PodPilot still rejects remediation targets in protected
 system namespaces.
+
+### Bounded diagnostic plans
+
+`TargetDown` investigations that identify a namespace and Service show a
+server-owned **Safe diagnostic plan**. An Investigator can press **Run safe
+checks** once. PodPilot reads the Service, at most 20 matching Pods, at most 20
+EndpointSlices, and events from at most five Pods within the configured event
+limit. It then adds those observations to the investigation and asks a ready
+model profile to reassess them. No model is required to run or retain the checks.
+
+Exercise the disposable live fixture with:
+
+```powershell
+. .\scripts\connect-sno.ps1
+oc apply -f evals/live/targetdown-investigation.yaml
+oc -n podpilot-targetdown-fixture rollout status deployment/check-endpoints --timeout=120s
+# Analyze the synthetic TargetDown alert and press Run safe checks as an Investigator.
+oc delete prometheusrule podpilot-targetdown-fixture -n openshift-monitoring --ignore-not-found
+oc delete namespace podpilot-targetdown-fixture --ignore-not-found
+```
+
+The plan should report Service selector, EndpointSlice readiness, selected Pod
+health, bounded events, tool names, and the requesting OpenShift user. A second
+run returns a conflict and must not duplicate tool activity.
 
 ### Trust the SNO router CA for interactive login
 

@@ -143,3 +143,16 @@ cannot be proven active. A separate read-only target validation classifies exact
 identity as current, stale, missing, or unavailable. Only stale or missing closes
 the preview automatically; transient Kubernetes failures leave it unapproved and
 visible for retry.
+
+Milestone 7 does not give the model Kubernetes credentials or a generic tool
+channel. Normal code selects check types and exact namespace/Service scope from a
+normalized alert. The browser submits only an investigation ID, and an
+Investigator role plus same-site CSRF is required. The API atomically claims at
+most `PODPILOT_DIAGNOSTIC_MAX_CHECKS` queued records and invokes a fixed read-only
+executor. Service selectors influence only bounded API LIST filters; cluster
+text is redacted and returned as evidence, never evaluated as instructions.
+Check failures are durable and do not fall through to shell, retries, broader
+scope, Secrets, active probes, or mutation.
+The reusable observer role adds only read access to `discovery.k8s.io`
+`EndpointSlices`; Service, Pod, and Event reads were already part of its evidence
+ceiling. No new mutation or Secret permission is introduced.

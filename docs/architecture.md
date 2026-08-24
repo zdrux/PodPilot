@@ -90,6 +90,16 @@ Investigation creators and Approvers may explicitly cancel previews; only
 Approvers retain execution permission. Closure reason, actor, time, and detail
 are persisted in the action result and audit stream.
 
+Milestone 7 adds persisted `DiagnosticCheck` records and a server-owned tool
+registry. A `TargetDown` investigation with namespace and Service labels receives
+two queued checks: Service/EndpointSlice/Pod topology and bounded target-Pod
+events. An Investigator can atomically claim the plan once. The OpenShift adapter
+performs only fixed Kubernetes GET/LIST calls, redacts free text, and returns
+portable evidence contracts. Results are appended to confirmed observations and
+the model is called again with the expanded evidence. The model and browser
+cannot add a tool, target, selector, command, or mutation. Existing compatible
+investigations receive the plan lazily when opened after the schema upgrade.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.
@@ -97,8 +107,9 @@ are persisted in the action result and audit stream.
 3. Deterministic tools collect only the required cluster evidence.
 4. The diagnostics engine correlates observations and records provenance.
 5. Sensitive values are removed before any external model call.
-6. The model proposes ranked hypotheses and safe verification steps.
-7. The UI presents conclusions alongside supporting evidence and uncertainty.
+6. A supported server-owned plan can execute registered read-only follow-up checks.
+7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
+8. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
 
 ## Source Of Truth Boundaries
 

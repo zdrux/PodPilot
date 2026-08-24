@@ -11,7 +11,14 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app
 from podpilot_api.model_provider import CapabilityReport, ModelInterpretation, ModelProviderError
-from podpilot_api.models import AuditEvent, Base, Investigation, ModelProfile, RemediationAction
+from podpilot_api.models import (
+    AuditEvent,
+    Base,
+    DiagnosticCheck,
+    Investigation,
+    ModelProfile,
+    RemediationAction,
+)
 from podpilot_api.settings import Settings
 from podpilot_diagnostics.workloads import (
     ContainerEvidence,
@@ -19,6 +26,7 @@ from podpilot_diagnostics.workloads import (
     OwnerEvidence,
     WorkloadEvidence,
 )
+from podpilot_diagnostics.checks import CheckObservation, DiagnosticCheckResult
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
 from podpilot_openshift.workloads import WorkloadEvidenceError
@@ -131,6 +139,36 @@ class FakeRemediationExecutor:
         return ActionValidation(self.validation, details[self.validation])
 
 
+class FakeDiagnosticExecutor:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls = []
+
+    def run(self, spec):
+        self.calls.append(spec)
+        if self.fail:
+            return DiagnosticCheckResult(
+                status="failed",
+                summary="Synthetic Kubernetes read failed.",
+                observations=(),
+                limitations=("The fixture API was unavailable.",),
+            )
+        return DiagnosticCheckResult(
+            status="succeeded",
+            summary=f"Synthetic {spec.tool_name} completed.",
+            observations=(
+                CheckObservation(
+                    id=f"check-{spec.id[:8]}-fixture",
+                    title="Discovered one ready endpoint",
+                    detail="The selected Service has one Ready Pod and one ready EndpointSlice address.",
+                    source=f"kubernetes:service/{spec.namespace}/{spec.service_name}",
+                    observed_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+                ),
+            ),
+            limitations=("Synthetic bounded result.",),
+        )
+
+
 def watchdog() -> AlertRecord:
     return AlertRecord(
         fingerprint="watchdog-1",
@@ -157,6 +195,27 @@ def crashloop() -> AlertRecord:
             "container": "api",
         },
         annotations={"summary": "Container restarts"},
+        starts_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        ends_at=None,
+        updated_at=None,
+        silenced_by=(),
+        inhibited_by=(),
+    )
+
+
+def target_down() -> AlertRecord:
+    return AlertRecord(
+        fingerprint="target-down-1",
+        state="active",
+        labels={
+            "alertname": "TargetDown",
+            "severity": "warning",
+            "namespace": "demo",
+            "service": "check-endpoints",
+            "job": "check-endpoints",
+            "instance": "10.0.0.10:8443",
+        },
+        annotations={"summary": "One monitoring target is down"},
         starts_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
         ends_at=None,
         updated_at=None,
@@ -220,6 +279,7 @@ def make_app(
     credential_store: MemoryCredentialStore | None = None,
     model_provider: FakeModelProvider | None = None,
     remediation_executor: FakeRemediationExecutor | None = None,
+    diagnostic_executor: FakeDiagnosticExecutor | None = None,
 ):
     settings = Settings(
         environment="test",
@@ -242,6 +302,7 @@ def make_app(
             credential_store or MemoryCredentialStore(),
             model_provider or FakeModelProvider(),
             remediation_executor or FakeRemediationExecutor(),
+            diagnostic_executor or FakeDiagnosticExecutor(),
         ),
         settings,
     )
@@ -259,8 +320,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 6 adds" in response.text
-        assert "PodPilot 0.6.0" in response.text
+        assert "Milestone 7 adds" in response.text
+        assert "PodPilot 0.7.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -324,7 +385,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Evidence-first Milestone 6 analysis" in detail.text
+        assert "Evidence-first Milestone 7 investigation" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -341,6 +402,180 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         assert snapshot["workload"]["pod_uid"] == "pod-uid"
         analysis = json.loads(investigation.analysis_json)
         assert analysis["hypotheses"][0]["confidence"] == "high"
+    engine.dispose()
+
+
+def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore("test-api-token")
+    provider = FakeModelProvider()
+    diagnostics = FakeDiagnosticExecutor()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "vic": Role.VIEWER},
+        source=FakeAlertSource((target_down(),)),
+        credential_store=credentials,
+        model_provider=provider,
+        diagnostic_executor=diagnostics,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="gpt-5.6-terra", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/alerts/target-down-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Safe diagnostic plan" in detail.text
+        assert "Run 2 safe checks" in detail.text
+        assert "Manual follow-up guidance" not in detail.text
+        assert "PodPilot will perform these checks itself" in detail.text
+
+        denied = client.post(
+            f"/api/v1/investigations/{investigation_id}/checks/run",
+            headers={"x-forwarded-user": "vic", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert denied.status_code == 403
+        csrf_denied = client.post(
+            f"/api/v1/investigations/{investigation_id}/checks/run",
+            headers={"x-forwarded-user": "ivy"},
+        )
+        assert csrf_denied.status_code == 403
+        completed = client.post(
+            f"/api/v1/investigations/{investigation_id}/checks/run",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        assert completed.status_code == 303
+        result_page = client.get(completed.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert result_page.text.count("Discovered one ready endpoint") >= 2
+        assert "Updated after checks" in result_page.text
+        assert "Run 2 safe checks" not in result_page.text
+        repeated = client.post(
+            f"/api/v1/investigations/{investigation_id}/checks/run",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert repeated.status_code == 409
+
+    assert [item.tool_name for item in diagnostics.calls] == [
+        "inspect_service_topology",
+        "inspect_target_events",
+    ]
+    assert len(provider.interpret_calls) == 2
+    assert "diagnostic_results" in provider.interpret_calls[-1]
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        checks = list(
+            db_session.scalars(select(DiagnosticCheck).order_by(DiagnosticCheck.position))
+        )
+        assert [item.status for item in checks] == ["succeeded", "succeeded"]
+        analysis = json.loads(db_session.get(Investigation, investigation_id).analysis_json)
+        assert any(item["title"] == "Discovered one ready endpoint" for item in analysis["observations"])
+        actions = list(db_session.scalars(select(AuditEvent.action)))
+        assert actions.count("diagnostic.execute") == 2
+        assert "diagnostic.plan" in actions
+        assert "investigation.reanalyze" in actions
+    engine.dispose()
+
+
+def test_existing_target_down_investigation_gets_safe_plan_on_open(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(
+            Investigation(
+                id="00000000-0000-0000-0000-000000000007",
+                created_by="ivy",
+                status="recommendation_ready",
+                alert_fingerprint="old-target-down",
+                alert_name="TargetDown",
+                alert_snapshot_json=json.dumps({
+                    "state": "active",
+                    "labels": {
+                        "alertname": "TargetDown",
+                        "severity": "warning",
+                        "namespace": "demo",
+                        "service": "check-endpoints",
+                    },
+                    "annotations": {},
+                    "workload": None,
+                }),
+                analysis_json=json.dumps({
+                    "summary": "TargetDown requires investigation.",
+                    "observations": [],
+                    "hypotheses": [],
+                    "next_checks": ["Inspect the Service."],
+                    "limitations": [],
+                    "model": {"status": "not_configured"},
+                }),
+            )
+        )
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        detail = client.get(
+            "/investigations/00000000-0000-0000-0000-000000000007",
+            headers={"x-forwarded-user": "ivy"},
+        )
+        assert detail.status_code == 200
+        assert "Run 2 safe checks" in detail.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.scalar(select(func.count()).select_from(DiagnosticCheck)) == 2
+        event = db_session.scalar(
+            select(AuditEvent).where(AuditEvent.action == "diagnostic.plan")
+        )
+        assert json.loads(event.details_json)["reason"] == "milestone_7_backfill"
+    engine.dispose()
+
+
+def test_target_down_check_failures_remain_visible_and_model_free(tmp_path: Path) -> None:
+    diagnostics = FakeDiagnosticExecutor(fail=True)
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource((target_down(),)),
+        diagnostic_executor=diagnostics,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/target-down-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        completed = client.post(
+            f"/api/v1/investigations/{investigation_id}/checks/run",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(completed.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert detail.text.count("Synthetic Kubernetes read failed") == 2
+        assert "The fixture API was unavailable" in detail.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert all(item.status == "failed" for item in db_session.scalars(select(DiagnosticCheck)))
     engine.dispose()
 
 
@@ -841,7 +1076,7 @@ def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path
             follow_redirects=False,
         )
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
-        assert "schema-validated model interpretation" in detail.text
+        assert "AI evidence interpretation" in detail.text
         assert "heartbeat evidence is consistent" in detail.text
         assert provider.interpret_calls
 

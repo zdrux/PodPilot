@@ -25,9 +25,20 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIResponsesProvider,
 )
-from podpilot_api.models import AuditEvent, Investigation, ModelProfile, RemediationAction
+from podpilot_api.models import (
+    AuditEvent,
+    DiagnosticCheck,
+    Investigation,
+    ModelProfile,
+    RemediationAction,
+)
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
+from podpilot_diagnostics.checks import (
+    DiagnosticCheckExecutor,
+    DiagnosticCheckSpec,
+    plan_diagnostic_checks,
+)
 from podpilot_diagnostics.redaction import redact_mapping
 from podpilot_diagnostics.remediation import (
     ActionProposal,
@@ -47,6 +58,7 @@ from podpilot_openshift.credentials import (
     EnvironmentCredentialStore,
     KubernetesSecretCredentialStore,
 )
+from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
 from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
 from podpilot_openshift.workloads import (
@@ -154,6 +166,11 @@ def _proposal_from_json(value: str) -> ActionProposal:
     payload["created_at"] = datetime.fromisoformat(payload["created_at"])
     payload["expires_at"] = datetime.fromisoformat(payload["expires_at"])
     return ActionProposal(**payload)
+
+
+def _check_spec_from_row(check: DiagnosticCheck) -> DiagnosticCheckSpec:
+    payload = json.loads(check.input_json)
+    return DiagnosticCheckSpec(**payload)
 
 
 def _aware(value: datetime) -> datetime:
@@ -301,6 +318,7 @@ def create_app(
     credential_store: CredentialStore | None = None,
     model_provider: ModelProvider | None = None,
     remediation_executor: RemediationExecutor | None = None,
+    diagnostic_executor: DiagnosticCheckExecutor | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
@@ -311,6 +329,9 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     provider = model_provider or OpenAIResponsesProvider()
     executor = remediation_executor or KubernetesRemediationExecutor()
+    check_executor = diagnostic_executor or KubernetesDiagnosticCheckExecutor(
+        max_events=app_settings.workload_max_events
+    )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
 
     @asynccontextmanager
@@ -322,7 +343,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.6.0",
+        version="0.7.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -753,6 +774,24 @@ def create_app(
                     preview_json=json.dumps(preview, default=_json_default, sort_keys=True),
                 )
             )
+        check_plan = plan_diagnostic_checks(
+            investigation_id=investigation_id,
+            alert_name=alert.name,
+            labels=evidence.labels,
+        )
+        check_records = [
+            DiagnosticCheck(
+                id=spec.id,
+                investigation_id=investigation_id,
+                position=spec.position,
+                tool_name=spec.tool_name,
+                title=spec.title,
+                purpose=spec.purpose,
+                status="queued",
+                input_json=json.dumps(spec.to_dict(), sort_keys=True),
+            )
+            for spec in check_plan
+        ]
         investigation_status = (
             "awaiting_approval"
             if any(item.status == "preview_ready" for item in action_records)
@@ -771,6 +810,7 @@ def create_app(
                 )
             )
             db_session.add_all(action_records)
+            db_session.add_all(check_records)
             db_session.add(
                 AuditEvent(
                     actor=user.username,
@@ -803,6 +843,22 @@ def create_app(
                         ),
                     )
                 )
+            if check_records:
+                db_session.add(
+                    AuditEvent(
+                        actor="system:planner",
+                        action="diagnostic.plan",
+                        outcome="queued",
+                        details_json=json.dumps(
+                            {
+                                "investigation_id": investigation_id,
+                                "tools": [item.tool_name for item in check_records],
+                                "check_count": len(check_records),
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+                )
             db_session.commit()
 
         return RedirectResponse(
@@ -822,6 +878,51 @@ def create_app(
             investigation = db_session.get(Investigation, investigation_id)
             if investigation is None:
                 raise HTTPException(status_code=404, detail="Investigation not found.")
+            existing_checks = db_session.scalar(
+                select(func.count())
+                .select_from(DiagnosticCheck)
+                .where(DiagnosticCheck.investigation_id == investigation_id)
+            ) or 0
+            if existing_checks == 0:
+                saved_alert = json.loads(investigation.alert_snapshot_json)
+                late_plan = plan_diagnostic_checks(
+                    investigation_id=investigation_id,
+                    alert_name=investigation.alert_name,
+                    labels=saved_alert.get("labels", {}),
+                )
+                if late_plan:
+                    db_session.add_all(
+                        [
+                            DiagnosticCheck(
+                                id=spec.id,
+                                investigation_id=investigation_id,
+                                position=spec.position,
+                                tool_name=spec.tool_name,
+                                title=spec.title,
+                                purpose=spec.purpose,
+                                status="queued",
+                                input_json=json.dumps(spec.to_dict(), sort_keys=True),
+                            )
+                            for spec in late_plan
+                        ]
+                    )
+                    db_session.add(
+                        AuditEvent(
+                            actor="system:planner",
+                            action="diagnostic.plan",
+                            outcome="queued",
+                            details_json=json.dumps(
+                                {
+                                    "investigation_id": investigation_id,
+                                    "tools": [spec.tool_name for spec in late_plan],
+                                    "check_count": len(late_plan),
+                                    "reason": "milestone_7_backfill",
+                                },
+                                sort_keys=True,
+                            ),
+                        )
+                    )
+                    db_session.commit()
             _reconcile_alert_lifecycle(
                 db_session,
                 now=now,
@@ -899,6 +1000,25 @@ def create_app(
                         "result": json.loads(action.result_json) if action.result_json else None,
                     }
                 )
+            checks = [
+                {
+                    "id": check.id,
+                    "position": check.position,
+                    "title": check.title,
+                    "purpose": check.purpose,
+                    "tool_name": check.tool_name,
+                    "status": check.status,
+                    "requested_by": check.requested_by,
+                    "started_at": check.started_at,
+                    "completed_at": check.completed_at,
+                    "result": json.loads(check.result_json) if check.result_json else None,
+                }
+                for check in db_session.scalars(
+                    select(DiagnosticCheck)
+                    .where(DiagnosticCheck.investigation_id == investigation_id)
+                    .order_by(DiagnosticCheck.position.asc())
+                )
+            ]
         response = templates.TemplateResponse(
             request=request,
             name="investigation.html",
@@ -906,6 +1026,7 @@ def create_app(
                 "user": user,
                 "investigation": view,
                 "actions": actions,
+                "checks": checks,
                 "csrf_token": csrf_token,
             },
         )
@@ -919,6 +1040,179 @@ def create_app(
                 max_age=28_800,
             )
         return response
+
+    @app.post("/api/v1/investigations/{investigation_id}/checks/run")
+    async def run_investigation_checks(
+        investigation_id: str,
+        request: Request,
+        user: AuthContext = Depends(current_user),
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(
+                status_code=403,
+                detail="Running diagnostic checks requires the Investigator role or higher.",
+            )
+        now = datetime.now(timezone.utc)
+        claimed: list[tuple[str, DiagnosticCheckSpec]] = []
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            if investigation is None:
+                raise HTTPException(status_code=404, detail="Investigation not found.")
+            queued = list(
+                db_session.scalars(
+                    select(DiagnosticCheck)
+                    .where(
+                        DiagnosticCheck.investigation_id == investigation_id,
+                        DiagnosticCheck.status == "queued",
+                    )
+                    .order_by(DiagnosticCheck.position.asc())
+                    .limit(app_settings.diagnostic_max_checks)
+                )
+            )
+            for check in queued:
+                result = db_session.execute(
+                    update(DiagnosticCheck)
+                    .where(
+                        DiagnosticCheck.id == check.id,
+                        DiagnosticCheck.status == "queued",
+                    )
+                    .values(status="running", started_at=now, requested_by=user.username)
+                )
+                if result.rowcount == 1:
+                    claimed.append((check.id, _check_spec_from_row(check)))
+            if not claimed:
+                raise HTTPException(status_code=409, detail="No queued diagnostic checks remain.")
+            db_session.commit()
+
+        for check_id, spec in claimed:
+            try:
+                result = await run_in_threadpool(check_executor.run, spec)
+                result_payload = result.to_dict()
+                check_status = result.status
+            except Exception as exc:
+                result_payload = {
+                    "status": "failed",
+                    "summary": f"The registered diagnostic check failed ({type(exc).__name__}).",
+                    "observations": [],
+                    "limitations": ["No mutation was attempted. Retry after checking cluster API health."],
+                }
+                check_status = "failed"
+            completed_at = datetime.now(timezone.utc)
+            with Session(request.app.state.engine) as db_session:
+                check = db_session.get(DiagnosticCheck, check_id)
+                if check is None or check.status != "running":
+                    continue
+                check.status = check_status
+                check.completed_at = completed_at
+                check.result_json = json.dumps(
+                    result_payload, default=_json_default, sort_keys=True
+                )
+                db_session.add(
+                    AuditEvent(
+                        actor=user.username,
+                        action="diagnostic.execute",
+                        outcome=check_status,
+                        details_json=json.dumps(
+                            {
+                                "investigation_id": investigation_id,
+                                "check_id": check.id,
+                                "tool_name": check.tool_name,
+                                "observation_count": len(result_payload.get("observations", [])),
+                            },
+                            sort_keys=True,
+                        ),
+                    )
+                )
+                db_session.commit()
+
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            assert investigation is not None
+            analysis_payload = json.loads(investigation.analysis_json)
+            alert_snapshot = json.loads(investigation.alert_snapshot_json)
+            diagnostic_results = [
+                {
+                    "tool_name": check.tool_name,
+                    "title": check.title,
+                    "status": check.status,
+                    "result": json.loads(check.result_json) if check.result_json else None,
+                }
+                for check in db_session.scalars(
+                    select(DiagnosticCheck)
+                    .where(DiagnosticCheck.investigation_id == investigation_id)
+                    .order_by(DiagnosticCheck.position.asc())
+                )
+            ]
+            known_ids = {item["id"] for item in analysis_payload.get("observations", [])}
+            limitations = list(analysis_payload.get("limitations", []))
+            for item in diagnostic_results:
+                result = item.get("result") or {}
+                for observation in result.get("observations", []):
+                    if observation.get("id") not in known_ids:
+                        analysis_payload.setdefault("observations", []).append(observation)
+                        known_ids.add(observation.get("id"))
+                for limitation in result.get("limitations", []):
+                    if limitation not in limitations:
+                        limitations.append(limitation)
+            analysis_payload["limitations"] = limitations
+            analysis_payload["diagnostic_results"] = diagnostic_results
+            profile = db_session.get(ModelProfile, 1)
+            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+
+        model_result: dict[str, object] = analysis_payload.get("model", {"status": "not_configured"})
+        if profile_snapshot:
+            try:
+                api_key = await run_in_threadpool(credentials.get)
+                if not api_key:
+                    raise ModelProviderError("The configured model token is unavailable.")
+                interpretation = await run_in_threadpool(
+                    provider.interpret,
+                    profile_snapshot,
+                    api_key,
+                    {
+                        "alert": alert_snapshot,
+                        "deterministic_analysis": {
+                            key: value for key, value in analysis_payload.items() if key != "model"
+                        },
+                        "diagnostic_results": diagnostic_results,
+                    },
+                )
+                model_result = {
+                    "status": "ready",
+                    "updated_after_checks": True,
+                    **interpretation.model_dump(),
+                }
+            except (CredentialStoreError, ModelProviderError) as exc:
+                model_result = {"status": "unavailable", "detail": str(exc)}
+        analysis_payload["model"] = model_result
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            if investigation is None:
+                raise HTTPException(status_code=404, detail="Investigation not found.")
+            investigation.analysis_json = json.dumps(
+                analysis_payload, default=_json_default, sort_keys=True
+            )
+            db_session.add(
+                AuditEvent(
+                    actor=user.username,
+                    action="investigation.reanalyze",
+                    outcome=str(model_result.get("status", "not_configured")),
+                    details_json=json.dumps(
+                        {
+                            "investigation_id": investigation_id,
+                            "executed_checks": len(claimed),
+                            "model_updated": model_result.get("status") == "ready",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+            db_session.commit()
+        return RedirectResponse(
+            url=f"/investigations/{investigation_id}#investigation-plan",
+            status_code=303,
+        )
 
     @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/approve")
     async def approve_action(

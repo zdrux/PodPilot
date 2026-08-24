@@ -200,3 +200,20 @@ Consequences: Awaiting-approval counts converge without database intervention,
 every closure is attributable, and fewer stale actions reach execution. Dashboard
 and investigation reads may perform safe lifecycle writes, and target validation
 adds bounded Kubernetes reads but no dry-run or mutation.
+
+## 2026-08-23 - Server-owned diagnostic plans before model-selected tools
+
+Context: Investigation pages exposed prose suggestions that neither PodPilot nor
+the operator could execute from the workflow, while giving a model generic
+Kubernetes or shell tools would undermine the policy boundary.
+
+Decision: Milestone 7 persists a typed, server-selected read-only plan for
+`TargetDown`. An Investigator starts the plan, normal code atomically claims and
+executes registered Service-topology and Pod-event checks, and the model
+reinterprets their normalized results. The browser and model provide no tool
+names or targets. Existing compatible investigations are lazily backfilled.
+
+Consequences: PodPilot now performs concrete follow-up investigation instead of
+only printing advice, with deterministic usefulness during model outages. The
+first pack does not yet offer free-form chat, model-selected tools, PromQL/rule
+state, or active network probes; those require separate fixtures and policy gates.
