@@ -7,7 +7,7 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.8.0 / Milestone 8 is implemented and deployed on the disposable SNO
+PodPilot 0.9.0 / Milestone 9 is implemented and deployed on the disposable SNO
 lab. The repository was clean at the last handoff. Start a new session by reading
 this file and `AGENTS.md`, then verify `git status --short` before making changes.
 
@@ -40,8 +40,9 @@ remediation actions after a fresh, explicit approval.
   unavailable or truncated Alertmanager snapshot fails closed without
   cancelling or authorizing the preview.
 - `TargetDown` investigations with namespace and Service scope receive a
-  persisted two-step safe diagnostic plan. An Investigator can run bounded
-  Service/EndpointSlice/Pod topology and recent target-Pod event checks once.
+  persisted three-step safe diagnostic plan. An Investigator can run bounded
+  passive Thanos rule/scrape correlation, Service/EndpointSlice/Pod topology,
+  and recent target-Pod event checks once.
 - Check results become confirmed, cited observations and trigger a fresh model
   interpretation when the configured provider is ready. The plan and evidence
   remain useful without the model.
@@ -53,15 +54,19 @@ remediation actions after a fresh, explicit approval.
   checks remain queued. The proposal cannot execute anything; an Investigator
   must use the separate existing check control and its CSRF, atomic claim, scope,
   and audit gates.
+- The monitoring check submits only fixed `ALERTS` and `up` instant-query shapes
+  to the TLS-validated, authenticated in-cluster Thanos endpoint. Exact alert
+  labels are escaped, responses are capped at 64 KiB and 20 retained series, and
+  results are redacted before becoming evidence.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
   `0006_investigation_chat`.
 
 ## Last Verified State
 
-- Application version: `0.8.0`.
+- Application version: `0.9.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 46 tests passing with 83% aggregate coverage.
+- Automated suite: 54 tests passing with 84% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source
@@ -86,9 +91,17 @@ remediation actions after a fresh, explicit approval.
   `run_queued_checks` proposal and rendered the separate run control. Both checks
   remained queued after the chat turn, proving the proposal did not execute.
   The fixture namespace and PrometheusRule were removed afterward.
-- Latest implementation commit: `f0b2dea` (`Add evidence-cited investigation
-  chat`). OpenShift build `podpilot-20` was built from that commit and deployed
-  at image digest `sha256:bbed3ed37fcf32506a9fe5e2d111bf0a4ea382f2de7237e7934a55462f879269`.
+- Live Milestone 9 fixture investigation
+  `9bdee782-bc08-418e-9922-cec6f66b3f16` ran all three checks under
+  `podpilot-breakglass`. Thanos returned one matching firing `ALERTS` series and
+  zero matching `up` series, so the deterministic result correctly left target
+  discovery unresolved. All checks succeeded, the model status was ready, and
+  three `diagnostic.execute` events recorded the exact registered tools. The
+  fixture namespace and PrometheusRule were removed afterward.
+- Latest implementation commit: `7178505` (`Add bounded TargetDown monitoring
+  evidence`). OpenShift build `podpilot-21` was built from that commit and
+  deployed at image digest
+  `sha256:2e5c611338c64167e26ac093172ea43f4c0209e237a4ef90ad7dcd616ed6e42c`.
 
 These observations are a handoff snapshot, not a substitute for checking the
 current repository and cluster state.
@@ -110,6 +123,9 @@ current repository and cluster state.
 - Chat receives no Kubernetes credentials or generic tool channel. Citations and
   the single available intent are validated by normal code; executing proposed
   checks always requires a separate operator request.
+- Alert labels are never treated as PromQL or network destinations. The server
+  owns the query shape and escapes exact-match values. No DNS, TCP, TLS, or HTTP
+  connection is made to the alert `instance` or selected Service.
 - The production-base observer role adds EndpointSlice read access but no new
   mutation or Secret permission.
 - Pod DELETE preview carries `dryRun: ["All"]` in `DeleteOptions` and the query
@@ -129,11 +145,15 @@ current repository and cluster state.
 - Chat is limited to one investigation, a 20-message history, one non-executing
   safe-check intent, and non-streaming responses. Cross-investigation retrieval
   and curated cluster memory are not implemented.
-- The first executable plan is fixed to scoped `TargetDown` Service topology and
-  Pod events. It does not yet inspect Prometheus rule state/target metadata or
-  perform an active DNS, TCP, TLS, or HTTP probe.
-- Rule-state and PromQL correlation, Routes, ClusterOperators, networking,
-  storage, and version-aware Service Mesh packs remain future capability packs.
+- The first executable plan is fixed to scoped `TargetDown` passive monitoring
+  signals, Service topology, and Pod events. It does not inspect full rule
+  definitions or perform an active DNS, TCP, TLS, or HTTP probe.
+- Active probing requires an administrator-owned destination registry, a
+  dedicated no-token identity, explicit egress policy, redirect/DNS-rebinding
+  defenses, rate limits, and adversarial fixtures before it is safe to add.
+- Full rule-definition inspection, ad hoc PromQL, Routes, ClusterOperators,
+  networking, storage, and version-aware Service Mesh packs remain future
+  capability packs.
 - The lab binary build publishes `:latest`; immutable release promotion and a
   tested database rollback process remain open.
 
@@ -141,12 +161,12 @@ current repository and cluster state.
 
 No next milestone is formally selected. The highest-value candidates are:
 
-1. Complete the `TargetDown` pack with Prometheus rule/target metadata and a
-   tightly controlled active reachability probe from an approved location.
-2. Introduce curated cluster memory with source, scope, owner, confidence, and
+1. Introduce curated cluster memory with source, scope, owner, confidence, and
    review/expiry metadata before adding retrieval to investigations.
-3. Add the next diagnostic capability pack with fixtures and release gates;
+2. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
+3. Design an administrator-owned probe-target registry and dedicated no-token,
+   egress-restricted probe identity before considering active reachability.
 4. Split production observation and action identities, then replace the lab
    `:latest` build flow with immutable image promotion.
 5. Add streaming and conversation summarization only after evaluation proves
