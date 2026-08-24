@@ -27,6 +27,7 @@ Read the nearest workspace `AGENTS.md` before changing files below that workspac
 
 ## Read Only When Relevant
 
+- Current implementation status and session handoff: `docs/project-status.md`
 - Product scope and non-goals: `docs/product.md`
 - Detailed requirements and phased scope: `docs/prd.md`
 - System shape and data flow: `docs/architecture.md`
