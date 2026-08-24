@@ -184,6 +184,8 @@ Secret above; the UI never reads the saved value back.
 Later integrations may add:
 
 - investigation limits and timeouts
+- Ask PodPilot read rounds, reads per turn, recent-context size, context-digest
+  size, display history, evidence retention, and per-user request-rate limits
 - optional custom CA Secret reference for internal providers
 - optional OpenShift API override for local development
 - `PODPILOT_BOOTSTRAP_KUBECONFIG` for the external local bootstrap credential path
@@ -245,8 +247,9 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    excluded from the workload kustomization so a later manifest apply cannot erase
    an existing token.
 
-5. Validate and deploy the complete SNO overlay, then add the separate PoC
-   cluster-admin exception:
+5. Validate and deploy the complete SNO overlay. Optionally retain the separate
+   PoC cluster-admin binding for the `ai-observer` development/break-glass identity;
+   the application does not run as that identity:
 
    ```powershell
    oc apply --dry-run=server -k deploy/openshift/overlays/sno-milestone-one
@@ -258,7 +261,11 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
 6. Audit effective access and application health:
 
    ```powershell
-   oc auth can-i --list --as=system:serviceaccount:ai-ops:ai-observer
+   oc auth can-i --list --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i get configmaps --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i create pods/exec --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
    oc -n ai-ops get deployment,pod,service,route,pvc
    $pod = oc -n ai-ops get pod -l app.kubernetes.io/name=podpilot -o jsonpath='{.items[0].metadata.name}'
    oc -n ai-ops exec $pod -c api -- python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health/ready').read().decode())"
@@ -268,15 +275,16 @@ Review `deploy/openshift/rbac.yaml` whenever a diagnostic adds a new API depende
 Production packaging must omit both SNO overlays, use a supported storage class,
 and pin an immutable application image digest.
 
-Milestone 7 adds read-only `get`, `list`, and `watch` access to EndpointSlices in
-the reusable observer role. It adds no mutation or Secret verbs.
+Milestone 10 binds the normal `podpilot-investigator` runtime to OpenShift
+`cluster-reader`. The application broker supports ConfigMaps and bounded Pod logs
+but denies Secrets, access-review resources, arbitrary subresources, and mutations.
 
 ### Typed remediation in the PoC lab
 
-The reusable observer RBAC remains read-only. The disposable SNO lab's explicit
-`poc-cluster-admin` overlay currently supplies mutation authority while the action
-catalog is being evaluated. PodPilot nevertheless exposes only controller-owned
-failed-Pod replacement and Deployment/StatefulSet/DaemonSet rollout restart.
+The normal runtime is now read-only. The `poc-cluster-admin` overlay applies only
+to `ai-observer`, not the application Pod. Existing action records and approval UI
+remain available for evaluation, but live execution will fail closed until a
+separate action executor ServiceAccount and workload are implemented.
 
 For every live action, confirm the investigation shows `server dry-run: passed`,
 the expected UID/resourceVersion, target namespace, operation, verification, and
@@ -345,7 +353,11 @@ destination; `instance` is only an escaped exact-match label in the fixed Thanos
 queries.
 
 The in-cluster URL, bearer-token pattern, and `cluster-monitoring-view` binding
-follow Red Hat's [OpenShift 4.22 monitoring API CLI guidance](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.22/html/accessing_metrics/accessing-monitoring-apis-by-using-the-cli).
+for Thanos follow Red Hat's [OpenShift 4.22 monitoring API CLI guidance](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.22/html/accessing_metrics/accessing-monitoring-apis-by-using-the-cli).
+Alertmanager is separate: `podpilot-investigator` is bound to the existing
+namespaced `monitoring-alertmanager-view` **Role** in `openshift-monitoring`.
+Do not reference it as a ClusterRole; that creates an inert binding and the
+authenticated Alertmanager proxy returns HTTP 403.
 The normalized vector shape follows the [Prometheus HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/).
 
 ### Investigation-scoped chat
@@ -465,16 +477,16 @@ read ceiling and application readiness:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing
 . .\scripts\connect-sno.ps1
-oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
-oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
-oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:ai-observer
+oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc auth can-i get configmaps --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc -n ai-ops rollout status deployment/podpilot --timeout=180s
 ```
 
-The reusable observer role should allow Pod, event, controller, node, and Pod-log
-reads but not Secret reads. The separate disposable PoC cluster-admin overlay makes
-the live lab identity broader, so review `deploy/openshift/rbac.yaml` to evaluate
-the production ceiling. A workload investigation must persist collection failures,
+The investigator identity should allow Pod, event, controller, node, ConfigMap,
+and Pod-log reads but not Secret reads. The separate disposable PoC cluster-admin
+overlay affects only the `ai-observer` development identity. A workload investigation must persist collection failures,
 not silently fall back to an empty evidence set. Crash-loop log collection is
 limited to the alert-selected container's current and previous streams; image and
 scheduling investigations do not collect logs.

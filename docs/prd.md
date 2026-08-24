@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.8; Milestone 9 passive monitoring-path evidence implemented
+Status: Draft v0.9; Milestone 10 standalone read-only investigation implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
@@ -318,6 +318,32 @@ submit tools, Kubernetes targets, query text, shell, YAML, credentials, or clust
 mutations. Messages are attributed, redacted before persistence/model use, capped
 at 1,000 characters each and 20 messages per investigation, and audited without
 copying message content into the audit record.
+
+### 5.11 Standalone Ask PodPilot
+
+An Investigator can start a durable, attributed conversation without a firing
+alert. For each turn, up to three schema-validated planning rounds select at most six total reads
+from named resource GET, bounded resource LIST, and bounded current or previous
+Pod logs. The server validates API version, Kind, namespace, name, selector, and
+limit before executing through the `podpilot-investigator` identity. Each round
+receives prior observations, allowing Pod discovery to lead to exact container-log
+collection without requiring an operator follow-up. ConfigMaps
+and logs are first-class evidence; Secrets, access-review resources, arbitrary
+subresources, commands, active network probes, and mutations are rejected.
+
+Collected objects are recursively bounded and redacted, persisted with source and
+timestamp, and supplied to a second schema-validated answer pass. Cluster-specific
+answers require server-resolvable evidence citations. A missing capability pack
+does not block generic investigation, but the answer must expose collection gaps
+and remain non-remediating until a typed action and its approval gates exist.
+
+Conversations are private to their creating OpenShift user and have no hard
+question-count limit. Operators can start a new conversation at any time and can
+permanently delete an owned conversation, including its messages and evidence.
+The model context uses a sliding recent-message window plus a bounded durable
+digest of older messages. Per-user request throttling, per-turn read/model budgets,
+bounded evidence retention, and independent UI message limits replace a session
+turn cap. Enter submits the question; Shift+Enter inserts a newline.
 
 ## 6. Cluster Memory
 

@@ -13,6 +13,12 @@
 
   const csrf = document.querySelector('meta[name="podpilot-csrf"]')?.content;
   const toast = document.querySelector("#action-toast");
+  const latestThread = document.querySelector(".ask-thread[data-scroll-latest]");
+  if (latestThread) {
+    window.requestAnimationFrame(() => {
+      latestThread.scrollTop = latestThread.scrollHeight;
+    });
+  }
   document.querySelectorAll(".analyze-button").forEach((button) => {
     button.addEventListener("click", async () => {
       if (!csrf || !button.dataset.analyzeUrl) return;
@@ -188,4 +194,70 @@
       }
     });
   }
+  const adhocForm = document.querySelector(".adhoc-chat-form");
+  if (adhocForm?.dataset.chatUrl) {
+    adhocForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const submit = adhocForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
+      try {
+        const response = await fetch(adhocForm.dataset.chatUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
+          credentials: "same-origin",
+          body: new URLSearchParams(new FormData(adhocForm)),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "PodPilot could not investigate this question.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
+      }
+    });
+    const textarea = adhocForm.querySelector("textarea");
+    textarea?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (adhocForm.checkValidity()) adhocForm.requestSubmit();
+      }
+    });
+  }
+  document.querySelectorAll('.chat-citations a[href^="#evidence-"]').forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const target = document.getElementById(link.hash.slice(1));
+      if (!target) return;
+      event.preventDefault();
+      document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
+      target.classList.add("evidence-focus");
+      target.scrollIntoView({behavior: "smooth", block: "center"});
+      target.focus({preventScroll: true});
+      window.history.replaceState(null, "", link.hash);
+    });
+  });
+  document.querySelectorAll(".delete-chat-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf || !form.dataset.deleteUrl) return;
+      if (!window.confirm("Delete this conversation and its collected evidence? This cannot be undone.")) return;
+      const button = form.querySelector('button[type="submit"]');
+      if (button) { button.disabled = true; button.textContent = "Deleting…"; }
+      try {
+        const response = await fetch(form.dataset.deleteUrl, {
+          method: "POST", headers: {"X-PodPilot-CSRF": csrf}, credentials: "same-origin",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "The conversation could not be deleted.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (button) { button.disabled = false; button.textContent = "Delete conversation"; }
+      }
+    });
+  });
 })();

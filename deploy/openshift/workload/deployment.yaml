@@ -20,7 +20,7 @@ spec:
         app.kubernetes.io/name: podpilot
         app.kubernetes.io/component: application
     spec:
-      serviceAccountName: ai-observer
+      serviceAccountName: podpilot-investigator
       automountServiceAccountToken: true
       securityContext:
         seccompProfile:
@@ -108,7 +108,7 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             - --provider=openshift
-            - --openshift-service-account=ai-observer
+            - --openshift-service-account=podpilot-investigator
             - --http-address=0.0.0.0:4180
             - --https-address=
             - --upstream=http://127.0.0.1:8080

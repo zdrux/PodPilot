@@ -7,11 +7,11 @@ Update when: top-level structure, core tooling, or verification commands change.
 
 | Path | Responsibility | Status |
 | --- | --- | --- |
-| `apps/api/` | AI orchestration and HTTP API | Milestone 9 monitoring-aware investigation, chat, action, and lifecycle flow |
+| `apps/api/` | AI orchestration and HTTP API | Milestone 10 alert and standalone evidence-cited investigation flow |
 | `apps/web/` | operator investigation UI | alert queue, evidence-cited chat, executable safe-check plan, approval, and cancellation |
 | `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
 | `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, diagnostic plan, interpretation, and remediation contracts |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 9 lab deployment surfaces |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Reader runtime plus separate lab break-glass identity |
 | `evals/` | incident fixtures and expected outcomes | synthetic workload alerts plus live remediation and TargetDown fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 

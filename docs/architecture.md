@@ -120,6 +120,37 @@ generic PromQL endpoint to the API, browser, or model. Active target probing is
 deliberately absent because the alert is not an authorized network-destination
 registry.
 
+Milestone 10 adds standalone Ask PodPilot conversations. Up to three
+schema-validated planning rounds may select at most six total reads from
+`get_resource`, `list_resources`, and `pod_logs`; each round receives the bounded
+observations from earlier rounds so resource discovery can lead to exact log reads.
+Normal code validates API version, Kind, scope, limits, duplicate suppression, and deny policy.
+ConfigMaps and bounded logs are intentional evidence sources. Secrets,
+access-review resources, arbitrary subresources, commands, network probes, and
+mutations are rejected. A final model pass receives normalized, redacted
+observations, and cluster-specific answers are withheld unless they cite persisted
+evidence IDs.
+
+Ad-hoc conversations are private to the creating OpenShift identity. The creator
+can start, continue, and permanently delete the conversation and its messages and
+evidence; deletion leaves a content-free audit event. There is no per-conversation
+question limit. The model receives the ten most recent messages plus a bounded,
+durable digest of older messages. UI rendering is capped independently, evidence
+retains its existing bounded window, and a per-user one-minute request limit
+controls cost and accidental rapid submission without ending a conversation.
+Pod-log collection distinguishes authorization, missing-resource, and invalid-log
+stream failures. When Kubernetes reports that a requested previous terminated
+container log is no longer retained, the read broker performs one bounded current
+log read instead and records the fallback as a limitation; it does not describe
+that condition as an RBAC denial. Citation links explicitly scroll and focus the
+matching evidence card, including when the evidence drawer has its own scroll area.
+Chat content is rendered server-side through a CommonMark parser with raw HTML
+disabled and unsafe link schemes rejected. The UI supports structured headings,
+lists, emphasis, inline and fenced code, blockquotes, and tables without trusting
+model- or cluster-supplied markup. Ask PodPilot initializes its bounded chat
+viewport at the newest message after navigation while retaining normal manual
+scrolling afterward.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

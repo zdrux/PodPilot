@@ -83,6 +83,28 @@ input, and malicious label strings cannot add PromQL or trigger a target network
 connection. Live QA must retain the fixture only long enough to verify the three
 checks and remove both its namespace and platform PrometheusRule afterward.
 
+Milestone 10 adds gates for Investigator-only standalone chat, schema-valid
+multi-round read plans, a three-round and six-total-read budget, duplicate
+suppression, discovery-followed-by-exact-container-log collection, ConfigMap and bounded-log evidence, Secret/subresource
+denial, recursive redaction, persisted provenance, and withholding of uncited
+cluster-specific answers. Audit both `cluster-reader` effective permissions and
+the application broker deny tests before release.
+
+Conversation-management gates cover owner-only list/read/continue/delete,
+not-found behavior for other users regardless of role, CSRF-protected deletion,
+content removal with a content-free audit record, no hard turn cap, rolling context
+compaction, per-user request throttling, bounded UI history, and Enter versus
+Shift+Enter behavior. Visual QA must confirm readable body, navigation, evidence,
+history, and chat typography at desktop and narrow widths.
+Ad-hoc log gates must distinguish a real 403 from an absent previous log stream,
+decode byte responses, and verify that an absent previous stream falls back to a
+bounded current stream with an explicit limitation. UI tests must verify that a
+citation activates, scrolls to, focuses, and visibly highlights its evidence card.
+Chat presentation gates verify that completed Ask conversations open at the newest
+message, CommonMark tables and prose render structurally, raw HTML is escaped,
+unsafe link schemes do not become anchors, and code uses a distinct monospace
+presentation without reducing surrounding prose readability.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

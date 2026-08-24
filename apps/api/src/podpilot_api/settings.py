@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     diagnostic_max_checks: int = Field(default=4, ge=1, le=10)
     chat_max_messages: int = Field(default=20, ge=2, le=50)
     chat_max_chars: int = Field(default=1000, ge=100, le=4000)
+    adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
+    adhoc_max_rounds: int = Field(default=3, ge=1, le=5)
+    adhoc_max_reads_per_turn: int = Field(default=6, ge=1, le=12)
+    adhoc_context_messages: int = Field(default=10, ge=4, le=30)
+    adhoc_context_summary_chars: int = Field(default=4000, ge=1000, le=12000)
+    adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)
+    adhoc_display_messages: int = Field(default=100, ge=20, le=500)
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
     model_secret_name: str = "podpilot-model-credentials"

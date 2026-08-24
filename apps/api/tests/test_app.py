@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -11,12 +11,15 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app
 from podpilot_api.model_provider import (
+    AdHocAnswer,
     CapabilityReport,
     InvestigationChatAnswer,
     ModelInterpretation,
     ModelProviderError,
 )
 from podpilot_api.models import (
+    AdHocConversation,
+    AdHocMessage,
     AuditEvent,
     Base,
     ChatMessage,
@@ -33,6 +36,7 @@ from podpilot_diagnostics.workloads import (
     WorkloadEvidence,
 )
 from podpilot_diagnostics.checks import CheckObservation, DiagnosticCheckResult
+from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadPlan, ReadResult
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
 from podpilot_openshift.workloads import WorkloadEvidenceError
@@ -96,6 +100,8 @@ class FakeModelProvider:
         self.chat_answer = chat_answer
         self.interpret_calls: list[dict[str, object]] = []
         self.chat_calls: list[dict[str, object]] = []
+        self.adhoc_plan_calls: list[dict[str, object]] = []
+        self.adhoc_answer_calls: list[dict[str, object]] = []
 
     def probe(self, profile, api_key: str) -> CapabilityReport:
         assert api_key == "test-api-token"
@@ -123,6 +129,93 @@ class FakeModelProvider:
             proposed_tool_intent="run_queued_checks",
             intent_reason="Collect the registered Service topology and Pod-event evidence.",
         )
+
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if context.get("completed_reads"):
+            return ReadPlan(scope_summary="The requested Pod evidence is sufficient.", intents=[])
+        return ReadPlan(
+            scope_summary="Inspect the selected Pod and its configuration.",
+            intents=[ReadIntent(
+                tool="get_resource", api_version="v1", kind="Pod",
+                namespace="payments", name="api-7d9",
+            )],
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        evidence_id = context["observations"][-1]["id"]
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer="The Pod selector does not match an available node.",
+            cited_evidence_ids=[evidence_id],
+            limitations=["No scheduler event was collected."],
+        )
+
+
+class FakeReadExplorer:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        return ReadResult((AdHocObservation(
+            id="cluster-pod-1", tool=intent.tool,
+            summary="Read Pod payments/api-7d9.", source="kubernetes:v1:Pod:payments/api-7d9",
+            collected_at=datetime.now(timezone.utc),
+            data={"spec": {"nodeSelector": {"tier": "missing"}}, "status": {"phase": "Pending"}},
+        ),))
+
+
+class DiscoveryThenLogsProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        round_number = context["investigation_round"]
+        if round_number == 1:
+            return ReadPlan(
+                scope_summary="Discover kube-apiserver Pods.",
+                limitations=["An exact Pod name is needed before logs can be read."],
+                intents=[ReadIntent(
+                    tool="list_resources", api_version="v1", kind="Pod",
+                    namespace="openshift-kube-apiserver", limit=5,
+                )],
+            )
+        if round_number == 2:
+            assert context["observations"][-1]["data"]["containers"] == ["kube-apiserver"]
+            return ReadPlan(scope_summary="Inspect the discovered kube-apiserver logs.", intents=[ReadIntent(
+                tool="pod_logs", namespace="openshift-kube-apiserver",
+                name="kube-apiserver-sno1", container="kube-apiserver",
+            )])
+        return ReadPlan(scope_summary="The log evidence is sufficient.", intents=[])
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        log = next(item for item in context["observations"] if item["tool"] == "pod_logs")
+        return AdHocAnswer(
+            answer_mode="evidence_based", answer="No error lines appeared in the bounded log tail.",
+            cited_evidence_ids=[log["id"]], limitations=[],
+        )
+
+
+class DiscoveryThenLogsExplorer:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        if intent.tool == "list_resources":
+            return ReadResult((AdHocObservation(
+                id="cluster-pod-list", tool="list_resources",
+                summary="Discovered kube-apiserver-sno1.",
+                source="kubernetes:v1:Pod:openshift-kube-apiserver/kube-apiserver-sno1",
+                collected_at=datetime.now(timezone.utc),
+                data={"name": "kube-apiserver-sno1", "containers": ["kube-apiserver"]},
+            ),))
+        return ReadResult((AdHocObservation(
+            id="cluster-api-logs", tool="pod_logs", summary="Collected kube-apiserver logs.",
+            source="kubernetes:v1:Pod/log:openshift-kube-apiserver/kube-apiserver-sno1",
+            collected_at=datetime.now(timezone.utc), data={"tail": "request completed successfully"},
+        ),))
 
 
 class FakeRemediationExecutor:
@@ -307,6 +400,8 @@ def make_app(
     model_provider: FakeModelProvider | None = None,
     remediation_executor: FakeRemediationExecutor | None = None,
     diagnostic_executor: FakeDiagnosticExecutor | None = None,
+    read_explorer: FakeReadExplorer | None = None,
+    settings_overrides: dict[str, object] | None = None,
 ):
     settings = Settings(
         environment="test",
@@ -316,6 +411,7 @@ def make_app(
         web_dir=ROOT / "apps" / "web",
         auth_mode="test",
         poc_mode=True,
+        **(settings_overrides or {}),
     )
     engine = build_engine(settings)
     Base.metadata.create_all(engine)
@@ -330,6 +426,7 @@ def make_app(
             model_provider or FakeModelProvider(),
             remediation_executor or FakeRemediationExecutor(),
             diagnostic_executor or FakeDiagnosticExecutor(),
+            read_explorer or FakeReadExplorer(),
         ),
         settings,
     )
@@ -347,8 +444,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 9 adds" in response.text
-        assert "PodPilot 0.9.0" in response.text
+        assert "Milestone 10 adds" in response.text
+        assert "PodPilot 0.10.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -357,6 +454,280 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         session = client.get("/api/v1/session", headers={"x-forwarded-user": "ada"})
         assert session.json() == {"username": "ada", "role": "approver"}
         assert client.get("/health/ready").json() == {"status": "ready", "database": True}
+
+
+def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Path) -> None:
+    provider = FakeModelProvider()
+    explorer = FakeReadExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert page.status_code == 200
+        assert "Investigation mode cannot change the cluster" in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Why is pod api-7d9 pending in payments?"},
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "selector does not match" in rendered.text
+        assert "Inspected 1 cluster target" in rendered.text
+        assert "cluster-pod-1" in rendered.text
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].tool == "get_resource"
+    assert provider.adhoc_plan_calls[0]["tool_policy"]["logs_and_configmaps_allowed"] is True
+    assert provider.adhoc_answer_calls[0]["observations"][0]["id"] == "cluster-pod-1"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.scalar(select(func.count()).select_from(AdHocConversation)) == 1
+        assert db_session.scalar(select(func.count()).select_from(AdHocMessage)) == 2
+        actions = list(db_session.scalars(select(AuditEvent.action)))
+        assert "adhoc.message" in actions and "adhoc.answer" in actions
+    engine.dispose()
+
+
+def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
+    provider = DiscoveryThenLogsProvider()
+    explorer = DiscoveryThenLogsExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Are there errors in the kube API server Pod logs?"},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert rendered.status_code == 200
+        assert "No error lines appeared" in rendered.text
+        assert "Inspected 2 cluster targets" in rendered.text
+        assert "container=kube-apiserver" in rendered.text
+        assert "cluster-api-logs" in rendered.text
+        assert "exact Pod name is needed" not in rendered.text
+
+    assert [call.tool for call in explorer.calls] == ["list_resources", "pod_logs"]
+    assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == 5
+    assert provider.adhoc_plan_calls[1]["completed_reads"][0]["round"] == 1
+    assert provider.adhoc_plan_calls[2]["observations"][-1]["tool"] == "pod_logs"
+
+
+def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path, assignments={"vic": Role.VIEWER}, source=FakeAlertSource()
+    )
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "vic"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        denied = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "vic", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Inspect everything"},
+        )
+        assert denied.status_code == 403
+
+
+def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        source=FakeAlertSource(),
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000088"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Private DNS question",
+            status="active", evidence_json="[]",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        own = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        assert own.status_code == 200
+        other_index = client.get("/ask", headers={"x-forwarded-user": "ada"})
+        assert "Private DNS question" not in other_index.text
+        assert client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ada"}
+        ).status_code == 404
+
+
+def test_owner_can_delete_conversation_and_evidence_with_audit_record(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000089"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Delete me",
+            status="active", evidence_json='[{"id":"evidence-to-delete"}]',
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000090",
+            conversation_id=conversation_id, role="user", actor="ivy", content="Delete me",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        assert "Delete conversation" in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        deleted = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/delete",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        assert deleted.status_code == 303 and deleted.headers["location"] == "/ask"
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.get(AdHocConversation, conversation_id) is None
+        assert db_session.scalar(
+            select(func.count()).select_from(AdHocMessage).where(
+                AdHocMessage.conversation_id == conversation_id
+            )
+        ) == 0
+        event = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "adhoc.delete"))
+        assert event is not None and event.actor == "ivy"
+    engine.dispose()
+
+
+def test_unlimited_conversation_uses_rolling_context_summary(tmp_path: Path) -> None:
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(), credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider, settings_overrides={"adhoc_context_messages": 10},
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000091"
+    old = datetime.now(timezone.utc) - timedelta(minutes=10)
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Long-running incident",
+            status="active", evidence_json="[]",
+        ))
+        for index in range(26):
+            db_session.add(AdHocMessage(
+                id=f"10000000-0000-0000-0000-{index:012d}", conversation_id=conversation_id,
+                created_at=old + timedelta(seconds=index),
+                role="user" if index % 2 == 0 else "assistant",
+                actor="ivy" if index % 2 == 0 else None,
+                content=f"historical message {index}",
+            ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Continue checking the same incident."},
+            follow_redirects=False,
+        )
+        assert continued.status_code == 303
+
+    assert len(provider.adhoc_plan_calls[0]["conversation"]) == 10
+    assert "historical message 0" in provider.adhoc_plan_calls[0]["earlier_context_summary"]
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        conversation = db_session.get(AdHocConversation, conversation_id)
+        assert conversation is not None and conversation.summarized_message_count == 17
+    engine.dispose()
+
+
+def test_adhoc_rate_limit_is_per_user_not_per_conversation(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        settings_overrides={"adhoc_rate_limit_per_minute": 1},
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000092"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Rate limited",
+            status="active", evidence_json="[]",
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000093",
+            conversation_id=conversation_id, role="user", actor="ivy", content="First",
+        ))
+        db_session.commit()
+    engine.dispose()
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        limited = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Second"},
+        )
+        assert limited.status_code == 429
+
+
+def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
+    template = (ROOT / "apps" / "web" / "templates" / "ask.html").read_text()
+    script = (ROOT / "apps" / "web" / "static" / "app.js").read_text()
+    assert "Conversation budget reached" not in template
+    assert "Enter to send" in template and "Shift+Enter for a new line" in template
+    assert 'event.key === "Enter" && !event.shiftKey' in script
+    assert "adhocForm.requestSubmit()" in script
+    assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
+    assert "target.scrollIntoView" in script
+    assert 'tabindex="-1"' in template
+    assert "data-scroll-latest" in template
+    assert "latestThread.scrollTop = latestThread.scrollHeight" in script
+    assert "message.content | safe_markdown" in template
 
 
 def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Path) -> None:

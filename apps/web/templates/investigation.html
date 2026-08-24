@@ -47,7 +47,7 @@
     {% for message in messages %}
     <article class="chat-message chat-{{ message.role }}">
       <div class="chat-meta"><strong>{% if message.role == 'assistant' %}PodPilot{% else %}{{ message.actor }}{% endif %}</strong><span>{{ message.created_at }}</span>{% if message.answer_mode %}<span class="tag">{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}</div>
-      <p>{{ message.content }}</p>
+      <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
       {% if message.citations %}<div class="chat-citations"><span>Evidence</span>{% for citation in message.citations %}<a href="#evidence-{{ citation }}">{{ citation }}</a>{% endfor %}</div>{% elif message.role == 'assistant' %}<small class="chat-guidance">No validated incident-evidence citations; treat this as {{ message.answer_mode | replace('_', ' ') }}.</small>{% endif %}
       {% if message.tool_intent %}<div class="tool-intent"><div><strong>Proposed safe-check intent</strong><p>{{ message.tool_intent.reason }}</p><code>{{ message.tool_intent.name }}</code></div>{% if queued_checks and user.role.value >= 20 %}<button class="button primary run-checks-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/checks/run">Review and run queued checks</button>{% elif queued_checks %}<span class="tag">Investigator required</span>{% else %}<span class="tag">No queued checks remain</span>{% endif %}</div>{% endif %}
     </article>

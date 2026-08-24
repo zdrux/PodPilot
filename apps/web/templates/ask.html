@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Ask PodPilot{% endblock %}
+{% block content %}
+<header class="topbar">
+  <div>
+    <p class="eyebrow">Read-only cluster assistant</p>
+    <h1>Ask PodPilot</h1>
+    <p class="subtitle">Describe a symptom. PodPilot will inspect bounded cluster evidence before answering. Conversations are private to your OpenShift user.</p>
+  </div>
+  {% if conversation %}
+  <div class="topbar-actions">
+    <a class="button secondary" href="/ask">New conversation</a>
+    <form class="delete-chat-form" data-delete-url="/api/v1/adhoc-conversations/{{ conversation.id }}/delete">
+      <button class="button danger" type="submit">Delete conversation</button>
+    </form>
+  </div>
+  {% endif %}
+</header>
+
+<section class="notice" aria-label="Investigation boundary">
+  <span class="notice-icon" aria-hidden="true">i</span>
+  <div>
+    <strong>Investigation mode cannot change the cluster</strong>
+    <p>PodPilot can read resources, ConfigMaps, events, and bounded Pod logs. Secrets, exec, proxy access, and mutations are outside this workflow.</p>
+  </div>
+</section>
+
+<div class="ask-layout">
+  <section class="panel ask-panel">
+    <div class="panel-header">
+      <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
+      <span class="tag">Evidence first</span>
+    </div>
+
+    {% if messages %}
+    <div class="chat-thread ask-thread" data-scroll-latest>
+      {% if messages_truncated %}<div class="context-divider">Older messages remain in the bounded conversation context.</div>{% endif %}
+      {% for message in messages %}
+      <article class="chat-message chat-{{ message.role }}">
+        <div class="chat-meta">
+          <strong>{% if message.role == 'user' %}{{ message.actor }}{% else %}PodPilot{% endif %}</strong>
+          {% if message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
+          <span>{{ message.created_at.strftime('%H:%M UTC') }}</span>
+        </div>
+        <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
+        {% if message.activity and message.activity.reads %}
+        <details class="tool-activity">
+          <summary>Inspected {{ message.activity.reads | length }} cluster target{% if message.activity.reads | length != 1 %}s{% endif %}</summary>
+          <ul>
+            {% for read in message.activity.reads %}
+            <li><span class="status-dot {% if read.status == 'succeeded' %}good{% else %}warning{% endif %}"></span><strong>{{ read.tool }}</strong> {{ read.target }} <small>round {{ read.round }} · {{ read.status | replace('_', ' ') }}</small></li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+        {% if message.citations %}
+        <div class="chat-citations"><span>Evidence</span>{% for id in message.citations %}<a href="#evidence-{{ id }}">{{ id[:18] }}</a>{% endfor %}</div>
+        {% endif %}
+        {% if message.activity and message.activity.limitations %}
+        <ul class="answer-limitations">{% for item in message.activity.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="ask-empty">
+      <div class="radar" aria-hidden="true"></div>
+      <h3>What should I investigate?</h3>
+      <p>Include the namespace and resource name when you know them. PodPilot will ask for narrower scope when a safe read cannot be planned.</p>
+      <div class="prompt-examples">
+        <span>Why is pod api-7d9 pending in payments?</span>
+        <span>Compare cluster DNS configuration with pod billing-worker</span>
+        <span>Check the logs for pod checkout-54b in store</span>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if user.role.value >= 20 %}
+    <form class="chat-form adhoc-chat-form" method="post"
+      data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
+      <label for="adhoc-message">Question or symptom</label>
+      <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="Include a namespace, Pod, Service, node, or other known scope…"></textarea>
+      <div><small>Each question: up to 6 read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready %}disabled{% endif %}>Investigate</button></div>
+    </form>
+    {% elif user.role.value < 20 %}
+    <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
+    {% endif %}
+    {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and successfully tests a model profile.</p></div>{% endif %}
+  </section>
+
+  <aside class="ask-sidebar">
+    <section class="panel">
+      <div class="panel-header"><div><p class="eyebrow">Private history</p><h2>My conversations</h2></div><a class="button secondary compact-button" href="/ask">New</a></div>
+      {% if recent_conversations %}<ul class="investigation-list">{% for item in recent_conversations %}<li><a href="/ask/{{ item.id }}"><strong>{{ item.title }}</strong><span>Private to {{ item.created_by }}</span><small>{{ item.updated_at.strftime('%Y-%m-%d %H:%M UTC') }}</small></a></li>{% endfor %}</ul>{% else %}<div class="side-empty"><strong>No conversations yet</strong><p>Conversations are private to your OpenShift user. Your first question creates an attributed audit record.</p></div>{% endif %}
+    </section>
+    {% if evidence_by_id %}
+    <section class="panel evidence-drawer">
+      <div class="panel-header"><div><p class="eyebrow">Provenance</p><h2>Collected evidence</h2></div><span class="tag">{{ evidence_by_id | length }}</span></div>
+      <div class="evidence-list">{% for id, item in evidence_by_id.items() %}<article id="evidence-{{ id }}" tabindex="-1"><span class="evidence-id">{{ item.tool }}</span><h3>{{ item.summary }}</h3><p>{{ item.source }}</p><small>{{ item.collected_at }}</small></article>{% endfor %}</div>
+    </section>
+    {% endif %}
+  </aside>
+</div>
+
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+{% endblock %}

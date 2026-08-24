@@ -17,8 +17,10 @@ Treat them as a snapshot and re-verify live state before relying on them.
 - Lab cluster name/domain: `sno.192-168-0-200.sslip.io`.
 - Kubernetes API: `https://api.sno.192-168-0-200.sslip.io:6443`.
 - Application wildcard: `*.apps.sno.192-168-0-200.sslip.io`.
-- Application namespace and identity: `ai-ops/ai-observer`.
-- PoC authorization: `cluster-admin` through the explicitly labeled `podpilot-poc-cluster-admin` binding.
+- Application namespace and identity: `ai-ops/podpilot-investigator`, bound to
+  OpenShift `cluster-reader`.
+- Development/break-glass identity: `ai-ops/ai-observer`, with `cluster-admin`
+  through the explicitly labeled `podpilot-poc-cluster-admin` binding.
 
 The MAC address, installer files, kubeconfig, administrator credentials, and pull
 secret are intentionally omitted. They do not belong in this repository.

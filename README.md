@@ -4,7 +4,7 @@ PodPilot is an OpenShift-first AI troubleshooting and Day-2 operations companion
 It correlates alerts, metrics, resource state, events, and targeted logs into an
 evidence-backed investigation with ranked hypotheses and approved remediations.
 
-Milestone 9 is implemented for the disposable SNO lab. PodPilot correlates workload
+Milestone 10 is implemented for the disposable SNO lab. PodPilot correlates workload
 alerts with bounded live evidence and model interpretation, then offers a small
 set of typed, previewed, approval-gated remediations with stale-target checks,
 verification, lifecycle reconciliation, explicit cancellation, and audit
@@ -17,6 +17,11 @@ current project status for the precise handoff. `TargetDown` plans now also
 correlate current `ALERTS` rule state and `up` scrape health through bounded,
 TLS-validated Thanos queries. PodPilot does not actively connect to destinations
 derived from alert labels.
+
+Ask PodPilot provides a standalone operational conversation outside Alertmanager.
+It can plan and perform bounded resource, ConfigMap, and Pod-log reads, then answers
+with persisted evidence citations. Secrets, exec-like subresources, and mutations
+are excluded from this workflow.
 
 ## Start Here
 
@@ -45,8 +50,9 @@ docs/                        Living project knowledge
 
 Never commit cluster pull secrets, kubeconfigs, kubeadmin credentials, private
 keys, installer ISOs, service-account tokens, or model API keys. PodPilot's
-production base identity is read-only; the disposable PoC lab uses a separate,
-explicit cluster-admin overlay. Every product mutation still requires a preview
+normal runtime identity is `podpilot-investigator`; the disposable PoC lab keeps
+`ai-observer` as a separate break-glass identity with an explicit cluster-admin
+overlay. Every product mutation still requires a preview
 and fresh user approval.
 
 ## Develop Locally

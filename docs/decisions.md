@@ -3,6 +3,44 @@
 Last reviewed: 2026-08-23
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-23 - Broad reader identity and brokered ad-hoc investigation
+
+Context: Alert-specific packs cannot cover the long tail of ordinary cluster
+questions. Logs and ConfigMaps are necessary operational evidence, while the model
+must not receive Kubernetes credentials or an unrestricted client.
+
+Decision: Run the application as `ai-ops/podpilot-investigator`, bind it to the
+OpenShift `cluster-reader` ClusterRole, and retain `ai-observer` as the disposable
+lab break-glass identity. Ask PodPilot uses schema-validated, bounded
+`get_resource`, `list_resources`, and `pod_logs` intents. Normal code denies
+Secrets, access-review resources, subresources, commands, and mutations and
+validates evidence citations before displaying cluster-specific claims.
+
+Consequences: Novel APIs can be investigated without waiting for a capability
+pack, while packs remain the gate for deterministic remediation. The application
+cannot execute existing remediation proposals until a separate action executor
+identity is implemented. `cluster-reader` aggregation and model-data redaction
+must be audited at release time.
+
+## 2026-08-23 - Private, unlimited managed conversations
+
+Context: A fixed question count interrupts legitimate incidents, while globally
+visible conversations disclose operational context across users. Unlimited raw
+model context and unbounded rendering would create separate cost and performance
+problems.
+
+Decision: Pin every standalone conversation to its creating OpenShift username
+and enforce that ownership for history, reads, continuation, and deletion. Remove
+the hard turn count. Preserve continuity with ten recent messages and a bounded
+durable digest of older content, while keeping per-turn read/token limits,
+per-user request throttling, bounded evidence, and bounded UI rendering. Deletion
+removes conversation content but leaves a content-free attribution audit event.
+
+Consequences: Conversations are private rather than team-shared. A future sharing
+feature must be explicit and separately authorized. Starting a new conversation
+is recommended when the operational target changes, but it is never forced by a
+question counter.
+
 ## 2026-08-22 - PoC cluster-admin with product-level approval gates
 
 Context: An AI troubleshooting service needs broad visibility, while AI-proposed actions can be incorrect or influenced by untrusted cluster content.

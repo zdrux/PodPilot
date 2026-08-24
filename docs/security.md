@@ -7,8 +7,14 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 
 - Cluster objects, events, logs, annotations, and alert text are untrusted data and may contain prompt injection.
 - Model output is untrusted advice and never authorization.
+- Chat Markdown is parsed with raw HTML disabled. Template output is marked safe
+  only after parser escaping and link-scheme validation; model and operator text
+  cannot inject script or trusted HTML through chat formatting.
 - The API is the policy enforcement point for tool scope, budgets, redaction, and future user authorization.
 - OpenShift RBAC is the hard ceiling on cluster capability.
+- Monitoring access remains read-only and split by platform API: the Thanos API
+  uses `cluster-monitoring-view`, while Alertmanager uses the namespaced
+  `openshift-monitoring/monitoring-alertmanager-view` Role.
 
 ## Credentials That Must Never Be Committed
 
@@ -34,6 +40,23 @@ local development. Rotate any credential exposed in source control or chat.
   then require a fresh explicit approval.
 - Production packaging must not install the PoC overlay. It should use separate
   read and action identities with a small action allowlist.
+
+Milestone 10 separates the normal runtime from the break-glass exception. The
+`ai-ops/podpilot-investigator` ServiceAccount runs the application and is bound to
+OpenShift `cluster-reader`; `ai-ops/ai-observer` retains the disposable lab
+cluster-admin overlay only for development access. Ask PodPilot permits bounded
+resource, ConfigMap, and Pod-log reads through an application broker, while denying
+Secrets, access-review resources, exec/attach/port-forward/proxy paths, and every
+mutation. Because `cluster-reader` is aggregated, release checks audit its effective
+permissions as well as the broker policy.
+
+Standalone conversations are authorization-scoped to their immutable
+`created_by` OpenShift username. Other users receive a not-found response and do
+not see the conversation in history, including users with a higher PodPilot role.
+Only the owner can continue or delete it. Deletion removes messages and retained
+evidence but preserves an audit record containing the conversation ID and actor,
+not message content. A per-user rate limit applies across all of that user's
+conversations.
 
 ## Model Data Policy
 

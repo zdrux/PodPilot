@@ -5,7 +5,7 @@ import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -13,13 +13,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.database import build_engine, database_is_ready
+from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
+    AdHocAnswer,
     InvestigationChatAnswer,
     ModelProfileConfig,
     ModelProvider,
@@ -27,6 +29,8 @@ from podpilot_api.model_provider import (
     OpenAIResponsesProvider,
 )
 from podpilot_api.models import (
+    AdHocConversation,
+    AdHocMessage,
     AuditEvent,
     ChatMessage,
     DiagnosticCheck,
@@ -36,6 +40,7 @@ from podpilot_api.models import (
 )
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
+from podpilot_diagnostics.adhoc import ReadOnlyExplorer
 from podpilot_diagnostics.checks import (
     DiagnosticCheckExecutor,
     DiagnosticCheckSpec,
@@ -60,6 +65,7 @@ from podpilot_openshift.credentials import (
     EnvironmentCredentialStore,
     KubernetesSecretCredentialStore,
 )
+from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
 from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
@@ -208,6 +214,87 @@ def _validated_chat_answer(
     }
 
 
+def _validated_adhoc_answer(
+    answer: AdHocAnswer, *, known_evidence_ids: set[str]
+) -> dict[str, object]:
+    citations: list[str] = []
+    for evidence_id in answer.cited_evidence_ids:
+        bounded = str(evidence_id)[:128]
+        if bounded in known_evidence_ids and bounded not in citations:
+            citations.append(bounded)
+    mode = answer.answer_mode
+    content = redact_text(answer.answer)[:4000]
+    if mode == "evidence_based" and not citations:
+        mode = "insufficient_evidence"
+        content = (
+            "The model response did not cite evidence collected for this conversation, "
+            "so PodPilot withheld its cluster-specific answer. Add a namespace and resource name, "
+            "or ask a narrower question."
+        )
+    return {
+        "answer_mode": mode,
+        "content": content,
+        "citations": citations,
+        "limitations": [redact_text(item)[:500] for item in answer.limitations[:6]],
+    }
+
+
+def _compact_adhoc_context(
+    db_session: Session,
+    *,
+    conversation: AdHocConversation,
+    recent_limit: int,
+    summary_char_limit: int,
+) -> list[dict[str, str]]:
+    """Persist a bounded digest of older messages and return the recent context window."""
+    total = db_session.scalar(
+        select(func.count()).select_from(AdHocMessage).where(
+            AdHocMessage.conversation_id == conversation.id
+        )
+    ) or 0
+    older_count = max(0, total - recent_limit)
+    if older_count > conversation.summarized_message_count:
+        additions = list(db_session.scalars(
+            select(AdHocMessage).where(AdHocMessage.conversation_id == conversation.id)
+            .order_by(AdHocMessage.created_at, AdHocMessage.id)
+            .offset(conversation.summarized_message_count)
+            .limit(older_count - conversation.summarized_message_count)
+        ))
+        digest_lines = [conversation.context_summary] if conversation.context_summary else []
+        digest_lines.extend(
+            f"{row.role}: {redact_text(row.content)[:500]}" for row in additions
+        )
+        conversation.context_summary = "\n".join(digest_lines)[-summary_char_limit:]
+        conversation.summarized_message_count = older_count
+        db_session.flush()
+    recent_rows = list(db_session.scalars(
+        select(AdHocMessage).where(AdHocMessage.conversation_id == conversation.id)
+        .order_by(AdHocMessage.created_at.desc(), AdHocMessage.id.desc())
+        .limit(recent_limit)
+    ))
+    return [
+        {"role": row.role, "content": row.content}
+        for row in reversed(recent_rows)
+    ]
+
+
+def _enforce_adhoc_rate_limit(
+    db_session: Session, *, username: str, now: datetime, limit: int
+) -> None:
+    recent = db_session.scalar(
+        select(func.count()).select_from(AdHocMessage).where(
+            AdHocMessage.actor == username,
+            AdHocMessage.role == "user",
+            AdHocMessage.created_at >= now - timedelta(minutes=1),
+        )
+    ) or 0
+    if recent >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Ask PodPilot is receiving questions too quickly. Wait a minute and retry.",
+        )
+
+
 def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
@@ -354,6 +441,7 @@ def create_app(
     model_provider: ModelProvider | None = None,
     remediation_executor: RemediationExecutor | None = None,
     diagnostic_executor: DiagnosticCheckExecutor | None = None,
+    read_explorer: ReadOnlyExplorer | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
@@ -372,7 +460,12 @@ def create_app(
         monitoring_timeout_seconds=app_settings.thanos_timeout_seconds,
         monitoring_max_series=app_settings.thanos_max_series,
     )
+    cluster_reader = read_explorer or KubernetesReadOnlyExplorer(
+        log_tail_lines=app_settings.workload_log_tail_lines,
+        max_log_bytes=app_settings.workload_max_log_bytes,
+    )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
+    templates.env.filters["safe_markdown"] = render_safe_markdown
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -383,7 +476,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.9.0",
+        version="0.10.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -411,6 +504,308 @@ def create_app(
         return response
 
     current_user = auth_dependency(app_settings, resolver)
+
+    async def _run_adhoc_turn(
+        *, request: Request, user: AuthContext, conversation_id: str, message_text: str
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            _enforce_adhoc_rate_limit(
+                db_session, username=user.username, now=now,
+                limit=app_settings.adhoc_rate_limit_per_minute,
+            )
+            db_session.add(AdHocMessage(
+                id=str(uuid4()), conversation_id=conversation_id, role="user",
+                actor=user.username, content=message_text,
+            ))
+            db_session.add(AuditEvent(
+                actor=user.username, action="adhoc.message", outcome="accepted",
+                details_json=json.dumps({"conversation_id": conversation_id}, sort_keys=True),
+            ))
+            conversation.updated_at = now
+            db_session.commit()
+
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            evidence = list(json.loads(conversation.evidence_json))
+            history = _compact_adhoc_context(
+                db_session,
+                conversation=conversation,
+                recent_limit=app_settings.adhoc_context_messages,
+                summary_char_limit=app_settings.adhoc_context_summary_chars,
+            )
+            context_summary = conversation.context_summary
+            profile = db_session.get(ModelProfile, 1)
+            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            db_session.commit()
+
+        activity: list[dict[str, object]] = []
+        limitations: list[str] = []
+        provider_status = "ready"
+        validated: dict[str, object] = {
+            "answer_mode": "insufficient_evidence",
+            "content": "Configure and successfully test a model profile before using Ask PodPilot.",
+            "citations": [],
+            "limitations": [],
+        }
+        if profile_snapshot:
+            try:
+                api_key = await run_in_threadpool(credentials.get)
+                if not api_key:
+                    raise ModelProviderError("The configured model token is unavailable.")
+                seen_intents: set[str] = set()
+                reads_used = 0
+                scope_summary = "Bounded read-only cluster investigation."
+                plan_limitations: list[str] = []
+                for round_number in range(1, app_settings.adhoc_max_rounds + 1):
+                    remaining_reads = app_settings.adhoc_max_reads_per_turn - reads_used
+                    if remaining_reads <= 0:
+                        break
+                    plan = await run_in_threadpool(
+                        provider.plan_ad_hoc,
+                        profile_snapshot,
+                        api_key,
+                        {
+                            "cluster": app_settings.cluster_name,
+                            "question": message_text,
+                            "conversation": history,
+                            "earlier_context_summary": context_summary,
+                            "observations": evidence[-app_settings.adhoc_max_evidence :],
+                            "completed_reads": activity,
+                            "investigation_round": round_number,
+                            "tool_policy": {
+                                "available": ["get_resource", "list_resources", "pod_logs"],
+                                "max_rounds": app_settings.adhoc_max_rounds,
+                                "max_reads_total": app_settings.adhoc_max_reads_per_turn,
+                                "remaining_reads": remaining_reads,
+                                "logs_and_configmaps_allowed": True,
+                                "secrets_and_mutations_allowed": False,
+                            },
+                        },
+                    )
+                    scope_summary = plan.scope_summary
+                    plan_limitations = list(plan.limitations)
+                    new_intents = []
+                    for intent in plan.intents[:remaining_reads]:
+                        signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
+                        if signature not in seen_intents:
+                            seen_intents.add(signature)
+                            new_intents.append(intent)
+                    if not new_intents:
+                        break
+                    for intent in new_intents:
+                        reads_used += 1
+                        entry: dict[str, object] = {
+                            "round": round_number,
+                            "tool": intent.tool,
+                            "target": f"{intent.api_version or 'v1'} {intent.kind or 'Pod'} "
+                            f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
+                            + (f" container={intent.container}" if intent.container else "")
+                            + (" previous=true" if intent.tool == "pod_logs" and intent.previous else ""),
+                        }
+                        try:
+                            result = await run_in_threadpool(cluster_reader.execute, intent)
+                            evidence.extend(item.to_dict() for item in result.observations)
+                            limitations.extend(result.limitations)
+                            entry["status"] = "succeeded"
+                            entry["observations"] = len(result.observations)
+                        except ReadOnlyExplorerError as exc:
+                            limitations.append(str(exc))
+                            entry["status"] = "denied_or_unavailable"
+                            entry["detail"] = str(exc)
+                        activity.append(entry)
+                    evidence = evidence[-app_settings.adhoc_max_evidence :]
+                limitations.extend(plan_limitations)
+                answer = await run_in_threadpool(
+                    provider.answer_ad_hoc,
+                    profile_snapshot,
+                    api_key,
+                    {
+                        "cluster": app_settings.cluster_name,
+                        "question": message_text,
+                        "conversation": history,
+                        "earlier_context_summary": context_summary,
+                        "scope_summary": scope_summary,
+                        "observations": evidence,
+                        "collection_limitations": limitations[:10],
+                    },
+                )
+                validated = _validated_adhoc_answer(
+                    answer, known_evidence_ids={str(item.get("id")) for item in evidence}
+                )
+                validated["limitations"] = list(dict.fromkeys(
+                    [*limitations, *list(validated["limitations"])]
+                ))[:8]
+            except (CredentialStoreError, ModelProviderError) as exc:
+                provider_status = "unavailable"
+                validated = {
+                    "answer_mode": "insufficient_evidence",
+                    "content": "The model provider is currently unavailable. No cluster changes were attempted.",
+                    "citations": [],
+                    "limitations": [str(exc)],
+                }
+        elif profile is not None:
+            provider_status = profile.status
+
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            conversation.evidence_json = json.dumps(evidence, default=_json_default, sort_keys=True)
+            conversation.updated_at = datetime.now(timezone.utc)
+            db_session.add(AdHocMessage(
+                id=str(uuid4()), conversation_id=conversation_id, role="assistant", actor=None,
+                content=str(validated["content"]), answer_mode=str(validated["answer_mode"]),
+                citations_json=json.dumps(validated["citations"], sort_keys=True),
+                tool_activity_json=json.dumps(
+                    {"reads": activity, "limitations": validated["limitations"]}, sort_keys=True
+                ),
+                provider_status=provider_status,
+            ))
+            db_session.add(AuditEvent(
+                actor="system:podpilot", action="adhoc.answer", outcome=provider_status,
+                details_json=json.dumps({
+                    "conversation_id": conversation_id,
+                    "read_count": len(activity),
+                    "evidence_count": len(evidence),
+                    "citation_count": len(validated["citations"]),
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+
+    @app.get("/ask", response_class=HTMLResponse)
+    async def ask_podpilot(
+        request: Request, user: AuthContext = Depends(current_user)
+    ):
+        csrf_token, csrf_is_new = _csrf_token(request)
+        with Session(request.app.state.engine) as db_session:
+            recent = list(db_session.scalars(
+                select(AdHocConversation).where(AdHocConversation.created_by == user.username)
+                .order_by(AdHocConversation.updated_at.desc()).limit(20)
+            ))
+            profile = db_session.get(ModelProfile, 1)
+        response = templates.TemplateResponse(
+            request=request, name="ask.html", context={
+                "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
+                "recent_conversations": recent, "csrf_token": csrf_token,
+                "chat_max_chars": app_settings.chat_max_chars,
+                "model_ready": bool(profile and profile.status == "ready"),
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                                httponly=True, samesite="strict", max_age=28_800)
+        return response
+
+    @app.get("/ask/{conversation_id}", response_class=HTMLResponse)
+    async def ask_podpilot_conversation(
+        conversation_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ):
+        csrf_token, csrf_is_new = _csrf_token(request)
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            rows = list(db_session.scalars(
+                select(AdHocMessage).where(AdHocMessage.conversation_id == conversation_id)
+                .order_by(AdHocMessage.created_at.desc(), AdHocMessage.id.desc())
+                .limit(app_settings.adhoc_display_messages)
+            ))
+            rows.reverse()
+            evidence = json.loads(conversation.evidence_json)
+            recent = list(db_session.scalars(
+                select(AdHocConversation).where(AdHocConversation.created_by == user.username)
+                .order_by(AdHocConversation.updated_at.desc()).limit(20)
+            ))
+            profile = db_session.get(ModelProfile, 1)
+        messages = [{
+            "role": row.role, "actor": row.actor, "content": row.content,
+            "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
+            "activity": json.loads(row.tool_activity_json), "provider_status": row.provider_status,
+            "created_at": row.created_at,
+        } for row in rows]
+        response = templates.TemplateResponse(
+            request=request, name="ask.html", context={
+                "user": user, "conversation": conversation, "messages": messages,
+                "evidence_by_id": {item["id"]: item for item in evidence},
+                "recent_conversations": recent, "csrf_token": csrf_token,
+                "chat_max_chars": app_settings.chat_max_chars,
+                "model_ready": bool(profile and profile.status == "ready"),
+                "messages_truncated": conversation.summarized_message_count > 0,
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                                httponly=True, samesite="strict", max_age=28_800)
+        return response
+
+    @app.post("/api/v1/adhoc-conversations")
+    async def create_adhoc_conversation(
+        request: Request, user: AuthContext = Depends(current_user)
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires the Investigator role or higher.")
+        form = await _urlencoded(request)
+        raw_message = form.get("message", "").strip()
+        if not raw_message or len(raw_message) > app_settings.chat_max_chars:
+            raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
+        message = redact_text(raw_message)[:app_settings.chat_max_chars]
+        conversation_id = str(uuid4())
+        with Session(request.app.state.engine) as db_session:
+            _enforce_adhoc_rate_limit(
+                db_session, username=user.username, now=datetime.now(timezone.utc),
+                limit=app_settings.adhoc_rate_limit_per_minute,
+            )
+            db_session.add(AdHocConversation(
+                id=conversation_id, created_by=user.username,
+                title=message.replace("\n", " ")[:100], status="active", evidence_json="[]",
+            ))
+            db_session.commit()
+        await _run_adhoc_turn(request=request, user=user, conversation_id=conversation_id, message_text=message)
+        return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
+
+    @app.post("/api/v1/adhoc-conversations/{conversation_id}/messages")
+    async def continue_adhoc_conversation(
+        conversation_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires the Investigator role or higher.")
+        form = await _urlencoded(request)
+        raw_message = form.get("message", "").strip()
+        if not raw_message or len(raw_message) > app_settings.chat_max_chars:
+            raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
+        await _run_adhoc_turn(
+            request=request, user=user, conversation_id=conversation_id,
+            message_text=redact_text(raw_message)[:app_settings.chat_max_chars],
+        )
+        return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
+
+    @app.post("/api/v1/adhoc-conversations/{conversation_id}/delete")
+    async def delete_adhoc_conversation(
+        conversation_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            db_session.execute(
+                delete(AdHocMessage).where(AdHocMessage.conversation_id == conversation_id)
+            )
+            db_session.delete(conversation)
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="adhoc.delete",
+                outcome="deleted",
+                details_json=json.dumps({"conversation_id": conversation_id}, sort_keys=True),
+            ))
+            db_session.commit()
+        return RedirectResponse("/ask", status_code=303)
 
     @app.get("/settings/model", response_class=HTMLResponse)
     async def model_settings(

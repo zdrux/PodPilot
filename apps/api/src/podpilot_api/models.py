@@ -131,3 +131,40 @@ class ChatMessage(Base):
     citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     tool_intent_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class AdHocConversation(Base):
+    __tablename__ = "adhoc_conversations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(253), nullable=False)
+    title: Mapped[str] = mapped_column(String(253), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    context_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    summarized_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class AdHocMessage(Base):
+    __tablename__ = "adhoc_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("adhoc_conversations.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    tool_activity_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
