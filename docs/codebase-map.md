@@ -7,11 +7,11 @@ Update when: top-level structure, core tooling, or verification commands change.
 
 | Path | Responsibility | Status |
 | --- | --- | --- |
-| `apps/api/` | AI orchestration and HTTP API | Milestone 8 investigation chat, diagnostic plan, model, action, and lifecycle flow |
+| `apps/api/` | AI orchestration and HTTP API | Milestone 9 monitoring-aware investigation, chat, action, and lifecycle flow |
 | `apps/web/` | operator investigation UI | alert queue, evidence-cited chat, executable safe-check plan, approval, and cancellation |
-| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded evidence/check, typed action, and read-only validation clients |
+| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
 | `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, diagnostic plan, interpretation, and remediation contracts |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 8 lab deployment surfaces |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 9 lab deployment surfaces |
 | `evals/` | incident fixtures and expected outcomes | synthetic workload alerts plus live remediation and TargetDown fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
@@ -47,7 +47,9 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/remediation.py`: typed action
   preview, read-only target validation, execution, and verification.
 - `packages/openshift-client/src/podpilot_openshift/checks.py`: registered,
-  bounded Service topology and target event checks.
+  bounded monitoring signal, Service topology, and target event checks.
+- `packages/openshift-client/src/podpilot_openshift/metrics.py`: authenticated,
+  TLS-validated, response-bounded Thanos instant-query adapter.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
 - `packages/diagnostics/src/podpilot_diagnostics/workloads.py`: portable workload evidence contracts.
 - `packages/diagnostics/src/podpilot_diagnostics/checks.py`: portable diagnostic

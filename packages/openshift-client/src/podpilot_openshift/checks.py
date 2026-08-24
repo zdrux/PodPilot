@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from kubernetes import client, config
@@ -11,6 +13,12 @@ from podpilot_diagnostics.checks import (
     DiagnosticCheckSpec,
 )
 from podpilot_diagnostics.redaction import redact_text
+from podpilot_openshift.metrics import (
+    MetricSample,
+    MonitoringQueryError,
+    MonitoringQuerySource,
+    ThanosQueryClient,
+)
 
 
 def _ready(pod: Any) -> bool:
@@ -29,11 +37,23 @@ class KubernetesDiagnosticCheckExecutor:
         *,
         core_api: client.CoreV1Api | None = None,
         discovery_api: client.DiscoveryV1Api | None = None,
+        monitoring_source: MonitoringQuerySource | None = None,
+        thanos_url: str = "https://thanos-querier.openshift-monitoring.svc:9091",
+        token_path: Path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token"),
+        ca_path: Path = Path("/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"),
+        monitoring_timeout_seconds: float = 8.0,
+        monitoring_max_series: int = 20,
         max_pods: int = 20,
         max_events: int = 30,
     ) -> None:
         self._core = core_api
         self._discovery = discovery_api
+        self._monitoring = monitoring_source
+        self._thanos_url = thanos_url
+        self._token_path = token_path
+        self._ca_path = ca_path
+        self._monitoring_timeout = monitoring_timeout_seconds
+        self._monitoring_max_series = monitoring_max_series
         self._max_pods = max_pods
         self._max_events = max_events
 
@@ -49,7 +69,11 @@ class KubernetesDiagnosticCheckExecutor:
         self._discovery = client.DiscoveryV1Api(api_client)
 
     def run(self, spec: DiagnosticCheckSpec) -> DiagnosticCheckResult:
-        if spec.tool_name not in {"inspect_service_topology", "inspect_target_events"}:
+        if spec.tool_name not in {
+            "inspect_monitoring_signal",
+            "inspect_service_topology",
+            "inspect_target_events",
+        }:
             return DiagnosticCheckResult(
                 status="failed",
                 summary="The requested diagnostic tool is not registered.",
@@ -57,10 +81,21 @@ class KubernetesDiagnosticCheckExecutor:
                 limitations=("No Kubernetes request was made.",),
             )
         try:
+            if spec.tool_name == "inspect_monitoring_signal":
+                return self._monitoring_signal(spec)
             self._ensure_clients()
             if spec.tool_name == "inspect_service_topology":
                 return self._topology(spec)
             return self._events(spec)
+        except MonitoringQueryError as exc:
+            return DiagnosticCheckResult(
+                status="failed",
+                summary=str(exc),
+                observations=(),
+                limitations=(
+                    "No target connection or Kubernetes mutation was attempted.",
+                ),
+            )
         except Exception:
             return DiagnosticCheckResult(
                 status="failed",
@@ -68,6 +103,106 @@ class KubernetesDiagnosticCheckExecutor:
                 observations=(),
                 limitations=("Retry the check after cluster API health is restored.",),
             )
+
+    def _ensure_monitoring(self) -> MonitoringQuerySource:
+        if self._monitoring is None:
+            self._monitoring = ThanosQueryClient(
+                base_url=self._thanos_url,
+                token_path=self._token_path,
+                ca_path=self._ca_path,
+                timeout_seconds=self._monitoring_timeout,
+                max_series=self._monitoring_max_series,
+            )
+        return self._monitoring
+
+    @staticmethod
+    def _matchers(spec: DiagnosticCheckSpec) -> str:
+        labels = {
+            "namespace": spec.namespace,
+            "service": spec.service_label,
+            "job": spec.job_name,
+            "instance": spec.instance,
+        }
+        return ",".join(
+            f"{name}={json.dumps(value)}"
+            for name, value in labels.items()
+            if value
+        )
+
+    @staticmethod
+    def _sample_identity(sample: MetricSample) -> str:
+        selected = [
+            f"{key}={sample.labels[key]}"
+            for key in ("namespace", "service", "job", "instance", "pod")
+            if sample.labels.get(key)
+        ]
+        return ", ".join(selected)[:1024] or "no identifying labels"
+
+    def _monitoring_signal(self, spec: DiagnosticCheckSpec) -> DiagnosticCheckResult:
+        source = self._ensure_monitoring()
+        matchers = self._matchers(spec)
+        alert_query = f'ALERTS{{alertname="TargetDown"{"," if matchers else ""}{matchers}}}'
+        up_query = f"up{{{matchers}}}"
+        alert_snapshot = source.query(alert_query)
+        up_snapshot = source.query(up_query)
+        firing = [
+            sample
+            for sample in alert_snapshot.samples
+            if sample.labels.get("alertstate") in {"firing", "pending"}
+        ]
+        healthy = [sample for sample in up_snapshot.samples if sample.value == 1]
+        down = [sample for sample in up_snapshot.samples if sample.value == 0]
+        unknown = [sample for sample in up_snapshot.samples if sample.value not in {0, 1}]
+        alert_identities = "; ".join(self._sample_identity(item) for item in firing[:5])
+        target_identities = "; ".join(
+            f"{self._sample_identity(item)}: up={item.value if item.value is not None else 'unknown'}"
+            for item in up_snapshot.samples[:5]
+        )
+        observations = (
+            CheckObservation(
+                id=f"check-{spec.id[:8]}-rule",
+                title="Current TargetDown rule state",
+                detail=redact_text(
+                    f"Thanos returned {len(firing)} matching firing or pending ALERTS series. "
+                    f"Bounded identities: {alert_identities or 'none'}."
+                )[:2048],
+                source="thanos:query/ALERTS",
+                observed_at=alert_snapshot.collected_at,
+            ),
+            CheckObservation(
+                id=f"check-{spec.id[:8]}-up",
+                title="Current scrape target health",
+                detail=redact_text(
+                    f"Thanos returned {len(up_snapshot.samples)} matching up series: "
+                    f"{len(healthy)} healthy, {len(down)} down, and {len(unknown)} unknown. "
+                    f"Bounded identities: {target_identities or 'none'}."
+                )[:2048],
+                source="thanos:query/up",
+                observed_at=up_snapshot.collected_at,
+            ),
+        )
+        if down:
+            summary = "The passive monitoring signal confirms at least one matching scrape target is down."
+        elif up_snapshot.samples and not firing:
+            summary = "Matching scrape targets currently report healthy and no matching firing rule series remains."
+        elif up_snapshot.samples:
+            summary = "The rule is firing while matching scrape targets currently report healthy; timing or rule scope may differ."
+        else:
+            summary = "No matching up series was returned, so target discovery or label scope remains unresolved."
+        limitations = [
+            "This is a current passive monitoring observation; PodPilot did not connect to the alert destination.",
+            "The query text and exact-match labels were constructed by the registered server tool, not by the model or browser.",
+        ]
+        if not alert_snapshot.is_complete or not up_snapshot.is_complete:
+            limitations.append(
+                f"At most {self._monitoring_max_series} series per query were retained."
+            )
+        return DiagnosticCheckResult(
+            status="succeeded",
+            summary=summary,
+            observations=observations,
+            limitations=tuple(limitations),
+        )
 
     def _service_and_pods(self, spec: DiagnosticCheckSpec) -> tuple[Any, list[Any], str]:
         assert self._core is not None

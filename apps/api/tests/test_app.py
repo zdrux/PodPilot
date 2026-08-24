@@ -347,8 +347,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 8 adds" in response.text
-        assert "PodPilot 0.8.0" in response.text
+        assert "Milestone 9 adds" in response.text
+        assert "PodPilot 0.9.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -412,7 +412,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Evidence-first Milestone 8 investigation" in detail.text
+        assert "Evidence-first Milestone 9 investigation" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -466,7 +466,7 @@ def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) 
         investigation_id = created.headers["location"].rsplit("/", 1)[-1]
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "Safe diagnostic plan" in detail.text
-        assert "Run 2 safe checks" in detail.text
+        assert "Run 3 safe checks" in detail.text
         assert "Manual follow-up guidance" not in detail.text
         assert "PodPilot will perform these checks itself" in detail.text
 
@@ -489,7 +489,7 @@ def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) 
         result_page = client.get(completed.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert result_page.text.count("Discovered one ready endpoint") >= 2
         assert "Updated after checks" in result_page.text
-        assert "Run 2 safe checks" not in result_page.text
+        assert "Run 3 safe checks" not in result_page.text
         repeated = client.post(
             f"/api/v1/investigations/{investigation_id}/checks/run",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
@@ -497,6 +497,7 @@ def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) 
         assert repeated.status_code == 409
 
     assert [item.tool_name for item in diagnostics.calls] == [
+        "inspect_monitoring_signal",
         "inspect_service_topology",
         "inspect_target_events",
     ]
@@ -507,11 +508,13 @@ def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) 
         checks = list(
             db_session.scalars(select(DiagnosticCheck).order_by(DiagnosticCheck.position))
         )
-        assert [item.status for item in checks] == ["succeeded", "succeeded"]
+        assert [item.status for item in checks] == [
+            "succeeded", "succeeded", "succeeded"
+        ]
         analysis = json.loads(db_session.get(Investigation, investigation_id).analysis_json)
         assert any(item["title"] == "Discovered one ready endpoint" for item in analysis["observations"])
         actions = list(db_session.scalars(select(AuditEvent.action)))
-        assert actions.count("diagnostic.execute") == 2
+        assert actions.count("diagnostic.execute") == 3
         assert "diagnostic.plan" in actions
         assert "investigation.reanalyze" in actions
     engine.dispose()
@@ -739,15 +742,93 @@ def test_existing_target_down_investigation_gets_safe_plan_on_open(tmp_path: Pat
             headers={"x-forwarded-user": "ivy"},
         )
         assert detail.status_code == 200
-        assert "Run 2 safe checks" in detail.text
+        assert "Run 3 safe checks" in detail.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
-        assert db_session.scalar(select(func.count()).select_from(DiagnosticCheck)) == 2
+        assert db_session.scalar(select(func.count()).select_from(DiagnosticCheck)) == 3
         event = db_session.scalar(
             select(AuditEvent).where(AuditEvent.action == "diagnostic.plan")
         )
-        assert json.loads(event.details_json)["reason"] == "milestone_7_backfill"
+        assert json.loads(event.details_json)["reason"] == "milestone_9_backfill"
+    engine.dispose()
+
+
+def test_existing_milestone_seven_plan_gets_only_missing_monitoring_check(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+    )
+    investigation_id = "00000000-0000-0000-0000-000000000009"
+    snapshot = {
+        "state": "active",
+        "labels": {
+            "alertname": "TargetDown",
+            "namespace": "demo",
+            "service": "check-endpoints",
+            "job": "check-endpoints",
+            "instance": "10.0.0.10:8443",
+        },
+        "annotations": {},
+        "workload": None,
+    }
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(Investigation(
+            id=investigation_id, created_by="ivy", status="recommendation_ready",
+            alert_fingerprint="m7-target-down", alert_name="TargetDown",
+            alert_snapshot_json=json.dumps(snapshot),
+            analysis_json=json.dumps({
+                "summary": "TargetDown requires investigation.", "observations": [],
+                "hypotheses": [], "next_checks": [], "limitations": [],
+                "model": {"status": "not_configured"},
+            }),
+        ))
+        for position, tool_name in enumerate(
+            ("inspect_service_topology", "inspect_target_events"), start=1
+        ):
+            db_session.add(DiagnosticCheck(
+                id=f"00000000-0000-0000-0000-00000000000{position}",
+                investigation_id=investigation_id, position=position,
+                tool_name=tool_name, title="Existing check", purpose="M7 fixture",
+                status="succeeded",
+                input_json=json.dumps({
+                    "id": f"old-{position}", "investigation_id": investigation_id,
+                    "position": position, "tool_name": tool_name, "title": "Existing check",
+                    "purpose": "M7 fixture", "namespace": "demo",
+                    "service_name": "check-endpoints",
+                }),
+                result_json=json.dumps({
+                    "status": "succeeded", "summary": "Previously completed.",
+                    "observations": [], "limitations": [],
+                }),
+            ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        detail = client.get(
+            f"/investigations/{investigation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert detail.status_code == 200
+        assert "Run 1 safe checks" in detail.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        checks = list(db_session.scalars(
+            select(DiagnosticCheck).order_by(DiagnosticCheck.position)
+        ))
+        assert [item.tool_name for item in checks] == [
+            "inspect_service_topology", "inspect_target_events", "inspect_monitoring_signal"
+        ]
+        assert [item.status for item in checks] == ["succeeded", "succeeded", "queued"]
+        event = db_session.scalar(
+            select(AuditEvent).where(AuditEvent.action == "diagnostic.plan")
+        )
+        details = json.loads(event.details_json)
+        assert details["tools"] == ["inspect_monitoring_signal"]
+        assert details["reason"] == "milestone_9_backfill"
     engine.dispose()
 
 
@@ -774,7 +855,7 @@ def test_target_down_check_failures_remain_visible_and_model_free(tmp_path: Path
             follow_redirects=False,
         )
         detail = client.get(completed.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert detail.text.count("Synthetic Kubernetes read failed") == 2
+        assert detail.text.count("Synthetic Kubernetes read failed") == 3
         assert "The fixture API was unavailable" in detail.text
 
     engine = build_engine(settings)

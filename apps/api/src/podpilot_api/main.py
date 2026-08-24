@@ -365,7 +365,12 @@ def create_app(
     provider = model_provider or OpenAIResponsesProvider()
     executor = remediation_executor or KubernetesRemediationExecutor()
     check_executor = diagnostic_executor or KubernetesDiagnosticCheckExecutor(
-        max_events=app_settings.workload_max_events
+        max_events=app_settings.workload_max_events,
+        thanos_url=app_settings.thanos_url,
+        token_path=app_settings.service_account_token_path,
+        ca_path=app_settings.service_ca_path,
+        monitoring_timeout_seconds=app_settings.thanos_timeout_seconds,
+        monitoring_max_series=app_settings.thanos_max_series,
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
 
@@ -378,7 +383,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.8.0",
+        version="0.9.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -913,34 +918,46 @@ def create_app(
             investigation = db_session.get(Investigation, investigation_id)
             if investigation is None:
                 raise HTTPException(status_code=404, detail="Investigation not found.")
-            existing_checks = db_session.scalar(
-                select(func.count())
-                .select_from(DiagnosticCheck)
-                .where(DiagnosticCheck.investigation_id == investigation_id)
-            ) or 0
-            if existing_checks == 0:
-                saved_alert = json.loads(investigation.alert_snapshot_json)
-                late_plan = plan_diagnostic_checks(
-                    investigation_id=investigation_id,
-                    alert_name=investigation.alert_name,
-                    labels=saved_alert.get("labels", {}),
-                )
-                if late_plan:
-                    db_session.add_all(
-                        [
-                            DiagnosticCheck(
-                                id=spec.id,
-                                investigation_id=investigation_id,
-                                position=spec.position,
-                                tool_name=spec.tool_name,
-                                title=spec.title,
-                                purpose=spec.purpose,
-                                status="queued",
-                                input_json=json.dumps(spec.to_dict(), sort_keys=True),
-                            )
-                            for spec in late_plan
-                        ]
+            existing_check_rows = list(
+                db_session.scalars(
+                    select(DiagnosticCheck).where(
+                        DiagnosticCheck.investigation_id == investigation_id
                     )
+                )
+            )
+            saved_alert = json.loads(investigation.alert_snapshot_json)
+            desired_plan = plan_diagnostic_checks(
+                investigation_id=investigation_id,
+                alert_name=investigation.alert_name,
+                labels=saved_alert.get("labels", {}),
+            )
+            existing_tools = {check.tool_name for check in existing_check_rows}
+            missing_specs = [
+                spec for spec in desired_plan if spec.tool_name not in existing_tools
+            ]
+            if missing_specs:
+                next_position = max(
+                    (check.position for check in existing_check_rows), default=0
+                )
+                new_checks = []
+                for spec in missing_specs:
+                    next_position += 1
+                    payload = spec.to_dict()
+                    payload["position"] = next_position
+                    new_checks.append(
+                        DiagnosticCheck(
+                            id=spec.id,
+                            investigation_id=investigation_id,
+                            position=next_position,
+                            tool_name=spec.tool_name,
+                            title=spec.title,
+                            purpose=spec.purpose,
+                            status="queued",
+                            input_json=json.dumps(payload, sort_keys=True),
+                        )
+                    )
+                db_session.add_all(new_checks)
+                if new_checks:
                     db_session.add(
                         AuditEvent(
                             actor="system:planner",
@@ -949,15 +966,15 @@ def create_app(
                             details_json=json.dumps(
                                 {
                                     "investigation_id": investigation_id,
-                                    "tools": [spec.tool_name for spec in late_plan],
-                                    "check_count": len(late_plan),
-                                    "reason": "milestone_7_backfill",
+                                    "tools": [check.tool_name for check in new_checks],
+                                    "check_count": len(new_checks),
+                                    "reason": "milestone_9_backfill",
                                 },
                                 sort_keys=True,
                             ),
                         )
                     )
-                    db_session.commit()
+                db_session.commit()
             _reconcile_alert_lifecycle(
                 db_session,
                 now=now,

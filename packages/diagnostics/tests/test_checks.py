@@ -13,11 +13,13 @@ def test_target_down_plan_is_bounded_and_server_owned() -> None:
     )
 
     assert [item.tool_name for item in plan] == [
+        "inspect_monitoring_signal",
         "inspect_service_topology",
         "inspect_target_events",
     ]
     assert all(item.namespace == "openshift-apiserver" for item in plan)
     assert all(item.service_name == "check-endpoints" for item in plan)
+    assert all(item.service_label == "check-endpoints" for item in plan)
     assert "ignore" not in plan[0].to_dict()
 
 

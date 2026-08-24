@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.7; Milestone 8 evidence-cited investigation chat implemented
+Status: Draft v0.8; Milestone 9 passive monitoring-path evidence implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
@@ -289,6 +289,16 @@ confirmed observations and are supplied to the configured model for a fresh
 schema-validated interpretation. Provider failure leaves the deterministic
 results usable. Active network probing, arbitrary PromQL, generic Kubernetes
 reads, shell, generated tools, and diagnostic mutation remain out of scope.
+
+Milestone 9 adds a third registered `TargetDown` check. Normal code constructs
+exact-label instant queries for current `ALERTS` rule state and `up` scrape health,
+then calls the authenticated in-cluster Thanos Querier with TLS validation, an
+eight-second timeout, a 64 KiB response ceiling, and a 20-series retention limit.
+Neither the browser nor model supplies PromQL. Query results are normalized and
+redacted before becoming evidence. A direct DNS/TCP/TLS/HTTP probe remains out of
+scope: allowing alert labels to select a network destination would create an
+SSRF-shaped capability until an administrator-owned destination registry and
+egress boundary exist.
 
 ### 5.10 Investigation-scoped chat
 

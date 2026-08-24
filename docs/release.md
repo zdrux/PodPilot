@@ -74,6 +74,15 @@ separate check execution, and audit records without message content. Live QA mus
 confirm cited answers link to persisted observations and that a tool proposal does
 not execute a check until the operator uses the registered-plan control.
 
+Milestone 9 adds gates for server-owned `ALERTS` and `up` query shapes, PromQL
+label escaping, bearer authentication, TLS validation, response-body and series
+limits, response-shape rejection, redaction, timeout/outage fallback, passive
+rule/scrape correlation, audit attribution, and incremental backfill of existing
+two-check plans. Tests must prove that alert annotations, model output, browser
+input, and malicious label strings cannot add PromQL or trigger a target network
+connection. Live QA must retain the fixture only long enough to verify the three
+checks and remove both its namespace and platform PrometheusRule afterward.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

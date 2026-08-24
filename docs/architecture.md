@@ -110,6 +110,16 @@ insufficient-evidence response. The server similarly accepts only the literal
 links validated citations to evidence cards and routes execution through the
 pre-existing check endpoint after a distinct operator click.
 
+Milestone 9 adds a bounded Thanos query adapter and a third server-owned
+`TargetDown` check. The diagnostics registry derives exact namespace, Service,
+job, and instance matchers from the persisted normalized alert. The adapter sends
+only fixed `ALERTS` and `up` instant-query shapes to the authenticated in-cluster
+Thanos endpoint, validates its service certificate, caps time, body size, and
+series count, and normalizes values and label provenance. It does not expose a
+generic PromQL endpoint to the API, browser, or model. Active target probing is
+deliberately absent because the alert is not an authorized network-destination
+registry.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

@@ -155,6 +155,11 @@ The current deployment uses these variables:
 - `PODPILOT_SERVICE_CA_PATH`, default projected OpenShift service CA path
 - `PODPILOT_ALERTMANAGER_TIMEOUT_SECONDS`, default `8`
 - `PODPILOT_ALERTMANAGER_MAX_ALERTS`, default `250`
+- `PODPILOT_THANOS_URL`, defaulting to the in-cluster
+  `https://thanos-querier.openshift-monitoring.svc:9091`
+- `PODPILOT_THANOS_TIMEOUT_SECONDS`, default `8`
+- `PODPILOT_THANOS_MAX_SERIES`, default `20`, with a hard accepted range of
+  `1` through `100`; the adapter also enforces a fixed 64 KiB response ceiling
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
@@ -315,10 +320,11 @@ system namespaces.
 
 `TargetDown` investigations that identify a namespace and Service show a
 server-owned **Safe diagnostic plan**. An Investigator can press **Run safe
-checks** once. PodPilot reads the Service, at most 20 matching Pods, at most 20
+checks** once. PodPilot first runs fixed instant `ALERTS` and `up` queries through
+Thanos, then reads the Service, at most 20 matching Pods, at most 20
 EndpointSlices, and events from at most five Pods within the configured event
-limit. It then adds those observations to the investigation and asks a ready
-model profile to reassess them. No model is required to run or retain the checks.
+limit. It adds those observations to the investigation and asks a ready model
+profile to reassess them. No model is required to run or retain the checks.
 
 Exercise the disposable live fixture with:
 
@@ -331,9 +337,16 @@ oc delete prometheusrule podpilot-targetdown-fixture -n openshift-monitoring --i
 oc delete namespace podpilot-targetdown-fixture --ignore-not-found
 ```
 
-The plan should report Service selector, EndpointSlice readiness, selected Pod
-health, bounded events, tool names, and the requesting OpenShift user. A second
-run returns a conflict and must not duplicate tool activity.
+The plan should report matching firing-rule state, passive scrape health, Service
+selector, EndpointSlice readiness, selected Pod health, bounded events, tool
+names, and the requesting OpenShift user. A second run returns a conflict and
+must not duplicate tool activity. PodPilot does not actively probe the alert
+destination; `instance` is only an escaped exact-match label in the fixed Thanos
+queries.
+
+The in-cluster URL, bearer-token pattern, and `cluster-monitoring-view` binding
+follow Red Hat's [OpenShift 4.22 monitoring API CLI guidance](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.22/html/accessing_metrics/accessing-monitoring-apis-by-using-the-cli).
+The normalized vector shape follows the [Prometheus HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/).
 
 ### Investigation-scoped chat
 

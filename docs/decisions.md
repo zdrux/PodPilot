@@ -236,3 +236,24 @@ Consequences: Chat can explain evidence and invite further collection without
 receiving credentials or executable tools. General guidance remains possible but
 is labeled as such. The first version has no streaming, arbitrary tool selection,
 cross-investigation memory, chat-driven mutation, or automatic execution.
+
+## 2026-08-23 - Use passive Thanos evidence before active reachability probes
+
+Context: `TargetDown` needs monitoring-path evidence after Kubernetes topology
+looks healthy. A direct probe seems useful, but alert labels and rule annotations
+are untrusted evidence and cannot safely authorize a destination for a
+cluster-admin workload.
+
+Decision: Milestone 9 adds only fixed, server-built Thanos instant queries for
+matching `ALERTS` rule state and `up` scrape health. Exact label values are escaped;
+the provider URL, query shapes, token source, CA, timeout, body limit, and series
+limit are application policy. Existing two-check investigations receive only the
+missing monitoring check when opened. No DNS, TCP, TLS, or HTTP request is sent to
+the alert instance or selected Service.
+
+Consequences: PodPilot can distinguish a currently down scrape target, recovered
+target, and missing target series without an SSRF primitive. Active probing is
+deferred until destinations are administrator-registered and enforced with a
+dedicated no-token identity, egress policy, rate limits, protocol allowlist, and
+fixtures for redirect, DNS-rebinding, link-local, control-plane, and Secret-service
+denial.

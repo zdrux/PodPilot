@@ -14,11 +14,18 @@ class DiagnosticCheckSpec:
     id: str
     investigation_id: str
     position: int
-    tool_name: Literal["inspect_service_topology", "inspect_target_events"]
+    tool_name: Literal[
+        "inspect_monitoring_signal",
+        "inspect_service_topology",
+        "inspect_target_events",
+    ]
     title: str
     purpose: str
     namespace: str
     service_name: str
+    service_label: str = ""
+    job_name: str = ""
+    instance: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -70,11 +77,24 @@ def plan_diagnostic_checks(
         "investigation_id": investigation_id,
         "namespace": namespace,
         "service_name": service_name,
+        "service_label": labels.get("service", "")[:253],
+        "job_name": labels.get("job", "")[:253],
+        "instance": labels.get("instance", "")[:512],
     }
     return (
         DiagnosticCheckSpec(
             id=str(uuid4()),
             position=1,
+            tool_name="inspect_monitoring_signal",
+            title="Correlate the firing rule and scrape signal",
+            purpose=(
+                "Compare the current TargetDown ALERTS series with bounded up-series target health."
+            ),
+            **common,
+        ),
+        DiagnosticCheckSpec(
+            id=str(uuid4()),
+            position=2,
             tool_name="inspect_service_topology",
             title="Resolve the target Service and endpoints",
             purpose=(
@@ -84,7 +104,7 @@ def plan_diagnostic_checks(
         ),
         DiagnosticCheckSpec(
             id=str(uuid4()),
-            position=2,
+            position=3,
             tool_name="inspect_target_events",
             title="Inspect bounded events for target Pods",
             purpose=(

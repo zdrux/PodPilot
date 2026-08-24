@@ -168,3 +168,14 @@ proposal cannot call the executor; it renders a separate button backed by the
 existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit
 controls. Chat audit events contain IDs, modes, citations, intent name, and counts,
 not message bodies.
+
+Milestone 9 treats Prometheus label values as untrusted selectors, not query text
+or network destinations. The server owns both supported PromQL expressions and
+JSON-escapes exact-match values. Thanos access uses the projected service-account
+token, the OpenShift service CA, a fixed service URL, bounded timeout, 64 KiB body
+limit, and series cap. Responses are shape-validated and redacted. The model and
+browser cannot submit PromQL. PodPilot does not resolve or connect to the alert's
+`instance` value or the selected Service; doing so would let rule authors steer a
+privileged workload toward arbitrary in-cluster endpoints. An active probe requires
+an administrator-owned allowlist, destination pre-registration, dedicated no-token
+identity, explicit egress policy, rate limits, and separate evaluation gates.
