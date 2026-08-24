@@ -7,7 +7,7 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.5.0 / Milestone 5 is implemented and deployed on the disposable SNO
+PodPilot 0.6.0 / Milestone 6 is implemented and deployed on the disposable SNO
 lab. The repository was clean at the last handoff. Start a new session by reading
 this file and `AGENTS.md`, then verify `git status --short` before making changes.
 
@@ -33,21 +33,30 @@ remediation actions after a fresh, explicit approval.
 - Server dry-run, exact UID/resourceVersion preconditions, ten-minute preview
   expiry, Approver-only two-step confirmation, atomic single execution,
   post-action verification, sibling-action cancellation, and audit events.
+- Explicit preview cancellation by the investigation creator or an Approver,
+  automatic expiry, source-alert reconciliation from complete Alertmanager
+  snapshots, and read-only stale or missing target reconciliation.
+- Approval rechecks the source alert immediately before claiming an action. An
+  unavailable or truncated Alertmanager snapshot fails closed without
+  cancelling or authorizing the preview.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
   `0004_remediation_actions`.
 
 ## Last Verified State
 
-- Application version: `0.5.0`.
+- Application version: `0.6.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 28 tests passing with 82% aggregate coverage.
-- Live Milestone 5 exercise verified Investigator denial, stale-preview failure,
-  Approver attribution, new-UID controller replacement, Ready-state
-  verification, and sibling cancellation.
+- Automated suite: 35 tests passing with 82% aggregate coverage.
+- Live Milestone 6 exercise verified creator cancellation with no workload
+  mutation, `remediation.cancel` attribution, automatic cancellation after the
+  exact fixture target changed, and automatic cancellation after the source
+  alert left Alertmanager. Reconciler audit events recorded `target_stale` and
+  `source_alert_not_active` under `system:reconciler`.
 - The disposable CrashLoop workload namespace and synthetic PrometheusRule were
   removed after validation.
-- Latest handoff commit: `d5aa6b4` (`Harden Pod delete server dry-run`).
+- Latest implementation commit: `523f460` (`Add remediation lifecycle
+  reconciliation`). OpenShift build `podpilot-18` was built from that commit.
 
 These observations are a handoff snapshot, not a substitute for checking the
 current repository and cluster state.
@@ -60,6 +69,10 @@ current repository and cluster state.
   untrusted evidence and cannot define executable operations.
 - The browser submits only an opaque action ID. The server owns the target,
   operation, preconditions, expiry, and verifier.
+- Cancellation grants no execute authority. Lifecycle closure uses an atomic
+  preview-ready transition and records the actor, reason, detail, and timestamp.
+- Absence from a bounded, truncated Alertmanager response is not accepted as
+  proof that an alert resolved.
 - Pod DELETE preview carries `dryRun: ["All"]` in `DeleteOptions` and the query
   parameter because live SNO testing found the query-only Python-client form was
   not sufficient on this OpenShift path.
@@ -85,16 +98,16 @@ current repository and cluster state.
 
 No next milestone is formally selected. The highest-value candidates are:
 
-1. Add explicit preview cancellation and better lifecycle reconciliation when
-   an alert resolves or its target disappears.
-2. Add investigation-scoped follow-up chat that can request only registered,
+1. Add investigation-scoped follow-up chat that can request only registered,
    bounded diagnostic checks and must cite evidence.
-3. Introduce curated cluster memory with source, scope, owner, confidence, and
+2. Introduce curated cluster memory with source, scope, owner, confidence, and
    review/expiry metadata before adding retrieval to investigations.
-4. Add the next diagnostic capability pack with fixtures and release gates;
+3. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
-5. Split production observation and action identities, then replace the lab
+4. Split production observation and action identities, then replace the lab
    `:latest` build flow with immutable image promotion.
+5. Add a background reconciliation loop so preview expiry and alert resolution
+   do not depend on an operator loading the dashboard or investigation detail.
 
 Before selecting work, reconcile these candidates with `docs/prd.md`, record the
 decision in `docs/decisions.md`, and update this file in the same change.
