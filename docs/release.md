@@ -51,6 +51,13 @@ shape, rollout readiness verification, sibling cancellation, and complete audit
 events. Live QA must use a disposable fixture namespace and must confirm the
 fixture is healthy or removed before release.
 
+Milestone 6 adds gates for creator cancellation, unauthorized cancellation,
+atomic closure, expiry reconciliation, source-alert resolution, missing/stale
+target validation, approval-time Alertmanager recheck, and audit attribution.
+Truncated Alertmanager snapshots must neither cancel previews nor authorize an
+action. Live QA must confirm cancellation performs no Kubernetes mutation and
+that a removed target is closed by `system:reconciler`.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

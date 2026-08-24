@@ -80,6 +80,16 @@ excludes pre-existing healthy siblings. A rollout verifies its fixed restart
 annotation, observed generation, and desired updated/Ready counts. Executing one
 proposal cancels sibling previews; another mutation requires fresh evidence.
 
+Milestone 6 adds a lifecycle reconciler around those proposals. Dashboard reads
+expire overdue previews and, only from a complete Alertmanager snapshot, cancel
+previews whose source fingerprint is no longer active. Investigation reads call a
+read-only executor validation for the exact target UID/resourceVersion and close
+missing or stale previews without issuing a dry-run or mutation. Approval fetches
+Alertmanager again and fails closed if the alert cannot be proven active.
+Investigation creators and Approvers may explicitly cancel previews; only
+Approvers retain execution permission. Closure reason, actor, time, and detail
+are persisted in the action result and audit stream.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

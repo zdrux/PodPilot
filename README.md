@@ -4,11 +4,12 @@ PodPilot is an OpenShift-first AI troubleshooting and Day-2 operations companion
 It correlates alerts, metrics, resource state, events, and targeted logs into an
 evidence-backed investigation with ranked hypotheses and approved remediations.
 
-Milestone 5 is deployed on the disposable SNO lab. PodPilot correlates workload
+Milestone 6 is implemented for the disposable SNO lab. PodPilot correlates workload
 alerts with bounded live evidence and model interpretation, then offers a small
 set of typed, previewed, approval-gated remediations with stale-target checks,
-verification, and audit attribution. See the current project status for the
-precise handoff and remaining work.
+verification, lifecycle reconciliation, explicit cancellation, and audit
+attribution. See the current project status for the precise handoff and remaining
+work.
 
 ## Start Here
 

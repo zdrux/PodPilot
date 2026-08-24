@@ -6,7 +6,7 @@
   <a class="button secondary" href="/">Back to queue</a>
 </header>
 
-<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 5 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 6 analysis</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Collection is bounded and read-only. {% if investigation.analysis.model.status == 'ready' %}A schema-validated model interpretation is shown separately below.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so the deterministic result remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
 
 <section class="investigation-summary panel">
   <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
@@ -52,11 +52,12 @@
         <div><dt>Recovery</dt><dd>{{ action.proposal.recovery }}</dd></div>
       </dl>
       {% if action.result %}
-      <div class="action-result result-{{ action.status }}"><strong>{{ action.result.summary }}</strong><p>Verification: {{ action.result.verification }}</p><p>Approved by {{ action.approved_by }}{% if action.approved_at %} at {{ action.approved_at }}{% endif %}.</p></div>
+      <div class="action-result result-{{ action.status }}"><strong>{{ action.result.summary }}</strong>{% if action.result.closure %}<p>{{ action.result.closure.detail }}</p><p>Closed by {{ action.result.closure.actor }} at {{ action.result.closure.closed_at }} · {{ action.result.closure.reason | replace('_', ' ') }}.</p>{% else %}<p>Verification: {{ action.result.verification }}</p><p>Approved by {{ action.approved_by }}{% if action.approved_at %} at {{ action.approved_at }}{% endif %}.</p>{% endif %}</div>
       {% elif action.status == 'preview_ready' and not action.expired %}
-        {% if user.role.value >= 30 %}
-        <div class="approval-controls"><button class="button secondary review-action" type="button" data-review-target="approval-{{ action.id }}">Review approval</button><div class="approval-confirm" id="approval-{{ action.id }}" hidden><strong>Confirm this exact {{ action.risk }}-risk operation</strong><p>PodPilot will re-read the UID and resourceVersion immediately before execution. This approval applies only to this action and expires at {{ action.expires_at }}.</p><button class="button primary approve-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/actions/{{ action.id }}/approve">Approve and run</button></div></div>
-        {% else %}<span class="tag">Approver required</span>{% endif %}
+        <div class="approval-controls">
+          {% if user.role.value >= 30 %}<button class="button secondary review-action" type="button" data-review-target="approval-{{ action.id }}">Review approval</button><div class="approval-confirm" id="approval-{{ action.id }}" hidden><strong>Confirm this exact {{ action.risk }}-risk operation</strong><p>PodPilot will re-read the UID and resourceVersion and verify the source alert immediately before execution. This approval applies only to this action and expires at {{ action.expires_at }}.</p><button class="button primary approve-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/actions/{{ action.id }}/approve">Approve and run</button></div>{% else %}<span class="tag">Approver required</span>{% endif %}
+          {% if user.role.value >= 30 or user.username == investigation.created_by %}<button class="button danger cancel-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/actions/{{ action.id }}/cancel">Cancel preview</button>{% endif %}
+        </div>
       {% elif action.expired %}<div class="action-result"><strong>Preview expired</strong><p>Create a fresh investigation to re-read the target and generate new preconditions.</p></div>
       {% endif %}
     </article>

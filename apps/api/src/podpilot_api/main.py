@@ -156,6 +156,143 @@ def _proposal_from_json(value: str) -> ActionProposal:
     return ActionProposal(**payload)
 
 
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _closure_result(
+    *, summary: str, actor: str, reason: str, detail: str, closed_at: datetime
+) -> str:
+    return json.dumps(
+        {
+            "summary": summary,
+            "verification": {},
+            "closure": {
+                "actor": actor,
+                "reason": reason,
+                "detail": detail,
+                "closed_at": closed_at.isoformat(),
+            },
+        },
+        sort_keys=True,
+    )
+
+
+def _close_preview(
+    db_session: Session,
+    *,
+    action: RemediationAction,
+    investigation: Investigation,
+    status_value: str,
+    actor: str,
+    audit_action: str,
+    reason: str,
+    summary: str,
+    detail: str,
+    now: datetime,
+) -> bool:
+    claimed = db_session.execute(
+        update(RemediationAction)
+        .where(
+            RemediationAction.id == action.id,
+            RemediationAction.status == "preview_ready",
+        )
+        .values(
+            status=status_value,
+            result_json=_closure_result(
+                summary=summary,
+                actor=actor,
+                reason=reason,
+                detail=detail,
+                closed_at=now,
+            ),
+        )
+    )
+    if claimed.rowcount != 1:
+        return False
+    db_session.add(
+        AuditEvent(
+            actor=actor,
+            action=audit_action,
+            outcome=status_value,
+            details_json=json.dumps(
+                {
+                    "action_id": action.id,
+                    "investigation_id": investigation.id,
+                    "reason": reason,
+                    "detail": detail,
+                },
+                sort_keys=True,
+            ),
+        )
+    )
+    db_session.flush()
+    remaining = db_session.scalar(
+        select(func.count())
+        .select_from(RemediationAction)
+        .where(
+            RemediationAction.investigation_id == investigation.id,
+            RemediationAction.status == "preview_ready",
+        )
+    ) or 0
+    if remaining == 0 and investigation.status == "awaiting_approval":
+        investigation.status = "cancelled"
+    return True
+
+
+def _reconcile_alert_lifecycle(
+    db_session: Session,
+    *,
+    now: datetime,
+    active_fingerprints: set[str] | None,
+) -> int:
+    changed = 0
+    rows = list(
+        db_session.execute(
+            select(RemediationAction, Investigation)
+            .join(Investigation, RemediationAction.investigation_id == Investigation.id)
+            .where(RemediationAction.status == "preview_ready")
+        )
+    )
+    for action, investigation in rows:
+        if now > _aware(action.expires_at):
+            changed += int(
+                _close_preview(
+                    db_session,
+                    action=action,
+                    investigation=investigation,
+                    status_value="expired",
+                    actor="system:reconciler",
+                    audit_action="remediation.expire",
+                    reason="preview_expired",
+                    summary="The approval window expired without execution.",
+                    detail="Generate a fresh investigation before approving a remediation.",
+                    now=now,
+                )
+            )
+        elif (
+            active_fingerprints is not None
+            and investigation.alert_fingerprint not in active_fingerprints
+        ):
+            changed += int(
+                _close_preview(
+                    db_session,
+                    action=action,
+                    investigation=investigation,
+                    status_value="cancelled",
+                    actor="system:reconciler",
+                    audit_action="remediation.reconcile",
+                    reason="source_alert_not_active",
+                    summary="The preview was cancelled because its source alert is no longer active.",
+                    detail="Create a fresh investigation if the condition returns.",
+                    now=now,
+                )
+            )
+    if changed:
+        db_session.commit()
+    return changed
+
+
 def create_app(
     settings: Settings | None = None,
     role_resolver: RoleResolver | None = None,
@@ -185,7 +322,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.5.0",
+        version="0.6.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -422,6 +559,15 @@ def create_app(
         csrf_token, csrf_is_new = _csrf_token(request)
 
         with Session(request.app.state.engine) as db_session:
+            _reconcile_alert_lifecycle(
+                db_session,
+                now=datetime.now(timezone.utc),
+                active_fingerprints=(
+                    {alert.fingerprint for alert in active_alerts if alert.state == "active"}
+                    if snapshot is not None and snapshot.is_complete
+                    else None
+                ),
+            )
             recent = list(
                 db_session.scalars(
                     select(Investigation)
@@ -676,6 +822,49 @@ def create_app(
             investigation = db_session.get(Investigation, investigation_id)
             if investigation is None:
                 raise HTTPException(status_code=404, detail="Investigation not found.")
+            _reconcile_alert_lifecycle(
+                db_session,
+                now=now,
+                active_fingerprints=None,
+            )
+            candidates = [
+                (action.id, _proposal_from_json(action.proposal_json))
+                for action in db_session.scalars(
+                    select(RemediationAction).where(
+                        RemediationAction.investigation_id == investigation_id,
+                        RemediationAction.status == "preview_ready",
+                    )
+                )
+            ]
+
+        for action_id, proposal in candidates:
+            validation = await run_in_threadpool(executor.validate, proposal)
+            if validation.status not in {"stale", "missing"}:
+                continue
+            with Session(request.app.state.engine) as db_session:
+                investigation = db_session.get(Investigation, investigation_id)
+                action = db_session.get(RemediationAction, action_id)
+                if investigation is None or action is None:
+                    continue
+                changed = _close_preview(
+                    db_session,
+                    action=action,
+                    investigation=investigation,
+                    status_value="cancelled",
+                    actor="system:reconciler",
+                    audit_action="remediation.reconcile",
+                    reason=f"target_{validation.status}",
+                    summary="The preview was cancelled because its exact target is no longer current.",
+                    detail=validation.detail,
+                    now=now,
+                )
+                if changed:
+                    db_session.commit()
+
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            if investigation is None:
+                raise HTTPException(status_code=404, detail="Investigation not found.")
             view = {
                 "id": investigation.id,
                 "created_at": investigation.created_at,
@@ -702,7 +891,7 @@ def create_app(
                         "target_kind": action.target_kind,
                         "target_name": action.target_name,
                         "expires_at": action.expires_at,
-                        "expired": now > action.expires_at.replace(tzinfo=timezone.utc) if action.expires_at.tzinfo is None else now > action.expires_at,
+                        "expired": now > _aware(action.expires_at),
                         "proposal": proposal,
                         "preview": json.loads(action.preview_json),
                         "approved_by": action.approved_by,
@@ -745,6 +934,16 @@ def create_app(
                 detail="Executing a remediation requires the Approver role or higher.",
             )
         now = datetime.now(timezone.utc)
+        try:
+            approval_snapshot = await run_in_threadpool(alerts.fetch)
+        except AlertSourceError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"PodPilot could not verify that the source alert is still active. {exc}",
+            ) from exc
+        active_fingerprints = {
+            item.fingerprint for item in approval_snapshot.alerts if item.state == "active"
+        }
         with Session(request.app.state.engine) as db_session:
             investigation = db_session.get(Investigation, investigation_id)
             action = db_session.get(RemediationAction, action_id)
@@ -752,15 +951,38 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Remediation action not found.")
             if action.status != "preview_ready":
                 raise HTTPException(status_code=409, detail="This remediation is no longer awaiting approval.")
-            expires_at = action.expires_at.replace(tzinfo=timezone.utc) if action.expires_at.tzinfo is None else action.expires_at
+            if (
+                not approval_snapshot.is_complete
+                and investigation.alert_fingerprint not in active_fingerprints
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="PodPilot could not prove that the source alert is still active because the Alertmanager snapshot was truncated.",
+                )
+            if investigation.alert_fingerprint not in active_fingerprints:
+                _reconcile_alert_lifecycle(
+                    db_session,
+                    now=now,
+                    active_fingerprints=active_fingerprints,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="The source alert is no longer active. This preview was cancelled.",
+                )
+            expires_at = _aware(action.expires_at)
             if now > expires_at:
-                action.status = "expired"
-                db_session.add(AuditEvent(
+                _close_preview(
+                    db_session,
+                    action=action,
+                    investigation=investigation,
+                    status_value="expired",
                     actor=user.username,
-                    action="remediation.approve",
-                    outcome="expired",
-                    details_json=json.dumps({"action_id": action_id, "investigation_id": investigation_id}, sort_keys=True),
-                ))
+                    audit_action="remediation.expire",
+                    reason="preview_expired",
+                    summary="The approval window expired without execution.",
+                    detail="Generate a fresh investigation before approving a remediation.",
+                    now=now,
+                )
                 db_session.commit()
                 raise HTTPException(status_code=409, detail="The preview expired. Generate a fresh investigation before approval.")
             proposal = _proposal_from_json(action.proposal_json)
@@ -801,15 +1023,28 @@ def create_app(
             action.status = result.outcome
             action.result_json = json.dumps(result.to_dict(), default=_json_default, sort_keys=True)
             investigation.status = result.outcome if result.outcome != "stale" else "unresolved"
-            cancelled = db_session.execute(
-                update(RemediationAction)
-                .where(
-                    RemediationAction.investigation_id == investigation_id,
-                    RemediationAction.id != action_id,
-                    RemediationAction.status == "preview_ready",
+            siblings = list(
+                db_session.scalars(
+                    select(RemediationAction).where(
+                        RemediationAction.investigation_id == investigation_id,
+                        RemediationAction.id != action_id,
+                        RemediationAction.status == "preview_ready",
+                    )
                 )
-                .values(status="cancelled")
-            ).rowcount
+            )
+            for sibling in siblings:
+                _close_preview(
+                    db_session,
+                    action=sibling,
+                    investigation=investigation,
+                    status_value="cancelled",
+                    actor=user.username,
+                    audit_action="remediation.cancel_siblings",
+                    reason="sibling_action_executed",
+                    summary="The preview was cancelled after another action executed.",
+                    detail="A fresh investigation is required before another mutation.",
+                    now=datetime.now(timezone.utc),
+                )
             db_session.add(AuditEvent(
                 actor=user.username,
                 action="remediation.execute",
@@ -824,21 +1059,57 @@ def create_app(
                     sort_keys=True,
                 ),
             ))
-            if cancelled:
-                db_session.add(AuditEvent(
-                    actor=user.username,
-                    action="remediation.cancel_siblings",
-                    outcome="cancelled",
-                    details_json=json.dumps(
-                        {
-                            "investigation_id": investigation_id,
-                            "executed_action_id": action_id,
-                            "cancelled_count": cancelled,
-                            "reason": "A fresh investigation is required before another mutation.",
-                        },
-                        sort_keys=True,
-                    ),
-                ))
+            db_session.commit()
+        return RedirectResponse(
+            url=f"/investigations/{investigation_id}#action-{action_id}",
+            status_code=303,
+        )
+
+    @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/cancel")
+    async def cancel_action(
+        investigation_id: str,
+        action_id: str,
+        request: Request,
+        user: AuthContext = Depends(current_user),
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            action = db_session.get(RemediationAction, action_id)
+            if investigation is None or action is None or action.investigation_id != investigation_id:
+                raise HTTPException(status_code=404, detail="Remediation action not found.")
+            if user.role < Role.APPROVER and investigation.created_by != user.username:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the investigation creator or an Approver can cancel this preview.",
+                )
+            if action.status != "preview_ready":
+                raise HTTPException(status_code=409, detail="This preview is no longer active.")
+            status_value = "expired" if now > _aware(action.expires_at) else "cancelled"
+            changed = _close_preview(
+                db_session,
+                action=action,
+                investigation=investigation,
+                status_value=status_value,
+                actor=user.username,
+                audit_action=("remediation.expire" if status_value == "expired" else "remediation.cancel"),
+                reason=("preview_expired" if status_value == "expired" else "user_cancelled"),
+                summary=(
+                    "The approval window expired without execution."
+                    if status_value == "expired"
+                    else "The remediation preview was cancelled without executing it."
+                ),
+                detail=(
+                    "Generate a fresh investigation before approving a remediation."
+                    if status_value == "expired"
+                    else "No Kubernetes mutation was attempted."
+                ),
+                now=now,
+            )
+            if not changed:
+                db_session.rollback()
+                raise HTTPException(status_code=409, detail="This preview was already changed.")
             db_session.commit()
         return RedirectResponse(
             url=f"/investigations/{investigation_id}#action-{action_id}",

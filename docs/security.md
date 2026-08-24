@@ -133,3 +133,13 @@ supports only Deployment, StatefulSet, and DaemonSet. Every attempt records the
 actor, preview, approval, operation result, before/after identities, and bounded
 verification. Shell, arbitrary YAML/patches, Secrets, RBAC, nodes, system-namespace
 targets, and model-created tools remain non-executable.
+
+Milestone 6 treats a preview as revocable state rather than durable authority.
+An investigation creator may cancel but cannot execute it. Dashboard
+reconciliation infers resolution only from a complete bounded Alertmanager
+snapshot; truncated or unavailable snapshots neither cancel nor authorize.
+Approval independently rechecks that source fingerprint and fails closed when it
+cannot be proven active. A separate read-only target validation classifies exact
+identity as current, stale, missing, or unavailable. Only stale or missing closes
+the preview automatically; transient Kubernetes failures leave it unapproved and
+visible for retry.

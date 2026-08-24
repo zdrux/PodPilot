@@ -181,3 +181,22 @@ Consequences: Arbitrary shell/YAML, standalone Pod deletion, node/system/Secret/
 RBAC mutation, and model authorization remain impossible through the product.
 Unresolved, stale, expired, and failed outcomes are durable rather than silently
 retried. Production still needs a separate narrowly scoped action identity.
+
+## 2026-08-23 - Remediation previews are revocable and continuously reconciled
+
+Context: A ten-minute preview could remain visible after its alert resolved or
+its exact target disappeared, encouraging an operator to approve stale intent.
+Bounded Alertmanager responses can also be truncated, so absence is not always
+proof of resolution.
+
+Decision: Milestone 6 lets the investigation creator or an Approver explicitly
+cancel without granting execution rights. It expires previews durably, cancels
+them when a complete Alertmanager snapshot proves the source fingerprint is no
+longer active, and uses read-only exact-target validation to close stale or
+missing targets. Approval independently proves the alert is active. Truncated or
+unavailable alert data fails closed and never implies resolution.
+
+Consequences: Awaiting-approval counts converge without database intervention,
+every closure is attributable, and fewer stale actions reach execution. Dashboard
+and investigation reads may perform safe lifecycle writes, and target validation
+adds bounded Kubernetes reads but no dry-run or mutation.

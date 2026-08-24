@@ -2,6 +2,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from kubernetes.client.exceptions import ApiException
+
 from podpilot_diagnostics.remediation import ActionProposal
 from podpilot_openshift.remediation import KubernetesRemediationExecutor
 
@@ -42,7 +44,8 @@ def proposal(action_type="delete_controller_owned_pod") -> ActionProposal:
 
 
 class FakeCore:
-    def __init__(self, stale=False):
+    def __init__(self, stale=False, missing=False):
+        self.missing = missing
         self.old = ns(metadata=ns(name="api-old", uid="old-uid", resource_version="changed" if stale else "old-rv", owner_references=[ns(controller=True, uid="rs-uid")]), status=ns(conditions=[]))
         self.replacement = ns(
             metadata=ns(
@@ -57,6 +60,8 @@ class FakeCore:
         self.deleted = False
 
     def read_namespaced_pod(self, name, namespace):
+        if self.missing:
+            raise ApiException(status=404, reason="Not Found")
         return self.old
 
     def delete_namespaced_pod(self, name, namespace, **kwargs):
@@ -125,6 +130,21 @@ def test_changed_resource_version_fails_closed_without_delete() -> None:
     assert result.outcome == "stale"
     assert "resourceVersion changed" in result.summary
     assert core.deletes == []
+
+
+def test_read_only_validation_distinguishes_current_stale_and_missing() -> None:
+    current = KubernetesRemediationExecutor(
+        core_api=FakeCore(), dynamic_client=FakeDynamic(None)
+    ).validate(proposal())
+    stale = KubernetesRemediationExecutor(
+        core_api=FakeCore(stale=True), dynamic_client=FakeDynamic(None)
+    ).validate(proposal())
+    missing = KubernetesRemediationExecutor(
+        core_api=FakeCore(missing=True), dynamic_client=FakeDynamic(None)
+    ).validate(proposal())
+    assert current.status == "current"
+    assert stale.status == "stale"
+    assert missing.status == "missing"
 
 
 def test_protected_namespace_fails_closed_before_kubernetes_call() -> None:

@@ -55,8 +55,15 @@ class ActionResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ActionValidation:
+    status: Literal["current", "stale", "missing", "unavailable"]
+    detail: str
+
+
 class RemediationExecutor(Protocol):
     def preview(self, proposal: ActionProposal) -> dict[str, object]: ...
+    def validate(self, proposal: ActionProposal) -> ActionValidation: ...
     def execute(self, proposal: ActionProposal) -> ActionResult: ...
 
 

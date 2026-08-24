@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.4; Milestone 5 typed remediation implemented
+Status: Draft v0.5; Milestone 6 remediation lifecycle reconciliation implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
@@ -261,6 +261,17 @@ new -> collecting -> analyzing -> recommendation_ready
 
 Every transition is durable and visible. Retrying creates a new attempt under the
 same investigation rather than rewriting history.
+
+### 5.8 Remediation preview lifecycle
+
+Fresh previews are not durable authorization. An investigation creator or an
+Approver can cancel a preview without gaining execution permission. PodPilot
+automatically expires overdue previews, cancels them after a complete
+Alertmanager snapshot proves the source alert is no longer active, and cancels a
+preview when a read-only recheck finds the exact target missing or stale. An
+incomplete or unavailable alert snapshot cannot authorize execution and cannot
+be used to infer that an alert resolved. Every closure records actor, time,
+reason, detail, and an audit event.
 
 ## 6. Cluster Memory
 

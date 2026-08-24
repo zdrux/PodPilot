@@ -19,7 +19,7 @@ from podpilot_diagnostics.workloads import (
     OwnerEvidence,
     WorkloadEvidence,
 )
-from podpilot_diagnostics.remediation import ActionResult
+from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
@@ -27,14 +27,20 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class FakeAlertSource:
-    def __init__(self, alerts: tuple[AlertRecord, ...] = (), error: str | None = None) -> None:
+    def __init__(
+        self,
+        alerts: tuple[AlertRecord, ...] = (),
+        error: str | None = None,
+        is_complete: bool = True,
+    ) -> None:
         self.alerts = alerts
         self.error = error
+        self.is_complete = is_complete
 
     def fetch(self) -> AlertSnapshot:
         if self.error:
             raise AlertSourceError(self.error)
-        return AlertSnapshot(self.alerts, datetime.now(timezone.utc))
+        return AlertSnapshot(self.alerts, datetime.now(timezone.utc), self.is_complete)
 
 
 class FakeWorkloadSource:
@@ -85,9 +91,11 @@ class FakeModelProvider:
 
 
 class FakeRemediationExecutor:
-    def __init__(self, outcome: str = "resolved") -> None:
+    def __init__(self, outcome: str = "resolved", validation: str = "current") -> None:
         self.outcome = outcome
+        self.validation = validation
         self.previews = []
+        self.validations = []
         self.executions = []
 
     def preview(self, proposal):
@@ -111,6 +119,16 @@ class FakeRemediationExecutor:
             verification={"replacement_ready": self.outcome == "resolved"},
             after={"uid": "replacement-uid"},
         )
+
+    def validate(self, proposal):
+        self.validations.append(proposal)
+        details = {
+            "current": "The exact target identity is still current.",
+            "stale": "The target UID or resourceVersion changed.",
+            "missing": "The exact target no longer exists.",
+            "unavailable": "The Kubernetes API is temporarily unavailable.",
+        }
+        return ActionValidation(self.validation, details[self.validation])
 
 
 def watchdog() -> AlertRecord:
@@ -241,8 +259,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 5 enables" in response.text
-        assert "PodPilot 0.5.0" in response.text
+        assert "Milestone 6 adds" in response.text
+        assert "PodPilot 0.6.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -306,7 +324,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Evidence-first Milestone 5 analysis" in detail.text
+        assert "Evidence-first Milestone 6 analysis" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -407,6 +425,219 @@ def test_typed_actions_require_approver_and_execute_once(tmp_path: Path) -> None
         assert "remediation.execute" in audit_actions
         assert "remediation.cancel_siblings" in audit_actions
     engine.dispose()
+
+
+def test_investigation_creator_can_cancel_previews_without_execution(tmp_path: Path) -> None:
+    remediation = FakeRemediationExecutor()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "eve": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        source=FakeAlertSource((crashloop(),)),
+        workload_source=FakeWorkloadSource(crashloop_evidence()),
+        remediation_executor=remediation,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            action_ids = list(
+                db_session.scalars(
+                    select(RemediationAction.id).order_by(RemediationAction.created_at)
+                )
+            )
+        engine.dispose()
+
+        denied = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_ids[0]}/cancel",
+            headers={"x-forwarded-user": "eve", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert denied.status_code == 403
+        for action_id in action_ids:
+            cancelled = client.post(
+                f"/api/v1/investigations/{investigation_id}/actions/{action_id}/cancel",
+                headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+                follow_redirects=False,
+            )
+            assert cancelled.status_code == 303
+        rejected_approval = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_ids[0]}/approve",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert rejected_approval.status_code == 409
+
+    assert remediation.executions == []
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        actions = list(db_session.scalars(select(RemediationAction)))
+        investigation = db_session.get(Investigation, investigation_id)
+        assert all(action.status == "cancelled" for action in actions)
+        assert all(json.loads(action.result_json or "{}")["closure"]["actor"] == "ivy" for action in actions)
+        assert investigation is not None and investigation.status == "cancelled"
+        assert list(db_session.scalars(select(AuditEvent.action))).count("remediation.cancel") == 2
+    engine.dispose()
+
+
+def test_dashboard_cancels_previews_when_source_alert_resolves(tmp_path: Path) -> None:
+    source = FakeAlertSource((crashloop(),))
+    remediation = FakeRemediationExecutor()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=source,
+        workload_source=FakeWorkloadSource(crashloop_evidence()),
+        remediation_executor=remediation,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        source.alerts = ()
+        reconciled = client.get("/", headers={"x-forwarded-user": "ada"})
+        assert re.search(
+            r"Awaiting approval</span>.*?<strong class=\"metric-value\">0</strong>",
+            reconciled.text,
+            re.S,
+        )
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        actions = list(db_session.scalars(select(RemediationAction)))
+        investigation = db_session.get(Investigation, investigation_id)
+        assert all(action.status == "cancelled" for action in actions)
+        assert investigation is not None and investigation.status == "cancelled"
+        events = list(
+            db_session.scalars(
+                select(AuditEvent).where(AuditEvent.action == "remediation.reconcile")
+            )
+        )
+        assert len(events) == 2
+        assert all(json.loads(event.details_json)["reason"] == "source_alert_not_active" for event in events)
+    engine.dispose()
+
+
+def test_missing_target_is_reconciled_on_investigation_view(tmp_path: Path) -> None:
+    remediation = FakeRemediationExecutor(validation="missing")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource((crashloop(),)),
+        workload_source=FakeWorkloadSource(crashloop_evidence()),
+        remediation_executor=remediation,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert detail.status_code == 200
+        assert detail.text.count("The preview was cancelled because its exact target is no longer current") == 2
+        assert "Closed by system:reconciler" in detail.text
+
+    assert len(remediation.validations) == 2
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert all(
+            action.status == "cancelled"
+            for action in db_session.scalars(select(RemediationAction))
+        )
+    engine.dispose()
+
+
+def test_approval_fails_closed_when_source_alert_is_no_longer_active(tmp_path: Path) -> None:
+    source = FakeAlertSource((crashloop(),))
+    remediation = FakeRemediationExecutor()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=source,
+        workload_source=FakeWorkloadSource(crashloop_evidence()),
+        remediation_executor=remediation,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            action_id = db_session.scalar(select(RemediationAction.id))
+        engine.dispose()
+        source.alerts = ()
+        rejected = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert rejected.status_code == 409
+        assert "source alert is no longer active" in rejected.text.lower()
+    assert remediation.executions == []
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert all(
+            action.status == "cancelled"
+            for action in db_session.scalars(select(RemediationAction))
+        )
+    engine.dispose()
+
+
+def test_truncated_alert_snapshot_neither_cancels_nor_authorizes(tmp_path: Path) -> None:
+    source = FakeAlertSource((crashloop(),))
+    remediation = FakeRemediationExecutor()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=source,
+        workload_source=FakeWorkloadSource(crashloop_evidence()),
+        remediation_executor=remediation,
+    )
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/crashloop-1/investigations",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            action_id = db_session.scalar(select(RemediationAction.id))
+        engine.dispose()
+        source.alerts = ()
+        source.is_complete = False
+        client.get("/", headers={"x-forwarded-user": "ada"})
+        rejected = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert rejected.status_code == 503
+        assert "snapshot was truncated" in rejected.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.get(RemediationAction, action_id).status == "preview_ready"
+    engine.dispose()
+    assert remediation.executions == []
 
 
 def test_expired_preview_fails_without_execution(tmp_path: Path) -> None:

@@ -5,9 +5,15 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from kubernetes import client, config
+from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
 
-from podpilot_diagnostics.remediation import ActionProposal, ActionResult, PROTECTED_NAMESPACES
+from podpilot_diagnostics.remediation import (
+    ActionProposal,
+    ActionResult,
+    ActionValidation,
+    PROTECTED_NAMESPACES,
+)
 
 
 class RemediationError(RuntimeError):
@@ -47,6 +53,40 @@ class KubernetesRemediationExecutor:
         if proposal.action_type == "restart_workload_rollout":
             return self._preview_rollout(proposal)
         raise RemediationError("The requested action type is not registered.")
+
+    def validate(self, proposal: ActionProposal) -> ActionValidation:
+        """Re-read exact identity without performing even a dry-run mutation."""
+        try:
+            self._require_registered_scope(proposal)
+            self._ensure_clients()
+            if proposal.action_type == "delete_controller_owned_pod":
+                assert self._core is not None
+                target = self._core.read_namespaced_pod(
+                    proposal.target_name, proposal.namespace
+                )
+                self._require_identity(target, proposal)
+                if not self._controlled_by(target, proposal.direct_owner_uid):
+                    raise RemediationError("The Pod controller changed.")
+            elif proposal.action_type == "restart_workload_rollout":
+                _, target = self._workload(proposal)
+                self._require_identity(target, proposal)
+            else:
+                raise RemediationError("The requested action type is not registered.")
+            return ActionValidation("current", "The exact target identity is still current.")
+        except RemediationError as exc:
+            return ActionValidation("stale", str(exc))
+        except ApiException as exc:
+            if exc.status == 404:
+                return ActionValidation("missing", "The exact target no longer exists.")
+            return ActionValidation(
+                "unavailable",
+                f"The Kubernetes API could not validate the target ({exc.status or 'error'}).",
+            )
+        except Exception as exc:
+            return ActionValidation(
+                "unavailable",
+                f"The target could not be validated ({type(exc).__name__}).",
+            )
 
     def execute(self, proposal: ActionProposal) -> ActionResult:
         try:

@@ -114,4 +114,27 @@
       }
     });
   });
+  document.querySelectorAll(".cancel-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!csrf || !button.dataset.actionUrl) return;
+      button.disabled = true;
+      button.textContent = "Cancelling…";
+      try {
+        const response = await fetch(button.dataset.actionUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "The remediation preview could not be cancelled.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = "Cancel preview";
+      }
+    });
+  });
 })();

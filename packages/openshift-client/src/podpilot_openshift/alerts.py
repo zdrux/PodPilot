@@ -53,6 +53,7 @@ class AlertRecord:
 class AlertSnapshot:
     alerts: tuple[AlertRecord, ...]
     collected_at: datetime
+    is_complete: bool = True
 
 
 class AlertSource(Protocol):
@@ -111,7 +112,11 @@ class AlertmanagerClient:
             raise AlertSourceError("Alertmanager returned an unexpected response shape.")
 
         alerts = tuple(self._normalize(item) for item in payload[: self._max_alerts] if isinstance(item, dict))
-        return AlertSnapshot(alerts=alerts, collected_at=datetime.now(timezone.utc))
+        return AlertSnapshot(
+            alerts=alerts,
+            collected_at=datetime.now(timezone.utc),
+            is_complete=len(payload) <= self._max_alerts,
+        )
 
     @staticmethod
     def _normalize(item: dict[str, Any]) -> AlertRecord:

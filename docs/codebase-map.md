@@ -7,12 +7,12 @@ Update when: top-level structure, core tooling, or verification commands change.
 
 | Path | Responsibility | Status |
 | --- | --- | --- |
-| `apps/api/` | AI orchestration and HTTP API | Milestone 3 durable workload investigation flow |
-| `apps/web/` | operator investigation UI | live alert queue and evidence-linked investigation views |
-| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | group, alert, and bounded workload evidence clients |
-| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | alert and workload evidence contracts plus capability pack 1 |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 3 deployed on SNO |
-| `evals/` | incident fixtures and expected outcomes | three synthetic workload-alert fixtures |
+| `apps/api/` | AI orchestration and HTTP API | Milestone 6 investigation, model, action, and lifecycle flow |
+| `apps/web/` | operator investigation UI | alert queue, evidence views, approval, and preview cancellation |
+| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded evidence, typed action, and read-only validation clients |
+| `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, interpretation, and typed remediation contracts |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Milestone 6 lab deployment surfaces |
+| `evals/` | incident fixtures and expected outcomes | synthetic workload-alert and live remediation fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
 Each workspace has a local `AGENTS.md` describing its intended boundary.
@@ -42,6 +42,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/alerts.py`: TLS-validated, bounded Alertmanager transport.
 - `packages/openshift-client/src/podpilot_openshift/workloads.py`: bounded Pod,
   event, owner-chain, log, and scheduling evidence collection.
+- `packages/openshift-client/src/podpilot_openshift/remediation.py`: typed action
+  preview, read-only target validation, execution, and verification.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
 - `packages/diagnostics/src/podpilot_diagnostics/workloads.py`: portable workload evidence contracts.
 - `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
@@ -70,6 +72,7 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 
 ## Questions To Resolve
 
-- Which typed remediation action should be executable first?
+- Which capability follows lifecycle reconciliation: investigation chat, curated
+  memory, Routes, or ClusterOperators?
 - Which supported CSI storage and backup design replaces SNO-local storage for production?
 - Which production image registry and immutable release promotion flow replaces the SNO binary build?
