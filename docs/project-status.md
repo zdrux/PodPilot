@@ -7,7 +7,7 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.6.0 / Milestone 6 is implemented and deployed on the disposable SNO
+PodPilot 0.7.0 / Milestone 7 is implemented and deployed on the disposable SNO
 lab. The repository was clean at the last handoff. Start a new session by reading
 this file and `AGENTS.md`, then verify `git status --short` before making changes.
 
@@ -39,15 +39,21 @@ remediation actions after a fresh, explicit approval.
 - Approval rechecks the source alert immediately before claiming an action. An
   unavailable or truncated Alertmanager snapshot fails closed without
   cancelling or authorizing the preview.
+- `TargetDown` investigations with namespace and Service scope receive a
+  persisted two-step safe diagnostic plan. An Investigator can run bounded
+  Service/EndpointSlice/Pod topology and recent target-Pod event checks once.
+- Check results become confirmed, cited observations and trigger a fresh model
+  interpretation when the configured provider is ready. The plan and evidence
+  remain useful without the model.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
-  `0004_remediation_actions`.
+  `0005_diagnostic_checks`.
 
 ## Last Verified State
 
-- Application version: `0.6.0`.
+- Application version: `0.7.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 35 tests passing with 82% aggregate coverage.
+- Automated suite: 43 tests passing with 83% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source
@@ -55,8 +61,15 @@ remediation actions after a fresh, explicit approval.
   `source_alert_not_active` under `system:reconciler`.
 - The disposable CrashLoop workload namespace and synthetic PrometheusRule were
   removed after validation.
-- Latest implementation commit: `523f460` (`Add remediation lifecycle
-  reconciliation`). OpenShift build `podpilot-18` was built from that commit.
+- Live Milestone 7 upgraded the pre-existing `TargetDown` investigation
+  `c1443ddc-cc0a-45e4-b91c-8bf2601a11cd` in place and successfully ran both
+  checks under `podpilot-breakglass`, followed by a ready model interpretation.
+- The independent TargetDown fixture investigation ran both checks under
+  `podpilot-investigator`, found ready Service topology, rejected a second run,
+  and recorded planner, execution, and reanalysis audit events. Its namespace
+  and platform PrometheusRule were removed after validation.
+- Latest implementation commit: `50e523a` (`Add bounded TargetDown diagnostic
+  plans`). OpenShift build `podpilot-19` was built from that commit.
 
 These observations are a handoff snapshot, not a substitute for checking the
 current repository and cluster state.
@@ -73,6 +86,10 @@ current repository and cluster state.
   preview-ready transition and records the actor, reason, detail, and timestamp.
 - Absence from a bounded, truncated Alertmanager response is not accepted as
   proof that an alert resolved.
+- The model and browser cannot submit diagnostic tool names, targets, selectors,
+  query text, or commands. Normal code owns the plan, budget, and exact inputs.
+- The production-base observer role adds EndpointSlice read access but no new
+  mutation or Secret permission.
 - Pod DELETE preview carries `dryRun: ["All"]` in `DeleteOptions` and the query
   parameter because live SNO testing found the query-only Python-client form was
   not sufficient on this OpenShift path.
@@ -87,8 +104,11 @@ current repository and cluster state.
   narrow action-specific identity are not implemented.
 - Only CrashLoop-correlated workload replacement and rollout restart are
   registered remediation domains.
-- Investigation-scoped chat and curated cluster memory are specified in the PRD
-  but not yet implemented.
+- Free-form investigation chat and curated cluster memory are specified in the
+  PRD but not yet implemented.
+- The first executable plan is fixed to scoped `TargetDown` Service topology and
+  Pod events. It does not yet inspect Prometheus rule state/target metadata or
+  perform an active DNS, TCP, TLS, or HTTP probe.
 - Rule-state and PromQL correlation, Routes, ClusterOperators, networking,
   storage, and version-aware Service Mesh packs remain future capability packs.
 - The lab binary build publishes `:latest`; immutable release promotion and a
@@ -99,15 +119,15 @@ current repository and cluster state.
 No next milestone is formally selected. The highest-value candidates are:
 
 1. Add investigation-scoped follow-up chat that can request only registered,
-   bounded diagnostic checks and must cite evidence.
-2. Introduce curated cluster memory with source, scope, owner, confidence, and
+   bounded diagnostic checks, show proposed tool intent, and cite evidence.
+2. Complete the `TargetDown` pack with Prometheus rule/target metadata and a
+   tightly controlled active reachability probe from an approved location.
+3. Introduce curated cluster memory with source, scope, owner, confidence, and
    review/expiry metadata before adding retrieval to investigations.
-3. Add the next diagnostic capability pack with fixtures and release gates;
+4. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
-4. Split production observation and action identities, then replace the lab
+5. Split production observation and action identities, then replace the lab
    `:latest` build flow with immutable image promotion.
-5. Add a background reconciliation loop so preview expiry and alert resolution
-   do not depend on an operator loading the dashboard or investigation detail.
 
 Before selecting work, reconcile these candidates with `docs/prd.md`, record the
 decision in `docs/decisions.md`, and update this file in the same change.
