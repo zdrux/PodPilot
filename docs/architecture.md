@@ -100,6 +100,16 @@ the model is called again with the expanded evidence. The model and browser
 cannot add a tool, target, selector, command, or mutation. Existing compatible
 investigations receive the plan lazily when opened after the schema upgrade.
 
+Milestone 8 adds durable `ChatMessage` records and a provider-level structured
+chat contract. The API composes bounded context from one investigation, redacts
+the operator message before storage, and sends no Kubernetes credentials or
+generic tool interface to the provider. Model citations are intersected with the
+persisted observation-ID set; uncited evidence-based claims are replaced with an
+insufficient-evidence response. The server similarly accepts only the literal
+`run_queued_checks` proposal while queued `DiagnosticCheck` records exist. The UI
+links validated citations to evidence cards and routes execution through the
+pre-existing check endpoint after a distinct operator click.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.
@@ -109,7 +119,8 @@ investigations receive the plan lazily when opened after the schema upgrade.
 5. Sensitive values are removed before any external model call.
 6. A supported server-owned plan can execute registered read-only follow-up checks.
 7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
-8. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
+8. Investigation chat answers follow-up questions with server-validated evidence citations.
+9. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
 
 ## Source Of Truth Boundaries
 

@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)
     workload_max_log_bytes: int = Field(default=16_384, ge=1024, le=65_536)
     diagnostic_max_checks: int = Field(default=4, ge=1, le=10)
+    chat_max_messages: int = Field(default=20, ge=2, le=50)
+    chat_max_chars: int = Field(default=1000, ge=100, le=4000)
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
     model_secret_name: str = "podpilot-model-credentials"

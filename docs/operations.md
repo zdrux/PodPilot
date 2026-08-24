@@ -160,6 +160,10 @@ The current deployment uses these variables:
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
 - `PODPILOT_DIAGNOSTIC_MAX_CHECKS`, default `4`, with a hard accepted range of
   `1` through `10`
+- `PODPILOT_CHAT_MAX_MESSAGES`, default `20`, counting both operator and assistant
+  messages, with a hard accepted range of `2` through `50`
+- `PODPILOT_CHAT_MAX_CHARS`, default `1000` characters per operator message, with
+  a hard accepted range of `100` through `4000`
 - `PODPILOT_MODEL_CREDENTIAL_STORE`, `environment` for local development or
   `kubernetes` in the OpenShift workload
 - `PODPILOT_MODEL_SECRET_NAMESPACE`, default `ai-ops`
@@ -330,6 +334,21 @@ oc delete namespace podpilot-targetdown-fixture --ignore-not-found
 The plan should report Service selector, EndpointSlice readiness, selected Pod
 health, bounded events, tool names, and the requesting OpenShift user. A second
 run returns a conflict and must not duplicate tool activity.
+
+### Investigation-scoped chat
+
+An Investigator can ask follow-up questions on an investigation page. Incident
+facts in an AI answer link to server-validated evidence IDs. `General guidance`
+and `Insufficient evidence` answers deliberately show no incident citation. If
+queued registered checks exist, the model may display a `run_queued_checks`
+proposal; it does not run anything until the operator presses **Review and run
+queued checks**. Viewer users can read attributed history but cannot post.
+
+Chat messages are redacted before persistence and provider use, limited by the
+two environment settings above, and never copied into audit details. Reaching the
+history budget requires a new investigation rather than silently truncating the
+durable transcript. A provider outage stores a visible unavailable response while
+leaving deterministic evidence and checks usable.
 
 ### Trust the SNO router CA for interactive login
 

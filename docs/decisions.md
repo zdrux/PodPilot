@@ -217,3 +217,22 @@ Consequences: PodPilot now performs concrete follow-up investigation instead of
 only printing advice, with deterministic usefulness during model outages. The
 first pack does not yet offer free-form chat, model-selected tools, PromQL/rule
 state, or active network probes; those require separate fixtures and policy gates.
+
+## 2026-08-23 - Validate chat citations and tool intent on the server
+
+Context: Follow-up chat is useful only if operators can distinguish grounded
+incident facts from general advice, and if conversational requests cannot bypass
+the registered diagnostic-plan boundary.
+
+Decision: Milestone 8 persists attributed, investigation-scoped chat with a
+structured provider response. The API intersects model citations with observation
+IDs already stored on that investigation and withholds evidence-based answers that
+have no valid citation. The model may propose only `run_queued_checks`, and only
+while queued server-owned checks exist. The proposal is rendered as data; a
+separate operator click calls the existing role-, CSRF-, scope-, claim-, and
+audit-gated endpoint. Inputs, history, and output are redacted and bounded.
+
+Consequences: Chat can explain evidence and invite further collection without
+receiving credentials or executable tools. General guidance remains possible but
+is labeled as such. The first version has no streaming, arbitrary tool selection,
+cross-investigation memory, chat-driven mutation, or automatic execution.

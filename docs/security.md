@@ -156,3 +156,15 @@ scope, Secrets, active probes, or mutation.
 The reusable observer role adds only read access to `discovery.k8s.io`
 `EndpointSlices`; Service, Pod, and Event reads were already part of its evidence
 ceiling. No new mutation or Secret permission is introduced.
+
+Milestone 8 keeps chat on the same evidence and authorization side of the trust
+boundary. Operator text and conversation history are untrusted, redacted, and
+bounded before a provider call. Structured output distinguishes evidence-based,
+general-guidance, and insufficient-evidence answers. The API—not the model—validates
+citation IDs against persisted observations and withholds uncited factual claims.
+The provider receives only an allowlisted intent name, never tool schemas,
+Kubernetes clients, credentials, or arbitrary arguments. A `run_queued_checks`
+proposal cannot call the executor; it renders a separate button backed by the
+existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit
+controls. Chat audit events contain IDs, modes, citations, intent name, and counts,
+not message bodies.

@@ -1,6 +1,6 @@
 # PodPilot Product Requirements Document
 
-Status: Draft v0.6; Milestone 7 bounded diagnostic plans implemented
+Status: Draft v0.7; Milestone 8 evidence-cited investigation chat implemented
 Last reviewed: 2026-08-23
 Update when: scope, personas, workflows, acceptance criteria, or product safety boundaries change.
 
@@ -289,6 +289,25 @@ confirmed observations and are supplied to the configured model for a fresh
 schema-validated interpretation. Provider failure leaves the deterministic
 results usable. Active network probing, arbitrary PromQL, generic Kubernetes
 reads, shell, generated tools, and diagnostic mutation remain out of scope.
+
+### 5.10 Investigation-scoped chat
+
+An Investigator can ask follow-up questions inside one durable investigation.
+PodPilot supplies only that investigation's redacted alert, deterministic analysis,
+persisted evidence, bounded conversation history, and available registered intent
+names to the configured model. Factual incident answers must cite observation IDs
+that the server can resolve in the investigation; an evidence-based response with
+no valid citation is withheld. General guidance and insufficient-evidence answers
+are labeled explicitly.
+
+The only initial tool proposal is `run_queued_checks`, and it is exposed only while
+the investigation has queued registered checks. A proposal is display data, not an
+execution request: the Investigator must press the existing safe-check control,
+which re-enters the role, CSRF, claim-once, scope, and audit gates. Chat cannot
+submit tools, Kubernetes targets, query text, shell, YAML, credentials, or cluster
+mutations. Messages are attributed, redacted before persistence/model use, capped
+at 1,000 characters each and 20 messages per investigation, and audited without
+copying message content into the audit record.
 
 ## 6. Cluster Memory
 

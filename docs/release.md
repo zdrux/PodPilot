@@ -66,6 +66,14 @@ re-interpretation, and model-free fallback. Live QA uses only the sanitized
 `targetdown-investigation.yaml` fixture and must remove its namespace and platform
 PrometheusRule after verifying the investigation plan.
 
+Milestone 8 adds gates for Investigator-only chat writes, Viewer and CSRF denial,
+message and history budgets, pre-persistence redaction, durable attribution,
+provider outage fallback, strict structured output, server-validated evidence
+citations, withholding of uncited factual claims, allowlisted tool-intent proposals,
+separate check execution, and audit records without message content. Live QA must
+confirm cited answers link to persisted observations and that a tool proposal does
+not execute a check until the operator uses the registered-plan control.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest

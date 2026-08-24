@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.database import build_engine, database_is_ready
 from podpilot_api.model_provider import (
+    InvestigationChatAnswer,
     ModelProfileConfig,
     ModelProvider,
     ModelProviderError,
@@ -27,6 +28,7 @@ from podpilot_api.model_provider import (
 )
 from podpilot_api.models import (
     AuditEvent,
+    ChatMessage,
     DiagnosticCheck,
     Investigation,
     ModelProfile,
@@ -39,7 +41,7 @@ from podpilot_diagnostics.checks import (
     DiagnosticCheckSpec,
     plan_diagnostic_checks,
 )
-from podpilot_diagnostics.redaction import redact_mapping
+from podpilot_diagnostics.redaction import redact_mapping, redact_text
 from podpilot_diagnostics.remediation import (
     ActionProposal,
     RemediationExecutor,
@@ -171,6 +173,39 @@ def _proposal_from_json(value: str) -> ActionProposal:
 def _check_spec_from_row(check: DiagnosticCheck) -> DiagnosticCheckSpec:
     payload = json.loads(check.input_json)
     return DiagnosticCheckSpec(**payload)
+
+
+def _validated_chat_answer(
+    answer: InvestigationChatAnswer,
+    *,
+    known_evidence_ids: set[str],
+    queued_checks: int,
+) -> dict[str, object]:
+    citations: list[str] = []
+    for evidence_id in answer.cited_evidence_ids:
+        bounded = str(evidence_id)[:128]
+        if bounded in known_evidence_ids and bounded not in citations:
+            citations.append(bounded)
+    mode = answer.answer_mode
+    content = redact_text(answer.answer)[:2400]
+    if mode == "evidence_based" and not citations:
+        mode = "insufficient_evidence"
+        content = (
+            "The model response did not cite evidence present in this investigation, "
+            "so PodPilot withheld its factual answer. Run available checks or ask a narrower question."
+        )
+    intent = None
+    if answer.proposed_tool_intent == "run_queued_checks" and queued_checks > 0:
+        intent = {
+            "name": "run_queued_checks",
+            "reason": redact_text(answer.intent_reason or "Collect the queued registered evidence.")[:500],
+        }
+    return {
+        "answer_mode": mode,
+        "content": content,
+        "citations": citations,
+        "tool_intent": intent,
+    }
 
 
 def _aware(value: datetime) -> datetime:
@@ -343,7 +378,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.7.0",
+        version="0.8.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -1019,6 +1054,32 @@ def create_app(
                     .order_by(DiagnosticCheck.position.asc())
                 )
             ]
+            message_rows = list(
+                db_session.scalars(
+                    select(ChatMessage)
+                    .where(ChatMessage.investigation_id == investigation_id)
+                    .order_by(ChatMessage.created_at.desc())
+                    .limit(app_settings.chat_max_messages)
+                )
+            )
+            messages = [
+                {
+                    "id": message.id,
+                    "role": message.role,
+                    "actor": message.actor,
+                    "content": message.content,
+                    "answer_mode": message.answer_mode,
+                    "citations": json.loads(message.citations_json),
+                    "tool_intent": (
+                        json.loads(message.tool_intent_json)
+                        if message.tool_intent_json
+                        else None
+                    ),
+                    "provider_status": message.provider_status,
+                    "created_at": message.created_at,
+                }
+                for message in reversed(message_rows)
+            ]
         response = templates.TemplateResponse(
             request=request,
             name="investigation.html",
@@ -1027,6 +1088,9 @@ def create_app(
                 "investigation": view,
                 "actions": actions,
                 "checks": checks,
+                "messages": messages,
+                "chat_max_chars": app_settings.chat_max_chars,
+                "chat_budget_exhausted": len(messages) + 2 > app_settings.chat_max_messages,
                 "csrf_token": csrf_token,
             },
         )
@@ -1040,6 +1104,198 @@ def create_app(
                 max_age=28_800,
             )
         return response
+
+    @app.post("/api/v1/investigations/{investigation_id}/chat")
+    async def investigation_chat(
+        investigation_id: str,
+        request: Request,
+        user: AuthContext = Depends(current_user),
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(
+                status_code=403,
+                detail="Investigation chat requires the Investigator role or higher.",
+            )
+        form = await _urlencoded(request)
+        raw_message = form.get("message", "").strip()
+        if not raw_message or len(raw_message) > app_settings.chat_max_chars:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Enter a message between 1 and {app_settings.chat_max_chars} characters.",
+            )
+        message_text = redact_text(raw_message)[: app_settings.chat_max_chars]
+        user_message_id = str(uuid4())
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            if investigation is None:
+                raise HTTPException(status_code=404, detail="Investigation not found.")
+            message_count = db_session.scalar(
+                select(func.count())
+                .select_from(ChatMessage)
+                .where(ChatMessage.investigation_id == investigation_id)
+            ) or 0
+            if message_count + 2 > app_settings.chat_max_messages:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This investigation reached its bounded chat-message budget.",
+                )
+            db_session.add(
+                ChatMessage(
+                    id=user_message_id,
+                    investigation_id=investigation_id,
+                    role="user",
+                    actor=user.username,
+                    content=message_text,
+                    citations_json="[]",
+                )
+            )
+            db_session.add(
+                AuditEvent(
+                    actor=user.username,
+                    action="chat.message",
+                    outcome="accepted",
+                    details_json=json.dumps(
+                        {
+                            "investigation_id": investigation_id,
+                            "message_id": user_message_id,
+                            "character_count": len(message_text),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+            db_session.commit()
+
+        with Session(request.app.state.engine) as db_session:
+            investigation = db_session.get(Investigation, investigation_id)
+            assert investigation is not None
+            alert_snapshot = json.loads(investigation.alert_snapshot_json)
+            analysis_payload = json.loads(investigation.analysis_json)
+            known_evidence_ids = {
+                str(item.get("id", ""))[:128]
+                for item in analysis_payload.get("observations", [])
+                if item.get("id")
+            }
+            queued_checks = db_session.scalar(
+                select(func.count())
+                .select_from(DiagnosticCheck)
+                .where(
+                    DiagnosticCheck.investigation_id == investigation_id,
+                    DiagnosticCheck.status == "queued",
+                )
+            ) or 0
+            history_rows = list(
+                db_session.scalars(
+                    select(ChatMessage)
+                    .where(ChatMessage.investigation_id == investigation_id)
+                    .order_by(ChatMessage.created_at.desc())
+                    .limit(app_settings.chat_max_messages)
+                )
+            )
+            conversation = [
+                {"role": item.role, "content": item.content}
+                for item in reversed(history_rows)
+            ]
+            profile = db_session.get(ModelProfile, 1)
+            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            alert_name = investigation.alert_name
+
+        provider_status = "not_configured"
+        validated = {
+            "answer_mode": "insufficient_evidence",
+            "content": "No ready model profile is configured. The persisted investigation evidence and safe diagnostic plan remain available.",
+            "citations": [],
+            "tool_intent": None,
+        }
+        if profile_snapshot:
+            try:
+                api_key = await run_in_threadpool(credentials.get)
+                if not api_key:
+                    raise ModelProviderError("The configured model token is unavailable.")
+                answer = await run_in_threadpool(
+                    provider.chat,
+                    profile_snapshot,
+                    api_key,
+                    {
+                        "investigation": {
+                            "id": investigation_id,
+                            "alert_name": alert_name,
+                        },
+                        "alert": alert_snapshot,
+                        "analysis": {
+                            key: value for key, value in analysis_payload.items() if key != "model"
+                        },
+                        "conversation": conversation,
+                        "policy": {
+                            "available_tool_intents": (
+                                ["run_queued_checks"] if queued_checks else []
+                            ),
+                            "tool_execution_requires_operator_click": True,
+                            "chat_cannot_mutate_cluster": True,
+                        },
+                    },
+                )
+                validated = _validated_chat_answer(
+                    answer,
+                    known_evidence_ids=known_evidence_ids,
+                    queued_checks=queued_checks,
+                )
+                provider_status = "ready"
+            except (CredentialStoreError, ModelProviderError) as exc:
+                provider_status = "unavailable"
+                validated = {
+                    "answer_mode": "insufficient_evidence",
+                    "content": f"The model is temporarily unavailable. {str(exc)}",
+                    "citations": [],
+                    "tool_intent": None,
+                }
+
+        assistant_message_id = str(uuid4())
+        with Session(request.app.state.engine) as db_session:
+            db_session.add(
+                ChatMessage(
+                    id=assistant_message_id,
+                    investigation_id=investigation_id,
+                    role="assistant",
+                    actor="podpilot",
+                    content=str(validated["content"]),
+                    answer_mode=str(validated["answer_mode"]),
+                    citations_json=json.dumps(validated["citations"], sort_keys=True),
+                    tool_intent_json=(
+                        json.dumps(validated["tool_intent"], sort_keys=True)
+                        if validated["tool_intent"]
+                        else None
+                    ),
+                    provider_status=provider_status,
+                )
+            )
+            db_session.add(
+                AuditEvent(
+                    actor="podpilot",
+                    action="chat.answer",
+                    outcome=provider_status,
+                    details_json=json.dumps(
+                        {
+                            "investigation_id": investigation_id,
+                            "message_id": assistant_message_id,
+                            "answer_mode": validated["answer_mode"],
+                            "citations": validated["citations"],
+                            "proposed_tool_intent": (
+                                validated["tool_intent"].get("name")
+                                if isinstance(validated["tool_intent"], dict)
+                                else None
+                            ),
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            )
+            db_session.commit()
+        return RedirectResponse(
+            url=f"/investigations/{investigation_id}#investigation-chat",
+            status_code=303,
+        )
 
     @app.post("/api/v1/investigations/{investigation_id}/checks/run")
     async def run_investigation_checks(

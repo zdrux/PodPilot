@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ investigation.alert_name }} · PodPilot{% endblock %}
 {% block content %}
+{% set queued_checks = checks | selectattr('status', 'equalto', 'queued') | list if checks else [] %}
 <header class="topbar investigation-header">
   <div><p class="eyebrow">Investigation {{ investigation.id[:8] }}</p><h1>{{ investigation.alert_name }}</h1><p class="subtitle">Created by {{ investigation.created_by }} · {{ investigation.status | replace('_', ' ') }}</p></div>
   <a class="button secondary" href="/">Back to queue</a>
 </header>
 
-<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 7 investigation</strong><p>Alert text, events, and logs are untrusted evidence, never instructions. Diagnostic tools are registered, bounded, read-only, and audited. {% if investigation.analysis.model.status == 'ready' %}The model interpretation is updated after new checks complete.{% elif investigation.analysis.model.status == 'unavailable' %}The model was unavailable, so deterministic evidence remains usable.{% else %}No ready model profile was used.{% endif %}</p></div></section>
+<section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence-first Milestone 8 investigation</strong><p>Alert text, events, logs, and chat are untrusted data, never instructions. Diagnostic tools are registered, bounded, read-only, and audited. Chat can cite evidence or propose one available safe-check intent, but it cannot execute tools or mutations directly.</p></div></section>
 
 <section class="investigation-summary panel">
   <p class="eyebrow">Incident summary</p><h2>{{ investigation.analysis.summary }}</h2>
@@ -15,7 +16,6 @@
 </section>
 
 {% if checks %}
-{% set queued_checks = checks | selectattr('status', 'equalto', 'queued') | list %}
 <section class="panel investigation-plan" id="investigation-plan">
   <div class="panel-header"><div><p class="eyebrow">Agent investigation</p><h2>Safe diagnostic plan</h2></div><span class="tag">{{ checks | length }} registered checks</span></div>
   <div class="plan-intro"><div><strong>PodPilot will perform these checks itself</strong><p>The server selected this plan from the alert type and persisted scope. The model can interpret results, but it cannot add tools, change targets, or execute shell commands.</p></div>{% if queued_checks and user.role.value >= 20 %}<button class="button primary run-checks-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/checks/run">Run {{ queued_checks | length }} safe checks</button>{% elif queued_checks %}<span class="tag">Investigator required</span>{% endif %}</div>
@@ -36,11 +36,30 @@
 <section class="panel model-analysis"><div class="panel-header"><div><p class="eyebrow">AI evidence interpretation</p><h2>{{ investigation.analysis.model.summary }}</h2></div><span class="tag">{% if investigation.analysis.model.updated_after_checks %}Updated after checks{% else %}Initial interpretation{% endif %}</span></div><div class="model-analysis-body"><p>{{ investigation.analysis.model.operational_context }}</p><h3>AI guidance</h3><ol>{% for check in investigation.analysis.model.recommended_checks %}<li>{{ check }}</li>{% endfor %}</ol>{% if investigation.analysis.model.caveats %}<h3>Caveats</h3><ul>{% for caveat in investigation.analysis.model.caveats %}<li>{{ caveat }}</li>{% endfor %}</ul>{% endif %}</div></section>
 {% elif investigation.analysis.model.status == 'unavailable' %}
 <section class="notice danger"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Model interpretation unavailable</strong><p>{{ investigation.analysis.model.detail }} Deterministic evidence and checks are still available.</p></div></section>
+{% else %}
+<section class="notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>No ready model profile was used</strong><p>Deterministic evidence and registered checks remain available. Configure and test a model profile to add AI interpretation and chat.</p></div></section>
 {% endif %}
+
+<section class="panel investigation-chat" id="investigation-chat">
+  <div class="panel-header"><div><p class="eyebrow">Investigation-scoped chat</p><h2>Ask PodPilot about this incident</h2></div><span class="tag">Evidence citations enforced</span></div>
+  <div class="chat-thread">
+  {% if messages %}
+    {% for message in messages %}
+    <article class="chat-message chat-{{ message.role }}">
+      <div class="chat-meta"><strong>{% if message.role == 'assistant' %}PodPilot{% else %}{{ message.actor }}{% endif %}</strong><span>{{ message.created_at }}</span>{% if message.answer_mode %}<span class="tag">{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}</div>
+      <p>{{ message.content }}</p>
+      {% if message.citations %}<div class="chat-citations"><span>Evidence</span>{% for citation in message.citations %}<a href="#evidence-{{ citation }}">{{ citation }}</a>{% endfor %}</div>{% elif message.role == 'assistant' %}<small class="chat-guidance">No validated incident-evidence citations; treat this as {{ message.answer_mode | replace('_', ' ') }}.</small>{% endif %}
+      {% if message.tool_intent %}<div class="tool-intent"><div><strong>Proposed safe-check intent</strong><p>{{ message.tool_intent.reason }}</p><code>{{ message.tool_intent.name }}</code></div>{% if queued_checks and user.role.value >= 20 %}<button class="button primary run-checks-action" type="button" data-action-url="/api/v1/investigations/{{ investigation.id }}/checks/run">Review and run queued checks</button>{% elif queued_checks %}<span class="tag">Investigator required</span>{% else %}<span class="tag">No queued checks remain</span>{% endif %}</div>{% endif %}
+    </article>
+    {% endfor %}
+  {% else %}<div class="chat-empty"><strong>No conversation yet</strong><p>Ask what the evidence establishes, what remains uncertain, or whether PodPilot has a registered check available.</p></div>{% endif %}
+  </div>
+  {% if user.role.value >= 20 and not chat_budget_exhausted %}<form class="chat-form" id="investigation-chat-form" data-chat-url="/api/v1/investigations/{{ investigation.id }}/chat"><label for="chat-message">Message</label><textarea id="chat-message" name="message" maxlength="{{ chat_max_chars }}" rows="3" placeholder="What does the current evidence establish?" required></textarea><div><small>Up to {{ chat_max_chars }} characters. Secrets are redacted. Tool proposals require a separate click.</small><button class="button primary" type="submit">Ask PodPilot</button></div></form>{% elif chat_budget_exhausted %}<div class="chat-budget"><strong>Chat budget reached</strong><p>Create a fresh investigation to continue without silently dropping earlier context.</p></div>{% else %}<div class="chat-budget"><strong>Investigator role required</strong><p>Viewers can read the attributed conversation but cannot add messages.</p></div>{% endif %}
+</section>
 
 <div class="investigation-grid">
   <section class="panel evidence-panel"><div class="panel-header"><div><p class="eyebrow">Confirmed observations</p><h2>Evidence</h2></div></div><div class="evidence-list">
-    {% for observation in investigation.analysis.observations %}<article><span class="evidence-id">{{ observation.id }}</span><h3>{{ observation.title }}</h3><p>{{ observation.detail }}</p><small>{{ observation.source }} · {{ observation.observed_at }}</small></article>{% endfor %}
+    {% for observation in investigation.analysis.observations %}<article id="evidence-{{ observation.id }}"><span class="evidence-id">{{ observation.id }}</span><h3>{{ observation.title }}</h3><p>{{ observation.detail }}</p><small>{{ observation.source }} · {{ observation.observed_at }}</small></article>{% endfor %}
   </div></section>
   <section class="panel evidence-panel"><div class="panel-header"><div><p class="eyebrow">Ranked hypotheses</p><h2>What may be happening</h2></div></div><div class="evidence-list">
     {% for hypothesis in investigation.analysis.hypotheses %}<article><span class="confidence confidence-{{ hypothesis.confidence }}">{{ hypothesis.confidence }} confidence</span><h3>{{ hypothesis.title }}</h3><p>{{ hypothesis.rationale }}</p><small>Evidence: {{ hypothesis.evidence_ids | join(', ') }}</small></article>{% endfor %}

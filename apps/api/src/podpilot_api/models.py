@@ -109,3 +109,25 @@ class DiagnosticCheck(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     input_json: Mapped[str] = mapped_column(Text, nullable=False)
     result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("investigations.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    tool_intent_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)

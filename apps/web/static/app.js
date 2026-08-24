@@ -160,4 +160,32 @@
       }
     });
   });
+  const chatForm = document.querySelector("#investigation-chat-form");
+  if (chatForm?.dataset.chatUrl) {
+    chatForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const submit = chatForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Thinking…"; }
+      try {
+        const response = await fetch(chatForm.dataset.chatUrl, {
+          method: "POST",
+          headers: {
+            "X-PodPilot-CSRF": csrf,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          credentials: "same-origin",
+          body: new URLSearchParams(new FormData(chatForm)),
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "PodPilot could not answer this question.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Ask PodPilot"; }
+      }
+    });
+  }
 })();

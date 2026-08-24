@@ -10,10 +10,16 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app
-from podpilot_api.model_provider import CapabilityReport, ModelInterpretation, ModelProviderError
+from podpilot_api.model_provider import (
+    CapabilityReport,
+    InvestigationChatAnswer,
+    ModelInterpretation,
+    ModelProviderError,
+)
 from podpilot_api.models import (
     AuditEvent,
     Base,
+    ChatMessage,
     DiagnosticCheck,
     Investigation,
     ModelProfile,
@@ -78,9 +84,18 @@ class MemoryCredentialStore:
 
 
 class FakeModelProvider:
-    def __init__(self, *, fail_interpretation: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_interpretation: bool = False,
+        fail_chat: bool = False,
+        chat_answer: InvestigationChatAnswer | None = None,
+    ) -> None:
         self.fail_interpretation = fail_interpretation
+        self.fail_chat = fail_chat
+        self.chat_answer = chat_answer
         self.interpret_calls: list[dict[str, object]] = []
+        self.chat_calls: list[dict[str, object]] = []
 
     def probe(self, profile, api_key: str) -> CapabilityReport:
         assert api_key == "test-api-token"
@@ -95,6 +110,18 @@ class FakeModelProvider:
             operational_context="This interpretation is bounded to the supplied alert observation.",
             recommended_checks=["Keep the heartbeat visible after monitoring changes."],
             caveats=["This does not prove every monitoring component is healthy."],
+        )
+
+    def chat(self, profile, api_key: str, context: dict[str, object]) -> InvestigationChatAnswer:
+        if self.fail_chat:
+            raise ModelProviderError("Provider request failed (synthetic chat outage).")
+        self.chat_calls.append(context)
+        return self.chat_answer or InvestigationChatAnswer(
+            answer_mode="evidence_based",
+            answer="The active alert is confirmed, but the queued topology checks are needed to narrow the cause.",
+            cited_evidence_ids=["alertmanager-alert"],
+            proposed_tool_intent="run_queued_checks",
+            intent_reason="Collect the registered Service topology and Pod-event evidence.",
         )
 
 
@@ -320,8 +347,8 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 7 adds" in response.text
-        assert "PodPilot 0.7.0" in response.text
+        assert "Milestone 8 adds" in response.text
+        assert "PodPilot 0.8.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -385,7 +412,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Evidence-first Milestone 7 investigation" in detail.text
+        assert "Evidence-first Milestone 8 investigation" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -487,6 +514,183 @@ def test_target_down_plan_runs_registered_checks_and_reanalyzes(tmp_path: Path) 
         assert actions.count("diagnostic.execute") == 2
         assert "diagnostic.plan" in actions
         assert "investigation.reanalyze" in actions
+    engine.dispose()
+
+
+def test_investigation_chat_cites_evidence_and_proposes_registered_checks(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore("test-api-token")
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "vic": Role.VIEWER},
+        source=FakeAlertSource((target_down(),)),
+        credential_store=credentials,
+        model_provider=provider,
+    )
+    settings.chat_max_messages = 2
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="gpt-5.6-terra", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/alerts/target-down-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        chat_url = f"/api/v1/investigations/{investigation_id}/chat"
+        assert client.post(chat_url, headers={"x-forwarded-user": "ivy"}, data={"message": "Help"}).status_code == 403
+        assert client.post(
+            chat_url,
+            headers={"x-forwarded-user": "vic", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Help"},
+        ).status_code == 403
+        assert client.post(
+            chat_url,
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "x" * 1001},
+        ).status_code == 422
+        asked = client.post(
+            chat_url,
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "What is confirmed? token=synthetic-secret"},
+            follow_redirects=False,
+        )
+        assert asked.status_code == 303
+        assert asked.headers["location"].endswith("#investigation-chat")
+        detail = client.get(asked.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "queued topology checks are needed" in detail.text
+        assert "href=\"#evidence-alertmanager-alert\"" in detail.text
+        assert "Proposed safe-check intent" in detail.text
+        assert "Review and run queued checks" in detail.text
+        assert "synthetic-secret" not in detail.text
+        assert "token=[REDACTED]" in detail.text
+        assert "Chat budget reached" in detail.text
+        assert client.post(
+            chat_url,
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "One more question"},
+        ).status_code == 409
+
+    assert len(provider.chat_calls) == 1
+    assert provider.chat_calls[0]["policy"]["available_tool_intents"] == ["run_queued_checks"]
+    assert provider.chat_calls[0]["conversation"][-1]["content"].endswith("[REDACTED]")
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        messages = list(db_session.scalars(select(ChatMessage).order_by(ChatMessage.created_at)))
+        assert [message.role for message in messages] == ["user", "assistant"]
+        assert messages[0].content.endswith("[REDACTED]")
+        assert json.loads(messages[1].citations_json) == ["alertmanager-alert"]
+        assert json.loads(messages[1].tool_intent_json)["name"] == "run_queued_checks"
+        events = list(db_session.scalars(select(AuditEvent).where(AuditEvent.action.like("chat.%"))))
+        assert [event.action for event in events] == ["chat.message", "chat.answer"]
+        assert all("synthetic-secret" not in event.details_json for event in events)
+    engine.dispose()
+
+
+def test_investigation_chat_withholds_uncited_factual_answer(tmp_path: Path) -> None:
+    provider = FakeModelProvider(chat_answer=InvestigationChatAnswer(
+        answer_mode="evidence_based",
+        answer="The network policy definitely caused the outage.",
+        cited_evidence_ids=["invented-evidence"],
+    ))
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource((target_down(),)),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="gpt-5.6-terra", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/target-down-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        asked = client.post(
+            f"/api/v1/investigations/{investigation_id}/chat",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "What caused this?"},
+            follow_redirects=False,
+        )
+        detail = client.get(asked.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "withheld its factual answer" in detail.text
+        assert "network policy definitely" not in detail.text
+        assert "invented-evidence" not in detail.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(ChatMessage).where(ChatMessage.role == "assistant"))
+        assert assistant.answer_mode == "insufficient_evidence"
+        assert json.loads(assistant.citations_json) == []
+    engine.dispose()
+
+
+def test_investigation_chat_degrades_safely_when_model_is_unavailable(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource((target_down(),)),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=FakeModelProvider(fail_chat=True),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="gpt-5.6-terra", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/target-down-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        asked = client.post(
+            f"/api/v1/investigations/{investigation_id}/chat",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "What is known?"},
+            follow_redirects=False,
+        )
+        detail = client.get(asked.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "model is temporarily unavailable" in detail.text
+        assert "Safe diagnostic plan" in detail.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(ChatMessage).where(ChatMessage.role == "assistant"))
+        assert assistant.provider_status == "unavailable"
+        assert assistant.answer_mode == "insufficient_evidence"
     engine.dispose()
 
 
