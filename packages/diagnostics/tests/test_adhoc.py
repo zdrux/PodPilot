@@ -53,7 +53,7 @@ def test_storageclass_inventory_is_deterministic_and_terminal() -> None:
         resource="storageclasses",
         api_version="storage.k8s.io/v1",
         kind="StorageClass",
-        limit=50,
+        limit=250,
     )
 
 
@@ -67,7 +67,7 @@ def test_namespace_pod_inventory_is_deterministic_and_terminal() -> None:
     assert plan.intents[0].kind == "Pod"
     assert plan.intents[0].resource == "pods"
     assert plan.intents[0].namespace == "ai-ops"
-    assert plan.intents[0].limit == 50
+    assert plan.intents[0].limit == 250
 
 
 def test_failed_job_alert_seeds_exact_job_read_then_allows_followup() -> None:
@@ -101,7 +101,7 @@ def test_live_catalog_compiles_common_cluster_scoped_inventory_without_model() -
     assert planned is not None
     plan, terminal = planned
     assert plan.intents == [ReadIntent(
-        tool="list_resources", resource="clusteroperators", limit=100,
+        tool="list_resources", resource="clusteroperators", limit=250,
     )]
     assert terminal is True
 
@@ -120,3 +120,13 @@ def test_live_catalog_allows_cluster_wide_list_for_namespaced_inventory() -> Non
     planned = plan_catalog_read("Show widgets in namespace payments", catalog)
     assert planned is not None
     assert planned[0].intents[0].namespace == "payments"
+
+
+def test_inventory_limit_can_be_increased_within_broker_ceiling() -> None:
+    planned = plan_known_read(
+        "List Pods in namespace openshift-logging",
+        inventory_limit=500,
+    )
+
+    assert planned is not None
+    assert planned[0].intents[0].limit == 500

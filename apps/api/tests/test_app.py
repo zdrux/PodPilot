@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
-from podpilot_api.main import _validated_adhoc_answer, create_app
+from podpilot_api.main import (
+    _deterministic_inventory_answer,
+    _validated_adhoc_answer,
+    create_app,
+)
 from podpilot_api.model_provider import (
     AdHocAnswer,
     CapabilityReport,
@@ -68,6 +72,34 @@ def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths()
     assert str(validated["content"]).startswith("**Access blocked by OpenShift RBAC.**")
     assert denial in str(validated["content"])
     assert "observations.0" not in str(validated["content"])
+
+
+def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None:
+    rendered = _deterministic_inventory_answer(
+        question="Give me a list of Pods in openshift-logging",
+        evidence=[{
+            "id": "cluster-pods-1",
+            "tool": "list_resources",
+            "data": {
+                "kind": "Pod",
+                "scope": "openshift-logging",
+                "names": ["collector-a", "collector-b"],
+                "objectListComplete": True,
+                "detailsTruncated": True,
+            },
+        }],
+        activity=[{
+            "tool": "list_resources",
+            "status": "succeeded",
+            "evidence_ids": ["cluster-pods-1"],
+        }],
+    )
+
+    assert rendered is not None
+    assert "| 1 | `collector-a` |" in str(rendered["content"])
+    assert "| 2 | `collector-b` |" in str(rendered["content"])
+    assert "complete for this snapshot" in str(rendered["content"])
+    assert rendered["citations"] == ["cluster-pods-1"]
 
 
 class FakeAlertSource:
@@ -720,7 +752,7 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert len(explorer.calls) == 1
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"
-    assert explorer.calls[0].limit == 50
+    assert explorer.calls[0].limit == 250
 
 
 def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(

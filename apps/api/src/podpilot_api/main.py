@@ -279,6 +279,68 @@ def _clean_adhoc_markdown(value: str) -> str:
     return "\n".join(line.rstrip() for line in cleaned.splitlines() if line.strip()).strip()
 
 
+def _deterministic_inventory_answer(
+    *,
+    question: str,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render explicit inventory requests from validated list evidence, not model prose."""
+
+    if not (
+        re.search(r"\b(?:list|inventory)\b", question, re.IGNORECASE)
+        or re.search(r"\bshow\s+me\b", question, re.IGNORECASE)
+    ):
+        return None
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "list_resources"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observation = next((
+        item for item in reversed(evidence)
+        if str(item.get("id")) in current_ids
+        and item.get("tool") == "list_resources"
+        and isinstance(item.get("data"), dict)
+        and isinstance(item["data"].get("names"), list)
+    ), None)
+    if observation is None:
+        return None
+    data = observation["data"]
+    names = [str(name)[:253] for name in data.get("names", [])]
+    kind = str(data.get("kind") or "Resource")
+    scope = str(data.get("scope") or "cluster")
+    complete = bool(data.get("objectListComplete", not data.get("truncated")))
+    heading = kind if kind.endswith("s") else f"{kind}s"
+    lines = [
+        f"## {heading}",
+        "",
+        f"**Scope:** `{scope}`  ",
+        f"**Collected:** {len(names)}",
+        "",
+    ]
+    if names:
+        lines.extend(["| # | Name |", "|---:|---|"])
+        lines.extend(f"| {index} | `{name}` |" for index, name in enumerate(names, 1))
+    else:
+        lines.append("No matching resources were returned.")
+    lines.extend(["", (
+        "The collected object list is complete for this snapshot."
+        if complete else
+        "The configured inventory ceiling was reached; additional matching resources exist."
+    )])
+    if data.get("detailsTruncated"):
+        lines.append(
+            "Verbose status details were compacted, but every collected resource name is shown above."
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": "\n".join(lines),
+        "citations": [str(observation["id"])],
+    }
+
+
 def _compact_adhoc_context(
     db_session: Session,
     *,
@@ -350,6 +412,7 @@ async def _collect_bounded_cluster_reads(
     scope_summary = "Bounded read-only cluster investigation."
     known_plan = plan_known_read(
         question,
+        inventory_limit=settings.adhoc_inventory_max_objects,
         alert_name=alert_name,
         alert_labels=alert_labels,
     )
@@ -368,7 +431,11 @@ async def _collect_bounded_cluster_reads(
                 str(exc),
             )
     if known_plan is None and catalog_entries:
-        known_plan = plan_catalog_read(question, catalog_entries)
+        known_plan = plan_catalog_read(
+            question,
+            catalog_entries,
+            inventory_limit=settings.adhoc_inventory_max_objects,
+        )
     for round_number in range(1, settings.adhoc_max_rounds + 1):
         remaining_reads = settings.adhoc_max_reads_per_turn - reads_used
         if remaining_reads <= 0:
@@ -400,6 +467,7 @@ async def _collect_bounded_cluster_reads(
                             "max_rounds": settings.adhoc_max_rounds,
                             "max_reads_total": settings.adhoc_max_reads_per_turn,
                             "remaining_reads": remaining_reads,
+                            "max_list_objects": settings.adhoc_inventory_max_objects,
                             "logs_and_configmaps_allowed": True,
                             "secrets_and_mutations_allowed": False,
                         },
@@ -433,6 +501,7 @@ async def _collect_bounded_cluster_reads(
                 limitations.extend(result.limitations)
                 entry["status"] = "succeeded"
                 entry["observations"] = len(result.observations)
+                entry["evidence_ids"] = [item.id for item in result.observations]
             except ReadOnlyExplorerError as exc:
                 LOGGER.warning(
                     "podpilot.cluster_read.failed actor=%s workflow_id=%s tool=%s target=%s error=%s",
@@ -791,9 +860,18 @@ def create_app(
                     known_evidence_ids={str(item.get("id")) for item in evidence},
                     collection_limitations=limitations,
                 )
-                validated["limitations"] = list(dict.fromkeys(
-                    [*limitations, *list(validated["limitations"])]
-                ))[:8]
+                inventory_answer = _deterministic_inventory_answer(
+                    question=message_text,
+                    evidence=evidence,
+                    activity=activity,
+                )
+                if inventory_answer is not None:
+                    validated.update(inventory_answer)
+                    validated["limitations"] = list(dict.fromkeys(limitations))[:8]
+                else:
+                    validated["limitations"] = list(dict.fromkeys(
+                        [*limitations, *list(validated["limitations"])]
+                    ))[:8]
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",

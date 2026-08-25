@@ -335,9 +335,9 @@ class KubernetesReadOnlyExplorer:
         elif intent.tool == "list_resources":
             items = []
             token: str | None = None
-            pages = 0
-            while len(items) < intent.limit and pages < 5:
-                kwargs: dict[str, object] = {"limit": min(50, intent.limit - len(items))}
+            seen_tokens: set[str] = set()
+            while len(items) < intent.limit:
+                kwargs: dict[str, object] = {"limit": min(100, intent.limit - len(items))}
                 if namespace:
                     kwargs["namespace"] = namespace
                 if intent.label_selector:
@@ -347,9 +347,11 @@ class KubernetesReadOnlyExplorer:
                 response = resource.get(**kwargs)
                 items.extend(list(getattr(response, "items", []) or []))
                 token = _continue_token(response)
-                pages += 1
                 if not token:
                     break
+                if token in seen_tokens:
+                    break
+                seen_tokens.add(token)
         else:
             raise ReadOnlyExplorerError("The requested read tool is not registered.")
 

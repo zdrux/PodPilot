@@ -160,6 +160,10 @@ Collected object names are retained separately from detailed projections.
 `objectListComplete` reports whether the Kubernetes object ceiling was reached,
 while `detailsTruncated` reports only status-detail compaction; the latter must
 not be presented as proof that more objects exist.
+The inventory object ceiling is deployment-configurable (250 by default, 500
+maximum). Explicit list/inventory requests are rendered by normal server code as
+an evidence-cited Markdown table from the collected `names` array, so model prose
+cannot omit the requested resource list.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and

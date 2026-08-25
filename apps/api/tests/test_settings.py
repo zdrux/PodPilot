@@ -42,3 +42,11 @@ def test_all_elevated_role_groups_may_be_empty() -> None:
     assert settings.role_investigator_groups == []
     assert settings.role_approver_groups == []
     assert settings.role_breakglass_groups == []
+
+
+def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS", "400")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_inventory_max_objects == 400

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
     adhoc_max_rounds: int = Field(default=3, ge=1, le=5)
     adhoc_max_reads_per_turn: int = Field(default=6, ge=1, le=12)
+    adhoc_inventory_max_objects: int = Field(default=250, ge=50, le=500)
     adhoc_context_messages: int = Field(default=10, ge=4, le=30)
     adhoc_context_summary_chars: int = Field(default=4000, ge=1000, le=12000)
     adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)

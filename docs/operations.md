@@ -473,6 +473,15 @@ more matches exist. `detailsTruncated: true` means only verbose detail was omitt
 it does not make the collected name list incomplete. Provider-facing observation
 paths are not valid citations and are removed from displayed answers.
 
+The default inventory ceiling is 250 objects per LIST and may be set from 50 to
+500 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests, edit
+`data.adhoc_inventory_max_objects` in `podpilot-runtime`; the Deployment maps it
+into both application and migration containers. Reapply the workload and restart
+the Deployment after changing the ConfigMap. Explicit list requests render a
+server-generated Markdown table containing every collected name. If the table
+states that the object list is incomplete, increase the ceiling deliberately
+rather than removing the bound.
+
 ### Trust the SNO router CA for interactive login
 
 The lab Route uses the private OpenShift ingress CA. TLS clients must trust that CA;

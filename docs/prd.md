@@ -343,6 +343,10 @@ subresources, commands, active network probes, and mutations are rejected.
 
 List collection follows server continue tokens within the object ceiling and uses
 kind-aware compact projections; object- or payload-ceiling truncation is explicit.
+The object ceiling is operator-configurable, defaults to 250, and remains bounded
+at 500 for the PoC. For explicit inventory requests, the API renders the collected
+names as an evidence-cited Markdown table instead of relying on the model to copy
+the list into its answer.
 Collected objects are recursively bounded and redacted, persisted with source and
 timestamp, and supplied to a second schema-validated answer pass. Cluster-specific
 answers require server-resolvable evidence citations. A missing capability pack

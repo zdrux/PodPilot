@@ -50,6 +50,20 @@ def test_remote_pvc_requests_the_default_storage_class() -> None:
     assert pvc["spec"]["resources"]["requests"]["storage"] == "5Gi"
 
 
+def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
+    workload = ROOT / "deploy" / "openshift" / "workload"
+    runtime = yaml.safe_load((workload / "runtime-config.yaml").read_text())
+    deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
+    env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
+
+    assert runtime["data"]["adhoc_inventory_max_objects"] == "250"
+    configured = next(item for item in env if item["name"] == "PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS")
+    assert configured["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_inventory_max_objects",
+    }
+
+
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:
     overlay = ROOT / "deploy" / "openshift" / "overlays" / "remote-poc"
     kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())

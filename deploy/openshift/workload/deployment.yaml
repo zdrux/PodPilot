@@ -42,6 +42,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: cluster_name
+            - name: PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_inventory_max_objects
             - name: PODPILOT_ROLE_INVESTIGATOR_GROUPS
               valueFrom:
                 configMapKeyRef:

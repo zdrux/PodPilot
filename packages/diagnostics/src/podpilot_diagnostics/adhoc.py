@@ -20,7 +20,7 @@ class ReadIntent(BaseModel):
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
     previous: bool = False
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=20, ge=1, le=500)
 
 
 class ReadPlan(BaseModel):
@@ -87,6 +87,7 @@ _NAMESPACE_RESOURCE_QUERY = re.compile(
 def plan_known_read(
     question: str,
     *,
+    inventory_limit: int = 250,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
 ) -> tuple[ReadPlan, bool] | None:
@@ -102,7 +103,7 @@ def plan_known_read(
                     resource="storageclasses",
                     api_version="storage.k8s.io/v1",
                     kind="StorageClass",
-                    limit=50,
+                    limit=inventory_limit,
                 )],
             ),
             True,
@@ -114,7 +115,7 @@ def plan_known_read(
             tool="list_resources",
             kind=match.group("kind"),
             namespace=match.group("namespace"),
-            limit=50,
+            limit=inventory_limit,
         )
         intent = normalize_read_intent(proposed)
         return (
@@ -154,6 +155,8 @@ def plan_known_read(
 def plan_catalog_read(
     question: str,
     resource_catalog: list[dict[str, object]],
+    *,
+    inventory_limit: int = 250,
 ) -> tuple[ReadPlan, bool] | None:
     """Compile an explicit inventory question against the live safe resource catalog."""
 
@@ -196,7 +199,7 @@ def plan_catalog_read(
                 tool="list_resources",
                 resource=resource,
                 namespace=namespace,
-                limit=100,
+                limit=inventory_limit,
             )],
         ),
         True,

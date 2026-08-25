@@ -9,6 +9,7 @@ metadata:
 data:
   environment: openshift-poc
   cluster_name: configure-cluster-name
+  adhoc_inventory_max_objects: "250"
   role_investigator_groups: '["podpilot-investigators"]'
   role_approver_groups: '["podpilot-approvers"]'
   role_breakglass_groups: '["podpilot-breakglass"]'

@@ -99,6 +99,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   session closes. A configured but non-ready profile now produces a persisted,
   attributed setup message with its real provider status instead of raising a
   detached-instance error during chat creation.
+- Explicit inventory LISTs now default to 250 objects and accept a deployment
+  setting up to 500. Kubernetes pagination is no longer capped at the old five
+  50-object pages. The API renders every collected name into a cited Markdown
+  table for list requests and suppresses redundant model-authored completeness
+  caveats; the model is not responsible for reproducing the actual inventory.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per
@@ -139,7 +144,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 125 tests passing with 82% aggregate branch coverage.
+- Automated suite: 129 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source
