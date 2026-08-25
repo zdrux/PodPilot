@@ -311,8 +311,8 @@ egress boundary exist.
 An Investigator can ask follow-up questions inside one durable investigation.
 PodPilot supplies only that investigation's redacted alert, deterministic analysis,
 persisted evidence, bounded conversation history, alert-scoped read policy, and
-available registered intent names to the configured model. Up to three planning
-rounds may request at most six reads through the same deny-by-default broker as
+available registered intent names to the configured model. Up to five planning
+rounds may request at most twelve reads through the same typed broker as
 standalone Ask; successful observations are persisted into the investigation
 before the answer pass. Factual incident answers must cite observation IDs
 that the server can resolve in the investigation; an evidence-based response with
@@ -332,19 +332,21 @@ copying message content into the audit record.
 ### 5.11 Standalone Ask PodPilot
 
 An Investigator can start a durable, attributed conversation without a firing
-alert. For each turn, up to three schema-validated planning rounds select at most six total reads
-from named resource GET, bounded resource LIST, and bounded current or previous
-Pod logs. A policy-filtered, five-minute discovery catalog lets planning address
+alert. For each turn, up to five schema-validated planning rounds select at most twelve total reads
+from named resource GET, bounded resource LIST, bounded current or previous
+Pod logs, and typed HTTP/HTTPS probes. A policy-filtered, five-minute discovery catalog lets planning address
 common Kubernetes/OpenShift objects and installed CRDs by plural resource name.
 The server resolves apiVersion, Kind, namespaced scope, and advertised read verb;
 it rejects ambiguous cross-group names unless qualified. Each round
 receives prior observations, allowing Pod discovery to lead to exact container-log
-collection without requiring an operator follow-up. ConfigMaps
-and logs are first-class evidence; Secrets, access-review resources, arbitrary
-subresources, commands, active network probes, and mutations are rejected.
-The model infers inventory, health, diagnosis, log, comparison, and explanation
-goals from natural language and returns an explicit collect, evidence-answer, or
-clarification decision. The API rejects unsupported operational answers, retries
+collection without requiring an operator follow-up. ConfigMaps, logs, and
+unauthenticated network results are first-class evidence. An HTTP probe may target
+any absolute URL, uses HEAD or bounded GET, validates TLS, does not follow redirects,
+and supports a separate TCP connection host while retaining the URL hostname for
+HTTP Host and TLS SNI. Secrets, access-review resources, arbitrary subresources,
+commands, authenticated requests, and mutations are rejected. The model infers
+inventory, health, diagnosis, log, comparison, and explanation goals from natural
+language. The API derives the decision from typed intents, rejects unsupported operational answers, retries
 the planner once with bounded feedback, and may compile a matching safe LIST from
 live discovery after a second refusal. No wording-specific object allowlist is
 required, and neither inference nor fallback can exceed broker policy or RBAC.
@@ -368,6 +370,8 @@ timestamp, and supplied to a second schema-validated answer pass. Cluster-specif
 answers require server-resolvable evidence citations. A missing capability pack
 does not block generic investigation, but the answer must expose collection gaps
 and remain non-remediating until a typed action and its approval gates exist.
+Malformed planning is recorded as a limitation and does not prevent the final
+answer pass, even when no new evidence could be collected.
 
 Conversations are private to their creating OpenShift user and have no hard
 question-count limit. Operators can start a new conversation at any time and can

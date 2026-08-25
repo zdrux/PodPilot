@@ -75,11 +75,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   must use the separate existing check control and its CSRF, atomic claim, scope,
   and audit gates.
 - Standalone Ask PodPilot conversations can investigate symptoms without an alert.
-  Up to three schema-validated planning rounds select at most six total bounded
-  resource, ConfigMap, or Pod-log reads. Earlier observations feed later rounds so
+  Up to five schema-validated planning rounds select at most twelve total bounded
+  resource, ConfigMap, Pod-log, or HTTP-probe reads. Earlier observations feed later rounds so
   discovery can lead to exact container logs; a final pass answers from persisted, redacted evidence with
-  server-validated citations. Secrets, access reviews, arbitrary subresources,
-  commands, network probes, and mutations are denied.
+  server-validated citations. HTTP probes are unauthenticated, SNI-aware, TLS-verified,
+  response-bounded, and do not follow redirects. Secrets, access reviews, arbitrary
+  subresources, commands, authenticated probes, and mutations are denied.
 - Unambiguous StorageClass inventory and supported namespaced built-in list
   questions use deterministic read plans. Failed-Job incident questions seed an
   exact `batch/v1` Job read from persisted alert labels before optional follow-up
@@ -90,7 +91,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift, and installed CRD objects. Normal code resolves versions, group
   collisions, scope, and verbs. Lists paginate and persist compact, explicitly
   truncated collection evidence rather than one observation per object.
-- Model planning now infers natural-language goal and decision types. Unsupported
+- Model planning now infers natural-language goals while the server derives collection
+  decisions from typed intents. Unsupported
   operational no-read answers receive one structured repair attempt; when live
   discovery identifies a safe matching inventory or health target, a repeated
   refusal falls back to the discovery-compiled read without expanding broker or
@@ -115,7 +117,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   response rather than conversation metadata. Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
-  bounded to six reads, and each user is throttled to ten questions per minute.
+  bounded to twelve reads, and each user is throttled to ten questions per minute.
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline.

@@ -13,6 +13,7 @@ from kubernetes.dynamic import DynamicClient
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
 from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
+from podpilot_openshift.http_probe import BoundedHttpProbe
 
 
 class ReadOnlyExplorerError(RuntimeError):
@@ -260,6 +261,7 @@ class KubernetesReadOnlyExplorer:
         max_payload_bytes: int = 48_000,
         log_tail_lines: int = 250,
         max_log_bytes: int = 24_000,
+        http_probe: BoundedHttpProbe | None = None,
     ) -> None:
         self._dynamic = dynamic_client
         self._core = core_api
@@ -267,6 +269,7 @@ class KubernetesReadOnlyExplorer:
         self._max_payload_bytes = max_payload_bytes
         self._log_tail_lines = log_tail_lines
         self._max_log_bytes = max_log_bytes
+        self._http_probe = http_probe or BoundedHttpProbe()
 
     def _ensure_clients(self) -> None:
         if self._dynamic is not None and self._core is not None:
@@ -296,6 +299,8 @@ class KubernetesReadOnlyExplorer:
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         try:
+            if intent.tool == "http_probe":
+                return self._http_probe.execute(intent)
             self._ensure_clients()
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)

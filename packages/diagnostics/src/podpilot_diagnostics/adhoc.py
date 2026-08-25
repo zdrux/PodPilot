@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from hashlib import sha256
 from typing import Literal, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -28,7 +29,7 @@ def looks_like_deferred_target(value: str | None) -> bool:
 class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
-    tool: Literal["get_resource", "list_resources", "pod_logs"]
+    tool: Literal["get_resource", "list_resources", "pod_logs", "http_probe"]
     resource: str | None = Field(default=None, max_length=253)
     api_version: str | None = Field(default=None, max_length=128)
     kind: str | None = Field(default=None, max_length=128)
@@ -37,6 +38,9 @@ class ReadIntent(BaseModel):
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
     candidate_id: str | None = Field(default=None, max_length=80)
+    url: str | None = Field(default=None, max_length=2048)
+    connect_host: str | None = Field(default=None, max_length=253)
+    method: Literal["HEAD", "GET"] = "HEAD"
     previous: bool = False
     limit: int = Field(default=20, ge=1, le=500)
 
@@ -53,6 +57,25 @@ class ReadIntent(BaseModel):
     def validate_candidate_usage(self) -> "ReadIntent":
         if self.candidate_id and self.tool != "pod_logs":
             raise ValueError("candidate_id is valid only for pod_logs")
+        if self.tool == "http_probe":
+            if any(ord(character) < 32 or ord(character) == 127 for character in (self.url or "")):
+                raise ValueError("http_probe URL must not contain control characters")
+            parsed = urlsplit(self.url or "")
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("http_probe requires an absolute HTTP or HTTPS URL")
+            try:
+                parsed.port
+            except ValueError as exc:
+                raise ValueError("http_probe URL contains an invalid port") from exc
+            if parsed.username or parsed.password:
+                raise ValueError("http_probe URLs must not contain credentials")
+            if self.connect_host and (
+                any(character.isspace() for character in self.connect_host)
+                or any(character in self.connect_host for character in "/?#@")
+            ):
+                raise ValueError("connect_host must be a hostname or IP address")
+        elif self.url or self.connect_host:
+            raise ValueError("url and connect_host are valid only for http_probe")
         return self
 
 
@@ -71,12 +94,15 @@ class ReadPlan(BaseModel):
 
     @model_validator(mode="after")
     def normalize_decision(self) -> "ReadPlan":
-        if self.decision is None:
-            self.decision = "collect" if self.intents else "answer_from_evidence"
-        if self.decision == "collect" and not self.intents:
-            raise ValueError("collect decisions require at least one read intent")
-        if self.decision != "collect" and self.intents:
-            raise ValueError("read intents require a collect decision")
+        # Intents and clarification are the authoritative output. Deriving this
+        # redundant discriminator server-side avoids rejecting otherwise usable
+        # plans from smaller structured-output models.
+        if self.intents:
+            self.decision = "collect"
+        elif self.clarification:
+            self.decision = "needs_clarification"
+        elif self.decision in {None, "collect"}:
+            self.decision = "answer_from_evidence"
         return self
 
 

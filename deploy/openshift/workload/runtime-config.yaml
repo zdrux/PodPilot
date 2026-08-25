@@ -10,6 +10,10 @@ data:
   environment: openshift-poc
   cluster_name: configure-cluster-name
   adhoc_inventory_max_objects: "250"
+  adhoc_max_rounds: "5"
+  adhoc_max_reads_per_turn: "12"
+  adhoc_http_probe_timeout_seconds: "8"
+  adhoc_http_probe_max_bytes: "16384"
   adhoc_run_timeout_seconds: "180"
   role_investigator_groups: '["podpilot-investigators"]'
   role_approver_groups: '["podpilot-approvers"]'

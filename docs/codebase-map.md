@@ -58,7 +58,11 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/discovery.py`: cached,
   policy-filtered live API catalog and safe resource-name resolution.
 - `packages/openshift-client/src/podpilot_openshift/explorer.py`: bounded dynamic
-  GET/LIST and Pod-log execution with pagination, projection, and redaction.
+  GET/LIST, Pod-log, and typed HTTP-probe dispatch with pagination, projection,
+  and redaction.
+- `packages/openshift-client/src/podpilot_openshift/http_probe.py`: bounded,
+  unauthenticated HTTP/HTTPS observations with verified TLS, SNI, connection
+  overrides, no redirects, and response ceilings.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
 - `packages/diagnostics/src/podpilot_diagnostics/adhoc.py`: portable read-plan,
   deterministic inventory, and ad-hoc evidence contracts.

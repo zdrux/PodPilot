@@ -100,11 +100,17 @@ connection. Live QA must retain the fixture only long enough to verify the three
 checks and remove both its namespace and platform PrometheusRule afterward.
 
 Milestone 10 adds gates for Investigator-only standalone chat, schema-valid
-multi-round read plans, a three-round and six-total-read budget, duplicate
+multi-round read plans, a five-round and twelve-total-read budget, duplicate
 suppression, discovery-followed-by-exact-container-log collection, ConfigMap and bounded-log evidence, Secret/subresource
 denial, recursive redaction, persisted provenance, and withholding of uncited
 cluster-specific answers. Audit both `cluster-reader` effective permissions and
 the application broker deny tests before release.
+
+HTTP-probe gates must cover arbitrary destinations, HEAD/GET-only enforcement,
+SNI and Host preservation across connection overrides, TLS verification, no redirect
+following, absence of credentials and custom headers, timeout/body ceilings, query-value
+redaction, and durable failure evidence. Document the accepted SSRF-shaped egress
+surface for every deployment environment.
 
 Discovery-backed resource gates cover TTL caching, stable-version selection,
 cross-group ambiguity and qualification, question-relevant catalog ranking,

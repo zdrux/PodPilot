@@ -323,6 +323,30 @@ class FailingAdHocProvider(FakeModelProvider):
             "(scope_summary: string_too_short)."
         )
 
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="insufficient_evidence",
+            answer="PodPilot could not collect cluster evidence because planning failed.",
+            cited_evidence_ids=[],
+            limitations=[],
+        )
+
+
+class LateFailingPlanProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if context["investigation_round"] == 1:
+            return ReadPlan(
+                scope_summary="Inspect the operator-supplied Pod.",
+                intents=[ReadIntent(
+                    tool="get_resource", resource="pods", namespace="payments", name="api-7d9",
+                )],
+            )
+        raise ModelProviderError(
+            "Provider response does not match ReadPlan. Provider returned content that failed schema validation."
+        )
+
 
 class BlockingAdHocProvider(FakeModelProvider):
     def __init__(self) -> None:
@@ -1027,7 +1051,7 @@ def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path)
     engine.dispose()
 
 
-def test_ask_provider_failure_is_visible_and_logged_without_question(
+def test_ask_planner_failure_is_visible_and_does_not_block_answer(
     tmp_path: Path, caplog
 ) -> None:
     app, settings = make_app(
@@ -1064,10 +1088,46 @@ def test_ask_provider_failure_is_visible_and_logged_without_question(
 
     log_text = caplog.text
     assert "podpilot.adhoc.provider_start" in log_text
-    assert "podpilot.adhoc.provider_failed" in log_text
-    assert "phase=bounded_read_collection" in log_text
+    assert "podpilot.adhoc.provider_complete" in log_text
+    assert "podpilot.adhoc.provider_failed" not in log_text
     assert "scope_summary: string_too_short" in log_text
     assert secret_question not in log_text
+
+
+def test_ask_continues_to_answer_when_later_plan_is_invalid(tmp_path: Path) -> None:
+    provider = LateFailingPlanProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check pod api-7d9 in namespace payments."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert "selector does not match" in rendered.text
+    assert "continued to the answer phase" in rendered.text
+    assert len(provider.adhoc_answer_calls) == 1
 
 
 def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
@@ -1292,7 +1352,9 @@ def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Pa
         assert "exact Pod name is needed" not in rendered.text
 
     assert [call.tool for call in explorer.calls] == ["list_resources", "pod_logs"]
-    assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == 5
+    assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == (
+        settings.adhoc_max_reads_per_turn - 1
+    )
     assert provider.adhoc_plan_calls[1]["completed_reads"][0]["round"] == 1
     assert provider.adhoc_plan_calls[2]["observations"][-1]["tool"] == "pod_logs"
 

@@ -1,7 +1,28 @@
 # PodPilot Decisions
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-25
 Update when: a durable architecture or product-engineering decision is made or superseded.
+
+## 2026-08-25 - Broader agentic reads and SNI-aware HTTP probes
+
+Context: Three planning rounds and six Kubernetes-only reads were too brittle for
+cross-resource OpenShift investigations. Later malformed plans also discarded usable
+evidence. Operators need direct reachability observations for Routes and Services,
+including passthrough Route SNI behavior.
+
+Decision: Allow up to five rounds and twelve reads, derive the plan decision from
+typed content, and continue to the answer phase after any planner-contract failure.
+Add an unrestricted-destination `http_probe` intent to the same bounded broker. It
+supports unauthenticated HEAD/GET, verified TLS, no redirects, bounded/redacted output,
+and a connection override that preserves the URL hostname as HTTP Host and TLS SNI.
+Arbitrary shell and model-authored headers, credentials, bodies, and mutations remain
+unavailable. Model-selected TLS verification bypass remains prohibited.
+
+Consequences: PodPilot can actively cross-check object configuration against network
+behavior and test passthrough Routes against a chosen router address. This introduces
+an accepted SSRF-shaped read capability wherever workload egress permits; production
+deployments that do not accept that reachability must add an egress or destination
+policy. Probe failures remain evidence rather than generic provider failures.
 
 ## 2026-08-23 - Broad reader identity and brokered ad-hoc investigation
 

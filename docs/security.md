@@ -239,8 +239,11 @@ bounded before a provider call. Incident chat can invoke the same schema-validat
 read-plan broker as standalone Ask, but the provider receives neither Kubernetes
 credentials nor a generic execution channel. Normal code canonicalizes, bounds,
 deny-checks, executes, redacts, persists, and audits every proposed read. Secrets,
-access reviews, arbitrary subresources, commands, active probes, and mutations
-remain unavailable. Structured output distinguishes evidence-based,
+access reviews, arbitrary subresources, commands, and mutations remain unavailable.
+The typed HTTP probe is an explicit exception to the former active-probe boundary:
+it sends only unauthenticated HEAD or bounded GET requests, follows no redirects,
+validates TLS, and records the logical Host/SNI name separately from an optional
+TCP connection override. Structured output distinguishes evidence-based,
 general-guidance, and insufficient-evidence answers. The API—not the model—validates
 citation IDs against persisted observations and withholds uncited factual claims.
 A `run_queued_checks`
@@ -270,13 +273,18 @@ the same policy-filtered live catalog. The broker still validates scope and verb
 applies limits and redaction, and submits the request using the investigator
 ServiceAccount, so Kubernetes RBAC remains the maximum read boundary.
 
-Milestone 9 treats Prometheus label values as untrusted selectors, not query text
-or network destinations. The server owns both supported PromQL expressions and
+Milestone 9 treats Prometheus label values as untrusted selectors, not query text.
+The server owns both supported PromQL expressions and
 JSON-escapes exact-match values. Thanos access uses the projected service-account
 token, the OpenShift service CA, a fixed service URL, bounded timeout, 64 KiB body
 limit, and series cap. Responses are shape-validated and redacted. The model and
-browser cannot submit PromQL. PodPilot does not resolve or connect to the alert's
-`instance` value or the selected Service; doing so would let rule authors steer a
-privileged workload toward arbitrary in-cluster endpoints. An active probe requires
-an administrator-owned allowlist, destination pre-registration, dedicated no-token
-identity, explicit egress policy, rate limits, and separate evaluation gates.
+browser cannot submit PromQL. The later ad-hoc HTTP probe deliberately allows any
+absolute HTTP/HTTPS destination selected by the model, including values derived
+from untrusted cluster evidence. This is an SSRF-shaped capability accepted for
+the operator-oriented environment: the workload currently has no egress-deny
+NetworkPolicy, so reachable internal and external endpoints are in scope. Risk is
+bounded by a typed method set, no credentials or custom headers, no redirect following,
+verified TLS, short timeouts, response-size ceilings, redaction, per-turn read budgets,
+ownership, attribution, and audit records. It does not execute text, shell syntax,
+or commands found in evidence. Deployments requiring a narrower boundary must add
+egress or destination policy before enabling this capability outside the PoC.

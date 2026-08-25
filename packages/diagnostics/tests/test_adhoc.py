@@ -189,17 +189,37 @@ def test_actionable_model_goal_requires_reads_or_valid_supporting_evidence() -> 
     ) is False
 
 
-def test_collect_decision_requires_a_typed_read_intent() -> None:
-    try:
-        ReadPlan(
-            goal_type="health",
-            decision="collect",
-            scope_summary="Assess ClusterOperator health.",
-        )
-    except ValidationError as exc:
-        assert "collect decisions require at least one read intent" in str(exc)
-    else:
-        raise AssertionError("An empty collect decision must fail schema validation")
+def test_plan_decision_is_derived_from_typed_intents() -> None:
+    empty = ReadPlan(
+        goal_type="health",
+        decision="collect",
+        scope_summary="Assess ClusterOperator health.",
+    )
+    collecting = ReadPlan(
+        goal_type="health",
+        decision="answer_from_evidence",
+        scope_summary="Assess ClusterOperator health.",
+        intents=[ReadIntent(tool="list_resources", resource="clusteroperators")],
+    )
+
+    assert empty.decision == "answer_from_evidence"
+    assert collecting.decision == "collect"
+
+
+def test_http_probe_requires_safe_typed_url_shape() -> None:
+    probe = ReadIntent(
+        tool="http_probe",
+        url="https://console.apps.example.test/healthz",
+        connect_host="192.0.2.20",
+        method="GET",
+    )
+
+    assert probe.url == "https://console.apps.example.test/healthz"
+    assert probe.connect_host == "192.0.2.20"
+    with pytest.raises(ValidationError, match="absolute HTTP or HTTPS URL"):
+        ReadIntent(tool="http_probe", url="file:///etc/passwd")
+    with pytest.raises(ValidationError, match="must not contain credentials"):
+        ReadIntent(tool="http_probe", url="https://user:password@example.test/")
 
 
 def test_log_candidate_id_is_rejected_for_non_log_tools() -> None:

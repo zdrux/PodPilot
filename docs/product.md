@@ -37,6 +37,6 @@ cluster/workload in a lab or non-production environment.
 
 - Autonomous remediation, arbitrary shell execution, or unrestricted model-generated patches.
 - `cluster-admin` access.
-- A general-purpose chat interface over every cluster object.
+- Arbitrary shell access or an unbounded command interface over the cluster.
 - Production HA claims based on a single-node Hyper-V lab.
 - Hosting a large model on the SNO control-plane node.

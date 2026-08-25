@@ -68,6 +68,10 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "adhoc_run_timeout_seconds",
     }
+    assert runtime["data"]["adhoc_max_rounds"] == "5"
+    assert runtime["data"]["adhoc_max_reads_per_turn"] == "12"
+    assert runtime["data"]["adhoc_http_probe_timeout_seconds"] == "8"
+    assert runtime["data"]["adhoc_http_probe_max_bytes"] == "16384"
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:

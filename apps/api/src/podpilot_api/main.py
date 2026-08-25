@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -81,6 +81,7 @@ from podpilot_openshift.credentials import (
     KubernetesSecretCredentialStore,
 )
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
+from podpilot_openshift.http_probe import BoundedHttpProbe
 from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
 from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
@@ -458,6 +459,8 @@ ProgressReporter = Callable[[str, str], Awaitable[None]]
 
 
 def _read_progress_message(intent) -> str:
+    if intent.tool == "http_probe":
+        return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}."
     resource = intent.kind or intent.resource or "cluster resource"
     scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
     if intent.tool == "pod_logs":
@@ -466,6 +469,17 @@ def _read_progress_message(intent) -> str:
     if intent.tool == "get_resource":
         return f"Inspecting {resource} {intent.namespace or 'cluster'}/{intent.name}."
     return f"Getting a list of {resource}{scope}."
+
+
+def _display_probe_url(value: str | None) -> str:
+    parsed = urlsplit(value or "")
+    return urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        "[REDACTED]" if parsed.query else "",
+        "",
+    ))
 
 
 def _bind_pod_log_intent(
@@ -708,7 +722,7 @@ async def _collect_bounded_cluster_reads(
             "completed_reads": activity,
             "investigation_round": round_number,
             "tool_policy": {
-                "available": ["get_resource", "list_resources", "pod_logs"],
+                "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
                 "resource_catalog": catalog_entries,
                 "pod_log_candidates": [
                     candidate.model_dump() for candidate in log_candidates[:100]
@@ -833,9 +847,18 @@ async def _collect_bounded_cluster_reads(
                     plan.goal_type,
                 )
             elif needs_fallback and planner_error is not None:
-                raise ModelProviderError(
-                    f"ReadPlan round {round_number} failed. {planner_error}"
-                ) from planner_error
+                LOGGER.warning(
+                    "podpilot.adhoc.plan_failed actor=%s workflow_id=%s round=%s error=%s",
+                    actor,
+                    workflow_id,
+                    round_number,
+                    str(planner_error),
+                )
+                limitations.append(
+                    f"ReadPlan round {round_number} failed; PodPilot continued to the answer phase "
+                    f"with the evidence available. {planner_error}"
+                )
+                break
             elif needs_fallback:
                 limitations.append(
                     "The model planner did not select a safe evidence read for its actionable goal."
@@ -867,16 +890,23 @@ async def _collect_bounded_cluster_reads(
             entry: dict[str, object] = {
                 "round": round_number,
                 "tool": intent.tool,
-                "target": f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
-                f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
-                + (f" container={intent.container}" if intent.container else "")
-                + (" previous=true" if intent.tool == "pod_logs" and intent.previous else ""),
+                "target": (
+                    f"{_display_probe_url(intent.url)} via {intent.connect_host or 'DNS'}"
+                    if intent.tool == "http_probe" else
+                    f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
+                    f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
+                    + (f" container={intent.container}" if intent.container else "")
+                    + (" previous=true" if intent.tool == "pod_logs" and intent.previous else "")
+                ),
             }
             try:
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
-                entry["status"] = "succeeded"
+                probe_failed = intent.tool == "http_probe" and any(
+                    item.data.get("outcome") == "failed" for item in result.observations
+                )
+                entry["status"] = "failed" if probe_failed else "succeeded"
                 entry["observations"] = len(result.observations)
                 entry["evidence_ids"] = [item.id for item in result.observations]
                 if progress:
@@ -1099,6 +1129,11 @@ def create_app(
     cluster_reader = read_explorer or KubernetesReadOnlyExplorer(
         log_tail_lines=app_settings.workload_log_tail_lines,
         max_log_bytes=app_settings.workload_max_log_bytes,
+        http_probe=BoundedHttpProbe(
+            timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
+            max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
+            additional_ca_path=app_settings.service_ca_path,
+        ),
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
     templates.env.filters["safe_markdown"] = render_safe_markdown
@@ -1283,10 +1318,20 @@ def create_app(
                     provider_phase,
                     str(exc),
                 )
-                provider_status = "unavailable"
+                contract_failure = isinstance(exc, ModelProviderError) and any(
+                    marker in str(exc).lower()
+                    for marker in ("schema", "does not match", "structured response")
+                )
+                provider_status = "invalid_response" if contract_failure else "unavailable"
                 validated = {
                     "answer_mode": "insufficient_evidence",
-                    "content": "The model provider is currently unavailable. No cluster changes were attempted.",
+                    "content": (
+                        "The model returned an invalid structured response, so PodPilot could not "
+                        "complete this investigation. Any successfully collected evidence remains "
+                        "available. No cluster changes were attempted."
+                        if contract_failure else
+                        "The model provider is currently unavailable. No cluster changes were attempted."
+                    ),
                     "citations": [],
                     "limitations": [str(exc)],
                 }
@@ -1630,6 +1675,7 @@ def create_app(
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
+                "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "model_ready": bool(profile and profile.status == "ready"),
                 "active_run": None,
             },
@@ -1678,6 +1724,7 @@ def create_app(
                 "evidence_by_id": {item["id"]: item for item in evidence},
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
+                "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "model_ready": bool(profile and profile.status == "ready"),
                 "messages_truncated": conversation.summarized_message_count > 0,
                 "adhoc_run_timeout_seconds": app_settings.adhoc_run_timeout_seconds,

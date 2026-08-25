@@ -113,8 +113,8 @@ Milestone 8 adds durable `ChatMessage` records and a provider-level structured
 chat contract. The API composes bounded context from one investigation, redacts
 the operator message before storage, and sends no Kubernetes credentials or
 generic Kubernetes client to the provider. Incident chat now shares Ask
-PodPilot's bounded read-plan broker: up to three planning rounds and six total
-resource, ConfigMap, Event, or Pod-log reads run under the same read-only identity,
+PodPilot's bounded read-plan broker: up to five planning rounds and twelve total
+resource, ConfigMap, Event, Pod-log, or HTTP-probe reads run under the same read-only identity,
 deny policy, normalization, redaction, and evidence cap. Trusted alert labels seed
 exact scope for deterministic cases such as a failed Job, and newly collected
 observations are persisted into the investigation before interpretation. Model
@@ -130,14 +130,14 @@ job, and instance matchers from the persisted normalized alert. The adapter send
 only fixed `ALERTS` and `up` instant-query shapes to the authenticated in-cluster
 Thanos endpoint, validates its service certificate, caps time, body size, and
 series count, and normalizes values and label provenance. It does not expose a
-generic PromQL endpoint to the API, browser, or model. Active target probing is
-deliberately absent because the alert is not an authorized network-destination
-registry.
+generic PromQL endpoint to the API, browser, or model. The later typed HTTP probe
+is separate from PromQL and never attaches the service-account token or model
+credentials to a request.
 
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
-broker later shared by incident chat. Up to three
-schema-validated planning rounds may select at most six total reads from
-`get_resource`, `list_resources`, and `pod_logs`; each round receives the bounded
+broker later shared by incident chat. Up to five
+schema-validated planning rounds may select at most twelve total reads from
+`get_resource`, `list_resources`, `pod_logs`, and `http_probe`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.
 Normal code validates the discovered resource, scope, verb, limits, duplicate
 suppression, and deny policy. A five-minute, process-local discovery catalog
@@ -149,18 +149,24 @@ inventory questions compile directly from that live catalog so a model cannot
 omit the only required intent. The small built-in canonicalization table remains
 only as a compatibility path for older model output.
 The planner classifies natural-language intent as inventory, health, diagnosis,
-logs, comparison, or explanation and explicitly chooses whether to collect,
-answer from cited evidence, or request clarification. If an operational answer
+logs, comparison, or explanation. Normal code derives the collection decision
+from typed intents or clarification content instead of rejecting a useful plan
+because a redundant discriminator disagreed. If an operational answer
 has no valid evidence—or a matching safe catalog target exists but the model
 declines to read it—the API supplies structured feedback and retries planning
 once. A second refusal falls back to the read compiled from live discovery. This
 fallback is generic across served resources; it does not grant a model a client
 or require a static list of OpenShift object types.
-ConfigMaps and bounded logs are intentional evidence sources. Secrets,
-access-review resources, arbitrary subresources, commands, network probes, and
-mutations are rejected. A final model pass receives normalized, redacted
+ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
+evidence sources. HTTP probes may target any model-selected URL, but remain typed:
+HEAD or bounded GET only, verified TLS, no redirects, request bodies, credentials,
+or custom headers. The URL hostname supplies both HTTP Host and TLS SNI; an optional
+connection-host override supports passthrough Route testing against a specific
+router address. Secrets, access-review resources, arbitrary subresources, commands,
+and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
-evidence IDs.
+evidence IDs. If any planning round fails, collection stops and the answer phase
+still proceeds with the available evidence and an explicit limitation.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.

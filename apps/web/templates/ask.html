@@ -95,7 +95,7 @@
       data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
       <label for="adhoc-message">Question or symptom</label>
       <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
-      <div><small>Each question: up to 6 read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button></div>
+      <div><small>Each question: up to {{ chat_read_budget }} read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button></div>
     </form>
     {% elif user.role.value < 20 %}
     <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>

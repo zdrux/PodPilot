@@ -253,7 +253,7 @@ class OpenAIResponsesProvider:
                     "completed_reads": [],
                     "investigation_round": 1,
                     "tool_policy": {
-                        "available": ["get_resource", "list_resources", "pod_logs"],
+                        "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
                         "resource_catalog": [{
                             "resource": "pods", "apiVersion": "v1", "kind": "Pod",
                             "namespaced": True, "verbs": ["get", "list"],
@@ -289,7 +289,7 @@ class OpenAIResponsesProvider:
                     "completed_reads": [{"tool": "list_resources", "status": "succeeded"}],
                     "investigation_round": 2,
                     "tool_policy": {
-                        "available": ["get_resource", "list_resources", "pod_logs"],
+                        "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
                         "resource_catalog": [],
                         "pod_log_candidates": [{
                             "id": "podlog-probe-candidate", "evidence_id": "probe-pods",
@@ -390,7 +390,12 @@ class OpenAIResponsesProvider:
                     "use needs_clarification only when no safe read "
                     "can proceed without a missing identifier. Never return an empty actionable plan merely "
                     "because the wording is unfamiliar. Select no more than "
-                    "the supplied remaining_reads from only get_resource, list_resources, and pod_logs. Use exact "
+                    "the supplied remaining_reads from only get_resource, list_resources, pod_logs, and http_probe. "
+                    "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL with HEAD or a "
+                    "bounded GET. The URL hostname is always the HTTP Host and HTTPS SNI name. To test a passthrough "
+                    "Route against a specific router address, keep the Route hostname in url and put the router IP "
+                    "or hostname in connect_host. TLS is always verified, redirects are observed but not followed, "
+                    "and probes never carry credentials, custom headers, or bodies. Use exact "
                     "resource names from the supplied resource_catalog whenever available; normal code resolves "
                     "their authoritative apiVersion, Kind, scope, and verbs. Otherwise use exact apiVersion and "
                     "Kind values. Prefer namespace-scoped, named reads and small limits, but allow a "
@@ -402,7 +407,7 @@ class OpenAIResponsesProvider:
                     "wait for the next planning round. Never put placeholders, instructions, examples, or "
                     "future values such as FIRST_POD_FROM_LIST into any intent field. Never request "
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
-                    "mutations, exec, attach, proxy, port-forward, or network connections. If scope is "
+                    "mutations, exec, attach, proxy, or port-forward. If scope is "
                     "missing, return no reads and explain what identifier is needed."
                 ),
                 input=json.dumps(context, sort_keys=True, default=str),
@@ -643,12 +648,15 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "Prefer the resource field with an exact plural name from resource_catalog; the server resolves API "
                 "coordinates and scope. A cluster-wide LIST is allowed for inventory when no namespace "
                 "was supplied; named GET reads still require exact scope. "
-                "When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
+                "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL using HEAD or a "
+                "bounded GET. The URL hostname is used for HTTP Host and HTTPS SNI; use connect_host to direct "
+                "a Route hostname to a specific router IP without changing SNI. TLS remains verified and redirects "
+                "are not followed. When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
                 "candidate_id from that list instead of constructing Pod or container names. "
                 "When no Pod log candidates exist, collect Pod evidence first. Never put placeholders, "
                 "instructions, examples, or future values such as FIRST_POD_FROM_LIST into intent fields. "
-                "Never request Secrets, identity/token/access-review resources, "
-                "subresources, commands, probes, or mutations."
+                "Never request Secrets, identity/token/access-review resources, arbitrary subresources, "
+                "commands, exec, proxy, port-forward, or mutations."
             ),
             payload=context, limit=min(profile.max_output_tokens, 1400),
         )

@@ -447,10 +447,10 @@ An Investigator can ask follow-up questions on an investigation page. Incident
 facts in an AI answer link to server-validated evidence IDs. `General guidance`
 and `Insufficient evidence` answers deliberately show no incident citation. If
 the question asks for further investigation, incident chat may perform the same
-bounded read-only resource and Pod-log collection used by Ask PodPilot. Alert
+bounded read-only resource, Pod-log, and HTTP-probe collection used by Ask PodPilot. Alert
 labels seed exact persisted scope where available; collected observations are
 added to the incident evidence panel and audited as `chat.investigate`. Secrets,
-commands, active probes, and mutations remain blocked. If
+commands, authenticated probes, and mutations remain blocked. If
 queued registered checks exist, the model may display a `run_queued_checks`
 proposal; it does not run anything until the operator presses **Review and run
 queued checks**. Viewer users can read attributed history but cannot post.
@@ -470,6 +470,18 @@ namespace and remain subject to ServiceAccount RBAC. Investigative questions sti
 question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
 requires the configured model.
+
+The default ad-hoc budget is five planning rounds and twelve total reads, configured
+with `PODPILOT_ADHOC_MAX_ROUNDS` and `PODPILOT_ADHOC_MAX_READS_PER_TURN`. A typed
+`http_probe` read can issue an unauthenticated HEAD or bounded GET to any absolute
+HTTP/HTTPS URL. `connect_host` overrides only DNS/TCP routing; the URL hostname
+remains the HTTP Host and HTTPS SNI name for passthrough Route tests. TLS verification
+is mandatory, redirects are not followed, and no cookies, authorization, custom
+headers, or request bodies are sent. Configure probe timeout and response ceilings
+with `PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS` and
+`PODPILOT_ADHOC_HTTP_PROBE_MAX_BYTES`. The mounted OpenShift service CA is added to
+system trust; additional private router/workload issuers must be installed through
+deployment trust rather than disabling verification.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is

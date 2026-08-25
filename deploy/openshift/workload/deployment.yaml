@@ -47,6 +47,26 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_inventory_max_objects
+            - name: PODPILOT_ADHOC_MAX_ROUNDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_max_rounds
+            - name: PODPILOT_ADHOC_MAX_READS_PER_TURN
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_max_reads_per_turn
+            - name: PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_http_probe_timeout_seconds
+            - name: PODPILOT_ADHOC_HTTP_PROBE_MAX_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_http_probe_max_bytes
             - name: PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS
               valueFrom:
                 configMapKeyRef:
