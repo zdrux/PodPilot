@@ -6,7 +6,23 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+_DEFERRED_TARGET = re.compile(
+    r"(?i)(?:"
+    r"[<>{}\[\]]|"
+    r"\b(?:first|next|previous|selected|replace|insert)[-_ ]+"
+    r"(?:pod|resource|object|deployment|container|namespace|name)\b|"
+    r"\b(?:pod|resource|object|deployment|container|namespace)[-_ ]+name[-_ ]+"
+    r"(?:from|in)[-_ ]+(?:previous[-_ ])?list\b"
+    r")"
+)
+
+
+def looks_like_deferred_target(value: str | None) -> bool:
+    """Identify model placeholders that are not observed Kubernetes coordinates."""
+    return bool(value and _DEFERRED_TARGET.search(value))
 
 
 class ReadIntent(BaseModel):
@@ -23,6 +39,15 @@ class ReadIntent(BaseModel):
     candidate_id: str | None = Field(default=None, max_length=80)
     previous: bool = False
     limit: int = Field(default=20, ge=1, le=500)
+
+    @field_validator(
+        "resource", "api_version", "kind", "namespace", "name", "container", "candidate_id"
+    )
+    @classmethod
+    def require_exact_target(cls, value: str | None) -> str | None:
+        if looks_like_deferred_target(value):
+            raise ValueError("must be an exact target, not a deferred placeholder")
+        return value
 
     @model_validator(mode="after")
     def validate_candidate_usage(self) -> "ReadIntent":
@@ -112,7 +137,7 @@ def pod_log_candidates_from_evidence(
         ))
 
     for observation in evidence:
-        if observation.get("tool") != "list_resources":
+        if observation.get("tool") not in {"list_resources", "get_resource"}:
             continue
         evidence_id = str(observation.get("id") or "")[:128]
         data = observation.get("data")
@@ -136,6 +161,43 @@ def pod_log_candidates_from_evidence(
                         ready=item.get("ready"),
                         restart_count=item.get("restartCount"),
                     )
+            continue
+
+        if observation.get("tool") == "get_resource" and str(data.get("kind")) == "Pod":
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+            status = data.get("status") if isinstance(data.get("status"), dict) else {}
+            statuses = status.get("containerStatuses") or status.get("container_statuses") or []
+            containers = [
+                item.get("name") for item in statuses
+                if isinstance(item, dict) and item.get("name")
+            ]
+            if not containers:
+                raw_containers = spec.get("containers") or []
+                containers = [
+                    item.get("name") for item in raw_containers
+                    if isinstance(item, dict) and item.get("name")
+                ]
+            statuses_by_name = {
+                str(item.get("name")): item
+                for item in statuses
+                if isinstance(item, dict) and item.get("name")
+            }
+            for container in containers or [None]:
+                container_status = statuses_by_name.get(str(container), {})
+                add(
+                    evidence_id=evidence_id,
+                    namespace=metadata.get("namespace"),
+                    pod=metadata.get("name"),
+                    container=container,
+                    phase=status.get("phase"),
+                    ready=container_status.get("ready"),
+                    restart_count=(
+                        container_status.get("restartCount")
+                        or container_status.get("restart_count")
+                        or 0
+                    ),
+                )
             continue
 
         items = data.get("items")

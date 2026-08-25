@@ -12,7 +12,7 @@ from podpilot_api.model_provider import (
     OpenAIProviderRouter,
     validate_model_endpoint,
 )
-from podpilot_diagnostics.adhoc import ReadPlan
+from podpilot_diagnostics.adhoc import ReadIntent, ReadPlan
 
 
 def profile(**overrides) -> ModelProfileConfig:
@@ -269,9 +269,22 @@ def test_ask_schema_probe_reports_operational_contract_failure() -> None:
 
 def test_ask_schema_probe_identifies_answer_phase() -> None:
     provider = OpenAIChatCompletionsProvider()
-    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
-        scope_summary="No reads are required.", intents=[]
-    )
+    def grounded_probe_plan(_profile, _key, context):
+        if context["investigation_round"] == 1:
+            return ReadPlan(
+                scope_summary="Discover Pods before reading logs.",
+                intents=[ReadIntent(
+                    tool="list_resources", resource="pods", namespace="payments",
+                )],
+            )
+        return ReadPlan(
+            scope_summary="Read the exact observed Pod logs.",
+            intents=[ReadIntent(
+                tool="pod_logs", candidate_id="podlog-probe-candidate",
+            )],
+        )
+
+    provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
     provider.answer_ad_hoc = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
         ModelProviderError("Provider request failed (InternalServerError, HTTP 504).")
     )
@@ -282,4 +295,22 @@ def test_ask_schema_probe_identifies_answer_phase() -> None:
     assert detail == (
         "AdHocAnswer probe failed. "
         "Provider request failed (InternalServerError, HTTP 504)."
+    )
+
+
+def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
+        scope_summary="Read a guessed Pod.",
+        intents=[ReadIntent(
+            tool="pod_logs", namespace="payments", name="guessed-pod", container="app",
+        )],
+    )
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is False
+    assert detail == (
+        "ReadPlan probe failed. "
+        "The model did not plan discovery before an ungrounded Pod log read."
     )

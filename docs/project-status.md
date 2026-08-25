@@ -136,6 +136,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   invented targets receive one budget-free repair, followed by a disclosed
   server-owned fallback across at most three relevant candidates. This improves
   discover-then-log autonomy without expanding the investigator ServiceAccount.
+  Direct unobserved Pod-log targets and literal future-value placeholders are now
+  rejected before cluster collection. Named GET targets must originate in the
+  operator question or collected evidence, and model activation probes verify a
+  synthetic discovery-to-exact-log-candidate sequence.
 - Ask PodPilot opens the bounded conversation viewport at the newest response.
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe

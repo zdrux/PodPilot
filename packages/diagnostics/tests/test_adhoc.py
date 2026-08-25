@@ -213,6 +213,52 @@ def test_log_candidate_id_is_rejected_for_non_log_tools() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "<FIRST_CRASHING_POD_NAME_FROM_PREVIOUS_LIST>",
+        "{pod-name-from-list}",
+        "first-pod-name-from-list",
+    ],
+)
+def test_deferred_model_targets_are_rejected_by_contract(placeholder: str) -> None:
+    with pytest.raises(ValidationError, match="exact target, not a deferred placeholder"):
+        ReadIntent(
+            tool="get_resource", resource="pods", namespace="payments", name=placeholder,
+        )
+
+
+def test_exact_kubernetes_names_are_not_mistaken_for_placeholders() -> None:
+    intent = ReadIntent(
+        tool="get_resource", resource="deployments", namespace="telemetry",
+        name="opentelemetry-collector-operated",
+    )
+    assert intent.name == "opentelemetry-collector-operated"
+
+
+def test_exact_log_candidates_can_be_derived_from_named_pod_evidence() -> None:
+    candidates = pod_log_candidates_from_evidence([{
+        "id": "cluster-pod-1",
+        "tool": "get_resource",
+        "data": {
+            "api_version": "v1",
+            "kind": "Pod",
+            "metadata": {"namespace": "payments", "name": "api-7d9"},
+            "spec": {"containers": [{"name": "api"}]},
+            "status": {
+                "phase": "Running",
+                "container_statuses": [{"name": "api", "restart_count": 2}],
+            },
+        },
+    }])
+
+    assert len(candidates) == 1
+    assert candidates[0].namespace == "payments"
+    assert candidates[0].pod == "api-7d9"
+    assert candidates[0].container == "api"
+    assert candidates[0].restart_count == 2
+
+
 def test_live_catalog_health_fallback_uses_discovered_cluster_operator() -> None:
     planned = plan_catalog_read("Check the status of the cluster operators", [{
         "resource": "clusteroperators",

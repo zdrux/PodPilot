@@ -243,15 +243,72 @@ class OpenAIResponsesProvider:
         self, profile: ModelProfileConfig, api_key: str
     ) -> tuple[bool, str | None]:
         try:
-            self.plan_ad_hoc(
+            discovery = self.plan_ad_hoc(
                 profile,
                 api_key,
                 {
                     "capability_probe": True,
-                    "question": "Return a schema-valid read plan with no reads.",
-                    "tool_policy": {"available": [], "remaining_reads": 0},
+                    "question": "Check recent logs from a failing Pod in namespace payments.",
+                    "observations": [],
+                    "completed_reads": [],
+                    "investigation_round": 1,
+                    "tool_policy": {
+                        "available": ["get_resource", "list_resources", "pod_logs"],
+                        "resource_catalog": [{
+                            "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+                            "namespaced": True, "verbs": ["get", "list"],
+                        }],
+                        "pod_log_candidates": [],
+                        "remaining_reads": 2,
+                    },
                 },
             )
+            if (
+                discovery.decision != "collect"
+                or not discovery.intents
+                or any(intent.tool == "pod_logs" for intent in discovery.intents)
+                or not any(
+                    intent.tool == "list_resources"
+                    and (intent.resource == "pods" or str(intent.kind).lower() in {"pod", "pods"})
+                    for intent in discovery.intents
+                )
+            ):
+                raise ModelProviderError(
+                    "The model did not plan discovery before an ungrounded Pod log read."
+                )
+            followup = self.plan_ad_hoc(
+                profile,
+                api_key,
+                {
+                    "capability_probe": True,
+                    "question": "Check recent logs from a failing Pod in namespace payments.",
+                    "observations": [{
+                        "id": "probe-pods", "tool": "list_resources",
+                        "data": {"scope": "payments", "names": ["api-probe-1"]},
+                    }],
+                    "completed_reads": [{"tool": "list_resources", "status": "succeeded"}],
+                    "investigation_round": 2,
+                    "tool_policy": {
+                        "available": ["get_resource", "list_resources", "pod_logs"],
+                        "resource_catalog": [],
+                        "pod_log_candidates": [{
+                            "id": "podlog-probe-candidate", "evidence_id": "probe-pods",
+                            "namespace": "payments", "pod": "api-probe-1",
+                            "container": "api", "phase": "Running", "ready": True,
+                            "restart_count": 1,
+                        }],
+                        "remaining_reads": 1,
+                    },
+                },
+            )
+            if not any(
+                intent.tool == "pod_logs"
+                and intent.candidate_id == "podlog-probe-candidate"
+                for intent in followup.intents
+            ):
+                raise ModelProviderError(
+                    "The model did not select the exact observed Pod log candidate."
+                )
         except ModelProviderError as exc:
             return False, f"ReadPlan probe failed. {exc}"
         try:
@@ -341,7 +398,9 @@ class OpenAIResponsesProvider:
                     "Use pod_logs only when an exact Pod, namespace, and relevant container are identified "
                     "by the operator or supplied observations. When tool_policy.pod_log_candidates is "
                     "non-empty, select its opaque candidate_id and never construct or modify Pod, namespace, "
-                    "or container names. Never request "
+                    "or container names. When no Pod log candidates exist, collect Pod evidence first and "
+                    "wait for the next planning round. Never put placeholders, instructions, examples, or "
+                    "future values such as FIRST_POD_FROM_LIST into any intent field. Never request "
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
                     "mutations, exec, attach, proxy, port-forward, or network connections. If scope is "
                     "missing, return no reads and explain what identifier is needed."
@@ -570,6 +629,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             profile, api_key, schema=ReadPlan,
             instructions=(
                 "Plan bounded read-only OpenShift checks using only the supplied tool policy. "
+                "You are called once per investigation round; observations from completed reads are "
+                "provided on the next call. If a target depends on a discovery result, request only the "
+                "discovery read now and wait for that next call. "
                 "Infer goal_type from natural language and set decision=collect whenever an inventory, "
                 "health, diagnostic, log, or comparison question needs cluster facts. Use "
                 "answer_from_evidence only when supplied observations are sufficient and name their IDs "
@@ -581,6 +643,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "was supplied; named GET reads still require exact scope. "
                 "When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
                 "candidate_id from that list instead of constructing Pod or container names. "
+                "When no Pod log candidates exist, collect Pod evidence first. Never put placeholders, "
+                "instructions, examples, or future values such as FIRST_POD_FROM_LIST into intent fields. "
                 "Never request Secrets, identity/token/access-review resources, "
                 "subresources, commands, probes, or mutations."
             ),

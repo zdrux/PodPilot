@@ -173,15 +173,18 @@ maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
 cannot omit the requested resource list.
 
-Pod LIST observations also retain a separately bounded registry of exact Pod and
-container log candidates. Each candidate receives an opaque server-derived ID.
-When candidates exist, a model may select only those IDs; normal code binds the ID
-back to the observed namespace, Pod, and container before calling `pods/log`.
-Fabricated or ambiguous names are rejected during planning and consume no cluster
-read budget. The planner receives one structured repair attempt. If it repeats an
-invalid log selection, server code may collect current logs from at most three
-question-relevant observed candidates; previous logs are selected only for an
-explicit restart/crash/terminated question and an observed positive restart count.
+Pod LIST and named Pod observations also retain a separately bounded registry of
+exact Pod and container log candidates. Each candidate receives an opaque
+server-derived ID. A model may call `pods/log` only by selecting one of those IDs;
+normal code binds it back to the observed namespace, Pod, and container. Literal
+placeholders fail the evidence contract before planning completes. Named GET
+targets must appear verbatim in the operator question or in collected evidence,
+otherwise the planner must discover them with a bounded LIST first. Fabricated or
+ambiguous targets consume no cluster-read budget and receive one structured repair
+attempt. If the model repeats an invalid log selection, server code may collect
+current logs from at most three question-relevant observed candidates; previous
+logs are selected only for an explicit restart/crash/terminated question and an
+observed positive restart count.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and

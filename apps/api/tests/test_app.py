@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
+    _bind_plan_log_intents,
     _deterministic_inventory_answer,
     _validated_adhoc_answer,
     create_app,
@@ -76,6 +77,50 @@ def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths()
     assert str(validated["content"]).startswith("**Access blocked by OpenShift RBAC.**")
     assert denial in str(validated["content"])
     assert "observations.0" not in str(validated["content"])
+
+
+def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
+    invented = ReadPlan(
+        scope_summary="Inspect a guessed collector.",
+        intents=[ReadIntent(
+            tool="get_resource", resource="deployments", namespace="telemetry",
+            name="opentelemetry-collector-operated",
+        )],
+    )
+
+    _, errors, _ = _bind_plan_log_intents(
+        invented, [], question="Why is telemetry failing?", evidence=[]
+    )
+    assert errors == [
+        "The named resource target was neither supplied by the operator nor present "
+        "in collected evidence; discover it with a bounded list first."
+    ]
+
+    grounded, errors, _ = _bind_plan_log_intents(
+        invented,
+        [],
+        question="Inspect opentelemetry-collector-operated in telemetry.",
+        evidence=[],
+    )
+    assert errors == []
+    assert grounded.intents[0].name == "opentelemetry-collector-operated"
+
+
+def test_direct_model_pod_log_target_requires_collected_candidate() -> None:
+    direct = ReadPlan(
+        scope_summary="Read a model-authored Pod name.",
+        intents=[ReadIntent(
+            tool="pod_logs", namespace="payments", name="api-guessed", container="app",
+        )],
+    )
+
+    _, errors, _ = _bind_plan_log_intents(
+        direct, [], question="Check payment logs.", evidence=[]
+    )
+
+    assert errors == [
+        "Pod logs require an exact candidate from previously collected Pod evidence."
+    ]
 
 
 def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None:
@@ -926,7 +971,7 @@ def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path)
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check the latest API server logs."},
+            data={"message": "Check pod api-7d9 in namespace payments."},
             follow_redirects=False,
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
@@ -1255,7 +1300,7 @@ def test_ask_rejects_synthesized_log_targets_and_falls_back_to_exact_candidates(
     assert all("/" not in call.name for call in explorer.calls if call.tool == "pod_logs")
     repaired_contexts = [
         context for context in provider.adhoc_plan_calls
-        if context.get("planner_feedback", {}).get("code") == "pod_log_target_not_observed"
+            if context.get("planner_feedback", {}).get("code") == "model_target_not_grounded"
     ]
     assert len(repaired_contexts) == 1
     assert len(repaired_contexts[0]["tool_policy"]["pod_log_candidates"]) == 4

@@ -416,8 +416,12 @@ def _bind_pod_log_intent(
 ) -> tuple[ReadIntent | None, str | None]:
     """Resolve a model-selected log candidate to exact server-observed coordinates."""
 
-    if intent.tool != "pod_logs" or not candidates:
+    if intent.tool != "pod_logs":
         return intent, None
+    if not candidates:
+        return None, (
+            "Pod logs require an exact candidate from previously collected Pod evidence."
+        )
     candidate = None
     if intent.candidate_id:
         candidate = next((item for item in candidates if item.id == intent.candidate_id), None)
@@ -448,13 +452,49 @@ def _bind_pod_log_intent(
 def _bind_plan_log_intents(
     plan: ReadPlan,
     candidates: list[PodLogCandidate],
+    *,
+    question: str,
+    evidence: list[dict[str, object]],
 ) -> tuple[ReadPlan, list[str], list[ReadIntent]]:
     bound: list[ReadIntent] = []
     errors: list[str] = []
     rejected: list[ReadIntent] = []
+    observed_names: set[str] = set()
+    for observation in evidence:
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            continue
+        names = data.get("names")
+        if isinstance(names, list):
+            observed_names.update(str(name).lower() for name in names if name)
+        metadata = data.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("name"):
+            observed_names.add(str(metadata["name"]).lower())
+        items = data.get("items")
+        if isinstance(items, list):
+            for item in items:
+                item_metadata = item.get("metadata") if isinstance(item, dict) else None
+                if isinstance(item_metadata, dict) and item_metadata.get("name"):
+                    observed_names.add(str(item_metadata["name"]).lower())
     for intent in plan.intents:
         normalized = normalize_read_intent(intent)
         resolved, error = _bind_pod_log_intent(normalized, candidates)
+        if (
+            error is None
+            and resolved is not None
+            and resolved.tool == "get_resource"
+            and resolved.name
+            and resolved.name.lower() not in observed_names
+            and not re.search(
+                rf"(?<![-A-Za-z0-9_.]){re.escape(resolved.name)}(?![-A-Za-z0-9_.])",
+                question,
+                re.IGNORECASE,
+            )
+        ):
+            error = (
+                "The named resource target was neither supplied by the operator nor present "
+                "in collected evidence; discover it with a bounded list first."
+            )
         if error:
             errors.append(error)
             rejected.append(normalized)
@@ -660,7 +700,10 @@ async def _collect_bounded_cluster_reads(
                     break
                 candidates = pod_log_candidates_from_evidence(evidence)
                 bound_plan, target_errors, rejected = _bind_plan_log_intents(
-                    plan, candidates
+                    plan,
+                    candidates,
+                    question=question,
+                    evidence=evidence,
                 )
                 rejected_log_intents.extend(rejected)
                 if not plan_requires_repair(plan, round_number=round_number) and not target_errors:
@@ -675,14 +718,15 @@ async def _collect_bounded_cluster_reads(
                     planning_attempt,
                     plan.goal_type,
                     plan.decision,
-                    "invalid_log_target" if target_errors else "unsupported_answer",
+                    "ungrounded_target" if target_errors else "unsupported_answer",
                 )
                 feedback = ({
-                    "code": "pod_log_target_not_observed",
+                    "code": "model_target_not_grounded",
                     "message": (
-                        "One or more Pod log targets were not exact candidates from collected "
-                        "evidence. Select candidate_id values only from "
-                        "tool_policy.pod_log_candidates. Do not construct Pod or container names."
+                        "One or more named targets were not grounded in the operator question or "
+                        "collected evidence. Discover names first. Pod logs must select candidate_id "
+                        "values from tool_policy.pod_log_candidates; never construct names or use "
+                        "placeholders for results that do not exist yet."
                     ),
                     "errors": target_errors,
                 } if target_errors else {

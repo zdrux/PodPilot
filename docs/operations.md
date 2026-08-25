@@ -290,6 +290,10 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    success or failure notification after the test and lists **Ask PodPilot
    schemas** separately. A reachable model that cannot satisfy those operational
    schemas remains reduced-capability and cannot be activated as ready.
+   The Ask probe exercises two planning rounds: Pod discovery without a fabricated
+   log target, followed by selection of an exact synthetic Pod/container candidate.
+   This catches endpoints that produce schema-valid JSON but substitute literal
+   instructions or placeholders for values that should come from earlier evidence.
    For Chat Completions endpoints, PodPilot makes one bounded correction attempt
    when a response fails schema validation. The retry includes only validation
    field locations/types and never echoes the rejected model response.
