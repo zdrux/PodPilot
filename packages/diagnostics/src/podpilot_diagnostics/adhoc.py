@@ -185,8 +185,6 @@ def plan_catalog_read(
     matches.sort(key=lambda item: item[0], reverse=True)
     entry = matches[0][1]
     namespaced = bool(entry.get("namespaced"))
-    if namespaced and not namespace:
-        return None
     if not namespaced and namespace:
         return None
     resource = str(entry["resource"])

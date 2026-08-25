@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -232,7 +233,10 @@ def _validated_chat_answer(
 
 
 def _validated_adhoc_answer(
-    answer: AdHocAnswer, *, known_evidence_ids: set[str]
+    answer: AdHocAnswer,
+    *,
+    known_evidence_ids: set[str],
+    collection_limitations: list[str] | None = None,
 ) -> dict[str, object]:
     citations: list[str] = []
     for evidence_id in answer.cited_evidence_ids:
@@ -240,20 +244,39 @@ def _validated_adhoc_answer(
         if bounded in known_evidence_ids and bounded not in citations:
             citations.append(bounded)
     mode = answer.answer_mode
-    content = redact_text(answer.answer)[:4000]
+    content = _clean_adhoc_markdown(redact_text(answer.answer))[:4000]
+    rbac_limitation = next((
+        item for item in (collection_limitations or [])
+        if item.startswith("OpenShift RBAC denied ")
+    ), None)
     if mode == "evidence_based" and not citations:
         mode = "insufficient_evidence"
         content = (
-            "The model response did not cite evidence collected for this conversation, "
-            "so PodPilot withheld its cluster-specific answer. Add a namespace and resource name, "
-            "or ask a narrower question."
+            "PodPilot could not provide a verified cluster-specific answer because the model did "
+            "not cite collected evidence."
         )
+    if rbac_limitation and rbac_limitation not in content:
+        content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
     return {
         "answer_mode": mode,
         "content": content,
         "citations": citations,
         "limitations": [redact_text(item)[:500] for item in answer.limitations[:6]],
     }
+
+
+_INTERNAL_EVIDENCE_PATH = re.compile(
+    r"\s*\[?`?observations(?:\.[0-9]+|\[[0-9]+\])"
+    r"(?:\.[A-Za-z0-9_-]+|\[[0-9]+\])*`?\]?",
+    re.IGNORECASE,
+)
+
+
+def _clean_adhoc_markdown(value: str) -> str:
+    """Remove provider-facing evidence paths that are not user-facing citations."""
+
+    cleaned = _INTERNAL_EVIDENCE_PATH.sub("", value)
+    return "\n".join(line.rstrip() for line in cleaned.splitlines() if line.strip()).strip()
 
 
 def _compact_adhoc_context(
@@ -761,7 +784,9 @@ def create_app(
                     },
                 )
                 validated = _validated_adhoc_answer(
-                    answer, known_evidence_ids={str(item.get("id")) for item in evidence}
+                    answer,
+                    known_evidence_ids={str(item.get("id")) for item in evidence},
+                    collection_limitations=limitations,
                 )
                 validated["limitations"] = list(dict.fromkeys(
                     [*limitations, *list(validated["limitations"])]

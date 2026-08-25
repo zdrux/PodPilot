@@ -155,9 +155,11 @@ observations, and cluster-specific answers are withheld unless they cite persist
 evidence IDs.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
-status, conditions, ownership, and selected scheduling/routing/storage fields;
-the list is explicitly marked truncated if either the object or payload ceiling
-is reached.
+status, conditions, ownership, and selected scheduling/routing/storage fields.
+Collected object names are retained separately from detailed projections.
+`objectListComplete` reports whether the Kubernetes object ceiling was reached,
+while `detailsTruncated` reports only status-detail compaction; the latter must
+not be presented as proof that more objects exist.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and

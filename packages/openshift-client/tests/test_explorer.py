@@ -176,8 +176,11 @@ def test_compact_list_enforces_payload_budget_with_explicit_truncation():
     objects = [FakeObject(name=f"pod-{index}", payload={
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": f"pod-{index}", "namespace": "payments"},
-        "status": {"phase": "Running", "conditions": [{"message": "x" * 500}]},
+        "metadata": {
+            "name": f"pod-{index}", "namespace": "payments",
+            "labels": {"diagnostic.example.io/detail": "x" * 500},
+        },
+        "status": {"phase": "Running"},
     }) for index in range(5)]
     target, _, _ = explorer(FakeResource(objects))
     target._max_payload_bytes = 900
@@ -187,9 +190,12 @@ def test_compact_list_enforces_payload_budget_with_explicit_truncation():
         namespace="payments", limit=5,
     ))
 
-    assert result.observations[0].data["truncated"] is True
+    assert result.observations[0].data["truncated"] is False
+    assert result.observations[0].data["objectListComplete"] is True
+    assert result.observations[0].data["detailsTruncated"] is True
+    assert result.observations[0].data["names"] == [f"pod-{index}" for index in range(5)]
     assert len(result.observations[0].data["items"]) < 5
-    assert "additional matching data exists" in result.limitations[0]
+    assert "retained all 5 collected Pod names" in result.limitations[0]
 
 
 def test_logs_are_bounded_and_redacted():
@@ -219,9 +225,31 @@ def test_missing_previous_logs_fall_back_to_bounded_current_logs():
 def test_log_permission_errors_are_reported_as_authorization_failures():
     target, _, _ = explorer()
     target._core = ForbiddenLogsCore()
-    with pytest.raises(ReadOnlyExplorerError, match="not authorized"):
+    with pytest.raises(ReadOnlyExplorerError, match="OpenShift RBAC denied.*pods/log"):
         target.execute(ReadIntent(
             tool="pod_logs", namespace="payments", name="api", container="app"
+        ))
+
+
+def test_resource_permission_error_names_service_account_action_and_scope():
+    class ForbiddenResource:
+        def get(self, **_kwargs):
+            raise ApiException(status=403, reason="Forbidden")
+
+    target, _, _ = explorer(ForbiddenResource())
+
+    with pytest.raises(
+        ReadOnlyExplorerError,
+        match=(
+            "podpilot-investigator ServiceAccount permission to list IngressController "
+            "at cluster-wide scope"
+        ),
+    ):
+        target.execute(ReadIntent(
+            tool="list_resources",
+            api_version="operator.openshift.io/v1",
+            kind="IngressController",
+            limit=20,
         ))
 
 

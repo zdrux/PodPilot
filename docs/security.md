@@ -236,6 +236,11 @@ resource, confirms the requested `get` or `list` verb is advertised, rejects
 ambiguous names unless group-qualified, and still relies on the investigator
 ServiceAccount's RBAC for the final authorization decision. Recursive redaction
 and compact payload ceilings apply to discovered built-ins and CRDs alike.
+An API `403` becomes an explicit operator-facing limitation naming the
+`podpilot-investigator` ServiceAccount, requested read verb, resource, scope, and
+the need for an administrator-granted permission. The answer validator prepends
+that RBAC boundary when no evidence could be collected rather than replacing it
+with a generic request for a narrower question.
 
 Milestone 9 treats Prometheus label values as untrusted selectors, not query text
 or network destinations. The server owns both supported PromQL expressions and

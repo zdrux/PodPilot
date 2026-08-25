@@ -91,6 +91,48 @@ def _metadata_projection(raw: dict[str, Any]) -> dict[str, Any]:
     })
 
 
+def _compact_conditions(conditions: object) -> list[dict[str, Any]]:
+    if not isinstance(conditions, list):
+        return []
+    return [{
+        key: condition.get(key) or condition.get(_camel_to_snake(key))
+        for key in ("type", "status", "reason", "lastTransitionTime")
+        if condition.get(key) is not None or condition.get(_camel_to_snake(key)) is not None
+    } for condition in conditions[:20] if isinstance(condition, dict)]
+
+
+def _camel_to_snake(value: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _compact_container_statuses(statuses: object) -> list[dict[str, Any]]:
+    if not isinstance(statuses, list):
+        return []
+    compact = []
+    for status in statuses[:40]:
+        if not isinstance(status, dict):
+            continue
+        state = status.get("state") or {}
+        state_summary: dict[str, Any] = {}
+        if isinstance(state, dict):
+            for state_name in ("waiting", "running", "terminated"):
+                state_value = state.get(state_name)
+                if isinstance(state_value, dict):
+                    state_summary[state_name] = {
+                        key: state_value.get(key) or state_value.get(_camel_to_snake(key))
+                        for key in ("reason", "exitCode", "signal", "startedAt", "finishedAt")
+                        if state_value.get(key) is not None
+                        or state_value.get(_camel_to_snake(key)) is not None
+                    }
+        compact.append({
+            "name": status.get("name"),
+            "ready": status.get("ready"),
+            "restartCount": status.get("restartCount") or status.get("restart_count") or 0,
+            "state": state_summary,
+        })
+    return compact
+
+
 def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_projection(raw)
     spec = raw.get("spec") or {}
@@ -100,8 +142,10 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
         projected["spec"] = {"nodeName": spec.get("nodeName") or spec.get("node_name")}
         projected["status"] = {
             "phase": status.get("phase"),
-            "conditions": status.get("conditions") or [],
-            "containerStatuses": status.get("containerStatuses") or status.get("container_statuses") or [],
+            "conditions": _compact_conditions(status.get("conditions") or []),
+            "containerStatuses": _compact_container_statuses(
+                status.get("containerStatuses") or status.get("container_statuses") or []
+            ),
         }
     elif kind in {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}:
         projected["spec"] = {"replicas": spec.get("replicas")}
@@ -228,13 +272,23 @@ class KubernetesReadOnlyExplorer:
         except ResourceCatalogError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
-            target = (
-                f"Pod {intent.namespace}/{intent.name} logs"
-                if intent.tool == "pod_logs"
-                else f"{intent.kind or 'resource'} {intent.namespace or 'cluster'}/{intent.name or '*'}"
+            resource_name = intent.resource or intent.kind or "resource"
+            action = "get" if intent.tool in {"get_resource", "pod_logs"} else "list"
+            if intent.tool == "pod_logs":
+                resource_name = "pods/log"
+            scope = (
+                f"in namespace {intent.namespace}"
+                if intent.namespace else "at cluster-wide scope"
             )
+            target = f"{resource_name} {scope}"
+            if intent.name:
+                target += f" for {intent.name}"
             if exc.status == 403:
-                detail = f"The investigator identity is not authorized to read {target}."
+                detail = (
+                    "OpenShift RBAC denied the podpilot-investigator ServiceAccount permission "
+                    f"to {action} {target} (HTTP 403). An administrator must grant that read "
+                    "permission before PodPilot can collect this evidence."
+                )
             elif exc.status == 404:
                 detail = f"The requested {target} was not found."
             elif exc.status == 400 and intent.tool == "pod_logs":
@@ -303,31 +357,40 @@ class KubernetesReadOnlyExplorer:
             projections = []
             projected_bytes = 0
             payload_truncated = False
-            for obj in items[: intent.limit]:
+            bounded_items = items[: intent.limit]
+            object_names: list[str] = []
+            for obj in bounded_items:
                 raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+                metadata = raw.get("metadata") or {}
+                object_names.append(str(metadata.get("name") or "unnamed")[:253])
                 projection = _list_projection(kind, raw)
                 projection_bytes = len(json.dumps(
                     projection, sort_keys=True, default=str
                 ).encode("utf-8"))
-                if projections and projected_bytes + projection_bytes > self._max_payload_bytes:
+                if projected_bytes + projection_bytes > self._max_payload_bytes:
                     payload_truncated = True
-                    break
-                projections.append(projection)
-                projected_bytes += projection_bytes
+                else:
+                    projections.append(projection)
+                    projected_bytes += projection_bytes
             scope = namespace or "cluster"
             collected_at = datetime.now(timezone.utc)
             limitations = []
-            if token or payload_truncated:
+            if token:
                 limitations.append(
-                    f"The bounded {kind} list returned {len(projections)} compact records; "
-                    "additional matching data exists."
+                    f"The {kind} list reached its {intent.limit}-object collection ceiling; "
+                    "additional matching resources exist."
                 )
-            if not projections:
+            if payload_truncated:
+                limitations.append(
+                    f"PodPilot retained all {len(object_names)} collected {kind} names, but detailed "
+                    f"status for only {len(projections)} objects fit the evidence payload ceiling."
+                )
+            if not bounded_items:
                 limitations.append(f"No {kind} resources matched the bounded query.")
             return ReadResult((AdHocObservation(
                 id=f"cluster-{uuid4()}",
                 tool="list_resources",
-                summary=f"Read {len(projections)} {kind} resources in {scope}.",
+                summary=f"Read {len(bounded_items)} {kind} resources in {scope}.",
                 source=f"kubernetes:{api_version}:{kind}:{scope}/*",
                 collected_at=collected_at,
                 data={
@@ -335,9 +398,12 @@ class KubernetesReadOnlyExplorer:
                     "kind": kind,
                     "resource": intent.resource,
                     "scope": scope,
-                    "count": len(projections),
+                    "count": len(bounded_items),
+                    "names": object_names,
                     "items": projections,
-                    "truncated": bool(token or payload_truncated),
+                    "objectListComplete": not bool(token),
+                    "detailsTruncated": payload_truncated,
+                    "truncated": bool(token),
                 },
             ),), tuple(limitations))
 

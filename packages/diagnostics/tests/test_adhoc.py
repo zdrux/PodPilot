@@ -106,7 +106,7 @@ def test_live_catalog_compiles_common_cluster_scoped_inventory_without_model() -
     assert terminal is True
 
 
-def test_live_catalog_requires_namespace_for_namespaced_inventory() -> None:
+def test_live_catalog_allows_cluster_wide_list_for_namespaced_inventory() -> None:
     catalog = [{
         "resource": "widgets.example.io",
         "apiVersion": "example.io/v1",
@@ -114,7 +114,9 @@ def test_live_catalog_requires_namespace_for_namespaced_inventory() -> None:
         "namespaced": True,
     }]
 
-    assert plan_catalog_read("Show widgets", catalog) is None
+    cluster_wide = plan_catalog_read("Show widgets", catalog)
+    assert cluster_wide is not None
+    assert cluster_wide[0].intents[0].namespace is None
     planned = plan_catalog_read("Show widgets in namespace payments", catalog)
     assert planned is not None
     assert planned[0].intents[0].namespace == "payments"

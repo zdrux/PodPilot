@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
-from podpilot_api.main import create_app
+from podpilot_api.main import _validated_adhoc_answer, create_app
 from podpilot_api.model_provider import (
     AdHocAnswer,
     CapabilityReport,
@@ -42,6 +42,32 @@ from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceErr
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths() -> None:
+    denial = (
+        "OpenShift RBAC denied the podpilot-investigator ServiceAccount permission to list "
+        "ingresscontrollers at cluster-wide scope (HTTP 403)."
+    )
+    answer = AdHocAnswer(
+        answer_mode="insufficient_evidence",
+        answer=(
+            "No IngressController evidence was available.\n\n"
+            "[observations.0.data.items[0].metadata.name]"
+        ),
+        cited_evidence_ids=[],
+        limitations=[],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids=set(),
+        collection_limitations=[denial],
+    )
+
+    assert str(validated["content"]).startswith("**Access blocked by OpenShift RBAC.**")
+    assert denial in str(validated["content"])
+    assert "observations.0" not in str(validated["content"])
 
 
 class FakeAlertSource:

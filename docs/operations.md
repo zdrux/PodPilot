@@ -453,8 +453,9 @@ leaving deterministic evidence and checks usable.
 Straightforward inventory questions bypass model planning: StorageClass discovery
 and explicit list/show questions compile against the live, safe API discovery
 catalog to one deterministic bounded read. This works for common Kubernetes and
-OpenShift resources plus installed CRDs; namespaced resources require an explicit
-namespace. Investigative questions still use iterative model planning, but the
+OpenShift resources plus installed CRDs. Named reads require exact namespace
+scope; inventory LISTs may be cluster-wide when the operator supplies no
+namespace and remain subject to ServiceAccount RBAC. Investigative questions still use iterative model planning, but the
 question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
 requires the configured model.
@@ -463,8 +464,14 @@ Discovery is cached for five minutes per Pod. Newly installed or removed APIs ma
 therefore take up to five minutes to appear without a restart. Cross-group name
 collisions are represented as `resource.group` (for example,
 `events.events.k8s.io`). List reads paginate up to the configured object ceiling
-and return compact projections; a visible limitation indicates when more matching
-objects or payload data exists.
+and return compact projections. Separate limitations identify either additional
+matching objects or compacted detail without conflating the two conditions.
+
+List evidence stores all collected object names separately from compact details.
+`objectListComplete: false` means the configured object ceiling was reached and
+more matches exist. `detailsTruncated: true` means only verbose detail was omitted;
+it does not make the collected name list incomplete. Provider-facing observation
+paths are not valid citations and are removed from displayed answers.
 
 ### Trust the SNO router CA for interactive login
 

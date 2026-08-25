@@ -111,6 +111,9 @@ cross-group ambiguity and qualification, question-relevant catalog ranking,
 advertised verb and namespaced-scope enforcement, sensitive resource/subresource
 filtering, deterministic explicit inventory compilation, continue-token
 pagination, compact projections, payload truncation, and installed-CRD reads.
+Tests must distinguish object-ceiling truncation from detail compaction, retain
+all collected names, suppress provider-facing observation paths in prose, and
+surface HTTP 403 limitations with ServiceAccount, verb, resource, and scope.
 
 Conversation-management gates cover owner-only list/read/continue/delete,
 not-found behavior for other users regardless of role, CSRF-protected deletion,

@@ -89,6 +89,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift, and installed CRD objects. Normal code resolves versions, group
   collisions, scope, and verbs. Lists paginate and persist compact, explicitly
   truncated collection evidence rather than one observation per object.
+- Cluster-wide inventory LISTs no longer require the operator to invent a
+  namespace. OpenShift API 403 responses identify the investigator ServiceAccount,
+  verb, resource, and scope in the answer. List evidence retains all collected
+  names separately from compact details, so detail compaction no longer falsely
+  claims that additional objects exist; internal observation paths are removed
+  from displayed Markdown.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per
@@ -129,7 +135,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 122 tests passing with 83% aggregate branch coverage.
+- Automated suite: 124 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

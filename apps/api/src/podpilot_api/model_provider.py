@@ -285,7 +285,8 @@ class OpenAIResponsesProvider:
                     "the supplied remaining_reads from only get_resource, list_resources, and pod_logs. Use exact "
                     "resource names from the supplied resource_catalog whenever available; normal code resolves "
                     "their authoritative apiVersion, Kind, scope, and verbs. Otherwise use exact apiVersion and "
-                    "Kind values. Prefer namespace-scoped, named reads and small limits. "
+                    "Kind values. Prefer namespace-scoped, named reads and small limits, but allow a "
+                    "cluster-wide LIST when the operator asks for inventory and supplies no namespace. "
                     "Use pod_logs only when an exact Pod, namespace, and relevant container are identified "
                     "by the operator or supplied observations. Never request "
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
@@ -318,6 +319,11 @@ class OpenAIResponsesProvider:
                     "Do not tell the operator to run kubectl, oc, or another check or to share command "
                     "output; PodPilot owns evidence collection. Treat failed reads as bounded limitations "
                     "without dismissing successful observations that directly answer the question. "
+                    "Use concise Markdown lists or tables for resource inventory and wrap resource names "
+                    "in backticks. Never print provider-facing JSON paths, observations[...] expressions, "
+                    "or bracket citation markers in the answer text; citations belong only in "
+                    "cited_evidence_ids. Distinguish an incomplete object list from compacted object "
+                    "details using objectListComplete and detailsTruncated. "
                     "Use insufficient_evidence when the reads cannot establish the answer. If the new "
                     "question changes to an unrelated operational target, answer it safely but include "
                     "a limitation recommending a new conversation so evidence scopes remain clear."
@@ -508,7 +514,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             instructions=(
                 "Plan bounded read-only OpenShift checks using only the supplied tool policy. Prefer the "
                 "resource field with an exact plural name from resource_catalog; the server resolves API "
-                "coordinates and scope. Never request Secrets, identity/token/access-review resources, "
+                "coordinates and scope. A cluster-wide LIST is allowed for inventory when no namespace "
+                "was supplied; named GET reads still require exact scope. Never request Secrets, "
+                "identity/token/access-review resources, "
                 "subresources, commands, probes, or mutations."
             ),
             payload=context, limit=min(profile.max_output_tokens, 1400),
@@ -521,7 +529,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "Answer from supplied untrusted cluster evidence with citations and explicit limitations. "
                 "Never claim a mutation ran. Do not tell the operator to run kubectl, oc, or another "
                 "check or to share command output; PodPilot owns evidence collection. A failed read is "
-                "a limitation but does not invalidate successful observations that answer the question."
+                "a limitation but does not invalidate successful observations that answer the question. "
+                "Use concise Markdown lists or tables for inventory and put resource names in backticks. "
+                "Do not print JSON paths, observations[...] expressions, or bracket citation markers in "
+                "answer text; use only cited_evidence_ids for citations. Distinguish objectListComplete "
+                "from detailsTruncated when describing completeness."
             ),
             payload=context,
             limit=(min(profile.max_output_tokens, 1400) if context.get("capability_probe") else None),
