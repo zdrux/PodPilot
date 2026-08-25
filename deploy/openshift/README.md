@@ -13,8 +13,11 @@ The remote PVC omits `storageClassName`; Kubernetes therefore uses the target
 cluster's default StorageClass. No PV or StorageClass is created by the remote
 overlay.
 
-Before applying, replace the example image, cluster name, and elevated-role JSON
-arrays in `overlays/remote-poc/`. Create the OAuth cookie and empty
+The remote overlay creates the `ai-ops/podpilot` ImageStream and deploys tag
+`0.11.0` through the stable internal-registry pull spec. Change `newTag` in its
+Kustomization when promoting another tag; the external registry Route is needed
+only to push from a workstation. Also replace the cluster name and elevated-role
+JSON arrays in `overlays/remote-poc/`. Create the OAuth cookie and empty
 model-credential Secrets out of band. Full ordered instructions are in
 [`docs/remote-poc-deployment.md`](../../docs/remote-poc-deployment.md).
 

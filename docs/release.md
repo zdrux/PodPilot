@@ -19,7 +19,9 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Scan tracked and staged content for credentials, kubeconfigs, tokens, certificates, and unsanitized cluster data.
 - Verify TLS validation, timeouts, bounded retries, and model-call redaction.
 - Exercise degraded paths for unavailable Kubernetes, Thanos, Alertmanager, and model APIs.
-- Confirm image digests, resource limits, probes, NetworkPolicy, and rollback instructions.
+- Confirm production image digests—or the explicitly accepted versioned
+  ImageStreamTag for a remote PoC—plus resource limits, probes, NetworkPolicy,
+  and rollback instructions.
 - For a remote PoC, confirm the rendered overlay contains no static PV,
   `storageClassName`, node selector, lab hostname, cluster-admin binding, or
   credential value; verify the target has exactly one suitable default
@@ -126,9 +128,9 @@ distinguished from verified TLS and documented as a PoC-only exception.
 
 ## Rollback
 
-Reapply the previous immutable application image digest and matching manifest
-revision, then wait for `deployment/podpilot` to become available. The SNO binary
-build currently publishes `:latest` for iteration, so record the successful
-ImageStream digest before a release and patch the overlay to that digest for a
-repeatable rollback. Alembic migrations must be backward-compatible until a
-separate, tested database rollback procedure exists.
+For production, reapply the previous immutable application image digest and
+matching manifest revision. For the remote PoC, restore the previous versioned
+ImageStreamTag in `newTag`; do not overwrite promoted tags. The SNO binary build
+continues to publish `:latest` for iteration. In every case, wait for
+`deployment/podpilot` to become available. Alembic migrations must be
+backward-compatible until a separate, tested database rollback procedure exists.

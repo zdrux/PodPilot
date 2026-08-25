@@ -57,35 +57,35 @@ Stop if no default class is returned. The portable PVC intentionally omits
 `storageClassName`; omission is Kubernetes' mechanism for requesting the default
 class. PodPilot does not create a StorageClass or PersistentVolume remotely.
 
-## 3. Build and push the image
+## 3. Build and push the ImageStreamTag
 
 The repository root contains the production-shaped `Dockerfile`. It uses a
 digest-pinned Red Hat UBI 9 Python 3.12 base, installs the locked dependencies,
 contains no `oc` binary, and runs as a non-root user.
 
-Docker example:
+Create the namespace and ImageStream before the first push. These operations are
+idempotent and are also included in the complete overlay:
 
 ```bash
-export PODPILOT_IMAGE=registry.example.com/your-org/podpilot
+oc apply -f deploy/openshift/base/namespace.yaml
+oc apply -f deploy/openshift/overlays/remote-poc/image-stream.yaml
+```
+
+Use the integrated registry's external Route for the workstation push:
+
+```bash
 export PODPILOT_VERSION=0.11.0
-docker login registry.example.com
-docker build --pull -t ${PODPILOT_IMAGE}:${PODPILOT_VERSION} .
-docker push ${PODPILOT_IMAGE}:${PODPILOT_VERSION}
-docker inspect --format='{{index .RepoDigests 0}}' ${PODPILOT_IMAGE}:${PODPILOT_VERSION}
+export REGISTRY_HOST="$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')"
+export PUSH_IMAGE="${REGISTRY_HOST}/ai-ops/podpilot:${PODPILOT_VERSION}"
+oc whoami -t | podman login -u "$(oc whoami)" --password-stdin "${REGISTRY_HOST}"
+podman build --pull -t "${PUSH_IMAGE}" .
+podman push "${PUSH_IMAGE}"
+oc get imagestreamtag "podpilot:${PODPILOT_VERSION}" -n ai-ops
 ```
 
-Podman uses the same `build`, `push`, and `inspect` arguments. Record the pushed
-`repository@sha256:...` digest. If the target uses a private or mirrored registry,
-create a pull Secret and link it to the runtime ServiceAccount after step 5:
-
-```bash
-oc -n ai-ops create secret docker-registry podpilot-registry-pull \
-  --docker-server=registry.example.com --docker-username='<username>' \
-  --docker-password='<token>' --docker-email='<email>'
-oc -n ai-ops secrets link podpilot-investigator podpilot-registry-pull --for=pull
-```
-
-Never commit registry credentials or generated pull Secrets.
+Docker can replace Podman in the build and push commands. If `default-route` does
+not exist, a cluster administrator must enable the integrated registry's default
+Route. Never commit the login token or generated registry configuration.
 
 ## 4. Configure the remote overlay
 
@@ -94,12 +94,16 @@ Edit `deploy/openshift/overlays/remote-poc/kustomization.yaml`:
 ```yaml
 images:
   - name: podpilot
-    newName: registry.example.com/your-org/podpilot
-    digest: sha256:REPLACE_WITH_PUSHED_DIGEST
+    newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot
+    newTag: 0.11.0
 ```
 
-Use `digest`, not a mutable tag, for the deployment candidate. Edit
-`deploy/openshift/overlays/remote-poc/runtime-config-patch.yaml` and replace
+The push uses the external Route, while Pods use the stable internal Service
+hostname above. A Kubernetes Deployment still needs an OCI image pull spec;
+Kustomize renders that pull spec from the `ai-ops/podpilot:0.11.0` ImageStreamTag.
+Use a new versioned tag for each promotion instead of overwriting an existing tag.
+
+Edit `deploy/openshift/overlays/remote-poc/runtime-config-patch.yaml` and replace
 `replace-with-target-cluster-name` with a recognizable non-secret cluster name.
 In the same file, replace each role's JSON array with exact existing OpenShift
 Group resource names for Investigator, Approver, and Breakglass. Multiple
@@ -244,8 +248,8 @@ oc get route podpilot -n ai-ops -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
 Open the Route in a clean browser session. OpenShift OAuth authenticates the user;
-the namespace Role admits the group; PodPilot shows the group-derived application
-role in the lower-left identity area.
+the namespace Role admits authenticated identities; PodPilot shows Viewer or the
+group-derived elevated role in the lower-left identity area.
 
 ## 9. Configure and test a model
 
@@ -260,10 +264,12 @@ attribution before widening the user group.
 
 ## 10. Rollback and removal
 
-For application rollback, restore the previous image digest in the remote
-Kustomization, run the server dry run, apply it, and wait for rollout. Alembic
-migrations are forward-only operationally; take a CSI snapshot or supported
-volume backup before upgrading a valuable PoC database.
+For application rollback, restore the previous versioned `newTag` in the remote
+Kustomization, run the server dry run, apply it, and wait for rollout. If an
+existing tag was overwritten, explicitly restart `deployment/podpilot`; tag
+changes do not otherwise guarantee a new rollout. Alembic migrations are
+forward-only operationally; take a CSI snapshot or supported volume backup before
+upgrading a valuable PoC database.
 
 Do not use `oc delete -k` casually because it includes the PVC. To stop PodPilot
 while preserving state, scale the Deployment to zero. Remove cluster bindings,

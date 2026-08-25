@@ -96,9 +96,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - A remote Kustomize overlay composes the read-only base, explicit
   `openshift-monitoring` Alertmanager API Role, group-based OAuth GUI admission,
   default-StorageClass PVC, and single-replica workload. The accompanying runbook
-  covers Docker/Podman build and push, immutable image selection, out-of-band
-  Secrets, existing LDAP-synchronized elevated-role mapping, server dry-run,
-  RBAC checks, rollout, and rollback. Every authenticated user receives Viewer;
+  covers Docker/Podman build and push, versioned internal-registry ImageStreamTag
+  selection, out-of-band Secrets, existing LDAP-synchronized elevated-role
+  mapping, server dry-run, RBAC checks, rollout, and rollback. Every authenticated user receives Viewer;
   each elevated application role accepts multiple existing groups; no remote
   Group or membership is created by PodPilot.
 
@@ -107,7 +107,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 89 tests passing with 82% aggregate branch coverage.
+- Automated suite: 90 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

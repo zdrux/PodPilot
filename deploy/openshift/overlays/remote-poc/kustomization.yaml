@@ -4,11 +4,12 @@ resources:
   - ../../base
   - ../../auth/group-rbac
   - ../../workload
+  - image-stream.yaml
 images:
-  # Replace this example image with the immutable image built for the target
-  # cluster before applying the overlay.
+  # Pods pull the ImageStreamTag through the stable in-cluster registry service.
+  # Change newTag when promoting a different PodPilot image.
   - name: podpilot
-    newName: registry.example.com/your-org/podpilot
+    newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot
     newTag: 0.11.0
 patches:
   - path: runtime-config-patch.yaml

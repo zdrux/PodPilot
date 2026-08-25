@@ -342,6 +342,10 @@ cluster-admin dependency. Cluster administrators still must audit the aggregated
 `cluster-reader` role and default StorageClass on every target. SQLite remains a
 single-replica PoC persistence choice, not an HA production database.
 
+Status: The immutable remote image selection was superseded for this PoC by the
+versioned internal ImageStreamTag decision below. Digest pinning remains the
+production recommendation.
+
 ## 2026-08-24 - Authenticated users default to Viewer
 
 Context: Repeating the same LDAP group names in both the OAuth proxy admission
@@ -361,3 +365,21 @@ cluster-wide findings, including collected logs and ConfigMap evidence. This is
 an explicit PoC disclosure boundary. Human identities still receive no direct
 cluster-reading or mutation RBAC, and all non-Viewer operations remain protected
 by application authorization, CSRF, typed-action, approval, and audit controls.
+
+## 2026-08-24 - Remote PoC deploys a versioned internal ImageStreamTag
+
+Context: The target OpenShift cluster already provides its integrated registry,
+and PoC operators prefer a readable ImageStreamTag over editing a digest into the
+remote Kustomization. The external registry Route used by a workstation is not the
+appropriate pull hostname for in-cluster Pods.
+
+Decision: Create the `ai-ops/podpilot` ImageStream in the remote overlay. Push
+versioned tags through the registry's external Route, but render the Deployment
+image as `image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot:<tag>`.
+Select the version through Kustomize `newTag`; do not duplicate the full Deployment
+as a second installation path.
+
+Consequences: Promotion and rollback use human-readable versioned tags and require
+no external-registry pull Secret. Tags are mutable, so operators must publish a
+new tag for each build. Reusing a tag requires an explicit Deployment restart and
+provides weaker provenance than a digest-pinned production release.

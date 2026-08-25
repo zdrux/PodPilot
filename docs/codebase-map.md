@@ -62,7 +62,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
 - `deploy/openshift/base/rbac.yaml`: read-only cluster, Thanos, and explicit
   namespaced Alertmanager API permissions.
-- `deploy/openshift/overlays/remote-poc/`: portable remote-cluster Kustomize entry point.
+- `deploy/openshift/overlays/remote-poc/`: portable remote-cluster Kustomize entry
+  point with an internal-registry ImageStreamTag deployment.
 - `docs/remote-poc-deployment.md`: ordered build, authorization, install,
   validation, and rollback procedure.
 - `deploy/openshift/workload/`: Deployment, OAuth-protected Service/Route, and NetworkPolicy.

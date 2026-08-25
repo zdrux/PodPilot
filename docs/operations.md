@@ -7,10 +7,11 @@ Update when: setup, environment variables, deployment, external services, or run
 
 Use [`remote-poc-deployment.md`](remote-poc-deployment.md) for a methodical
 deployment on an existing OpenShift cluster. That path builds and pushes the root
-`Dockerfile`, requests storage from the target's default StorageClass, uses
-existing OAuth identities, and applies only read-only runtime and monitoring
-permissions. The local SNO sections below remain development-lab procedures and
-must not be combined with the remote overlay.
+`Dockerfile` as a versioned ImageStreamTag, pulls it through the integrated
+registry's internal Service, requests storage from the target's default
+StorageClass, uses existing OAuth identities, and applies only read-only runtime
+and monitoring permissions. The local SNO sections below remain development-lab
+procedures and must not be combined with the remote overlay.
 
 ## Local Setup
 

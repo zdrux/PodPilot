@@ -50,6 +50,22 @@ def test_remote_pvc_requests_the_default_storage_class() -> None:
     assert pvc["spec"]["resources"]["requests"]["storage"] == "5Gi"
 
 
+def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:
+    overlay = ROOT / "deploy" / "openshift" / "overlays" / "remote-poc"
+    kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
+    image_stream = yaml.safe_load((overlay / "image-stream.yaml").read_text())
+
+    assert "image-stream.yaml" in kustomization["resources"]
+    assert kustomization["images"] == [{
+        "name": "podpilot",
+        "newName": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot",
+        "newTag": "0.11.0",
+    }]
+    assert image_stream["kind"] == "ImageStream"
+    assert image_stream["metadata"]["namespace"] == "ai-ops"
+    assert image_stream["metadata"]["name"] == "podpilot"
+
+
 def test_remote_gui_access_is_local_and_allows_authenticated_users() -> None:
     documents = list(yaml.safe_load_all(
         (ROOT / "deploy" / "openshift" / "auth" / "group-rbac" / "ui-access-rbac.yaml").read_text()
