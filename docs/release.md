@@ -137,6 +137,8 @@ credential deletion, token non-disclosure,
 Responses versus Chat Completions routing, strict schema validation, configured
 embedding probes, and invalid custom-CA handling. Insecure TLS must be visibly
 distinguished from verified TLS and documented as a PoC-only exception.
+Ask creation with an active but non-ready profile must persist the setup response
+and provider status without accessing ORM state after its session closes.
 The connection test must visibly report its result and separately exercise the
 live Ask PodPilot `ReadPlan` and `AdHocAnswer` contracts. Provider failures must
 produce phase-specific operational events while tests prove that questions,

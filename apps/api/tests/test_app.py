@@ -723,6 +723,52 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert explorer.calls[0].limit == 50
 
 
+def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
+    tmp_path: Path,
+) -> None:
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="reduced_capability", capabilities_json="{}",
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Show Pods in namespace ai-ops"},
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert rendered.status_code == 200
+        assert "Configure and successfully test a model profile" in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
+        assert assistant is not None
+        assert assistant.provider_status == "reduced_capability"
+    engine.dispose()
+    assert provider.adhoc_plan_calls == []
+
+
 def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
     provider = DiscoveryThenLogsProvider()
     explorer = DiscoveryThenLogsExplorer()

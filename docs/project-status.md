@@ -95,6 +95,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   names separately from compact details, so detail compaction no longer falsely
   claims that additional objects exist; internal observation paths are removed
   from displayed Markdown.
+- Ask PodPilot snapshots active model-profile status before its SQLAlchemy
+  session closes. A configured but non-ready profile now produces a persisted,
+  attributed setup message with its real provider status instead of raising a
+  detached-instance error during chat creation.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per
@@ -135,7 +139,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 124 tests passing with 82% aggregate branch coverage.
+- Automated suite: 125 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

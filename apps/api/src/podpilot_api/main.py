@@ -724,14 +724,17 @@ def create_app(
             )
             context_summary = conversation.context_summary
             profile = _active_profile(db_session)
-            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            profile_status = str(profile.status) if profile is not None else None
+            profile_snapshot = (
+                _profile_config(profile) if profile is not None and profile_status == "ready" else None
+            )
             profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
 
         activity: list[dict[str, object]] = []
         limitations: list[str] = []
-        provider_status = "ready"
+        provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
             "content": "Configure and successfully test a model profile before using Ask PodPilot.",
@@ -817,9 +820,6 @@ def create_app(
                     "citations": [],
                     "limitations": [str(exc)],
                 }
-        elif profile is not None:
-            provider_status = profile.status
-
         with Session(request.app.state.engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
