@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -86,3 +87,37 @@ def test_query_rejects_oversized_response_before_json_parsing(tmp_path: Path) ->
 
     with pytest.raises(MonitoringQueryError, match="more data"):
         query_client.query("up")
+
+
+def test_range_query_is_authenticated_bounded_and_normalized(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer fixture-token"
+        assert request.url.path == "/api/v1/query_range"
+        assert request.url.params["query"] == "sum(rate(cpu[5m]))"
+        assert request.url.params["step"] == "60"
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {
+                "resultType": "matrix",
+                "result": [{
+                    "metric": {"namespace": "demo", "note": "token=do-not-retain"},
+                    "values": [
+                        [1_777_000_000, "0.5"],
+                        [1_777_000_060, "NaN"],
+                        [1_777_000_120, "0.8"],
+                    ],
+                }],
+            },
+        })
+
+    start = datetime.fromtimestamp(1_777_000_000, tz=timezone.utc)
+    snapshot = client(tmp_path, handler, max_points_per_series=2).query_range(
+        "sum(rate(cpu[5m]))",
+        start=start,
+        end=start + timedelta(minutes=2),
+        step_seconds=60,
+    )
+
+    assert snapshot.is_complete is False
+    assert [point.value for point in snapshot.series[0].points] == [0.5, None]
+    assert snapshot.series[0].labels["note"] == "token=[REDACTED]"

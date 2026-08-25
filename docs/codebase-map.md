@@ -54,14 +54,16 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/checks.py`: registered,
   bounded monitoring signal, Service topology, and target event checks.
 - `packages/openshift-client/src/podpilot_openshift/metrics.py`: authenticated,
-  TLS-validated, response-bounded Thanos instant-query adapter.
+  TLS-validated, response-bounded Thanos instant/range-query adapter.
+- `packages/openshift-client/src/podpilot_openshift/metric_trends.py`: registered
+  metric templates, bounded range execution, normalized points, statistics, and trends.
 - `packages/openshift-client/src/podpilot_openshift/discovery.py`: cached,
   policy-filtered live API catalog and safe resource-name resolution.
 - `packages/openshift-client/src/podpilot_openshift/explorer.py`: bounded dynamic
-  GET/LIST, Pod-log, and typed HTTP-probe dispatch with pagination, projection,
+  GET/LIST/projected-search, Pod-log, and typed HTTP-probe dispatch with pagination, projection,
   and redaction.
 - `packages/openshift-client/src/podpilot_openshift/http_probe.py`: bounded,
-  unauthenticated HTTP/HTTPS observations with verified TLS, SNI, connection
+  unauthenticated HTTP/HTTPS observations with default-verified or explicitly insecure TLS, SNI, connection
   overrides, no redirects, and response ceilings.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
 - `packages/diagnostics/src/podpilot_diagnostics/adhoc.py`: portable read-plan,

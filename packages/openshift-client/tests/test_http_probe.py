@@ -107,3 +107,27 @@ def test_tls_verification_failure_is_retained_as_evidence() -> None:
     assert result.observations[0].data["outcome"] == "failed"
     assert result.observations[0].data["stage"] == "tls"
     assert "unknown CA" in result.limitations[0]
+
+
+def test_https_probe_can_bypass_verification_without_changing_sni() -> None:
+    stream = FakeSocket(b"HTTP/1.1 200 OK\r\n\r\n")
+    context = FakeTlsContext()
+    probe = BoundedHttpProbe(
+        resolver=resolver,
+        connector=lambda _address, _timeout: stream,
+        ssl_context_factory=lambda: context,
+    )
+
+    result = probe.execute(ReadIntent(
+        tool="http_probe",
+        url="https://route.apps.example.test/",
+        connect_host="192.0.2.50",
+        tls_verify=False,
+    ))
+
+    assert context.server_name == "route.apps.example.test"
+    assert context.check_hostname is False
+    assert context.verify_mode == ssl.CERT_NONE
+    assert result.observations[0].data["tls"]["verified"] is False
+    assert result.observations[0].data["tls"]["verificationMode"] == "insecure"
+    assert "does not prove server identity" in result.limitations[0]

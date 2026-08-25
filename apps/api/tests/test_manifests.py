@@ -57,11 +57,27 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
     assert runtime["data"]["adhoc_inventory_max_objects"] == "250"
+    assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
+    assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
+    assert runtime["data"]["adhoc_metrics_max_points_per_series"] == "300"
     configured = next(item for item in env if item["name"] == "PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS")
     assert configured["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_inventory_max_objects",
     }
+    search = next(item for item in env if item["name"] == "PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS")
+    assert search["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_search_max_scan_objects",
+    }
+    metric_range = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS"
+    )
+    assert metric_range["valueFrom"]["configMapKeyRef"]["key"] == "adhoc_metrics_max_range_seconds"
+    metric_points = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES"
+    )
+    assert metric_points["valueFrom"]["configMapKeyRef"]["key"] == "adhoc_metrics_max_points_per_series"
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "180"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {

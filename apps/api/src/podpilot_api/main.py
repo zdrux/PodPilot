@@ -82,6 +82,8 @@ from podpilot_openshift.credentials import (
 )
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.http_probe import BoundedHttpProbe
+from podpilot_openshift.metric_trends import BoundedMetricTrendReader
+from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
 from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
@@ -460,7 +462,15 @@ ProgressReporter = Callable[[str, str], Awaitable[None]]
 
 def _read_progress_message(intent) -> str:
     if intent.tool == "http_probe":
-        return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}."
+        verification = " without certificate verification" if not intent.tls_verify else ""
+        return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}{verification}."
+    if intent.tool == "query_metrics":
+        target = (
+            intent.namespace if intent.metric_scope == "namespace" else
+            intent.name if intent.metric_scope == "node" else
+            f"{intent.namespace}/{intent.name}"
+        )
+        return f"Reading {intent.metric} trend for {intent.metric_scope} {target}."
     resource = intent.kind or intent.resource or "cluster resource"
     scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
     if intent.tool == "pod_logs":
@@ -468,6 +478,8 @@ def _read_progress_message(intent) -> str:
         return f"Checking logs for Pod {intent.namespace}/{intent.name}{container}."
     if intent.tool == "get_resource":
         return f"Inspecting {resource} {intent.namespace or 'cluster'}/{intent.name}."
+    if intent.tool == "search_resources":
+        return f"Searching {resource}{scope} by {intent.match_field}."
     return f"Getting a list of {resource}{scope}."
 
 
@@ -722,7 +734,10 @@ async def _collect_bounded_cluster_reads(
             "completed_reads": activity,
             "investigation_round": round_number,
             "tool_policy": {
-                "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
+                "available": [
+                    "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
+                    "query_metrics",
+                ],
                 "resource_catalog": catalog_entries,
                 "pod_log_candidates": [
                     candidate.model_dump() for candidate in log_candidates[:100]
@@ -731,6 +746,16 @@ async def _collect_bounded_cluster_reads(
                 "max_reads_total": settings.adhoc_max_reads_per_turn,
                 "remaining_reads": remaining_reads,
                 "max_list_objects": settings.adhoc_inventory_max_objects,
+                "max_search_scan_objects": settings.adhoc_search_max_scan_objects,
+                "max_metric_range_seconds": settings.adhoc_metrics_max_range_seconds,
+                "max_metric_points_per_series": settings.adhoc_metrics_max_points_per_series,
+                "metric_catalog": [
+                    "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+                    "memory_working_set", "memory_requests", "memory_limits",
+                    "network_receive", "network_transmit", "container_restarts",
+                    "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
+                    "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
+                ],
                 "cluster_wide_inventory_allowed": True,
                 "logs_and_configmaps_allowed": True,
                 "secrets_and_mutations_allowed": False,
@@ -893,6 +918,10 @@ async def _collect_bounded_cluster_reads(
                 "target": (
                     f"{_display_probe_url(intent.url)} via {intent.connect_host or 'DNS'}"
                     if intent.tool == "http_probe" else
+                    f"{intent.metric} {intent.metric_scope} "
+                    f"{intent.namespace + '/' if intent.namespace else ''}{intent.name or '*'} "
+                    f"range={intent.range_seconds}s"
+                    if intent.tool == "query_metrics" else
                     f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
                     f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
                     + (f" container={intent.container}" if intent.container else "")
@@ -1129,10 +1158,23 @@ def create_app(
     cluster_reader = read_explorer or KubernetesReadOnlyExplorer(
         log_tail_lines=app_settings.workload_log_tail_lines,
         max_log_bytes=app_settings.workload_max_log_bytes,
+        max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
         http_probe=BoundedHttpProbe(
             timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
             max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
             additional_ca_path=app_settings.service_ca_path,
+        ),
+        metric_reader=BoundedMetricTrendReader(
+            ThanosQueryClient(
+                base_url=app_settings.thanos_url,
+                token_path=app_settings.service_account_token_path,
+                ca_path=app_settings.service_ca_path,
+                timeout_seconds=app_settings.thanos_timeout_seconds,
+                max_series=app_settings.thanos_max_series,
+                max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+            ),
+            max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
+            max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
         ),
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")

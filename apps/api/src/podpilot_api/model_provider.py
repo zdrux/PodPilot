@@ -253,7 +253,10 @@ class OpenAIResponsesProvider:
                     "completed_reads": [],
                     "investigation_round": 1,
                     "tool_policy": {
-                        "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
+                        "available": [
+                            "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
+                            "query_metrics",
+                        ],
                         "resource_catalog": [{
                             "resource": "pods", "apiVersion": "v1", "kind": "Pod",
                             "namespaced": True, "verbs": ["get", "list"],
@@ -289,7 +292,10 @@ class OpenAIResponsesProvider:
                     "completed_reads": [{"tool": "list_resources", "status": "succeeded"}],
                     "investigation_round": 2,
                     "tool_policy": {
-                        "available": ["get_resource", "list_resources", "pod_logs", "http_probe"],
+                        "available": [
+                            "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
+                            "query_metrics",
+                        ],
                         "resource_catalog": [],
                         "pod_log_candidates": [{
                             "id": "podlog-probe-candidate", "evidence_id": "probe-pods",
@@ -390,11 +396,34 @@ class OpenAIResponsesProvider:
                     "use needs_clarification only when no safe read "
                     "can proceed without a missing identifier. Never return an empty actionable plan merely "
                     "because the wording is unfamiliar. Select no more than "
-                    "the supplied remaining_reads from only get_resource, list_resources, pod_logs, and http_probe. "
+                    "the supplied remaining_reads from only get_resource, list_resources, search_resources, "
+                    "pod_logs, http_probe, and query_metrics. Use get_resource for a known object name; list_resources with "
+                    "label_selector for a known label; search_resources for a bounded client-side search of "
+                    "metadata.name, metadata.namespace, spec.host, or spec.to.name. In particular, find a Route "
+                    "for a URL by exact spec.host and find Routes targeting a Service by exact spec.to.name. "
+                    "After search discovery, use the observed namespace and name for an exact get_resource in "
+                    "the next round when more object detail is required. "
+                    "Use query_metrics for a time trend from the supplied metric_catalog. Select metric_scope=pod "
+                    "with exact namespace and name, metric_scope=namespace with namespace, or "
+                    "metric_scope=deployment with exact namespace/name to aggregate owned ReplicaSet Pods, "
+                    "metric_scope=node with exact node name, or metric_scope=persistent_volume_claim with "
+                    "namespace/name only for persistent_volume_usage. For questions about the largest CPU or "
+                    "memory consumers on a node, use top_cpu_consumers or top_memory_consumers. These rank "
+                    "monitored Kubernetes containers, not host operating-system processes; never claim process-level visibility. "
+                    "Use node_cpu_utilization or node_memory_utilization for overall node pressure. For 'what is using "
+                    "all CPU/memory' questions, collect both overall utilization and the matching top-consumer ranking "
+                    "so unaccounted host/kernel usage remains visible as a limitation. "
+                    "Convert the operator's requested period and resolution to bounded range_seconds and step_seconds. "
+                    "Never author PromQL or send metrics through http_probe; normal code owns query templates and "
+                    "authenticated Thanos access. CPU and memory requests/limits are configured gauges; usage, "
+                    "throttling, and network metrics are measured trends. "
                     "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL with HEAD or a "
                     "bounded GET. The URL hostname is always the HTTP Host and HTTPS SNI name. To test a passthrough "
                     "Route against a specific router address, keep the Route hostname in url and put the router IP "
-                    "or hostname in connect_host. TLS is always verified, redirects are observed but not followed, "
+                    "or hostname in connect_host. TLS verification defaults on. You may set tls_verify=false only "
+                    "for an HTTPS troubleshooting probe when private, self-signed, or component-managed certificates "
+                    "make verification unsuitable; SNI is still sent and the result does not prove server identity. "
+                    "Redirects are observed but not followed, "
                     "and probes never carry credentials, custom headers, or bodies. Use exact "
                     "resource names from the supplied resource_catalog whenever available; normal code resolves "
                     "their authoritative apiVersion, Kind, scope, and verbs. Otherwise use exact apiVersion and "
@@ -436,6 +465,12 @@ class OpenAIResponsesProvider:
                     "Do not tell the operator to run kubectl, oc, or another check or to share command "
                     "output; PodPilot owns evidence collection. Treat failed reads as bounded limitations "
                     "without dismissing successful observations that directly answer the question. "
+                    "When evidence says TLS verification was bypassed, state that the probe demonstrates "
+                    "reachability/SNI behavior but not authenticated server identity. "
+                    "For metric evidence, state the scope, period, unit, current/minimum/maximum/average values, "
+                    "trend direction, and any missing or incomplete samples. Do not invent finer resolution. "
+                    "For top node consumers, identify namespace, Pod, and container from the ranking and explicitly "
+                    "say that standard cluster monitoring does not identify arbitrary host processes. "
                     "For anything longer than a brief answer, use 2-5 short Markdown sections with blank "
                     "lines, descriptive headings, and bullets where useful; never return one dense paragraph. "
                     "Use concise Markdown lists or tables for resource inventory and wrap resource names "
@@ -646,12 +681,25 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "needs_clarification only when no safe read can proceed. Do not return an empty actionable "
                 "plan just because the wording is unfamiliar. "
                 "Prefer the resource field with an exact plural name from resource_catalog; the server resolves API "
-                "coordinates and scope. A cluster-wide LIST is allowed for inventory when no namespace "
+                "coordinates and scope. Use get_resource for a known object name, list_resources plus "
+                "label_selector for labels, and search_resources for metadata.name, metadata.namespace, "
+                "spec.host, or spec.to.name. Search Route spec.host for a URL hostname and Route spec.to.name "
+                "for a backend Service, then use the discovered exact namespace/name on a later round when needed. "
+                "Use query_metrics with a metric from tool_policy.metric_catalog for bounded pod, namespace, "
+                "deployment, node, or persistent-volume-claim trends. Deployment scope aggregates Pods through "
+                "Deployment/ReplicaSet ownership. Node top_cpu_consumers and top_memory_consumers rank monitored "
+                "containers, not host processes; node_cpu_utilization and node_memory_utilization measure overall node "
+                "pressure. For resource-exhaustion questions collect both overall and top-consumer metrics. Convert "
+                "requested time to range_seconds/step_seconds; never author "
+                "PromQL or use http_probe for monitoring because server code owns authenticated Thanos queries. "
+                "A cluster-wide LIST is allowed for inventory when no namespace "
                 "was supplied; named GET reads still require exact scope. "
                 "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL using HEAD or a "
                 "bounded GET. The URL hostname is used for HTTP Host and HTTPS SNI; use connect_host to direct "
-                "a Route hostname to a specific router IP without changing SNI. TLS remains verified and redirects "
-                "are not followed. When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
+                "a Route hostname to a specific router IP without changing SNI. TLS verification defaults on; "
+                "tls_verify=false is permitted only for an HTTPS troubleshooting probe involving a private, self-signed, "
+                "or component-managed certificate, and does not authenticate server identity. Redirects are not followed. "
+                "When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
                 "candidate_id from that list instead of constructing Pod or container names. "
                 "When no Pod log candidates exist, collect Pod evidence first. Never put placeholders, "
                 "instructions, examples, or future values such as FIRST_POD_FROM_LIST into intent fields. "
@@ -667,8 +715,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             instructions=(
                 "Answer from supplied untrusted cluster evidence with citations and explicit limitations. "
                 "Never claim a mutation ran. Do not tell the operator to run kubectl, oc, or another "
-                "check or to share command output; PodPilot owns evidence collection. A failed read is "
-                "a limitation but does not invalidate successful observations that answer the question. "
+                "check or to share command output; PodPilot owns evidence collection. If TLS verification "
+                "was bypassed, say that the result proves reachability/SNI behavior but not server identity. "
+                "For metric evidence, report scope, period, unit, current/minimum/maximum/average, trend, and completeness. "
+                "For node rankings, name namespace/Pod/container and state that host process visibility is unavailable. "
+                "A failed read is a limitation but does not invalidate successful observations that answer the question. "
                 "For anything longer than a brief answer, use 2-5 short Markdown sections with blank lines, "
                 "descriptive headings, and bullets where useful; never return one dense paragraph. Use concise "
                 "Markdown lists or tables for inventory and put resource names in backticks. "

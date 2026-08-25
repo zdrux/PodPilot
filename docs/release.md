@@ -123,6 +123,23 @@ surface HTTP 403 limitations with ServiceAccount, verb, resource, and scope.
 Inventory gates also verify the configurable 50–500 ceiling, the 250-object
 deployment default, pagination above 50, and server-rendered cited tables that do
 not depend on model formatting.
+Resource-search gates must find projected matches beyond the 250-object inventory
+window, enforce the independent 250–5000 scan ceiling, stop at the match-result ceiling,
+and distinguish a complete search from a scan-ceiling limitation. Route URL planning
+must use exact `spec.host` matching and preserve discovered namespace/name coordinates.
+HTTP probe gates must verify that `tls_verify=false` remains HTTPS-only, keeps Host and
+SNI unchanged, records `verified: false`, and produces a visible server-identity limitation.
+Metric trend gates must verify authenticated `/query_range` requests, matrix validation,
+server-owned templates for every registered metric, exact scope validation, PromQL escaping,
+range/step/series/point/body bounds, label redaction, statistics and trend summaries, and a
+clear distinction between usage versus configured requests/limits. Tests must prove the model
+and browser cannot submit PromQL or receive the ServiceAccount token.
+Deployment tests must cover ReplicaSet/Pod ownership joins rather than name-prefix matching.
+Node tests must cover bounded top CPU/memory rankings, optional namespace narrowing, retained
+namespace/Pod/container labels, and operator-visible wording that does not misrepresent
+container telemetry as host process inspection.
+Node-exhaustion tests must pair overall node-exporter utilization with top workload consumers
+and preserve unexplained utilization as a limitation rather than falsely attributing it.
 
 Conversation-management gates cover owner-only list/read/continue/delete,
 not-found behavior for other users regardless of role, CSRF-protected deletion,

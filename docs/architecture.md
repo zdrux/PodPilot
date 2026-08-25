@@ -134,10 +134,26 @@ generic PromQL endpoint to the API, browser, or model. The later typed HTTP prob
 is separate from PromQL and never attaches the service-account token or model
 credentials to a request.
 
+Ask PodPilot later reuses the authenticated adapter through `query_metrics`. The model
+selects only a registered metric, pod/namespace/Deployment/node/PVC scope, exact coordinates, range, and
+step. Normal code compiles server-owned PromQL and calls `/api/v1/query_range`, accepts only
+matrix results, caps series/points/body/time, redacts labels, and persists normalized points
+plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
+is increased automatically when necessary to keep the series within its point ceiling.
+Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
+Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
+and memory queries retain bounded namespace/Pod/container labels and per-series rankings.
+These are container/workload observations, not host process telemetry.
+Overall node CPU/memory utilization comes from bounded node-exporter templates joined to
+`node_uname_info`. Resource-exhaustion planning should collect both overall utilization and
+top workload consumers; any unexplained difference may be host, kernel, cache, or unmonitored
+work and must remain a limitation rather than being assigned to a Pod.
+
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
 broker later shared by incident chat. Up to five
 schema-validated planning rounds may select at most twelve total reads from
-`get_resource`, `list_resources`, `pod_logs`, and `http_probe`; each round receives the bounded
+`get_resource`, `list_resources`, `search_resources`, `pod_logs`, `http_probe`, and
+`query_metrics`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.
 Normal code validates the discovered resource, scope, verb, limits, duplicate
 suppression, and deny policy. A five-minute, process-local discovery catalog
@@ -159,8 +175,10 @@ fallback is generic across served resources; it does not grant a model a client
 or require a static list of OpenShift object types.
 ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
 evidence sources. HTTP probes may target any model-selected URL, but remain typed:
-HEAD or bounded GET only, verified TLS, no redirects, request bodies, credentials,
-or custom headers. The URL hostname supplies both HTTP Host and TLS SNI; an optional
+HEAD or bounded GET only, no redirects, request bodies, credentials, or custom headers.
+TLS verification defaults on, but an individual HTTPS troubleshooting probe may disable
+it for private, self-signed, or component-managed certificates; evidence then explicitly
+states that server identity was not verified. The URL hostname supplies both HTTP Host and TLS SNI; an optional
 connection-host override supports passthrough Route testing against a specific
 router address. Secrets, access-review resources, arbitrary subresources, commands,
 and mutations remain rejected. A final model pass receives normalized, redacted
@@ -178,6 +196,12 @@ The inventory object ceiling is deployment-configurable (250 by default, 500
 maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
 cannot omit the requested resource list.
+
+`search_resources` is distinct from inventory. It follows continue tokens up to a
+separate scan ceiling (2,000 by default, 5,000 maximum), compares only approved projected
+fields (`metadata.name`, `metadata.namespace`, `spec.host`, and `spec.to.name`), and returns
+only bounded compact matches. Route questions containing a URL compile directly to an
+exact `spec.host` search, allowing a later round to GET the discovered namespace/name.
 
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque

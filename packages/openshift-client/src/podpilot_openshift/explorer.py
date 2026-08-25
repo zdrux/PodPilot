@@ -14,6 +14,7 @@ from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
 from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
 from podpilot_openshift.http_probe import BoundedHttpProbe
+from podpilot_openshift.metric_trends import BoundedMetricTrendReader, MetricTrendError
 
 
 class ReadOnlyExplorerError(RuntimeError):
@@ -249,6 +250,24 @@ def _continue_token(response: object) -> str | None:
     return str(getattr(metadata, "continue_", None) or getattr(metadata, "continue", None) or "") or None
 
 
+def _search_value(raw: dict[str, Any], field: str) -> str:
+    value: object = raw
+    for segment in field.split("."):
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(segment)
+    return "" if value is None else str(value)
+
+
+def _matches_search(raw: dict[str, Any], intent: ReadIntent) -> bool:
+    assert intent.match_field and intent.match_value
+    observed = _search_value(raw, intent.match_field)
+    expected = intent.match_value
+    if intent.match_field == "spec.host" or intent.match_operator == "contains":
+        observed, expected = observed.casefold(), expected.casefold()
+    return expected in observed if intent.match_operator == "contains" else observed == expected
+
+
 class KubernetesReadOnlyExplorer:
     """Executes a small, deny-by-default set of bounded Kubernetes reads."""
 
@@ -261,7 +280,9 @@ class KubernetesReadOnlyExplorer:
         max_payload_bytes: int = 48_000,
         log_tail_lines: int = 250,
         max_log_bytes: int = 24_000,
+        max_search_scan_objects: int = 2_000,
         http_probe: BoundedHttpProbe | None = None,
+        metric_reader: BoundedMetricTrendReader | None = None,
     ) -> None:
         self._dynamic = dynamic_client
         self._core = core_api
@@ -269,7 +290,9 @@ class KubernetesReadOnlyExplorer:
         self._max_payload_bytes = max_payload_bytes
         self._log_tail_lines = log_tail_lines
         self._max_log_bytes = max_log_bytes
+        self._max_search_scan_objects = max_search_scan_objects
         self._http_probe = http_probe or BoundedHttpProbe()
+        self._metric_reader = metric_reader
 
     def _ensure_clients(self) -> None:
         if self._dynamic is not None and self._core is not None:
@@ -301,6 +324,10 @@ class KubernetesReadOnlyExplorer:
         try:
             if intent.tool == "http_probe":
                 return self._http_probe.execute(intent)
+            if intent.tool == "query_metrics":
+                if self._metric_reader is None:
+                    raise ReadOnlyExplorerError("The authenticated monitoring adapter is unavailable.")
+                return self._metric_reader.execute(intent)
             self._ensure_clients()
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)
@@ -308,6 +335,8 @@ class KubernetesReadOnlyExplorer:
         except ReadOnlyExplorerError:
             raise
         except ResourceCatalogError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
+        except MetricTrendError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
             resource_name = intent.resource or intent.kind or "resource"
@@ -370,12 +399,17 @@ class KubernetesReadOnlyExplorer:
         if intent.tool == "get_resource":
             obj = resource.get(name=name, namespace=namespace)
             items = [obj]
-        elif intent.tool == "list_resources":
+        elif intent.tool in {"list_resources", "search_resources"}:
             items = []
             token: str | None = None
             seen_tokens: set[str] = set()
-            while len(items) < intent.limit:
-                kwargs: dict[str, object] = {"limit": min(100, intent.limit - len(items))}
+            scanned = 0
+            scan_limit = (
+                self._max_search_scan_objects
+                if intent.tool == "search_resources" else intent.limit
+            )
+            while scanned < scan_limit and len(items) < intent.limit:
+                kwargs: dict[str, object] = {"limit": min(100, scan_limit - scanned)}
                 if namespace:
                     kwargs["namespace"] = namespace
                 if intent.label_selector:
@@ -383,7 +417,17 @@ class KubernetesReadOnlyExplorer:
                 if token:
                     kwargs["_continue"] = token
                 response = resource.get(**kwargs)
-                items.extend(list(getattr(response, "items", []) or []))
+                page = list(getattr(response, "items", []) or [])
+                scanned += len(page)
+                if intent.tool == "search_resources":
+                    for obj in page:
+                        raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+                        if _matches_search(raw, intent):
+                            items.append(obj)
+                            if len(items) >= intent.limit:
+                                break
+                else:
+                    items.extend(page)
                 token = _continue_token(response)
                 if not token:
                     break
@@ -393,7 +437,7 @@ class KubernetesReadOnlyExplorer:
         else:
             raise ReadOnlyExplorerError("The requested read tool is not registered.")
 
-        if intent.tool == "list_resources":
+        if intent.tool in {"list_resources", "search_resources"}:
             projections = []
             projected_bytes = 0
             payload_truncated = False
@@ -429,10 +473,19 @@ class KubernetesReadOnlyExplorer:
             scope = namespace or "cluster"
             collected_at = datetime.now(timezone.utc)
             limitations = []
-            if token:
+            if token and intent.tool == "list_resources":
                 limitations.append(
                     f"The {kind} list reached its {intent.limit}-object collection ceiling; "
                     "additional matching resources exist."
+                )
+            if token and intent.tool == "search_resources":
+                reason = (
+                    f"the {intent.limit}-match result ceiling"
+                    if len(items) >= intent.limit else
+                    f"the {self._max_search_scan_objects}-object scan ceiling"
+                )
+                limitations.append(
+                    f"The bounded {kind} search stopped at {reason}; additional objects were not scanned."
                 )
             if payload_truncated:
                 limitations.append(
@@ -445,10 +498,15 @@ class KubernetesReadOnlyExplorer:
                 )
             if not bounded_items:
                 limitations.append(f"No {kind} resources matched the bounded query.")
+            summary = (
+                f"Found {len(bounded_items)} matching {kind} resources after scanning {scanned} in {scope}."
+                if intent.tool == "search_resources" else
+                f"Read {len(bounded_items)} {kind} resources in {scope}."
+            )
             return ReadResult((AdHocObservation(
                 id=f"cluster-{uuid4()}",
-                tool="list_resources",
-                summary=f"Read {len(bounded_items)} {kind} resources in {scope}.",
+                tool=intent.tool,
+                summary=summary,
                 source=f"kubernetes:{api_version}:{kind}:{scope}/*",
                 collected_at=collected_at,
                 data={
@@ -457,11 +515,20 @@ class KubernetesReadOnlyExplorer:
                     "resource": intent.resource,
                     "scope": scope,
                     "count": len(bounded_items),
+                    "scannedCount": scanned,
+                    "matchField": intent.match_field,
+                    "matchValue": intent.match_value,
+                    "matchOperator": (
+                        intent.match_operator if intent.tool == "search_resources" else None
+                    ),
                     "names": object_names,
                     "items": projections,
                     "logCandidates": log_candidates,
                     "logCandidatesTruncated": log_candidates_truncated,
                     "objectListComplete": not bool(token),
+                    "searchComplete": (
+                        not bool(token) if intent.tool == "search_resources" else None
+                    ),
                     "detailsTruncated": payload_truncated,
                     "truncated": bool(token),
                 },

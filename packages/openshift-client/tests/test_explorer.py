@@ -63,6 +63,29 @@ class FakePagedResource:
         )
 
 
+class FakeRouteSearchResource:
+    def __init__(self):
+        self.calls = []
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        page = int(str(kwargs.get("_continue") or "0"))
+        start = page * 100
+        items = [FakeObject(name=f"route-{index}", namespace="tenant", payload={
+            "apiVersion": "route.openshift.io/v1",
+            "kind": "Route",
+            "metadata": {"name": f"route-{index}", "namespace": "tenant"},
+            "spec": {
+                "host": "maas.apps.example.test" if index == 275 else f"app-{index}.example.test",
+                "to": {"kind": "Service", "name": f"service-{index}"},
+                "tls": {"termination": "passthrough" if index == 275 else "edge"},
+            },
+            "status": {},
+        }) for index in range(start, min(start + 100, 300))]
+        next_token = str(page + 1) if page < 2 else ""
+        return SimpleNamespace(items=items, metadata=SimpleNamespace(continue_=next_token))
+
+
 class FakeCore:
     def read_namespaced_pod_log(self, *args, **kwargs):
         return "token=do-not-leak\nserver started"
@@ -170,6 +193,30 @@ def test_bounded_list_follows_continue_tokens_until_complete():
         {"limit": 2, "namespace": "payments"},
         {"limit": 1, "namespace": "payments", "_continue": "next-page"},
     ]
+
+
+def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
+    resource = FakeRouteSearchResource()
+    target, _, _ = explorer(resource)
+    target._max_search_scan_objects = 300
+
+    result = target.execute(ReadIntent(
+        tool="search_resources",
+        api_version="route.openshift.io/v1",
+        kind="Route",
+        match_field="spec.host",
+        match_value="MAAS.APPS.EXAMPLE.TEST",
+        limit=5,
+    ))
+
+    observation = result.observations[0]
+    assert observation.tool == "search_resources"
+    assert observation.data["scannedCount"] == 300
+    assert observation.data["count"] == 1
+    assert observation.data["items"][0]["metadata"]["name"] == "route-275"
+    assert observation.data["items"][0]["metadata"]["namespace"] == "tenant"
+    assert observation.data["items"][0]["spec"]["tls"]["termination"] == "passthrough"
+    assert observation.data["searchComplete"] is True
 
 
 def test_pod_list_exposes_compact_exact_log_candidates():

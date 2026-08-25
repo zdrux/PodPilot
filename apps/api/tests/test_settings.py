@@ -52,6 +52,24 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
     assert settings.adhoc_inventory_max_objects == 400
 
 
+def test_resource_search_scan_ceiling_is_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS", "3000")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_search_max_scan_objects == 3000
+
+
+def test_metric_trend_bounds_are_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS", "604800")
+    monkeypatch.setenv("PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES", "500")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_metrics_max_range_seconds == 604800
+    assert settings.adhoc_metrics_max_points_per_series == 500
+
+
 def test_adhoc_run_deadline_is_bounded() -> None:
     assert Settings(adhoc_run_timeout_seconds=45).adhoc_run_timeout_seconds == 45
     with pytest.raises(ValidationError):

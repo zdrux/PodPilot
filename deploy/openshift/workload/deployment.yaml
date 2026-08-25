@@ -47,6 +47,21 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_inventory_max_objects
+            - name: PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_search_max_scan_objects
+            - name: PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_metrics_max_range_seconds
+            - name: PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_metrics_max_points_per_series
             - name: PODPILOT_ADHOC_MAX_ROUNDS
               valueFrom:
                 configMapKeyRef:

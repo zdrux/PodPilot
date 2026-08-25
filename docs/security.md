@@ -284,7 +284,26 @@ from untrusted cluster evidence. This is an SSRF-shaped capability accepted for
 the operator-oriented environment: the workload currently has no egress-deny
 NetworkPolicy, so reachable internal and external endpoints are in scope. Risk is
 bounded by a typed method set, no credentials or custom headers, no redirect following,
-verified TLS, short timeouts, response-size ceilings, redaction, per-turn read budgets,
+verified TLS by default, short timeouts, response-size ceilings, redaction, per-turn read budgets,
 ownership, attribution, and audit records. It does not execute text, shell syntax,
 or commands found in evidence. Deployments requiring a narrower boundary must add
 egress or destination policy before enabling this capability outside the PoC.
+
+Ad-hoc metric trends preserve the same boundary: the model selects only an enumerated
+metric and typed scope/time parameters. Kubernetes coordinates are syntax-validated, and
+server code owns every PromQL metric name, label, function, and aggregation. The browser and
+model never receive the projected token or a generic PromQL field. Range responses must be
+matrices and remain bounded by time, points, series, bytes, timeout, and redaction policy.
+Deployment and node membership are derived from server-owned kube-state-metrics joins, not
+model-provided selectors. Node consumer rankings expose only already-authorized monitoring
+labels and must be described as container/Pod attribution. No node shell, `/proc` access,
+host PID inspection, privileged DaemonSet, or process-level credential is introduced.
+For private, self-signed, or component-managed certificates, a model may explicitly
+select `tls_verify=false` on one HTTPS troubleshooting probe. SNI remains enabled, the
+bypass is persisted and displayed as a limitation, and the observation establishes only
+reachability/protocol behavior—not authenticated server identity. This exception never
+applies to Kubernetes API, model-provider, credential-bearing, or default application TLS.
+
+Bounded resource search does not grant a query language or raw API access. Normal code
+allows four projected field paths, scans at most the configured ceiling, returns a small
+match set, applies the existing sensitive-kind deny policy, and redacts the evidence.

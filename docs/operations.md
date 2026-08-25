@@ -476,12 +476,14 @@ with `PODPILOT_ADHOC_MAX_ROUNDS` and `PODPILOT_ADHOC_MAX_READS_PER_TURN`. A type
 `http_probe` read can issue an unauthenticated HEAD or bounded GET to any absolute
 HTTP/HTTPS URL. `connect_host` overrides only DNS/TCP routing; the URL hostname
 remains the HTTP Host and HTTPS SNI name for passthrough Route tests. TLS verification
-is mandatory, redirects are not followed, and no cookies, authorization, custom
+is enabled by default. For a private, self-signed, or component-managed certificate,
+the planner may set `tls_verify=false` on that individual HTTPS probe; the result is
+marked insecure and cannot verify server identity. Redirects are not followed, and no cookies, authorization, custom
 headers, or request bodies are sent. Configure probe timeout and response ceilings
 with `PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS` and
 `PODPILOT_ADHOC_HTTP_PROBE_MAX_BYTES`. The mounted OpenShift service CA is added to
-system trust; additional private router/workload issuers must be installed through
-deployment trust rather than disabling verification.
+system trust. Installing additional private issuers remains preferred when authenticated
+identity matters; bypass is intended for bounded troubleshooting reachability tests.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is
@@ -523,6 +525,36 @@ the Deployment after changing the ConfigMap. Explicit list requests render a
 server-generated Markdown table containing every collected name. If the table
 states that the object list is incomplete, increase the ceiling deliberately
 rather than removing the bound.
+
+Field searches use a separate scan ceiling so a small result can be found beyond the
+ordinary inventory window. `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS` defaults to 2000 and
+accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
+`podpilot-runtime`. Searches support exact/contains matching on `metadata.name`,
+`metadata.namespace`, `spec.host`, and `spec.to.name`. A Route URL in the question is
+compiled to an exact hostname search automatically. Search evidence reports both match
+count and scanned count, plus whether a ceiling stopped the scan.
+
+Metric trend questions use authenticated Thanos `/api/v1/query_range` through the
+`podpilot-investigator` ServiceAccount. Supported metrics are CPU usage, requests, limits,
+and throttling; memory working set, requests, and limits; network receive/transmit rate;
+container restarts; PVC utilization percentage; Pod readiness; and top node CPU/memory
+consumers. Pod, namespace, and Deployment scopes require an exact namespace; Pod and
+Deployment scopes also require a name. Node scope requires an exact node name and may
+optionally narrow to a namespace. PVC utilization requires an exact namespace/claim.
+Deployment totals follow ReplicaSet/Pod ownership, including multiple ReplicaSets during a
+rollout. Node rankings identify monitored namespace/Pod/container consumers. They cannot
+identify arbitrary operating-system processes unless separate process-level telemetry is
+installed. Overall node CPU and memory utilization uses node-exporter metrics. For “what is
+using everything” questions, PodPilot collects both the overall node value and top workload
+containers; a gap can represent kernel, filesystem cache, host services, or unmonitored work.
+Requests and limits are configuration gauges, not measured usage.
+
+`PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS` defaults to 2592000 (30 days) and accepts up to
+7776000 (90 days). `PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES` defaults to 300 and accepts
+50–1000. Configure `adhoc_metrics_max_range_seconds` and
+`adhoc_metrics_max_points_per_series` in `podpilot-runtime`. PodPilot may increase the
+requested step to stay within the point ceiling. Thanos retention, unavailable metrics,
+series/response ceilings, and access failures are returned as explicit limitations.
 
 ### Ask PodPilot job progress
 

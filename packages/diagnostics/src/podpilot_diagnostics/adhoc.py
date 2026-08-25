@@ -19,6 +19,7 @@ _DEFERRED_TARGET = re.compile(
     r"(?:from|in)[-_ ]+(?:previous[-_ ])?list\b"
     r")"
 )
+_METRIC_IDENTIFIER = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 
 
 def looks_like_deferred_target(value: str | None) -> bool:
@@ -29,18 +30,39 @@ def looks_like_deferred_target(value: str | None) -> bool:
 class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
-    tool: Literal["get_resource", "list_resources", "pod_logs", "http_probe"]
+    tool: Literal[
+        "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
+        "query_metrics",
+    ]
     resource: str | None = Field(default=None, max_length=253)
     api_version: str | None = Field(default=None, max_length=128)
     kind: str | None = Field(default=None, max_length=128)
     namespace: str | None = Field(default=None, max_length=253)
     name: str | None = Field(default=None, max_length=253)
     label_selector: str | None = Field(default=None, max_length=512)
+    match_field: Literal[
+        "metadata.name", "metadata.namespace", "spec.host", "spec.to.name"
+    ] | None = None
+    match_value: str | None = Field(default=None, max_length=512)
+    match_operator: Literal["exact", "contains"] = "exact"
     container: str | None = Field(default=None, max_length=253)
     candidate_id: str | None = Field(default=None, max_length=80)
     url: str | None = Field(default=None, max_length=2048)
     connect_host: str | None = Field(default=None, max_length=253)
     method: Literal["HEAD", "GET"] = "HEAD"
+    tls_verify: bool = True
+    metric: Literal[
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "network_receive", "network_transmit", "container_restarts",
+        "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
+        "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
+    ] | None = None
+    metric_scope: Literal[
+        "pod", "namespace", "deployment", "node", "persistent_volume_claim"
+    ] | None = None
+    range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
+    step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
     limit: int = Field(default=20, ge=1, le=500)
 
@@ -69,13 +91,48 @@ class ReadIntent(BaseModel):
                 raise ValueError("http_probe URL contains an invalid port") from exc
             if parsed.username or parsed.password:
                 raise ValueError("http_probe URLs must not contain credentials")
+            if not self.tls_verify and parsed.scheme != "https":
+                raise ValueError("tls_verify may be disabled only for HTTPS probes")
             if self.connect_host and (
                 any(character.isspace() for character in self.connect_host)
                 or any(character in self.connect_host for character in "/?#@")
             ):
                 raise ValueError("connect_host must be a hostname or IP address")
-        elif self.url or self.connect_host:
-            raise ValueError("url and connect_host are valid only for http_probe")
+        elif self.url or self.connect_host or not self.tls_verify:
+            raise ValueError("url, connect_host, and tls_verify=false are valid only for http_probe")
+        if self.tool == "search_resources":
+            if not self.match_field or not self.match_value:
+                raise ValueError("search_resources requires match_field and match_value")
+            if any(ord(character) < 32 or ord(character) == 127 for character in self.match_value):
+                raise ValueError("search_resources match_value must not contain control characters")
+        elif self.match_field or self.match_value:
+            raise ValueError("match_field and match_value are valid only for search_resources")
+        if self.tool == "query_metrics":
+            if not self.metric or not self.metric_scope:
+                raise ValueError("query_metrics requires metric and metric_scope")
+            if self.metric_scope != "node" and not self.namespace:
+                raise ValueError("the selected metric scope requires an exact namespace")
+            if self.metric_scope in {
+                "pod", "deployment", "node", "persistent_volume_claim"
+            } and not self.name:
+                raise ValueError("the selected metric scope requires an exact name")
+            if (self.namespace and not _METRIC_IDENTIFIER.fullmatch(self.namespace)) or (
+                self.name and not _METRIC_IDENTIFIER.fullmatch(self.name)
+            ):
+                raise ValueError("metric scope coordinates must be exact Kubernetes identifiers")
+            if self.metric in {
+                "top_cpu_consumers", "top_memory_consumers",
+                "node_cpu_utilization", "node_memory_utilization",
+            }:
+                if self.metric_scope != "node":
+                    raise ValueError("the selected metric requires node scope")
+            if self.metric == "persistent_volume_usage":
+                if self.metric_scope != "persistent_volume_claim":
+                    raise ValueError("persistent_volume_usage requires persistent_volume_claim scope")
+            elif self.metric_scope == "persistent_volume_claim":
+                raise ValueError("persistent_volume_claim scope supports only persistent_volume_usage")
+        elif self.metric or self.metric_scope:
+            raise ValueError("metric and metric_scope are valid only for query_metrics")
         return self
 
 
@@ -341,6 +398,7 @@ _NAMESPACE_RESOURCE_QUERY = re.compile(
     r".*?\b(?:in|from)\s+(?:the\s+)?(?:namespace\s+)?(?P<namespace>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
     re.IGNORECASE,
 )
+_URL_QUERY = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def plan_known_read(
@@ -353,6 +411,30 @@ def plan_known_read(
     """Compile unambiguous inventory and alert-scoped reads without model syntax."""
 
     lowered = question.lower()
+    url_match = _URL_QUERY.search(question)
+    if url_match and "route" in lowered:
+        try:
+            hostname = urlsplit(url_match.group(0).rstrip(".,);]}")).hostname
+        except ValueError:
+            hostname = None
+        if hostname:
+            return (
+                ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary=f"Find the OpenShift Route for host {hostname}.",
+                    intents=[ReadIntent(
+                        tool="search_resources",
+                        resource="routes",
+                        api_version="route.openshift.io/v1",
+                        kind="Route",
+                        match_field="spec.host",
+                        match_value=hostname,
+                        match_operator="exact",
+                        limit=5,
+                    )],
+                ),
+                False,
+            )
     if "storageclass" in lowered or "storage class" in lowered:
         return (
             ReadPlan(

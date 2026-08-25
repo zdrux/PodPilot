@@ -19,7 +19,7 @@ Connector = Callable[[tuple[str, int], float], socket.socket]
 
 
 class BoundedHttpProbe:
-    """Perform one unauthenticated, verified, bounded HTTP/HTTPS observation."""
+    """Perform one unauthenticated, bounded HTTP/HTTPS observation."""
 
     def __init__(
         self,
@@ -71,13 +71,17 @@ class BoundedHttpProbe:
             if parsed.scheme == "https":
                 stage = "tls"
                 context = self._ssl_context_factory()
-                if self._additional_ca_path and self._additional_ca_path.is_file():
+                if intent.tls_verify and self._additional_ca_path and self._additional_ca_path.is_file():
                     context.load_verify_locations(cafile=str(self._additional_ca_path))
+                if not intent.tls_verify:
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
                 context.set_alpn_protocols(["http/1.1"])
                 stream = context.wrap_socket(stream, server_hostname=logical_host)
                 certificate = stream.getpeercert() or {}
                 tls = {
-                    "verified": True,
+                    "verified": intent.tls_verify,
+                    "verificationMode": "verified" if intent.tls_verify else "insecure",
                     "serverName": logical_host,
                     "version": stream.version(),
                     "cipher": (stream.cipher() or (None,))[0],
@@ -142,6 +146,10 @@ class BoundedHttpProbe:
                 "elapsedMs": elapsed_ms,
                 "tls": tls,
             }
+            limitations = () if intent.tls_verify else (
+                "TLS certificate verification was explicitly bypassed for this troubleshooting probe; "
+                "the response demonstrates reachability and SNI behavior but does not prove server identity.",
+            )
             return ReadResult(observations=(AdHocObservation(
                 id=f"network-{uuid4()}",
                 tool="http_probe",
@@ -149,7 +157,7 @@ class BoundedHttpProbe:
                 source=f"{display_url} via {connect_host}:{port}",
                 collected_at=datetime.now(timezone.utc),
                 data=data,
-            ),))
+            ),), limitations=limitations)
         except (OSError, ssl.SSLError, ValueError, UnicodeError) as exc:
             elapsed_ms = round((time.monotonic() - started) * 1000, 1)
             safe_error = redact_text(str(exc))[:500] or type(exc).__name__
@@ -169,6 +177,7 @@ class BoundedHttpProbe:
                         "connectHost": connect_host,
                         "resolvedAddresses": resolved,
                         "port": port,
+                        "tlsVerificationRequested": intent.tls_verify,
                         "error": safe_error,
                         "elapsedMs": elapsed_ms,
                         "tls": tls,

@@ -112,6 +112,23 @@ records remain, but execution now awaits a separate approval-gated action servic
   50-object pages. The API renders every collected name into a cited Markdown
   table for list requests and suppresses redundant model-authored completeness
   caveats; the model is not responsible for reproducing the actual inventory.
+- Projected resource search can scan beyond the ordinary LIST evidence window while
+  returning only a bounded match set. Route URL questions compile to exact `spec.host`
+  searches, and planner guidance covers named GETs, label selectors, Route hosts,
+  Route backend Services, and follow-up reads from discovered coordinates.
+- HTTPS troubleshooting probes keep verification enabled by default but may explicitly
+  select `tls_verify=false` for private, self-signed, or component-managed certificates.
+  SNI is preserved and both evidence and limitations state that server identity was not verified.
+- Ask PodPilot can request typed CPU, memory, network, restart, PVC-utilization, and
+  readiness trends for exact Pod/namespace/PVC scopes. Server-owned PromQL is sent through
+  authenticated Thanos range queries; the model receives bounded normalized samples and
+  statistics but never PromQL control or the ServiceAccount token.
+- Deployment metric scope aggregates all owned ReplicaSet Pods, including rollout overlap.
+  Node scope supports total workload trends and top-10 CPU/memory container rankings with
+  namespace/Pod/container attribution. Standard monitoring still cannot identify arbitrary
+  host processes; that would require separate process-exporter/eBPF or node diagnostics.
+  Overall node-exporter CPU/memory utilization can be paired with those rankings to reveal
+  pressure not explained by monitored workload containers.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per

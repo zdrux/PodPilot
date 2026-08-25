@@ -222,6 +222,78 @@ def test_http_probe_requires_safe_typed_url_shape() -> None:
         ReadIntent(tool="http_probe", url="https://user:password@example.test/")
 
 
+def test_https_probe_may_explicitly_disable_tls_verification() -> None:
+    intent = ReadIntent(
+        tool="http_probe", url="https://mesh-control.example.test/ready", tls_verify=False,
+    )
+
+    assert intent.tls_verify is False
+    with pytest.raises(ValidationError, match="only for HTTPS"):
+        ReadIntent(tool="http_probe", url="http://mesh-control.example.test/", tls_verify=False)
+
+
+def test_resource_search_requires_a_supported_field_and_value() -> None:
+    intent = ReadIntent(
+        tool="search_resources", resource="routes", match_field="spec.host",
+        match_value="maas.apps.example.test", limit=5,
+    )
+
+    assert intent.match_operator == "exact"
+    with pytest.raises(ValidationError, match="requires match_field and match_value"):
+        ReadIntent(tool="search_resources", resource="routes")
+
+
+def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
+    intent = ReadIntent(
+        tool="query_metrics",
+        metric="cpu_usage",
+        metric_scope="pod",
+        namespace="payments",
+        name="api-7d9",
+        range_seconds=21_600,
+        step_seconds=300,
+    )
+
+    assert intent.metric == "cpu_usage"
+    with pytest.raises(ValidationError, match="requires metric and metric_scope"):
+        ReadIntent(tool="query_metrics")
+    with pytest.raises(ValidationError, match="persistent_volume_usage requires"):
+        ReadIntent(
+            tool="query_metrics", metric="persistent_volume_usage",
+            metric_scope="namespace", namespace="payments",
+        )
+    node = ReadIntent(
+        tool="query_metrics", metric="top_cpu_consumers",
+        metric_scope="node", name="worker-2",
+    )
+    assert node.namespace is None
+    with pytest.raises(ValidationError, match="selected metric requires node scope"):
+        ReadIntent(
+            tool="query_metrics", metric="top_memory_consumers",
+            metric_scope="namespace", namespace="payments",
+        )
+
+
+def test_route_url_question_compiles_to_exact_host_search() -> None:
+    planned = plan_known_read(
+        'Is this route HTTP or HTTPS? "https://maas.apps.example.test/v1/models"'
+    )
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is False
+    assert plan.intents == [ReadIntent(
+        tool="search_resources",
+        resource="routes",
+        api_version="route.openshift.io/v1",
+        kind="Route",
+        match_field="spec.host",
+        match_value="maas.apps.example.test",
+        match_operator="exact",
+        limit=5,
+    )]
+
+
 def test_log_candidate_id_is_rejected_for_non_log_tools() -> None:
     with pytest.raises(ValidationError, match="candidate_id is valid only for pod_logs"):
         ReadIntent(

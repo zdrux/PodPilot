@@ -194,6 +194,8 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
     assert "Do not return an empty actionable plan" in planner_instructions
     assert "HTTPS SNI" in planner_instructions
     assert "connect_host" in planner_instructions
+    assert "query_metrics" in planner_instructions
+    assert "never author PromQL" in planner_instructions
     correction_messages = completions.requests[1]["messages"]
     assert "scope_summary: string_too_short" in correction_messages[-1]["content"]
     assert '"scope_summary": ""' not in correction_messages[-1]["content"]

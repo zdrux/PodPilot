@@ -44,7 +44,15 @@ Read the nearest workspace `AGENTS.md` before changing files below that workspac
 - Never commit a pull secret, kubeconfig, kubeadmin password, private SSH key, installer ISO, service-account token, certificate private key, or LLM API key.
 - The disposable SNO lab grants `ai-ops/ai-observer` `cluster-admin` through `deploy/openshift/overlays/poc-cluster-admin/`. Do not use that overlay outside this PoC cluster.
 - Even with cluster-admin RBAC, mutation through the product must require a preview and explicit user approval. Do not interpret broad RBAC as permission for unrequested destructive actions.
-- Validate cluster and route TLS. Do not normalize `-k`, `--insecure-skip-tls-verify`, or disabled certificate checks into application code.
+- Validate cluster and route TLS by default. Read-only troubleshooting probes may explicitly
+  disable certificate verification (for example, `curl -k`/`--insecure`, HTTPX
+  `verify=False`, or the typed probe's `tls_verify=false`) when the scenario requires
+  testing endpoints that use
+  private, self-signed, or component-managed certificates. Keep bypasses scoped to the
+  individual probe, preserve HTTPS SNI, never make insecure mode the default, and record the
+  bypass prominently in evidence and operator-visible limitations. Do not use TLS bypass for
+  Kubernetes API authentication, model-provider traffic, credential-bearing requests, or
+  ordinary application transport.
 - Redact secrets and sensitive workload data before model calls, logs, traces, fixtures, or eval captures.
 - Treat Hyper-V SNO as a lab, not a production or high-availability reference environment.
 

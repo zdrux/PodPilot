@@ -3,6 +3,52 @@
 Last reviewed: 2026-08-25
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-25 - Typed metric trends use server-owned PromQL
+
+Context: Operators need pod, namespace, and volume trends over a requested period, but
+model-authored PromQL would expand the evidence boundary and make cost, injection, and
+cardinality controls difficult to enforce.
+
+Decision: Add `query_metrics` to the bounded read broker. The model selects a registered
+metric, typed scope, exact coordinates, period, and resolution; normal code compiles the
+PromQL and calls authenticated Thanos `/api/v1/query_range`. The initial catalog covers CPU
+usage/requests/limits/throttling, memory working set/requests/limits, network receive/transmit,
+container restarts, PVC utilization, Pod readiness, Deployment aggregation, and node-level
+top CPU/memory container consumers. Deployment scope joins Deployment-to-ReplicaSet-to-Pod
+ownership at query time. Node scope joins Pod metrics to `kube_pod_info` and ranks monitored
+namespace/Pod/container series; it does not claim visibility into arbitrary host processes.
+Separate node-exporter templates report overall node CPU and memory utilization so PodPilot
+can disclose when ranked workload containers do not explain total node pressure.
+Default policy permits 30 days and
+300 points per series, with a 90-day and 1,000-point configuration maximum. The existing
+series, response-byte, timeout, TLS, redaction, ServiceAccount, and read-budget controls apply.
+
+Consequences: Ask PodPilot can answer bounded trend questions without exposing tokens or a
+generic PromQL endpoint. Query availability still depends on OpenShift monitoring retention
+and metric presence, and configured requests/limits must not be described as measured usage.
+Host process attribution requires a separate process exporter, eBPF agent, or privileged
+node diagnostic capability and is not implied by `cluster-reader`.
+
+## 2026-08-25 - Projected resource search and explicit troubleshooting TLS mode
+
+Context: Ordinary LIST evidence is intentionally capped, but operators often identify
+an object by a projected field rather than its Kubernetes name. Route hostnames are a
+common example. Private, self-signed, and component-managed certificates also make a
+verified network probe unsuitable for some reachability and passthrough-SNI tests.
+
+Decision: Add `search_resources`, which follows Kubernetes pagination while comparing
+only approved projected fields and returns at most the requested matches. The scan has
+a separate 2,000-object default and 5,000-object hard configuration maximum. Compile an
+operator-supplied Route URL deterministically into an exact `spec.host` search. Add an
+explicit `tls_verify=false` option to unauthenticated HTTPS probes. Verification remains
+the default, SNI remains the URL hostname, and every bypass is recorded in evidence and
+operator-visible limitations. The exception does not apply to Kubernetes, model-provider,
+or other credential-bearing transport.
+
+Consequences: Route-host and backend-Service lookup no longer depends on which 250 objects
+fit ordinary inventory evidence. Insecure probes can demonstrate reachability and SNI
+behavior with internally issued certificates, but cannot establish server identity.
+
 ## 2026-08-25 - Broader agentic reads and SNI-aware HTTP probes
 
 Context: Three planning rounds and six Kubernetes-only reads were too brittle for
@@ -16,7 +62,8 @@ Add an unrestricted-destination `http_probe` intent to the same bounded broker. 
 supports unauthenticated HEAD/GET, verified TLS, no redirects, bounded/redacted output,
 and a connection override that preserves the URL hostname as HTTP Host and TLS SNI.
 Arbitrary shell and model-authored headers, credentials, bodies, and mutations remain
-unavailable. Model-selected TLS verification bypass remains prohibited.
+unavailable. This decision's prohibition on model-selected TLS bypass is superseded by
+the explicit, evidence-visible troubleshooting mode above.
 
 Consequences: PodPilot can actively cross-check object configuration against network
 behavior and test passthrough Routes against a chosen router address. This introduces
