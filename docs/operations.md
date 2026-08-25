@@ -526,6 +526,16 @@ return HTTP 409. Inspect phase transitions without payloads through
 server-observed actions and do not stream model reasoning. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
 
+Every run has an overall execution deadline, defaulting to 180 seconds through
+`PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS`. A run that exceeds it is atomically marked
+`failed`, receives an operator-visible insufficient-evidence message, and emits a
+terminal SSE event. Status and event requests also expire stale `running` rows,
+so an abandoned worker cannot leave the browser spinner active indefinitely. The
+browser stops its own progress animation after the server deadline plus a short
+delivery grace period if it cannot retrieve terminal state. While a run is active,
+the browser also reconciles persisted status alongside SSE so a missed terminal
+event still refreshes the completed answer promptly.
+
 Migration `0010_adhoc_runs` creates the durable job table. The workload migration
 init container runs Alembic before the API starts; apply the matching image and
 manifests together and verify the migration completes before troubleshooting the

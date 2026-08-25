@@ -313,32 +313,54 @@
     const finish = (payload) => {
       window.location.assign(payload.location || window.location.pathname);
     };
+    let source = null;
+    let poll = null;
+    let progressStopped = false;
+    const configuredTimeout = Number.parseInt(pendingRun.dataset.runTimeoutMs || "180000", 10);
+    const reconcileStatus = async () => {
+      if (progressStopped || !pendingRun.dataset.statusUrl) return false;
+      try {
+        const response = await fetch(pendingRun.dataset.statusUrl, {credentials: "same-origin"});
+        if (!response.ok) return false;
+        const payload = await response.json();
+        payload.events?.forEach(addProgress);
+        if (!["succeeded", "failed"].includes(payload.status)) return false;
+        progressStopped = true;
+        source?.close();
+        if (poll) window.clearInterval(poll);
+        window.clearTimeout(progressWatchdog);
+        finish(payload);
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    };
+    const progressWatchdog = window.setTimeout(async () => {
+      if (await reconcileStatus()) return;
+      progressStopped = true;
+      source?.close();
+      if (poll) window.clearInterval(poll);
+      pendingRun.querySelector(".thinking-spinner")?.remove();
+      if (current) current.textContent = "The investigation exceeded its progress deadline. Reload to check its final status.";
+    }, (Number.isFinite(configuredTimeout) ? configuredTimeout : 180000) + 15000);
     if (window.EventSource && pendingRun.dataset.eventsUrl) {
-      const source = new EventSource(pendingRun.dataset.eventsUrl);
+      source = new EventSource(pendingRun.dataset.eventsUrl);
       source.addEventListener("progress", (event) => {
         try { addProgress(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
       });
       source.addEventListener("complete", (event) => {
+        progressStopped = true;
         source.close();
+        if (poll) window.clearInterval(poll);
+        window.clearTimeout(progressWatchdog);
         try { finish(JSON.parse(event.data)); } catch (_error) { window.location.reload(); }
       });
       source.onerror = () => {
-        if (current) current.textContent = "Progress connection interrupted; reconnecting…";
+        if (!progressStopped && current) current.textContent = "Progress connection interrupted; reconnecting…";
+        void reconcileStatus();
       };
-    } else if (pendingRun.dataset.statusUrl) {
-      const poll = window.setInterval(async () => {
-        try {
-          const response = await fetch(pendingRun.dataset.statusUrl, {credentials: "same-origin"});
-          if (!response.ok) return;
-          const payload = await response.json();
-          payload.events?.forEach(addProgress);
-          if (["succeeded", "failed"].includes(payload.status)) {
-            window.clearInterval(poll);
-            finish(payload);
-          }
-        } catch (_error) { /* retry the bounded status poll */ }
-      }, 1500);
     }
+    poll = window.setInterval(() => { void reconcileStatus(); }, 1500);
   }
 
   if (adhocForm?.dataset.chatUrl) {

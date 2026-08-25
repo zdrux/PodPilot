@@ -62,7 +62,7 @@
       </article>
       {% endfor %}
       {% if active_run %}
-      <article class="chat-message chat-assistant chat-pending" data-adhoc-run-id="{{ active_run.id }}" data-events-url="/api/v1/adhoc-runs/{{ active_run.id }}/events" data-status-url="/api/v1/adhoc-runs/{{ active_run.id }}">
+      <article class="chat-message chat-assistant chat-pending" data-adhoc-run-id="{{ active_run.id }}" data-events-url="/api/v1/adhoc-runs/{{ active_run.id }}/events" data-status-url="/api/v1/adhoc-runs/{{ active_run.id }}" data-run-timeout-ms="{{ (adhoc_run_timeout_seconds * 1000) | int }}">
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>

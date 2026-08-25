@@ -46,6 +46,7 @@ from podpilot_diagnostics.checks import CheckObservation, DiagnosticCheckResult
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadPlan, ReadResult
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
+from podpilot_openshift.explorer import ReadOnlyExplorerError
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -263,6 +264,26 @@ class FakeReadExplorer:
             collected_at=datetime.now(timezone.utc),
             data={"spec": {"nodeSelector": {"tier": "missing"}}, "status": {"phase": "Pending"}},
         ),))
+
+
+class ForbiddenReadExplorer(FakeReadExplorer):
+    def execute(self, intent):
+        self.calls.append(intent)
+        raise ReadOnlyExplorerError(
+            "OpenShift RBAC denied the podpilot-investigator ServiceAccount permission "
+            "to get pods/log in namespace openshift-kube-apiserver (HTTP 403)."
+        )
+
+
+class RbacAwareAdHocProvider(FakeModelProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="insufficient_evidence",
+            answer="The requested API server logs could not be collected.",
+            cited_evidence_ids=[],
+            limitations=[],
+        )
 
 
 class DiscoveryThenLogsProvider(FakeModelProvider):
@@ -879,6 +900,48 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
     engine.dispose()
 
 
+def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
+    provider = RbacAwareAdHocProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=ForbiddenReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check the latest API server logs."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Access blocked by OpenShift RBAC" in rendered.text
+        assert "HTTP 403" in rendered.text
+        assert "Working on your question" not in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.scalar(select(AdHocRun))
+        assert run is not None and run.status == "succeeded"
+        assert run.completed_at is not None
+    engine.dispose()
+
+
 def test_ask_provider_failure_is_visible_and_logged_without_question(
     tmp_path: Path, caplog
 ) -> None:
@@ -1465,6 +1528,76 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
     engine.dispose()
 
 
+def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(tmp_path: Path) -> None:
+    provider = BlockingAdHocProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+        settings_overrides={
+            "adhoc_job_worker_enabled": True,
+            "adhoc_run_timeout_seconds": 1,
+        },
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Why is pod api-7d9 pending in payments?"},
+            follow_redirects=False,
+        )
+        assert provider.answer_started.wait(timeout=2)
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            run_id = db_session.scalar(select(AdHocRun.id).where(
+                AdHocRun.conversation_id == conversation_id
+            ))
+        engine.dispose()
+        terminal = None
+        for _ in range(60):
+            terminal = client.get(
+                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+            ).json()
+            if terminal["status"] == "failed":
+                break
+            time.sleep(0.05)
+        provider.release_answer.set()
+        assert terminal is not None and terminal["status"] == "failed"
+        assert terminal["phase"] == "failed"
+        assert terminal["events"][-1]["phase"] == "failed"
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "exceeded the execution deadline" in rendered.text
+        assert "Working on your question" not in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.get(AdHocRun, run_id)
+        assert run is not None and run.completed_at is not None
+        assert run.error_detail == "Investigation exceeded the 1-second execution deadline."
+        messages = list(db_session.scalars(select(AdHocMessage).where(
+            AdHocMessage.conversation_id == conversation_id,
+            AdHocMessage.role == "assistant",
+        )))
+        assert len(messages) == 1
+    engine.dispose()
+
+
 def test_ask_worker_requeues_interrupted_persisted_run_on_startup(tmp_path: Path) -> None:
     run_id = "00000000-0000-0000-0000-000000000094"
     conversation_id = "00000000-0000-0000-0000-000000000095"
@@ -1554,6 +1687,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'textarea.value = ""' in script
     assert "new EventSource" in script
     assert "thinking-spinner" in template
+    assert "data-run-timeout-ms" in template
+    assert "progressWatchdog" in script
+    assert "reconcileStatus" in script
+    assert "exceeded its progress deadline" in script
     assert "data-progress-current" in template
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script

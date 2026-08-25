@@ -1194,6 +1194,8 @@ def create_app(
             assert conversation is not None
             run = db_session.get(AdHocRun, run_id)
             assert run is not None
+            if run.status != "running":
+                return run.assistant_message_id or ""
             conversation.evidence_json = json.dumps(evidence, default=_json_default, sort_keys=True)
             conversation.updated_at = datetime.now(timezone.utc)
             db_session.add(AdHocMessage(
@@ -1249,6 +1251,100 @@ def create_app(
             run.progress_json = json.dumps(events[-40:], sort_keys=True)
             db_session.commit()
 
+    def _fail_adhoc_run(
+        engine,
+        run_id: str,
+        *,
+        error_type: str,
+        error_detail: str,
+        progress_message: str,
+        answer: str,
+    ) -> bool:
+        """Persist one terminal failure; callers may safely race or retry."""
+        now = datetime.now(timezone.utc)
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.status not in {"queued", "running"}:
+                return False
+            conversation_id = run.conversation_id
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None:
+                return False
+            events = list(json.loads(run.progress_json))
+            events.append({
+                "seq": (int(events[-1]["seq"]) + 1) if events else 0,
+                "phase": "failed",
+                "message": progress_message,
+                "at": now.isoformat(),
+            })
+            assistant_message_id = str(uuid4())
+            claimed = db_session.execute(
+                update(AdHocRun)
+                .where(
+                    AdHocRun.id == run_id,
+                    AdHocRun.status.in_(("queued", "running")),
+                )
+                .values(
+                    status="failed",
+                    phase="failed",
+                    progress_json=json.dumps(events[-40:], sort_keys=True),
+                    error_detail=error_detail,
+                    assistant_message_id=assistant_message_id,
+                    completed_at=now,
+                )
+            )
+            if claimed.rowcount != 1:
+                db_session.rollback()
+                return False
+            conversation.updated_at = now
+            db_session.add(AdHocMessage(
+                id=assistant_message_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                actor=None,
+                content=answer,
+                answer_mode="insufficient_evidence",
+                citations_json="[]",
+                tool_activity_json=json.dumps({
+                    "reads": [],
+                    "limitations": [error_detail],
+                }, sort_keys=True),
+                provider_status="unavailable",
+            ))
+            db_session.add(AuditEvent(
+                actor="system:podpilot",
+                action="adhoc.run",
+                outcome="failed",
+                details_json=json.dumps({
+                    "conversation_id": conversation_id,
+                    "run_id": run_id,
+                    "error_type": error_type,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+            return True
+
+    def _expire_stale_adhoc_run(engine, run_id: str) -> bool:
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.status != "running" or run.started_at is None:
+                return False
+            elapsed = (datetime.now(timezone.utc) - _aware(run.started_at)).total_seconds()
+        if elapsed < app_settings.adhoc_run_timeout_seconds:
+            return False
+        seconds = int(app_settings.adhoc_run_timeout_seconds)
+        return _fail_adhoc_run(
+            engine,
+            run_id,
+            error_type="RunTimeout",
+            error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
+            progress_message="The investigation reached its execution deadline.",
+            answer=(
+                "PodPilot stopped this investigation because it exceeded the execution deadline. "
+                "No cluster changes were attempted. Retry the question or review the application logs."
+            ),
+        )
+
     def _claim_adhoc_run(engine, run_id: str | None = None) -> str | None:
         with Session(engine) as db_session:
             query = select(AdHocRun.id).where(AdHocRun.status == "queued")
@@ -1284,13 +1380,36 @@ def create_app(
             await _record_run_progress(engine, run_id, phase, message)
 
         try:
-            await _execute_adhoc_turn(
-                engine=engine,
-                username=username,
-                conversation_id=conversation_id,
-                message_text=message_text,
-                run_id=run_id,
-                progress=report,
+            await asyncio.wait_for(
+                _execute_adhoc_turn(
+                    engine=engine,
+                    username=username,
+                    conversation_id=conversation_id,
+                    message_text=message_text,
+                    run_id=run_id,
+                    progress=report,
+                ),
+                timeout=app_settings.adhoc_run_timeout_seconds,
+            )
+        except TimeoutError:
+            LOGGER.warning(
+                "podpilot.adhoc.run_timed_out actor=%s conversation_id=%s run_id=%s timeout=%s",
+                username,
+                conversation_id,
+                run_id,
+                app_settings.adhoc_run_timeout_seconds,
+            )
+            seconds = int(app_settings.adhoc_run_timeout_seconds)
+            _fail_adhoc_run(
+                engine,
+                run_id,
+                error_type="RunTimeout",
+                error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
+                progress_message="The investigation reached its execution deadline.",
+                answer=(
+                    "PodPilot stopped this investigation because it exceeded the execution deadline. "
+                    "No cluster changes were attempted. Retry the question or review the application logs."
+                ),
             )
         except Exception as exc:
             LOGGER.error(
@@ -1300,55 +1419,17 @@ def create_app(
                 run_id,
                 type(exc).__name__,
             )
-            now = datetime.now(timezone.utc)
-            assistant_message_id = str(uuid4())
-            with Session(engine) as db_session:
-                run = db_session.get(AdHocRun, run_id)
-                conversation = db_session.get(AdHocConversation, conversation_id)
-                if run is None or conversation is None:
-                    return
-                events = list(json.loads(run.progress_json))
-                events.append({
-                    "seq": (int(events[-1]["seq"]) + 1) if events else 0,
-                    "phase": "failed",
-                    "message": "The investigation could not be completed.",
-                    "at": now.isoformat(),
-                })
-                run.status = "failed"
-                run.phase = "failed"
-                run.progress_json = json.dumps(events[-40:], sort_keys=True)
-                run.error_detail = f"Internal job failure ({type(exc).__name__})."
-                run.assistant_message_id = assistant_message_id
-                run.completed_at = now
-                conversation.updated_at = now
-                db_session.add(AdHocMessage(
-                    id=assistant_message_id,
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    actor=None,
-                    content=(
-                        "PodPilot could not complete this investigation. No cluster changes were "
-                        "attempted. Retry the question or review the application logs."
-                    ),
-                    answer_mode="insufficient_evidence",
-                    citations_json="[]",
-                    tool_activity_json=json.dumps({
-                        "reads": [],
-                        "limitations": [run.error_detail],
-                    }, sort_keys=True),
-                    provider_status="unavailable",
-                ))
-                db_session.add(AuditEvent(
-                    actor="system:podpilot",
-                    action="adhoc.run",
-                    outcome="failed",
-                    details_json=json.dumps({
-                        "conversation_id": conversation_id,
-                        "run_id": run_id,
-                        "error_type": type(exc).__name__,
-                    }, sort_keys=True),
-                ))
-                db_session.commit()
+            _fail_adhoc_run(
+                engine,
+                run_id,
+                error_type=type(exc).__name__,
+                error_detail=f"Internal job failure ({type(exc).__name__}).",
+                progress_message="The investigation could not be completed.",
+                answer=(
+                    "PodPilot could not complete this investigation. No cluster changes were "
+                    "attempted. Retry the question or review the application logs."
+                ),
+            )
 
     async def _adhoc_worker(application: FastAPI) -> None:
         wake = application.state.adhoc_wake
@@ -1497,6 +1578,7 @@ def create_app(
                 "chat_max_chars": app_settings.chat_max_chars,
                 "model_ready": bool(profile and profile.status == "ready"),
                 "messages_truncated": conversation.summarized_message_count > 0,
+                "adhoc_run_timeout_seconds": app_settings.adhoc_run_timeout_seconds,
                 "active_run": ({
                     "id": active_run_row.id,
                     "status": active_run_row.status,
@@ -1576,6 +1658,10 @@ def create_app(
             run = db_session.get(AdHocRun, run_id)
             if run is None or run.created_by != user.username:
                 raise HTTPException(status_code=404, detail="That PodPilot run does not exist.")
+        _expire_stale_adhoc_run(request.app.state.engine, run_id)
+        with Session(request.app.state.engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            assert run is not None
             return JSONResponse({
                 "id": run.id,
                 "conversation_id": run.conversation_id,
@@ -1605,6 +1691,7 @@ def create_app(
             while True:
                 if await request.is_disconnected():
                     return
+                _expire_stale_adhoc_run(request.app.state.engine, run_id)
                 with Session(request.app.state.engine) as db_session:
                     current = db_session.get(AdHocRun, run_id)
                     if current is None or current.created_by != user.username:

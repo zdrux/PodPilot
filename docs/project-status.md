@@ -124,6 +124,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   optimistic user turn plus pulsating assistant placeholder. Owner-only SSE
   updates report real discovery, planning, collection, and answer phases; reloads
   recover progress from SQLite, and interrupted jobs are requeued on startup.
+  Runs have an overall configurable execution deadline; the worker and owner-only
+  status streams atomically fail stale jobs, while the browser stops progress
+  animation after a bounded delivery grace period.
 - Ad-hoc Pod-log reads report authorization, missing-target, and invalid-stream
   failures separately. A missing retained previous container stream falls back to
   bounded current logs and preserves that distinction as a limitation. Evidence

@@ -62,6 +62,12 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "adhoc_inventory_max_objects",
     }
+    assert runtime["data"]["adhoc_run_timeout_seconds"] == "180"
+    timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
+    assert timeout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_run_timeout_seconds",
+    }
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:

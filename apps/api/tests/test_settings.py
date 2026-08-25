@@ -50,3 +50,11 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.adhoc_inventory_max_objects == 400
+
+
+def test_adhoc_run_deadline_is_bounded() -> None:
+    assert Settings(adhoc_run_timeout_seconds=45).adhoc_run_timeout_seconds == 45
+    with pytest.raises(ValidationError):
+        Settings(adhoc_run_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_run_timeout_seconds=901)

@@ -47,6 +47,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_inventory_max_objects
+            - name: PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_run_timeout_seconds
             - name: PODPILOT_ROLE_INVESTIGATOR_GROUPS
               valueFrom:
                 configMapKeyRef:
