@@ -101,6 +101,22 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
   unencrypted inside the cluster, so production deployments should prefer HTTPS,
   NetworkPolicy, and a trusted service certificate.
 
+## Curated Memory Policy
+
+Cluster memory accepts only Approver-curated Markdown or text and redacts common
+secret patterns before persistence. Every immutable version records its source,
+owner, cluster and optional namespace/resource scope, verification state,
+sensitivity, review time, optional expiry, and checksum. Audit events retain IDs
+and metadata but not document content.
+
+Only current, enabled, reviewed, unexpired versions are retrievable. Normal code
+applies cluster and namespace filters before ranking; restricted entries require
+the Approver role. Search text is converted to a bounded quoted FTS expression,
+so operators and cluster-derived text cannot supply SQLite FTS instructions.
+Retrieved memory remains untrusted guidance rather than live evidence. The first
+slice exposes retrieval preview only and does not include memory in model prompts,
+read planning, or remediation.
+
 ## OpenShift Authentication And Application Roles
 
 PodPilot places an OAuth-aware proxy in front of its Route, accepts identity only

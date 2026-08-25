@@ -129,6 +129,49 @@
     });
   });
 
+  const knowledgeForm = document.querySelector("#knowledge-form");
+  if (knowledgeForm?.dataset.saveUrl) {
+    knowledgeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = knowledgeForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
+      try {
+        const payload = await sendSettingsRequest(
+          knowledgeForm.dataset.saveUrl,
+          new URLSearchParams(new FormData(knowledgeForm)),
+        );
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: "success",
+          message: `Knowledge saved as version ${payload.version}.`,
+        }));
+        window.location.assign(`/memory?edit=${encodeURIComponent(payload.document_id)}`);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Save knowledge"; }
+      }
+    });
+  }
+  document.querySelectorAll(".knowledge-status").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!button.dataset.statusUrl) return;
+      button.disabled = true;
+      try {
+        const payload = await sendSettingsRequest(
+          button.dataset.statusUrl,
+          new URLSearchParams({enabled: button.dataset.enabled || "false"}),
+        );
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: "success",
+          message: `Knowledge entry ${payload.status}.`,
+        }));
+        window.location.reload();
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+      }
+    });
+  });
+
   document.querySelectorAll(".review-action").forEach((button) => {
     button.addEventListener("click", () => {
       const target = document.querySelector(`#${CSS.escape(button.dataset.reviewTarget || "")}`);

@@ -206,6 +206,21 @@ FastAPI patches only that key through the Kubernetes API using the runtime
 ServiceAccount. The UI never reads the saved value back. Model calls reread the
 key, so token creation and rotation require no Deployment restart.
 
+### Curated cluster memory
+
+Investigators can open `/memory` and test scoped lexical retrieval. Approvers can
+create cluster facts, runbooks, approved incident summaries, and product
+knowledge; revising an entry creates a new immutable version. Draft, disabled,
+expired, wrong-cluster, and wrong-namespace entries do not appear in results.
+Restricted entries are visible only to Approvers. Use `*` as the cluster scope
+only for guidance that is genuinely portable across clusters, and assign an
+expiry to operational facts likely to drift.
+
+The `0011_cluster_memory` migration creates the relational metadata/chunk tables
+and the SQLite FTS5 virtual table. The application verifies that the FTS table is
+available at startup. This phase is a retrieval preview: search results are not
+yet supplied to chat or investigation model calls.
+
 Later integrations may add:
 
 - investigation limits and timeouts

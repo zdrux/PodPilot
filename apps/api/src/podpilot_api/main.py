@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.database import build_engine, database_is_ready
+from podpilot_api.knowledge import ensure_knowledge_fts, index_document, search_knowledge
 from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
     AdHocAnswer,
@@ -40,6 +42,7 @@ from podpilot_api.models import (
     ChatMessage,
     DiagnosticCheck,
     Investigation,
+    KnowledgeDocument,
     ModelProfile,
     RemediationAction,
 )
@@ -1184,6 +1187,7 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
         application.state.engine = build_engine(app_settings)
+        ensure_knowledge_fts(application.state.engine)
         worker_task = None
         if app_settings.adhoc_job_worker_enabled:
             with Session(application.state.engine) as db_session:
@@ -2263,6 +2267,191 @@ def create_app(
         if was_active:
             response["activated_profile_id"] = replacement_id
         return JSONResponse(response)
+
+    @app.get("/memory", response_class=HTMLResponse)
+    async def cluster_memory(request: Request, user: AuthContext = Depends(current_user)):
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(status_code=403, detail="Cluster memory requires the Investigator role or higher.")
+        csrf_token, csrf_is_new = _csrf_token(request)
+        query = request.query_params.get("q", "").strip()[:500]
+        namespace = request.query_params.get("namespace", "").strip()[:253] or None
+        edit_id = request.query_params.get("edit", "").strip()
+        with Session(request.app.state.engine) as db_session:
+            document_query = select(KnowledgeDocument).where(KnowledgeDocument.is_current.is_(True))
+            if user.role < Role.APPROVER:
+                document_query = document_query.where(
+                    KnowledgeDocument.sensitivity != "restricted",
+                    KnowledgeDocument.is_enabled.is_(True),
+                    KnowledgeDocument.verification_state == "reviewed",
+                    (KnowledgeDocument.expires_at.is_(None))
+                    | (KnowledgeDocument.expires_at > datetime.now(timezone.utc)),
+                    KnowledgeDocument.cluster_id.in_((app_settings.cluster_name, "*")),
+                )
+                if namespace:
+                    document_query = document_query.where(
+                        (KnowledgeDocument.namespace.is_(None))
+                        | (KnowledgeDocument.namespace == namespace)
+                    )
+                else:
+                    document_query = document_query.where(KnowledgeDocument.namespace.is_(None))
+            documents = list(db_session.scalars(
+                document_query
+                .order_by(KnowledgeDocument.title, KnowledgeDocument.created_at.desc())
+            ))
+            selected = next((item for item in documents if item.id == edit_id), None)
+            results = search_knowledge(
+                db_session, query=query, cluster_id=app_settings.cluster_name,
+                namespace=namespace, include_restricted=user.role >= Role.APPROVER,
+            ) if query else []
+        response = templates.TemplateResponse(
+            request=request,
+            name="cluster_memory.html",
+            context={
+                "user": user, "documents": documents, "selected": selected,
+                "results": results, "query": query, "namespace": namespace or "",
+                "cluster_id": app_settings.cluster_name, "csrf_token": csrf_token,
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(
+                CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                httponly=True, samesite="strict", max_age=28_800,
+            )
+        return response
+
+    @app.get("/api/v1/knowledge/search")
+    async def knowledge_search(
+        request: Request, q: str, namespace: str | None = None,
+        user: AuthContext = Depends(current_user),
+    ) -> JSONResponse:
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(status_code=403, detail="Knowledge search requires the Investigator role or higher.")
+        query = q.strip()
+        if not query or len(query) > 500:
+            raise HTTPException(status_code=422, detail="Search text must be between 1 and 500 characters.")
+        bounded_namespace = namespace.strip()[:253] if namespace else None
+        with Session(request.app.state.engine) as db_session:
+            results = search_knowledge(
+                db_session, query=query, cluster_id=app_settings.cluster_name,
+                namespace=bounded_namespace, include_restricted=user.role >= Role.APPROVER,
+            )
+        return JSONResponse({
+            "query": query, "cluster_id": app_settings.cluster_name,
+            "namespace": bounded_namespace,
+            "results": [result.__dict__ for result in results],
+        })
+
+    @app.post("/api/v1/knowledge")
+    async def save_knowledge(request: Request, user: AuthContext = Depends(current_user)) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver role or higher.")
+        form = await _urlencoded(request)
+        logical_id = form.get("logical_id", "").strip()
+        title = redact_text(form.get("title", "").strip())[:253]
+        content = redact_text(form.get("content", "").strip())
+        source = redact_text(form.get("source", "").strip())[:512]
+        source_type = form.get("source_type", "cluster_fact").strip()
+        cluster_id = form.get("cluster_id", app_settings.cluster_name).strip()[:253]
+        namespace = form.get("namespace", "").strip()[:253] or None
+        resource_kind = form.get("resource_kind", "").strip()[:128] or None
+        resource_name = form.get("resource_name", "").strip()[:253] or None
+        owner = form.get("owner", user.username).strip()[:253]
+        verification_state = form.get("verification_state", "draft").strip()
+        sensitivity = form.get("sensitivity", "internal").strip()
+        expires_text = form.get("expires_at", "").strip()
+        if not title or not source or not owner or not cluster_id:
+            raise HTTPException(status_code=422, detail="Title, source, cluster, and owner are required.")
+        if not content or len(content) > 100_000:
+            raise HTTPException(status_code=422, detail="Content must be between 1 and 100,000 characters.")
+        if source_type not in {"runbook", "cluster_fact", "incident_summary", "product_knowledge"}:
+            raise HTTPException(status_code=422, detail="Knowledge source type is invalid.")
+        if verification_state not in {"draft", "reviewed"}:
+            raise HTTPException(status_code=422, detail="Verification state must be draft or reviewed.")
+        if sensitivity not in {"internal", "restricted"}:
+            raise HTTPException(status_code=422, detail="Sensitivity must be internal or restricted.")
+        try:
+            expires_at = (
+                datetime.fromisoformat(expires_text).replace(tzinfo=timezone.utc)
+                if expires_text else None
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Expiry must be an ISO date.") from exc
+        now = datetime.now(timezone.utc)
+        if expires_at is not None and expires_at <= now:
+            raise HTTPException(status_code=422, detail="Expiry must be in the future.")
+        with Session(request.app.state.engine) as db_session:
+            previous = None
+            if logical_id:
+                previous = db_session.scalar(select(KnowledgeDocument).where(
+                    KnowledgeDocument.logical_id == logical_id,
+                    KnowledgeDocument.is_current.is_(True),
+                ))
+                if previous is None:
+                    raise HTTPException(status_code=404, detail="Knowledge entry not found.")
+                previous.is_current = False
+                version = previous.version + 1
+            else:
+                logical_id = str(uuid4())
+                version = 1
+            document = KnowledgeDocument(
+                id=str(uuid4()), logical_id=logical_id, version=version,
+                created_at=now, created_by=user.username, title=title, content=content,
+                source=source, source_type=source_type, cluster_id=cluster_id,
+                namespace=namespace, resource_kind=resource_kind, resource_name=resource_name,
+                owner=owner, verification_state=verification_state, sensitivity=sensitivity,
+                review_at=now if verification_state == "reviewed" else None,
+                expires_at=expires_at, is_enabled=True, is_current=True,
+                content_sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            )
+            db_session.add(document)
+            db_session.flush()
+            index_document(db_session, document)
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="knowledge.create" if version == 1 else "knowledge.revise",
+                outcome="saved",
+                details_json=json.dumps({
+                    "document_id": document.id, "logical_id": logical_id,
+                    "version": version, "source_type": source_type,
+                    "cluster_id": cluster_id, "namespace": namespace,
+                    "verification_state": verification_state, "sensitivity": sensitivity,
+                }, sort_keys=True),
+            ))
+            document_id = document.id
+            db_session.commit()
+        return JSONResponse({
+            "status": "saved", "document_id": document_id,
+            "logical_id": logical_id, "version": version,
+        })
+
+    @app.post("/api/v1/knowledge/{document_id}/status")
+    async def set_knowledge_status(
+        document_id: str, request: Request, user: AuthContext = Depends(current_user),
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver role or higher.")
+        form = await _urlencoded(request)
+        enabled_text = form.get("enabled", "").strip().lower()
+        if enabled_text not in {"true", "false"}:
+            raise HTTPException(status_code=422, detail="Enabled must be true or false.")
+        enabled = enabled_text == "true"
+        with Session(request.app.state.engine) as db_session:
+            document = db_session.get(KnowledgeDocument, document_id)
+            if document is None or not document.is_current:
+                raise HTTPException(status_code=404, detail="Knowledge entry not found.")
+            document.is_enabled = enabled
+            db_session.add(AuditEvent(
+                actor=user.username, action="knowledge.status",
+                outcome="enabled" if enabled else "disabled",
+                details_json=json.dumps({
+                    "document_id": document.id, "logical_id": document.logical_id,
+                    "version": document.version,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({"status": "enabled" if enabled else "disabled", "document_id": document_id})
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):

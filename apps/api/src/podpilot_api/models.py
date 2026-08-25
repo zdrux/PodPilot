@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -70,6 +70,48 @@ class ModelProfile(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class KnowledgeDocument(Base):
+    __tablename__ = "knowledge_documents"
+    __table_args__ = (UniqueConstraint("logical_id", "version", name="uq_knowledge_logical_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    logical_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    created_by: Mapped[str] = mapped_column(String(253), nullable=False)
+    title: Mapped[str] = mapped_column(String(253), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    cluster_id: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    namespace: Mapped[str | None] = mapped_column(String(253), nullable=True, index=True)
+    resource_kind: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resource_name: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    owner: Mapped[str] = mapped_column(String(253), nullable=False)
+    verification_state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    sensitivity: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("knowledge_documents.id"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    heading: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class RemediationAction(Base):

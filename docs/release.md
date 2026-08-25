@@ -178,6 +178,11 @@ Compatibility gates cover a missing descriptive `ReadPlan` summary, reduced
 probe output budgets, canonical built-in Kind/apiVersion coordinates, unchanged
 custom-resource validation, and suppression of model-authored planning caveats
 from trusted collection-limit displays.
+Cluster-memory gates must cover a clean Alembic upgrade through
+`0011_cluster_memory`, FTS5 availability, immutable revision history, heading-aware
+chunking, safe query-token handling, reviewed/current/enabled/expiry filters,
+cluster and namespace scope, restricted-entry authorization, content-free audit
+details, and the explicit absence of memory from model prompts in this phase.
 Incident-chat gates must prove that alert-scoped reads use the shared broker,
 persist redacted observations before answering, validate citations against the
 expanded evidence set, audit targets without payloads, and retain the separate

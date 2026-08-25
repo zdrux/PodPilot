@@ -546,3 +546,22 @@ target selection without wider RBAC or arbitrary log access. Candidate creation,
 binding, fan-out, budget accounting, redaction, and error classification remain
 deterministic. The compact candidate projection has its own payload ceiling, so a
 very large Pod inventory can still require narrower scope.
+
+## 2026-08-25 - Curated memory begins with deterministic lexical retrieval
+
+Context: PodPilot needs basic operator tribal knowledge, while available model
+profiles may expose Chat Completions without an embedding endpoint. Allowing the
+model to decide whether or how to search would make recall inconsistent and would
+let untrusted context influence retrieval policy before provenance is established.
+
+Decision: Store immutable, metadata-rich knowledge versions and heading-aware
+chunks in SQLite, using FTS5/BM25 for deterministic lexical retrieval. Normal code
+owns eligibility, cluster/namespace/sensitivity filters, query tokenization, and
+result limits. Approvers curate memory and Investigators can preview retrieval.
+Keep this first slice out of model prompts until a distinct knowledge-citation
+contract and retrieval evaluations exist.
+
+Consequences: Useful exact operational terminology is searchable without an
+embedding service or new database. Revisions remain auditable and stale or
+out-of-scope entries fail closed. Semantic reranking and answer-time augmentation
+remain optional later layers; neither may expand collection or remediation policy.

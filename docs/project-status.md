@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-25
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -14,6 +14,11 @@ path is prepared and locally validated but has not yet been exercised on a secon
 cluster. Start a new session by reading this file and `AGENTS.md`, then verify
 `git status --short` before making changes.
 
+The post-0.11 working tree adds the first curated-memory slice at schema head
+`0011_cluster_memory`; it is locally tested but not deployed to the SNO lab.
+Approvers can version and govern knowledge, and Investigators can preview scoped
+FTS5 retrieval. Memory is intentionally not yet supplied to model prompts.
+
 The product is an OpenShift-first investigation and Day-2 operations companion.
 It presents active Alertmanager signals, builds bounded evidence-backed
 investigations from live cluster state, adds a schema-validated model
@@ -21,6 +26,13 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- Curated cluster-memory foundation with immutable versions, heading-aware chunks,
+  SQLite FTS5/BM25 search, reviewed/enabled/expiry eligibility, cluster and
+  namespace scope, restricted-entry authorization, Approver management controls,
+  Investigator retrieval preview, redaction, and content-free audit metadata.
+  This post-0.11 slice is locally implemented and awaits deployment; model prompt
+  integration and knowledge citations remain separate work.
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
@@ -186,7 +198,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 146 tests passing with 83% aggregate branch coverage.
+- Local automated suite: 191 tests passing with 84% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source
@@ -309,7 +321,8 @@ current repository and cluster state.
 - Investigation chat is limited to one investigation, a 20-message history, one
   non-executing safe-check intent, and non-streaming responses. Standalone Ask
   PodPilot conversations are unlimited and use rolling context, but responses
-  remain non-streaming and curated cluster memory is not implemented.
+  remain non-streaming. Curated memory can now be managed and searched, but is not
+  yet retrieved into investigation or chat model context.
 - The first executable plan is fixed to scoped `TargetDown` passive monitoring
   signals, Service topology, and Pod events. It does not inspect full rule
   definitions or perform an active DNS, TCP, TLS, or HTTP probe.
@@ -326,8 +339,8 @@ current repository and cluster state.
 
 No next milestone is formally selected. The highest-value candidates are:
 
-1. Introduce curated cluster memory with source, scope, owner, confidence, and
-   review/expiry metadata before adding retrieval to investigations.
+1. Add bounded answer-time memory retrieval and a server-validated knowledge
+   citation contract without allowing memory to influence tool or action policy.
 2. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
 3. Design an administrator-owned probe-target registry and dedicated no-token,

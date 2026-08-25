@@ -33,6 +33,7 @@ from podpilot_api.models import (
     ChatMessage,
     DiagnosticCheck,
     Investigation,
+    KnowledgeDocument,
     ModelProfile,
     RemediationAction,
 )
@@ -3118,6 +3119,159 @@ def test_active_model_can_be_deleted_with_ready_fallback_or_no_model(tmp_path: P
         assert json.loads(events[1].details_json)["activated_profile_id"] is None
     engine.dispose()
     assert credentials.values == {}
+
+
+def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER, "grace": Role.INVESTIGATOR, "vic": Role.VIEWER},
+        source=FakeAlertSource(),
+    )
+    with TestClient(app) as client:
+        page = client.get("/memory", headers={"x-forwarded-user": "ada"})
+        assert page.status_code == 200
+        assert "memory is not yet sent to the model" in page.text
+        csrf_match = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf_match is not None
+        approver_headers = {
+            "x-forwarded-user": "ada",
+            "x-podpilot-csrf": csrf_match.group(1),
+        }
+
+        saved = client.post(
+            "/api/v1/knowledge",
+            headers=approver_headers,
+            data={
+                "title": "Payments registry mirror",
+                "content": "# Image pulls\n\nPayments workloads pull through mirror.corp.example.",
+                "source": "Platform team runbook",
+                "source_type": "cluster_fact",
+                "cluster_id": "test-cluster",
+                "namespace": "payments",
+                "owner": "platform-team",
+                "verification_state": "reviewed",
+                "sensitivity": "internal",
+            },
+        )
+        assert saved.status_code == 200
+        first = saved.json()
+        assert first["version"] == 1
+
+        out_of_scope = client.get(
+            "/api/v1/knowledge/search?q=registry+mirror",
+            headers={"x-forwarded-user": "grace"},
+        )
+        assert out_of_scope.json()["results"] == []
+        in_scope = client.get(
+            "/api/v1/knowledge/search?q=registry+mirror&namespace=payments",
+            headers={"x-forwarded-user": "grace"},
+        )
+        assert len(in_scope.json()["results"]) == 1
+        assert in_scope.json()["results"][0]["heading"] == "Image pulls"
+
+        draft = client.post(
+            "/api/v1/knowledge",
+            headers=approver_headers,
+            data={
+                "title": "Unreviewed proxy note", "content": "Use tentative-proxy.example.",
+                "source": "Operator note", "source_type": "cluster_fact",
+                "cluster_id": "test-cluster", "owner": "ada",
+                "verification_state": "draft", "sensitivity": "internal",
+            },
+        )
+        assert draft.status_code == 200
+        assert client.get(
+            "/api/v1/knowledge/search?q=tentative-proxy",
+            headers={"x-forwarded-user": "grace"},
+        ).json()["results"] == []
+
+        restricted = client.post(
+            "/api/v1/knowledge",
+            headers=approver_headers,
+            data={
+                "title": "Restricted escalation path", "content": "Escalate frobnicator faults.",
+                "source": "SRE handbook", "source_type": "runbook",
+                "cluster_id": "test-cluster", "owner": "sre",
+                "verification_state": "reviewed", "sensitivity": "restricted",
+            },
+        )
+        assert restricted.status_code == 200
+        assert client.get(
+            "/api/v1/knowledge/search?q=frobnicator",
+            headers={"x-forwarded-user": "grace"},
+        ).json()["results"] == []
+        assert len(client.get(
+            "/api/v1/knowledge/search?q=frobnicator",
+            headers={"x-forwarded-user": "ada"},
+        ).json()["results"]) == 1
+        investigator_page = client.get("/memory", headers={"x-forwarded-user": "grace"})
+        assert "Restricted escalation path" not in investigator_page.text
+        assert "Unreviewed proxy note" not in investigator_page.text
+
+        revised = client.post(
+            "/api/v1/knowledge",
+            headers=approver_headers,
+            data={
+                "logical_id": first["logical_id"],
+                "title": "Payments registry mirror",
+                "content": "# Image pulls\n\nPayments now uses quay-mirror.corp.example.",
+                "source": "Platform team runbook", "source_type": "cluster_fact",
+                "cluster_id": "test-cluster", "namespace": "payments",
+                "owner": "platform-team", "verification_state": "reviewed",
+                "sensitivity": "internal",
+            },
+        )
+        assert revised.status_code == 200
+        assert revised.json()["version"] == 2
+        assert client.get(
+            "/api/v1/knowledge/search?q=workloads&namespace=payments",
+            headers={"x-forwarded-user": "grace"},
+        ).json()["results"] == []
+        assert len(client.get(
+            "/api/v1/knowledge/search?q=quay-mirror&namespace=payments",
+            headers={"x-forwarded-user": "grace"},
+        ).json()["results"]) == 1
+
+        disabled = client.post(
+            f"/api/v1/knowledge/{revised.json()['document_id']}/status",
+            headers=approver_headers,
+            data={"enabled": "false"},
+        )
+        assert disabled.json()["status"] == "disabled"
+        assert client.get(
+            "/api/v1/knowledge/search?q=quay-mirror&namespace=payments",
+            headers={"x-forwarded-user": "grace"},
+        ).json()["results"] == []
+
+        punctuation = client.get(
+            '/api/v1/knowledge/search?q=%22+OR+NOT+%28registry%29',
+            headers={"x-forwarded-user": "grace"},
+        )
+        assert punctuation.status_code == 200
+        assert client.get("/memory", headers={"x-forwarded-user": "vic"}).status_code == 403
+        forbidden_write = client.post(
+            "/api/v1/knowledge", headers={
+                "x-forwarded-user": "grace", "x-podpilot-csrf": csrf_match.group(1),
+            }, data={},
+        )
+        assert forbidden_write.status_code == 403
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        versions = list(db_session.scalars(
+            select(KnowledgeDocument)
+            .where(KnowledgeDocument.logical_id == first["logical_id"])
+            .order_by(KnowledgeDocument.version)
+        ))
+        assert [item.version for item in versions] == [1, 2]
+        assert versions[0].is_current is False
+        assert versions[1].is_current is True
+        events = list(db_session.scalars(
+            select(AuditEvent).where(AuditEvent.action.like("knowledge.%"))
+        ))
+        assert len(events) == 5
+        assert all("mirror.corp.example" not in event.details_json for event in events)
+    engine.dispose()
 
 
 def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path) -> None:

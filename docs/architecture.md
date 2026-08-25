@@ -73,6 +73,16 @@ Schema-validated interpretation is displayed separately from deterministic facts
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
+The first cluster-memory slice stores curated Markdown or text as immutable
+versions in SQLite and indexes heading-aware bounded chunks with FTS5. Approvers
+create, revise, enable, and disable entries; Investigators can preview retrieval.
+Normal code filters candidates by current version, enabled and reviewed state,
+expiry, cluster, optional namespace, and sensitivity before BM25 ranking. Search
+input is tokenized into a bounded quoted expression rather than accepted as raw
+FTS syntax. Restricted entries are visible only to Approvers. This slice does not
+send retrieved memory to model planning or answer prompts; that integration
+requires a separate knowledge-citation contract and evaluation gate.
+
 Milestone 5 adds a policy-owned typed action catalog. A crash-loop investigation
 can generate at most two server-built proposals: delete the exact failed,
 controller-owned Pod or restart its Deployment, StatefulSet, or DaemonSet. The
