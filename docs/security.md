@@ -213,15 +213,29 @@ ceiling. No new mutation or Secret permission is introduced.
 
 Milestone 8 keeps chat on the same evidence and authorization side of the trust
 boundary. Operator text and conversation history are untrusted, redacted, and
-bounded before a provider call. Structured output distinguishes evidence-based,
+bounded before a provider call. Incident chat can invoke the same schema-validated
+read-plan broker as standalone Ask, but the provider receives neither Kubernetes
+credentials nor a generic execution channel. Normal code canonicalizes, bounds,
+deny-checks, executes, redacts, persists, and audits every proposed read. Secrets,
+access reviews, arbitrary subresources, commands, active probes, and mutations
+remain unavailable. Structured output distinguishes evidence-based,
 general-guidance, and insufficient-evidence answers. The API—not the model—validates
 citation IDs against persisted observations and withholds uncited factual claims.
-The provider receives only an allowlisted intent name, never tool schemas,
-Kubernetes clients, credentials, or arbitrary arguments. A `run_queued_checks`
+A `run_queued_checks`
 proposal cannot call the executor; it renders a separate button backed by the
 existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit
-controls. Chat audit events contain IDs, modes, citations, intent name, and counts,
-not message bodies.
+controls. Chat audit events contain IDs, modes, citations, bounded read targets,
+limitations, intent name, and counts, not message bodies or evidence payloads.
+
+Dynamic API discovery does not expand this execution boundary. The provider sees
+only a policy-filtered catalog of resource names, Kinds, scope, and apiVersions;
+it does not receive discovery credentials or callable clients. Secret, OAuth
+token, identity, user/group, access-review, and every subresource entry are
+removed before planning. The broker independently resolves the selected plural
+resource, confirms the requested `get` or `list` verb is advertised, rejects
+ambiguous names unless group-qualified, and still relies on the investigator
+ServiceAccount's RBAC for the final authorization decision. Recursive redaction
+and compact payload ceilings apply to discovered built-ins and CRDs alike.
 
 Milestone 9 treats Prometheus label values as untrusted selectors, not query text
 or network destinations. The server owns both supported PromQL expressions and

@@ -55,7 +55,13 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
   bounded monitoring signal, Service topology, and target event checks.
 - `packages/openshift-client/src/podpilot_openshift/metrics.py`: authenticated,
   TLS-validated, response-bounded Thanos instant-query adapter.
+- `packages/openshift-client/src/podpilot_openshift/discovery.py`: cached,
+  policy-filtered live API catalog and safe resource-name resolution.
+- `packages/openshift-client/src/podpilot_openshift/explorer.py`: bounded dynamic
+  GET/LIST and Pod-log execution with pagination, projection, and redaction.
 - `packages/diagnostics/src/podpilot_diagnostics/alerts.py`: model-free alert evidence and triage results.
+- `packages/diagnostics/src/podpilot_diagnostics/adhoc.py`: portable read-plan,
+  deterministic inventory, and ad-hoc evidence contracts.
 - `packages/diagnostics/src/podpilot_diagnostics/workloads.py`: portable workload evidence contracts.
 - `packages/diagnostics/src/podpilot_diagnostics/checks.py`: portable diagnostic
   plan, result, and executor contracts.
@@ -90,7 +96,7 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 
 ## Questions To Resolve
 
-- Which capability follows the first executable plan: investigation chat,
-  active reachability probes, Routes, ClusterOperators, or curated memory?
+- Which read domains need deeper deterministic interpretation beyond generic
+  discovery-backed evidence collection, and which typed remediation pack follows?
 - Which supported CSI storage and backup design replaces SNO-local storage for production?
 - Which production image registry and immutable release promotion flow replaces the SNO binary build?

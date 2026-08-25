@@ -283,7 +283,9 @@ class OpenAIResponsesProvider:
                     "be called again after earlier reads; use supplied observations to plan the next "
                     "necessary step and return no intents when enough evidence exists. Select no more than "
                     "the supplied remaining_reads from only get_resource, list_resources, and pod_logs. Use exact "
-                    "apiVersion and Kind values. Prefer namespace-scoped, named reads and small limits. "
+                    "resource names from the supplied resource_catalog whenever available; normal code resolves "
+                    "their authoritative apiVersion, Kind, scope, and verbs. Otherwise use exact apiVersion and "
+                    "Kind values. Prefer namespace-scoped, named reads and small limits. "
                     "Use pod_logs only when an exact Pod, namespace, and relevant container are identified "
                     "by the operator or supplied observations. Never request "
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
@@ -490,14 +492,25 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     def chat(self, profile, api_key, context):
         return self._parse(
             profile, api_key, schema=InvestigationChatAnswer,
-            instructions="Answer only from supplied untrusted evidence, cite supplied IDs, and never invent tools or mutations.",
+            instructions=(
+                "Answer only from supplied untrusted incident evidence and cite supplied IDs. Never "
+                "invent tools or mutations. PodPilot owns available read-only evidence collection: do "
+                "not tell the operator to run kubectl, oc, shell commands, or share command output. "
+                "If read_activity is present, explain what PodPilot inspected. Treat read failures as "
+                "limitations without dismissing successful observations."
+            ),
             payload=context,
         )
 
     def plan_ad_hoc(self, profile, api_key, context):
         return self._parse(
             profile, api_key, schema=ReadPlan,
-            instructions="Plan bounded read-only OpenShift checks using only the tool policy supplied. Never request secrets or mutations.",
+            instructions=(
+                "Plan bounded read-only OpenShift checks using only the supplied tool policy. Prefer the "
+                "resource field with an exact plural name from resource_catalog; the server resolves API "
+                "coordinates and scope. Never request Secrets, identity/token/access-review resources, "
+                "subresources, commands, probes, or mutations."
+            ),
             payload=context, limit=min(profile.max_output_tokens, 1400),
         )
 

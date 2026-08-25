@@ -112,12 +112,17 @@ investigations receive the plan lazily when opened after the schema upgrade.
 Milestone 8 adds durable `ChatMessage` records and a provider-level structured
 chat contract. The API composes bounded context from one investigation, redacts
 the operator message before storage, and sends no Kubernetes credentials or
-generic tool interface to the provider. Model citations are intersected with the
-persisted observation-ID set; uncited evidence-based claims are replaced with an
-insufficient-evidence response. The server similarly accepts only the literal
-`run_queued_checks` proposal while queued `DiagnosticCheck` records exist. The UI
-links validated citations to evidence cards and routes execution through the
-pre-existing check endpoint after a distinct operator click.
+generic Kubernetes client to the provider. Incident chat now shares Ask
+PodPilot's bounded read-plan broker: up to three planning rounds and six total
+resource, ConfigMap, Event, or Pod-log reads run under the same read-only identity,
+deny policy, normalization, redaction, and evidence cap. Trusted alert labels seed
+exact scope for deterministic cases such as a failed Job, and newly collected
+observations are persisted into the investigation before interpretation. Model
+citations are intersected with that expanded observation-ID set; uncited
+evidence-based claims are replaced with an insufficient-evidence response. The
+server separately accepts only the literal `run_queued_checks` proposal while
+queued `DiagnosticCheck` records exist, and that proposal still requires a
+distinct operator click.
 
 Milestone 9 adds a bounded Thanos query adapter and a third server-owned
 `TargetDown` check. The diagnostics registry derives exact namespace, Service,
@@ -129,16 +134,30 @@ generic PromQL endpoint to the API, browser, or model. Active target probing is
 deliberately absent because the alert is not an authorized network-destination
 registry.
 
-Milestone 10 adds standalone Ask PodPilot conversations. Up to three
+Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
+broker later shared by incident chat. Up to three
 schema-validated planning rounds may select at most six total reads from
 `get_resource`, `list_resources`, and `pod_logs`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.
-Normal code validates API version, Kind, scope, limits, duplicate suppression, and deny policy.
+Normal code validates the discovered resource, scope, verb, limits, duplicate
+suppression, and deny policy. A five-minute, process-local discovery catalog
+collapses duplicate versions within an API group, qualifies cross-group name
+collisions, and ranks resources mentioned in the question ahead of the prompt
+cap. The model proposes a plural resource name; server code resolves the current
+apiVersion, Kind, namespaced scope, and advertised read verb. Unambiguous
+inventory questions compile directly from that live catalog so a model cannot
+omit the only required intent. The small built-in canonicalization table remains
+only as a compatibility path for older model output.
 ConfigMaps and bounded logs are intentional evidence sources. Secrets,
 access-review resources, arbitrary subresources, commands, network probes, and
 mutations are rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
 evidence IDs.
+List reads follow Kubernetes continue tokens within the per-turn budget and emit
+one compact collection observation. Kind-aware projections retain operational
+status, conditions, ownership, and selected scheduling/routing/storage fields;
+the list is explicitly marked truncated if either the object or payload ceiling
+is reached.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and
@@ -169,7 +188,8 @@ scrolling afterward.
 5. Sensitive values are removed before any external model call.
 6. A supported server-owned plan can execute registered read-only follow-up checks.
 7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
-8. Investigation chat answers follow-up questions with server-validated evidence citations.
+8. Investigation chat may collect additional bounded alert-scoped evidence and
+   answers with server-validated citations.
 9. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
 
 ## Source Of Truth Boundaries

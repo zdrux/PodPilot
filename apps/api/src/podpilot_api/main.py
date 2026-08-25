@@ -5,7 +5,7 @@ import logging
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -41,7 +41,12 @@ from podpilot_api.models import (
 )
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
-from podpilot_diagnostics.adhoc import ReadOnlyExplorer, normalize_read_intent
+from podpilot_diagnostics.adhoc import (
+    ReadOnlyExplorer,
+    normalize_read_intent,
+    plan_catalog_read,
+    plan_known_read,
+)
 from podpilot_diagnostics.checks import (
     DiagnosticCheckExecutor,
     DiagnosticCheckSpec,
@@ -288,6 +293,145 @@ def _compact_adhoc_context(
         {"role": row.role, "content": row.content}
         for row in reversed(recent_rows)
     ]
+
+
+@dataclass
+class _BoundedReadCollection:
+    evidence: list[dict[str, object]]
+    activity: list[dict[str, object]]
+    limitations: list[str]
+    scope_summary: str
+
+
+async def _collect_bounded_cluster_reads(
+    *,
+    model_provider: ModelProvider,
+    cluster_reader: ReadOnlyExplorer,
+    profile: ModelProfileConfig,
+    api_key: str,
+    settings: Settings,
+    actor: str,
+    workflow_id: str,
+    question: str,
+    conversation: list[dict[str, str]],
+    existing_evidence: list[dict[str, object]],
+    earlier_context_summary: str = "",
+    alert_name: str | None = None,
+    alert_labels: dict[str, object] | None = None,
+) -> _BoundedReadCollection:
+    evidence = list(existing_evidence)
+    activity: list[dict[str, object]] = []
+    limitations: list[str] = []
+    seen_intents: set[str] = set()
+    reads_used = 0
+    scope_summary = "Bounded read-only cluster investigation."
+    known_plan = plan_known_read(
+        question,
+        alert_name=alert_name,
+        alert_labels=alert_labels,
+    )
+    catalog_entries: list[dict[str, object]] = []
+    catalog_reader = getattr(cluster_reader, "resource_catalog", None)
+    if callable(catalog_reader):
+        try:
+            catalog_entries = await run_in_threadpool(
+                catalog_reader, query=question, limit=120
+            )
+        except ReadOnlyExplorerError as exc:
+            LOGGER.warning(
+                "podpilot.resource_catalog.unavailable actor=%s workflow_id=%s error=%s",
+                actor,
+                workflow_id,
+                str(exc),
+            )
+    if known_plan is None and catalog_entries:
+        known_plan = plan_catalog_read(question, catalog_entries)
+    for round_number in range(1, settings.adhoc_max_rounds + 1):
+        remaining_reads = settings.adhoc_max_reads_per_turn - reads_used
+        if remaining_reads <= 0:
+            break
+        terminal_plan = False
+        if round_number == 1 and known_plan:
+            plan, terminal_plan = known_plan
+        else:
+            try:
+                plan = await run_in_threadpool(
+                    model_provider.plan_ad_hoc,
+                    profile,
+                    api_key,
+                    {
+                        "cluster": settings.cluster_name,
+                        "question": question,
+                        "conversation": conversation,
+                        "earlier_context_summary": earlier_context_summary,
+                        "alert_scope": (
+                            {"alert_name": alert_name, "labels": alert_labels or {}}
+                            if alert_name else None
+                        ),
+                        "observations": evidence[-settings.adhoc_max_evidence :],
+                        "completed_reads": activity,
+                        "investigation_round": round_number,
+                        "tool_policy": {
+                            "available": ["get_resource", "list_resources", "pod_logs"],
+                            "resource_catalog": catalog_entries,
+                            "max_rounds": settings.adhoc_max_rounds,
+                            "max_reads_total": settings.adhoc_max_reads_per_turn,
+                            "remaining_reads": remaining_reads,
+                            "logs_and_configmaps_allowed": True,
+                            "secrets_and_mutations_allowed": False,
+                        },
+                    },
+                )
+            except ModelProviderError as exc:
+                raise ModelProviderError(f"ReadPlan round {round_number} failed. {exc}") from exc
+        scope_summary = plan.scope_summary
+        new_intents = []
+        for proposed_intent in plan.intents[:remaining_reads]:
+            intent = normalize_read_intent(proposed_intent)
+            signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
+            if signature not in seen_intents:
+                seen_intents.add(signature)
+                new_intents.append(intent)
+        if not new_intents:
+            break
+        for intent in new_intents:
+            reads_used += 1
+            entry: dict[str, object] = {
+                "round": round_number,
+                "tool": intent.tool,
+                "target": f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
+                f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
+                + (f" container={intent.container}" if intent.container else "")
+                + (" previous=true" if intent.tool == "pod_logs" and intent.previous else ""),
+            }
+            try:
+                result = await run_in_threadpool(cluster_reader.execute, intent)
+                evidence.extend(item.to_dict() for item in result.observations)
+                limitations.extend(result.limitations)
+                entry["status"] = "succeeded"
+                entry["observations"] = len(result.observations)
+            except ReadOnlyExplorerError as exc:
+                LOGGER.warning(
+                    "podpilot.cluster_read.failed actor=%s workflow_id=%s tool=%s target=%s error=%s",
+                    actor,
+                    workflow_id,
+                    intent.tool,
+                    entry["target"],
+                    str(exc),
+                )
+                limitations.append(str(exc))
+                entry["status"] = "denied_or_unavailable"
+                entry["detail"] = str(exc)
+            activity.append(entry)
+        evidence = evidence[-settings.adhoc_max_evidence :]
+        if terminal_plan:
+            break
+    return _BoundedReadCollection(
+        evidence=evidence,
+        activity=activity,
+        limitations=list(dict.fromkeys(limitations))[:10],
+        scope_summary=scope_summary,
+    )
 
 
 def _enforce_adhoc_rate_limit(
@@ -584,77 +728,23 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
-                seen_intents: set[str] = set()
-                reads_used = 0
-                scope_summary = "Bounded read-only cluster investigation."
-                for round_number in range(1, app_settings.adhoc_max_rounds + 1):
-                    remaining_reads = app_settings.adhoc_max_reads_per_turn - reads_used
-                    if remaining_reads <= 0:
-                        break
-                    provider_phase = f"read_plan_round_{round_number}"
-                    plan = await run_in_threadpool(
-                        provider.plan_ad_hoc,
-                        profile_snapshot,
-                        api_key,
-                        {
-                            "cluster": app_settings.cluster_name,
-                            "question": message_text,
-                            "conversation": history,
-                            "earlier_context_summary": context_summary,
-                            "observations": evidence[-app_settings.adhoc_max_evidence :],
-                            "completed_reads": activity,
-                            "investigation_round": round_number,
-                            "tool_policy": {
-                                "available": ["get_resource", "list_resources", "pod_logs"],
-                                "max_rounds": app_settings.adhoc_max_rounds,
-                                "max_reads_total": app_settings.adhoc_max_reads_per_turn,
-                                "remaining_reads": remaining_reads,
-                                "logs_and_configmaps_allowed": True,
-                                "secrets_and_mutations_allowed": False,
-                            },
-                        },
-                    )
-                    scope_summary = plan.scope_summary
-                    new_intents = []
-                    for proposed_intent in plan.intents[:remaining_reads]:
-                        intent = normalize_read_intent(proposed_intent)
-                        signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
-                        if signature not in seen_intents:
-                            seen_intents.add(signature)
-                            new_intents.append(intent)
-                    if not new_intents:
-                        break
-                    for intent in new_intents:
-                        reads_used += 1
-                        entry: dict[str, object] = {
-                            "round": round_number,
-                            "tool": intent.tool,
-                            "target": f"{intent.api_version or 'v1'} {intent.kind or 'Pod'} "
-                            f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
-                            + (f" container={intent.container}" if intent.container else "")
-                            + (" previous=true" if intent.tool == "pod_logs" and intent.previous else ""),
-                        }
-                        try:
-                            result = await run_in_threadpool(cluster_reader.execute, intent)
-                            evidence.extend(item.to_dict() for item in result.observations)
-                            limitations.extend(result.limitations)
-                            entry["status"] = "succeeded"
-                            entry["observations"] = len(result.observations)
-                        except ReadOnlyExplorerError as exc:
-                            LOGGER.warning(
-                                "podpilot.adhoc.cluster_read_failed actor=%s conversation_id=%s "
-                                "tool=%s target=%s error=%s",
-                                user.username,
-                                conversation_id,
-                                intent.tool,
-                                entry["target"],
-                                str(exc),
-                            )
-                            limitations.append(str(exc))
-                            entry["status"] = "denied_or_unavailable"
-                            entry["detail"] = str(exc)
-                        activity.append(entry)
-                    evidence = evidence[-app_settings.adhoc_max_evidence :]
+                provider_phase = "bounded_read_collection"
+                collected = await _collect_bounded_cluster_reads(
+                    model_provider=provider,
+                    cluster_reader=cluster_reader,
+                    profile=profile_snapshot,
+                    api_key=api_key,
+                    settings=app_settings,
+                    actor=user.username,
+                    workflow_id=conversation_id,
+                    question=message_text,
+                    conversation=history,
+                    earlier_context_summary=context_summary,
+                    existing_evidence=evidence,
+                )
+                evidence = collected.evidence
+                activity = collected.activity
+                limitations = collected.limitations
                 provider_phase = "final_answer"
                 answer = await run_in_threadpool(
                     provider.answer_ad_hoc,
@@ -665,7 +755,7 @@ def create_app(
                         "question": message_text,
                         "conversation": history,
                         "earlier_context_summary": context_summary,
-                        "scope_summary": scope_summary,
+                        "scope_summary": collected.scope_summary,
                         "observations": evidence,
                         "collection_limitations": limitations[:10],
                     },
@@ -1701,6 +1791,7 @@ def create_app(
                 "checks": checks,
                 "messages": messages,
                 "chat_max_chars": app_settings.chat_max_chars,
+                "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "chat_budget_exhausted": len(messages) + 2 > app_settings.chat_max_messages,
                 "csrf_token": csrf_token,
             },
@@ -1820,11 +1911,79 @@ def create_app(
             "citations": [],
             "tool_intent": None,
         }
+        read_activity: list[dict[str, object]] = []
+        read_limitations: list[str] = []
         if profile_snapshot:
             try:
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
+                original_evidence_ids = {
+                    str(item.get("id")) for item in analysis_payload.get("observations", [])
+                    if item.get("id")
+                }
+                try:
+                    collected = await _collect_bounded_cluster_reads(
+                        model_provider=provider,
+                        cluster_reader=cluster_reader,
+                        profile=profile_snapshot,
+                        api_key=api_key,
+                        settings=app_settings,
+                        actor=user.username,
+                        workflow_id=investigation_id,
+                        question=message_text,
+                        conversation=conversation,
+                        existing_evidence=list(analysis_payload.get("observations", [])),
+                        alert_name=alert_name,
+                        alert_labels=dict(alert_snapshot.get("labels") or {}),
+                    )
+                    read_activity = collected.activity
+                    read_limitations = collected.limitations
+                    new_observations = [
+                        item for item in collected.evidence
+                        if str(item.get("id")) not in original_evidence_ids
+                    ]
+                    for item in new_observations:
+                        analysis_payload.setdefault("observations", []).append({
+                            "id": item.get("id"),
+                            "title": item.get("summary", "Collected cluster evidence."),
+                            "detail": item.get("summary", "Collected bounded read-only cluster evidence."),
+                            "source": item.get("source", "kubernetes"),
+                            "observed_at": item.get("collected_at"),
+                            "tool": item.get("tool"),
+                            "data": item.get("data", {}),
+                        })
+                    known_evidence_ids.update(
+                        str(item.get("id"))[:128] for item in new_observations if item.get("id")
+                    )
+                    if new_observations or read_activity or read_limitations:
+                        with Session(request.app.state.engine) as db_session:
+                            current = db_session.get(Investigation, investigation_id)
+                            if current is None:
+                                raise HTTPException(status_code=404, detail="Investigation not found.")
+                            current.analysis_json = json.dumps(
+                                analysis_payload, default=_json_default, sort_keys=True
+                            )
+                            db_session.add(AuditEvent(
+                                actor=user.username,
+                                action="chat.investigate",
+                                outcome="completed",
+                                details_json=json.dumps({
+                                    "investigation_id": investigation_id,
+                                    "reads": read_activity,
+                                    "limitations": read_limitations,
+                                    "observations_added": len(new_observations),
+                                }, sort_keys=True),
+                            ))
+                            db_session.commit()
+                except ModelProviderError as exc:
+                    read_limitations = [str(exc)]
+                    LOGGER.warning(
+                        "podpilot.chat.read_plan_failed actor=%s investigation_id=%s error=%s",
+                        user.username,
+                        investigation_id,
+                        str(exc),
+                    )
                 answer = await run_in_threadpool(
                     provider.chat,
                     profile_snapshot,
@@ -1839,12 +1998,16 @@ def create_app(
                             key: value for key, value in analysis_payload.items() if key != "model"
                         },
                         "conversation": conversation,
+                        "read_activity": read_activity,
+                        "read_limitations": read_limitations,
                         "policy": {
                             "available_tool_intents": (
                                 ["run_queued_checks"] if queued_checks else []
                             ),
                             "tool_execution_requires_operator_click": True,
                             "chat_cannot_mutate_cluster": True,
+                            "bounded_cluster_reads_enabled": True,
+                            "chat_must_not_delegate_reads_to_operator": True,
                         },
                     },
                 )
@@ -1898,6 +2061,8 @@ def create_app(
                                 if isinstance(validated["tool_intent"], dict)
                                 else None
                             ),
+                            "read_count": len(read_activity),
+                            "read_limitations": read_limitations,
                         },
                         sort_keys=True,
                     ),

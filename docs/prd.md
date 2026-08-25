@@ -308,17 +308,21 @@ egress boundary exist.
 
 An Investigator can ask follow-up questions inside one durable investigation.
 PodPilot supplies only that investigation's redacted alert, deterministic analysis,
-persisted evidence, bounded conversation history, and available registered intent
-names to the configured model. Factual incident answers must cite observation IDs
+persisted evidence, bounded conversation history, alert-scoped read policy, and
+available registered intent names to the configured model. Up to three planning
+rounds may request at most six reads through the same deny-by-default broker as
+standalone Ask; successful observations are persisted into the investigation
+before the answer pass. Factual incident answers must cite observation IDs
 that the server can resolve in the investigation; an evidence-based response with
 no valid citation is withheld. General guidance and insufficient-evidence answers
 are labeled explicitly.
 
-The only initial tool proposal is `run_queued_checks`, and it is exposed only while
+The only executable UI proposal is `run_queued_checks`, and it is exposed only while
 the investigation has queued registered checks. A proposal is display data, not an
 execution request: the Investigator must press the existing safe-check control,
-which re-enters the role, CSRF, claim-once, scope, and audit gates. Chat cannot
-submit tools, Kubernetes targets, query text, shell, YAML, credentials, or cluster
+which re-enters the role, CSRF, claim-once, scope, and audit gates. Read-plan
+output is advisory data validated and executed by the API; chat cannot directly
+submit Kubernetes calls, query text, shell, YAML, credentials, or cluster
 mutations. Messages are attributed, redacted before persistence/model use, capped
 at 1,000 characters each and 20 messages per investigation, and audited without
 copying message content into the audit record.
@@ -328,13 +332,17 @@ copying message content into the audit record.
 An Investigator can start a durable, attributed conversation without a firing
 alert. For each turn, up to three schema-validated planning rounds select at most six total reads
 from named resource GET, bounded resource LIST, and bounded current or previous
-Pod logs. The server validates API version, Kind, namespace, name, selector, and
-limit before executing through the `podpilot-investigator` identity. Each round
+Pod logs. A policy-filtered, five-minute discovery catalog lets planning address
+common Kubernetes/OpenShift objects and installed CRDs by plural resource name.
+The server resolves apiVersion, Kind, namespaced scope, and advertised read verb;
+it rejects ambiguous cross-group names unless qualified. Each round
 receives prior observations, allowing Pod discovery to lead to exact container-log
 collection without requiring an operator follow-up. ConfigMaps
 and logs are first-class evidence; Secrets, access-review resources, arbitrary
 subresources, commands, active network probes, and mutations are rejected.
 
+List collection follows server continue tokens within the object ceiling and uses
+kind-aware compact projections; object- or payload-ceiling truncation is explicit.
 Collected objects are recursively bounded and redacted, persisted with source and
 timestamp, and supplied to a second schema-validated answer pass. Cluster-specific
 answers require server-resolvable evidence citations. A missing capability pack

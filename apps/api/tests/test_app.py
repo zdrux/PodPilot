@@ -242,6 +242,66 @@ class DiscoveryThenLogsExplorer:
         ),))
 
 
+class IncidentJobProvider(FakeModelProvider):
+    def chat(self, profile, api_key: str, context: dict[str, object]) -> InvestigationChatAnswer:
+        self.chat_calls.append(context)
+        observations = context["analysis"]["observations"]
+        job = next(item for item in observations if item.get("id") == "cluster-job-1")
+        assert job["data"]["status"]["failed"] == 1
+        return InvestigationChatAnswer(
+            answer_mode="evidence_based",
+            answer="PodPilot inspected the alert-scoped Job; it has one failed execution.",
+            cited_evidence_ids=["cluster-job-1"],
+        )
+
+
+class IncidentJobExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        return ReadResult((AdHocObservation(
+            id="cluster-job-1",
+            tool="get_resource",
+            summary="Read Job operators/status-check-abc.",
+            source="kubernetes:batch/v1:Job:operators/status-check-abc",
+            collected_at=datetime.now(timezone.utc),
+            data={
+                "metadata": {"name": "status-check-abc", "namespace": "operators"},
+                "status": {"failed": 1, "conditions": [{"type": "Failed", "reason": "BackoffLimitExceeded"}]},
+            },
+        ),))
+
+
+class StorageClassProvider(FakeModelProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        storage = next(item for item in context["observations"] if item["id"] == "cluster-sc-1")
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer=f"The cluster exposes the {storage['data']['metadata']['name']} StorageClass.",
+            cited_evidence_ids=[storage["id"]],
+            limitations=[],
+        )
+
+
+class StorageClassExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        return ReadResult((AdHocObservation(
+            id="cluster-sc-1",
+            tool="list_resources",
+            summary="Read StorageClass cluster/managed-premium.",
+            source="kubernetes:storage.k8s.io/v1:StorageClass:cluster/managed-premium",
+            collected_at=datetime.now(timezone.utc),
+            data={"metadata": {"name": "managed-premium"}, "provisioner": "disk.csi.azure.com"},
+        ),))
+
+
 class FakeRemediationExecutor:
     def __init__(self, outcome: str = "resolved", validation: str = "current") -> None:
         self.outcome = outcome
@@ -360,6 +420,25 @@ def target_down() -> AlertRecord:
             "instance": "10.0.0.10:8443",
         },
         annotations={"summary": "One monitoring target is down"},
+        starts_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+        ends_at=None,
+        updated_at=None,
+        silenced_by=(),
+        inhibited_by=(),
+    )
+
+
+def job_failed() -> AlertRecord:
+    return AlertRecord(
+        fingerprint="job-failed-1",
+        state="active",
+        labels={
+            "alertname": "KubeJobFailed",
+            "severity": "warning",
+            "namespace": "operators",
+            "job_name": "status-check-abc",
+        },
+        annotations={"summary": "A Kubernetes Job failed"},
         starts_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
         ends_at=None,
         updated_at=None,
@@ -550,7 +629,7 @@ def test_ask_provider_failure_is_visible_and_logged_without_question(
         ))
         db_session.commit()
     engine.dispose()
-    secret_question = "Which storage classes contain customer-secret-phrase?"
+    secret_question = "Why is customer-secret-phrase workload unhealthy?"
     caplog.set_level("INFO", logger="uvicorn.error")
 
     with TestClient(app) as client:
@@ -569,9 +648,53 @@ def test_ask_provider_failure_is_visible_and_logged_without_question(
     log_text = caplog.text
     assert "podpilot.adhoc.provider_start" in log_text
     assert "podpilot.adhoc.provider_failed" in log_text
-    assert "phase=read_plan_round_1" in log_text
+    assert "phase=bounded_read_collection" in log_text
     assert "scope_summary: string_too_short" in log_text
     assert secret_question not in log_text
+
+
+def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
+    tmp_path: Path,
+) -> None:
+    provider = StorageClassProvider()
+    explorer = StorageClassExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "What StorageClasses are available on the cluster?"},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "managed-premium StorageClass" in rendered.text
+        assert "cluster-sc-1" in rendered.text
+        assert "No observations were provided" not in rendered.text
+
+    assert provider.adhoc_plan_calls == []
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].api_version == "storage.k8s.io/v1"
+    assert explorer.calls[0].kind == "StorageClass"
+    assert explorer.calls[0].limit == 50
 
 
 def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
@@ -850,7 +973,7 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert detail.status_code == 200
         assert "exceeding its memory limit" in detail.text
-        assert "Evidence-first Milestone 9 investigation" in detail.text
+        assert "Evidence-first incident investigation" in detail.text
 
     assert workload_source.calls == [{
         "namespace": "demo",
@@ -1034,8 +1157,73 @@ def test_investigation_chat_cites_evidence_and_proposes_registered_checks(tmp_pa
         assert json.loads(messages[1].citations_json) == ["alertmanager-alert"]
         assert json.loads(messages[1].tool_intent_json)["name"] == "run_queued_checks"
         events = list(db_session.scalars(select(AuditEvent).where(AuditEvent.action.like("chat.%"))))
-        assert [event.action for event in events] == ["chat.message", "chat.answer"]
+        assert [event.action for event in events] == [
+            "chat.message", "chat.investigate", "chat.answer"
+        ]
         assert all("synthetic-secret" not in event.details_json for event in events)
+    engine.dispose()
+
+
+def test_incident_chat_collects_and_persists_alert_scoped_job_evidence(tmp_path: Path) -> None:
+    provider = IncidentJobProvider()
+    explorer = IncidentJobExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource((job_failed(),)),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
+        created = client.post(
+            "/api/v1/alerts/job-failed-1/investigations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
+        asked = client.post(
+            f"/api/v1/investigations/{investigation_id}/chat",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Can you inspect the Job object and find clues?"},
+            follow_redirects=False,
+        )
+        detail = client.get(asked.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "PodPilot inspected the alert-scoped Job" in detail.text
+        assert 'href="#evidence-cluster-job-1"' in detail.text
+        assert "Read Job operators/status-check-abc" in detail.text
+        assert "chat may perform bounded" in detail.text
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].api_version == "batch/v1"
+    assert explorer.calls[0].kind == "Job"
+    assert explorer.calls[0].namespace == "operators"
+    assert explorer.calls[0].name == "status-check-abc"
+    assert provider.chat_calls[0]["policy"]["bounded_cluster_reads_enabled"] is True
+    assert provider.chat_calls[0]["read_activity"][0]["status"] == "succeeded"
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        investigation = db_session.get(Investigation, investigation_id)
+        analysis = json.loads(investigation.analysis_json)
+        job = next(item for item in analysis["observations"] if item["id"] == "cluster-job-1")
+        assert job["data"]["status"]["conditions"][0]["reason"] == "BackoffLimitExceeded"
+        audit = db_session.scalar(
+            select(AuditEvent).where(AuditEvent.action == "chat.investigate")
+        )
+        assert json.loads(audit.details_json)["observations_added"] == 1
     engine.dispose()
 
 

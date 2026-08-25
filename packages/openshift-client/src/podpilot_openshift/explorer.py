@@ -12,6 +12,7 @@ from kubernetes.dynamic import DynamicClient
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
+from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
 
 
 class ReadOnlyExplorerError(RuntimeError):
@@ -28,6 +29,12 @@ _DENIED_KINDS = {
     "selfsubjectaccessreview",
     "selfsubjectrulesreview",
     "localsubjectaccessreview",
+    "oauthaccesstoken",
+    "oauthauthorizetoken",
+    "useroauthaccesstoken",
+    "identity",
+    "user",
+    "group",
 }
 _SENSITIVE_KEYS = re.compile(
     r"(?i)^(?:.*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key).*)$"
@@ -72,6 +79,98 @@ def _sanitize(value: Any, *, depth: int = 0) -> Any:
     return redact_text(str(value))[:2048]
 
 
+def _metadata_projection(raw: dict[str, Any]) -> dict[str, Any]:
+    metadata = raw.get("metadata") or {}
+    return _sanitize({
+        "name": metadata.get("name"),
+        "namespace": metadata.get("namespace"),
+        "generation": metadata.get("generation"),
+        "creationTimestamp": metadata.get("creationTimestamp") or metadata.get("creation_timestamp"),
+        "labels": metadata.get("labels") or {},
+        "ownerReferences": metadata.get("ownerReferences") or metadata.get("owner_references") or [],
+    })
+
+
+def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
+    metadata = _metadata_projection(raw)
+    spec = raw.get("spec") or {}
+    status = raw.get("status") or {}
+    projected: dict[str, Any] = {"metadata": metadata}
+    if kind == "Pod":
+        projected["spec"] = {"nodeName": spec.get("nodeName") or spec.get("node_name")}
+        projected["status"] = {
+            "phase": status.get("phase"),
+            "conditions": status.get("conditions") or [],
+            "containerStatuses": status.get("containerStatuses") or status.get("container_statuses") or [],
+        }
+    elif kind in {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}:
+        projected["spec"] = {"replicas": spec.get("replicas")}
+        projected["status"] = {
+            key: status.get(key) for key in (
+                "replicas", "readyReplicas", "availableReplicas", "updatedReplicas",
+                "currentReplicas", "numberReady", "desiredNumberScheduled",
+            ) if key in status
+        }
+        projected["status"]["conditions"] = status.get("conditions") or []
+    elif kind == "Job":
+        projected["spec"] = {
+            "completions": spec.get("completions"),
+            "parallelism": spec.get("parallelism"),
+            "backoffLimit": spec.get("backoffLimit") or spec.get("backoff_limit"),
+        }
+        projected["status"] = {
+            key: status.get(key) for key in ("active", "succeeded", "failed", "startTime", "completionTime")
+            if key in status
+        }
+        projected["status"]["conditions"] = status.get("conditions") or []
+    elif kind == "Route":
+        projected["spec"] = {
+            "host": spec.get("host"), "to": spec.get("to"), "port": spec.get("port"),
+            "tls": {"termination": (spec.get("tls") or {}).get("termination")},
+        }
+        projected["status"] = {"ingress": status.get("ingress") or []}
+    elif kind == "ClusterOperator":
+        projected["status"] = {
+            "versions": status.get("versions") or [],
+            "conditions": status.get("conditions") or [],
+        }
+    elif kind in {"PersistentVolume", "PersistentVolumeClaim"}:
+        projected["spec"] = {
+            key: spec.get(key) for key in (
+                "storageClassName", "capacity", "accessModes", "volumeName", "claimRef"
+            ) if key in spec
+        }
+        projected["status"] = {"phase": status.get("phase"), "capacity": status.get("capacity")}
+    elif kind == "StorageClass":
+        projected.update({
+            "provisioner": raw.get("provisioner"),
+            "reclaimPolicy": raw.get("reclaimPolicy") or raw.get("reclaim_policy"),
+            "volumeBindingMode": raw.get("volumeBindingMode") or raw.get("volume_binding_mode"),
+            "allowVolumeExpansion": raw.get("allowVolumeExpansion") or raw.get("allow_volume_expansion"),
+        })
+    elif kind == "Node":
+        projected["spec"] = {
+            "unschedulable": spec.get("unschedulable"), "taints": spec.get("taints") or []
+        }
+        projected["status"] = {
+            "conditions": status.get("conditions") or [],
+            "capacity": status.get("capacity") or {},
+            "allocatable": status.get("allocatable") or {},
+        }
+    else:
+        projected["status"] = {"conditions": status.get("conditions") or []}
+    return _sanitize(projected)
+
+
+def _continue_token(response: object) -> str | None:
+    metadata = getattr(response, "metadata", None)
+    if metadata is None:
+        return None
+    if isinstance(metadata, dict):
+        return str(metadata.get("continue") or metadata.get("continue_") or "") or None
+    return str(getattr(metadata, "continue_", None) or getattr(metadata, "continue", None) or "") or None
+
+
 class KubernetesReadOnlyExplorer:
     """Executes a small, deny-by-default set of bounded Kubernetes reads."""
 
@@ -80,12 +179,14 @@ class KubernetesReadOnlyExplorer:
         *,
         dynamic_client: DynamicClient | None = None,
         core_api: client.CoreV1Api | None = None,
+        resource_catalog: ResourceCatalog | None = None,
         max_payload_bytes: int = 48_000,
         log_tail_lines: int = 250,
         max_log_bytes: int = 24_000,
     ) -> None:
         self._dynamic = dynamic_client
         self._core = core_api
+        self._catalog = resource_catalog
         self._max_payload_bytes = max_payload_bytes
         self._log_tail_lines = log_tail_lines
         self._max_log_bytes = max_log_bytes
@@ -100,6 +201,17 @@ class KubernetesReadOnlyExplorer:
         api_client = client.ApiClient()
         self._dynamic = DynamicClient(api_client)
         self._core = client.CoreV1Api(api_client)
+        self._catalog = ResourceCatalog(self._dynamic.resources.search)
+
+    def resource_catalog(self, *, query: str = "", limit: int = 120) -> list[dict[str, object]]:
+        self._ensure_clients()
+        assert self._dynamic is not None
+        if self._catalog is None:
+            self._catalog = ResourceCatalog(self._dynamic.resources.search)
+        try:
+            return self._catalog.prompt_entries(query=query, limit=limit)
+        except ResourceCatalogError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         try:
@@ -109,6 +221,8 @@ class KubernetesReadOnlyExplorer:
             return self._resource_read(intent)
         except ReadOnlyExplorerError:
             raise
+        except ResourceCatalogError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
             target = (
                 f"Pod {intent.namespace}/{intent.name} logs"
@@ -135,27 +249,93 @@ class KubernetesReadOnlyExplorer:
 
     def _resource_read(self, intent: ReadIntent) -> ReadResult:
         assert self._dynamic is not None
-        api_version = _safe_api_version(intent.api_version)
-        kind = _safe_identifier(intent.kind, "kind")
+        verb = "get" if intent.tool == "get_resource" else "list"
+        namespaced: bool | None = None
+        if intent.resource:
+            if self._catalog is None:
+                self._catalog = ResourceCatalog(self._dynamic.resources.search)
+            descriptor = self._catalog.resolve(intent.resource, verb=verb)
+            api_version = descriptor.api_version
+            kind = descriptor.kind
+            namespaced = descriptor.namespaced
+        else:
+            api_version = _safe_api_version(intent.api_version)
+            kind = _safe_identifier(intent.kind, "kind")
         namespace = _safe_identifier(intent.namespace, "namespace", required=False)
         name = _safe_identifier(intent.name, "resource name", required=intent.tool == "get_resource")
         assert kind
         if kind.lower() in _DENIED_KINDS or "/" in kind:
             raise ReadOnlyExplorerError("That resource type is outside the read-only evidence policy.")
+        if namespaced is False and namespace:
+            raise ReadOnlyExplorerError("The requested cluster-scoped resource must not include a namespace.")
+        if namespaced is True and intent.tool == "get_resource" and not namespace:
+            raise ReadOnlyExplorerError("A namespace is required to read that namespaced resource by name.")
         resource = self._dynamic.resources.get(api_version=api_version, kind=kind)
         if intent.tool == "get_resource":
             obj = resource.get(name=name, namespace=namespace)
             items = [obj]
         elif intent.tool == "list_resources":
-            kwargs: dict[str, object] = {"limit": min(intent.limit, 50)}
-            if namespace:
-                kwargs["namespace"] = namespace
-            if intent.label_selector:
-                kwargs["label_selector"] = intent.label_selector
-            response = resource.get(**kwargs)
-            items = list(getattr(response, "items", []) or [])[: min(intent.limit, 50)]
+            items = []
+            token: str | None = None
+            pages = 0
+            while len(items) < intent.limit and pages < 5:
+                kwargs: dict[str, object] = {"limit": min(50, intent.limit - len(items))}
+                if namespace:
+                    kwargs["namespace"] = namespace
+                if intent.label_selector:
+                    kwargs["label_selector"] = intent.label_selector
+                if token:
+                    kwargs["_continue"] = token
+                response = resource.get(**kwargs)
+                items.extend(list(getattr(response, "items", []) or []))
+                token = _continue_token(response)
+                pages += 1
+                if not token:
+                    break
         else:
             raise ReadOnlyExplorerError("The requested read tool is not registered.")
+
+        if intent.tool == "list_resources":
+            projections = []
+            projected_bytes = 0
+            payload_truncated = False
+            for obj in items[: intent.limit]:
+                raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+                projection = _list_projection(kind, raw)
+                projection_bytes = len(json.dumps(
+                    projection, sort_keys=True, default=str
+                ).encode("utf-8"))
+                if projections and projected_bytes + projection_bytes > self._max_payload_bytes:
+                    payload_truncated = True
+                    break
+                projections.append(projection)
+                projected_bytes += projection_bytes
+            scope = namespace or "cluster"
+            collected_at = datetime.now(timezone.utc)
+            limitations = []
+            if token or payload_truncated:
+                limitations.append(
+                    f"The bounded {kind} list returned {len(projections)} compact records; "
+                    "additional matching data exists."
+                )
+            if not projections:
+                limitations.append(f"No {kind} resources matched the bounded query.")
+            return ReadResult((AdHocObservation(
+                id=f"cluster-{uuid4()}",
+                tool="list_resources",
+                summary=f"Read {len(projections)} {kind} resources in {scope}.",
+                source=f"kubernetes:{api_version}:{kind}:{scope}/*",
+                collected_at=collected_at,
+                data={
+                    "apiVersion": api_version,
+                    "kind": kind,
+                    "resource": intent.resource,
+                    "scope": scope,
+                    "count": len(projections),
+                    "items": projections,
+                    "truncated": bool(token or payload_truncated),
+                },
+            ),), tuple(limitations))
 
         observations: list[AdHocObservation] = []
         for obj in items:
@@ -179,8 +359,7 @@ class KubernetesReadOnlyExplorer:
                     data=payload,
                 )
             )
-        limitation = () if observations else (f"No {kind} resources matched the bounded query.",)
-        return ReadResult(tuple(observations), limitation)
+        return ReadResult(tuple(observations))
 
     def _pod_logs(self, intent: ReadIntent) -> ReadResult:
         assert self._core is not None

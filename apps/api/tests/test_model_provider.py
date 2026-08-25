@@ -183,6 +183,23 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     assert "Do not tell the operator to run kubectl" in request["messages"][0]["content"]
 
 
+def test_incident_chat_prompt_keeps_read_work_inside_podpilot() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.chat(
+        profile(),
+        "secret-token",
+        {"analysis": {"observations": [{"id": "cluster-pod-1"}]}, "read_activity": []},
+    )
+
+    instructions = completions.requests[0]["messages"][0]["content"]
+    assert "PodPilot owns available read-only evidence collection" in instructions
+    assert "do not tell the operator to run kubectl" in instructions
+
+
 def test_capability_report_requires_ask_schemas_for_ready_state() -> None:
     base = dict(
         reachable=True,

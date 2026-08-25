@@ -106,6 +106,12 @@ denial, recursive redaction, persisted provenance, and withholding of uncited
 cluster-specific answers. Audit both `cluster-reader` effective permissions and
 the application broker deny tests before release.
 
+Discovery-backed resource gates cover TTL caching, stable-version selection,
+cross-group ambiguity and qualification, question-relevant catalog ranking,
+advertised verb and namespaced-scope enforcement, sensitive resource/subresource
+filtering, deterministic explicit inventory compilation, continue-token
+pagination, compact projections, payload truncation, and installed-CRD reads.
+
 Conversation-management gates cover owner-only list/read/continue/delete,
 not-found behavior for other users regardless of role, CSRF-protected deletion,
 content removal with a content-free audit record, no hard turn cap, rolling context
@@ -138,6 +144,11 @@ Compatibility gates cover a missing descriptive `ReadPlan` summary, reduced
 probe output budgets, canonical built-in Kind/apiVersion coordinates, unchanged
 custom-resource validation, and suppression of model-authored planning caveats
 from trusted collection-limit displays.
+Incident-chat gates must prove that alert-scoped reads use the shared broker,
+persist redacted observations before answering, validate citations against the
+expanded evidence set, audit targets without payloads, and retain the separate
+operator click for registered checks. Deterministic planning gates cover
+StorageClass inventory, namespaced built-in lists, and exact failed-Job alert scope.
 
 ## Rollback
 

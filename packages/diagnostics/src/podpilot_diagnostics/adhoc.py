@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Literal, Protocol
@@ -11,6 +12,7 @@ class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
     tool: Literal["get_resource", "list_resources", "pod_logs"]
+    resource: str | None = Field(default=None, max_length=253)
     api_version: str | None = Field(default=None, max_length=128)
     kind: str | None = Field(default=None, max_length=128)
     namespace: str | None = Field(default=None, max_length=253)
@@ -18,7 +20,7 @@ class ReadIntent(BaseModel):
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
     previous: bool = False
-    limit: int = Field(default=20, ge=1, le=50)
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class ReadPlan(BaseModel):
@@ -48,6 +50,14 @@ _BUILTIN_RESOURCE_TYPES: dict[str, tuple[str, str]] = {
     "storageclass": ("storage.k8s.io/v1", "StorageClass"),
     "storageclasses": ("storage.k8s.io/v1", "StorageClass"),
 }
+_KIND_RESOURCE_NAMES = {
+    "ConfigMap": "configmaps", "DaemonSet": "daemonsets", "Deployment": "deployments",
+    "Event": "events", "IngressController": "ingresscontrollers", "Namespace": "namespaces",
+    "NetworkPolicy": "networkpolicies", "Node": "nodes", "PersistentVolume": "persistentvolumes",
+    "PersistentVolumeClaim": "persistentvolumeclaims", "Pod": "pods", "ReplicaSet": "replicasets",
+    "Route": "routes", "Service": "services", "StatefulSet": "statefulsets",
+    "StorageClass": "storageclasses",
+}
 
 
 def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
@@ -59,7 +69,140 @@ def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
     if not coordinates:
         return intent
     api_version, kind = coordinates
-    return intent.model_copy(update={"api_version": api_version, "kind": kind})
+    return intent.model_copy(update={
+        "resource": _KIND_RESOURCE_NAMES[kind],
+        "api_version": api_version,
+        "kind": kind,
+    })
+
+
+_NAMESPACE_RESOURCE_QUERY = re.compile(
+    r"\b(?:show|list|display|what|which)\b.*?\b"
+    r"(?P<kind>pods?|services?|deployments?|statefulsets?|daemonsets?|configmaps?|routes?)\b"
+    r".*?\b(?:in|from)\s+(?:the\s+)?(?:namespace\s+)?(?P<namespace>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
+    re.IGNORECASE,
+)
+
+
+def plan_known_read(
+    question: str,
+    *,
+    alert_name: str | None = None,
+    alert_labels: dict[str, object] | None = None,
+) -> tuple[ReadPlan, bool] | None:
+    """Compile unambiguous inventory and alert-scoped reads without model syntax."""
+
+    lowered = question.lower()
+    if "storageclass" in lowered or "storage class" in lowered:
+        return (
+            ReadPlan(
+                scope_summary="List cluster StorageClasses.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="storageclasses",
+                    api_version="storage.k8s.io/v1",
+                    kind="StorageClass",
+                    limit=50,
+                )],
+            ),
+            True,
+        )
+
+    match = _NAMESPACE_RESOURCE_QUERY.search(question)
+    if match:
+        proposed = ReadIntent(
+            tool="list_resources",
+            kind=match.group("kind"),
+            namespace=match.group("namespace"),
+            limit=50,
+        )
+        intent = normalize_read_intent(proposed)
+        return (
+            ReadPlan(
+                scope_summary=f"List {intent.kind} resources in {intent.namespace}.",
+                intents=[intent],
+            ),
+            True,
+        )
+
+    labels = alert_labels or {}
+    namespace = str(labels.get("namespace") or "")
+    job_name = str(labels.get("job_name") or labels.get("jobName") or "")
+    if (
+        alert_name in {"KubeJobFailed", "KubeJobCompletion"}
+        and "job" in lowered
+        and namespace
+        and job_name
+    ):
+        return (
+            ReadPlan(
+                scope_summary=f"Inspect alert-scoped Job {namespace}/{job_name}.",
+                intents=[ReadIntent(
+                    tool="get_resource",
+                    resource="jobs",
+                    api_version="batch/v1",
+                    kind="Job",
+                    namespace=namespace,
+                    name=job_name,
+                )],
+            ),
+            False,
+        )
+    return None
+
+
+def plan_catalog_read(
+    question: str,
+    resource_catalog: list[dict[str, object]],
+) -> tuple[ReadPlan, bool] | None:
+    """Compile an explicit inventory question against the live safe resource catalog."""
+
+    if not re.search(r"\b(?:show|list|display|what|which)\b", question, re.IGNORECASE):
+        return None
+    lowered = question.lower()
+    namespace_match = re.search(
+        r"\b(?:in|from)\s+(?:the\s+)?(?:namespace\s+)?"
+        r"(?P<namespace>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
+        question,
+        re.IGNORECASE,
+    )
+    namespace = namespace_match.group("namespace") if namespace_match else None
+    matches: list[tuple[int, dict[str, object]]] = []
+    for entry in resource_catalog:
+        resource = str(entry.get("resource") or "")
+        kind = str(entry.get("kind") or "")
+        if not resource or not kind:
+            continue
+        unqualified = resource.split(".", 1)[0]
+        kind_words = re.sub(r"(?<!^)(?=[A-Z])", " ", kind).lower()
+        aliases = {unqualified.lower(), kind.lower(), kind_words}
+        for alias in aliases:
+            if re.search(rf"\b{re.escape(alias)}s?\b", lowered):
+                matches.append((len(alias), entry))
+                break
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0], reverse=True)
+    entry = matches[0][1]
+    namespaced = bool(entry.get("namespaced"))
+    if namespaced and not namespace:
+        return None
+    if not namespaced and namespace:
+        return None
+    resource = str(entry["resource"])
+    kind = str(entry["kind"])
+    return (
+        ReadPlan(
+            scope_summary=f"List {kind} resources in {namespace or 'the cluster'}.",
+            intents=[ReadIntent(
+                tool="list_resources",
+                resource=resource,
+                namespace=namespace,
+                limit=100,
+            )],
+        ),
+        True,
+    )
 
 
 @dataclass(frozen=True)

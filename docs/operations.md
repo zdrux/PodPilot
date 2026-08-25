@@ -435,6 +435,11 @@ The normalized vector shape follows the [Prometheus HTTP API](https://prometheus
 An Investigator can ask follow-up questions on an investigation page. Incident
 facts in an AI answer link to server-validated evidence IDs. `General guidance`
 and `Insufficient evidence` answers deliberately show no incident citation. If
+the question asks for further investigation, incident chat may perform the same
+bounded read-only resource and Pod-log collection used by Ask PodPilot. Alert
+labels seed exact persisted scope where available; collected observations are
+added to the incident evidence panel and audited as `chat.investigate`. Secrets,
+commands, active probes, and mutations remain blocked. If
 queued registered checks exist, the model may display a `run_queued_checks`
 proposal; it does not run anything until the operator presses **Review and run
 queued checks**. Viewer users can read attributed history but cannot post.
@@ -444,6 +449,22 @@ two environment settings above, and never copied into audit details. Reaching th
 history budget requires a new investigation rather than silently truncating the
 durable transcript. A provider outage stores a visible unavailable response while
 leaving deterministic evidence and checks usable.
+
+Straightforward inventory questions bypass model planning: StorageClass discovery
+and explicit list/show questions compile against the live, safe API discovery
+catalog to one deterministic bounded read. This works for common Kubernetes and
+OpenShift resources plus installed CRDs; namespaced resources require an explicit
+namespace. Investigative questions still use iterative model planning, but the
+question-relevant catalog entries are supplied so the model proposes a resource
+name rather than guessing apiVersion/Kind coordinates. Interpretation still
+requires the configured model.
+
+Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
+therefore take up to five minutes to appear without a restart. Cross-group name
+collisions are represented as `resource.group` (for example,
+`events.events.k8s.io`). List reads paginate up to the configured object ceiling
+and return compact projections; a visible limitation indicates when more matching
+objects or payload data exists.
 
 ### Trust the SNO router CA for interactive login
 

@@ -66,7 +66,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Investigation-scoped chat persists attributed, redacted messages and labels
   evidence-based, general-guidance, and insufficient-evidence answers. The API
   validates model citations against the investigation's persisted observation
-  IDs and withholds uncited factual claims.
+  IDs and withholds uncited factual claims. It now shares the bounded Ask read
+  broker, persists alert-scoped resource and Pod-log observations into the
+  incident, and audits read targets without evidence bodies.
 - Chat may propose only the literal `run_queued_checks` intent while registered
   checks remain queued. The proposal cannot execute anything; an Investigator
   must use the separate existing check control and its CSRF, atomic claim, scope,
@@ -77,6 +79,16 @@ records remain, but execution now awaits a separate approval-gated action servic
   discovery can lead to exact container logs; a final pass answers from persisted, redacted evidence with
   server-validated citations. Secrets, access reviews, arbitrary subresources,
   commands, network probes, and mutations are denied.
+- Unambiguous StorageClass inventory and supported namespaced built-in list
+  questions use deterministic read plans. Failed-Job incident questions seed an
+  exact `batch/v1` Job read from persisted alert labels before optional follow-up
+  planning, preventing empty or malformed model intents from blocking basic work.
+- The read broker now builds a five-minute safe catalog from live Kubernetes API
+  discovery. Explicit inventory questions compile from that catalog, and model
+  planning receives question-relevant plural resource names for core,
+  OpenShift, and installed CRD objects. Normal code resolves versions, group
+  collisions, scope, and verbs. Lists paginate and persist compact, explicitly
+  truncated collection evidence rather than one observation per object.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per
@@ -117,7 +129,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 102 tests passing with 82% aggregate branch coverage.
+- Automated suite: 119 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

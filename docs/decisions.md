@@ -383,3 +383,24 @@ Consequences: Promotion and rollback use human-readable versioned tags and requi
 no external-registry pull Secret. Tags are mutable, so operators must publish a
 new tag for each build. Reusing a tag requires an explicit Deployment restart and
 provides weaker provenance than a digest-pinned production release.
+
+## 2026-08-24 - Read investigations resolve resources from safe API discovery
+
+Context: Maintaining apiVersion/Kind mappings for every common OpenShift object
+and installed operator CRD does not scale, while allowing a model to invent raw
+API coordinates or invoke a generic Kubernetes client weakens the trust boundary.
+
+Decision: Cache the cluster's served API resources for five minutes, remove
+Secrets, identity/token/access-review resources, and all subresources, and expose
+only bounded catalog metadata to planning. Plans select plural resource names.
+Normal code resolves the current stable served version, group collision,
+namespaced scope, and advertised `get`/`list` verb before using the dynamic client.
+Explicit inventory questions compile directly from the same catalog. List results
+follow continue tokens but persist compact kind-aware projections under object and
+payload ceilings.
+
+Consequences: Core Kubernetes, OpenShift, and installed CRD reads no longer need a
+handwritten domain pack merely to collect evidence. RBAC remains the final access
+ceiling, provider output remains non-executable data, and remediation still
+requires separately reviewed typed actions, preconditions, approval, and
+verification. Newly served APIs may take up to five minutes to enter the catalog.

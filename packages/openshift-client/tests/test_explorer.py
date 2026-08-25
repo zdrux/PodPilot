@@ -33,13 +33,34 @@ class FakeResource:
 
 
 class FakeResources:
-    def __init__(self, resource):
+    def __init__(self, resource, discovered=()):
         self.resource = resource
+        self.discovered = discovered
         self.calls = []
 
     def get(self, **kwargs):
         self.calls.append(kwargs)
         return self.resource
+
+    def search(self, **_kwargs):
+        return self.discovered
+
+
+class FakePagedResource:
+    def __init__(self):
+        self.calls = []
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        if "_continue" not in kwargs:
+            return SimpleNamespace(
+                items=[FakeObject(name="a")],
+                metadata=SimpleNamespace(continue_="next-page"),
+            )
+        return SimpleNamespace(
+            items=[FakeObject(name="b")],
+            metadata=SimpleNamespace(continue_=""),
+        )
 
 
 class FakeCore:
@@ -92,8 +113,71 @@ def test_list_supports_grouped_api_versions_and_enforces_limit():
         tool="list_resources", api_version="apps/v1", kind="Deployment",
         namespace="payments", label_selector="app=api", limit=2,
     ))
-    assert len(result.observations) == 2
+    assert len(result.observations) == 1
+    assert result.observations[0].data["count"] == 2
+    assert len(result.observations[0].data["items"]) == 2
     assert resource.calls == [{"limit": 2, "namespace": "payments", "label_selector": "app=api"}]
+
+
+def test_resource_name_resolves_from_discovery_and_compacts_list_payload():
+    resource = FakeResource([FakeObject(payload={
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {"name": "api", "namespace": "payments"},
+        "spec": {"host": "api.example.test", "to": {"kind": "Service", "name": "api"}},
+        "status": {"ingress": [{"conditions": [{"type": "Admitted", "status": "True"}]}]},
+    })])
+    descriptor = SimpleNamespace(
+        name="routes", group_version="route.openshift.io/v1", kind="Route",
+        namespaced=True, verbs=("get", "list"), singular_name="route", short_names=(),
+    )
+    resources = FakeResources(resource, discovered=(descriptor,))
+    dynamic = SimpleNamespace(resources=resources)
+    target = KubernetesReadOnlyExplorer(dynamic_client=dynamic, core_api=FakeCore())
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", resource="routes", namespace="payments", limit=20,
+    ))
+
+    assert resources.calls == [{"api_version": "route.openshift.io/v1", "kind": "Route"}]
+    assert result.observations[0].data["kind"] == "Route"
+    assert result.observations[0].data["items"][0]["spec"]["host"] == "api.example.test"
+
+
+def test_bounded_list_follows_continue_tokens_until_complete():
+    resource = FakePagedResource()
+    target, _, _ = explorer(resource)
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", api_version="v1", kind="Pod", namespace="payments", limit=2,
+    ))
+
+    assert result.observations[0].data["count"] == 2
+    assert result.observations[0].data["truncated"] is False
+    assert resource.calls == [
+        {"limit": 2, "namespace": "payments"},
+        {"limit": 1, "namespace": "payments", "_continue": "next-page"},
+    ]
+
+
+def test_compact_list_enforces_payload_budget_with_explicit_truncation():
+    objects = [FakeObject(name=f"pod-{index}", payload={
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": f"pod-{index}", "namespace": "payments"},
+        "status": {"phase": "Running", "conditions": [{"message": "x" * 500}]},
+    }) for index in range(5)]
+    target, _, _ = explorer(FakeResource(objects))
+    target._max_payload_bytes = 900
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", api_version="v1", kind="Pod",
+        namespace="payments", limit=5,
+    ))
+
+    assert result.observations[0].data["truncated"] is True
+    assert len(result.observations[0].data["items"]) < 5
+    assert "additional matching data exists" in result.limitations[0]
 
 
 def test_logs_are_bounded_and_redacted():
