@@ -1,18 +1,6 @@
 apiVersion: user.openshift.io/v1
 kind: Group
 metadata:
-  name: podpilot-viewers
-  labels:
-    app.kubernetes.io/name: podpilot
-users:
-  - podpilot-viewer
-  - podpilot-investigator
-  - podpilot-approver
-  - podpilot-breakglass
----
-apiVersion: user.openshift.io/v1
-kind: Group
-metadata:
   name: podpilot-investigators
   labels:
     app.kubernetes.io/name: podpilot

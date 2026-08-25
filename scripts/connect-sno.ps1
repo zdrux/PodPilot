@@ -10,7 +10,7 @@ $expectedServer = 'https://api.sno.192-168-0-200.sslip.io:6443'
 $expectedIdentity = 'system:serviceaccount:ai-ops:ai-observer'
 
 if ([string]::IsNullOrWhiteSpace($BootstrapKubeconfig)) {
-    $BootstrapKubeconfig = 'C:\Users\zdrux\Documents\Codex\2026-08-22\i-w\work\sno-agent\build-20260822-205029\auth\kubeconfig'
+    throw 'Set PODPILOT_BOOTSTRAP_KUBECONFIG or pass -BootstrapKubeconfig with an external kubeconfig path.'
 }
 
 if (-not (Get-Command oc -ErrorAction SilentlyContinue)) {

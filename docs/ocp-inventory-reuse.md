@@ -3,7 +3,7 @@
 Last reviewed: 2026-08-22
 Update when: code is imported from `ocp-inventory` or the PodPilot UI architecture changes.
 
-The adjacent `C:\Users\zdrux\Desktop\projects\ocp-inventory` repository is a
+The adjacent `ocp-inventory` repository is a
 useful design reference, not a foundation to fork wholesale. PodPilot should
 selectively extract small, reviewed pieces while keeping its troubleshooting,
 evidence, approval, and provider boundaries purpose-built.

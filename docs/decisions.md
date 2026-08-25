@@ -121,6 +121,10 @@ Decision: Configure a PoC HTPasswd provider and hierarchical `podpilot-viewers`,
 
 Consequences: Test approvals can be attributed to named OpenShift users. Cluster API mutations still appear as the executor service account and must be correlated with PodPilot's action audit record. Password bootstrap material remains outside Git and is deleted after distribution.
 
+Status: The group-gated GUI admission portion was superseded on 2026-08-24 by
+authenticated-user Viewer access. The named Investigator, Approver, and
+Breakglass groups remain lab elevation fixtures; the Viewer group was removed.
+
 ## 2026-08-22 - Disposable integrated-registry build path
 
 Context: The SNO lab has no external release registry and its integrated image
@@ -315,3 +319,45 @@ deferred until destinations are administrator-registered and enforced with a
 dedicated no-token identity, egress policy, rate limits, protocol allowlist, and
 fixtures for redirect, DNS-rebinding, link-local, control-plane, and Secret-service
 denial.
+
+## 2026-08-24 - Portable remote PoC uses default dynamic storage and split RBAC
+
+Context: The local static PV, node-specific security context, HTPasswd users,
+integrated-registry build, and cluster-admin helper are unsuitable for a cluster
+with real workloads.
+
+Decision: Add one remote Kustomize entry point that composes the portable base,
+group-based GUI access, and single-replica workload. Existing LDAP-synchronized
+OpenShift Groups are mapped through deployment-configured JSON arrays; PodPilot
+does not create or update Group membership. The GUI RoleBinding admits the union
+of those groups to the exact Service. Build the root Dockerfile
+externally and deploy an immutable digest. Omit `storageClassName` so the target's
+default CSI class provisions the PVC. Keep human exact-Service GUI permission as
+namespace-local RBAC, attach `cluster-reader` and monitoring access only to the
+runtime ServiceAccount, and define the named Alertmanager API Role explicitly in
+`openshift-monitoring`.
+
+Consequences: The remote path has no node, local-path, lab-hostname, HTPasswd, or
+cluster-admin dependency. Cluster administrators still must audit the aggregated
+`cluster-reader` role and default StorageClass on every target. SQLite remains a
+single-replica PoC persistence choice, not an HA production database.
+
+## 2026-08-24 - Authenticated users default to Viewer
+
+Context: Repeating the same LDAP group names in both the OAuth proxy admission
+RoleBinding and application-role configuration creates avoidable drift. The PoC
+is intended for a cluster whose authenticated users may view shared operational
+evidence, while investigation and remediation workflows still require explicit
+elevation.
+
+Decision: Bind the namespace-local exact-Service GUI Role to OpenShift's built-in
+`system:authenticated` group and assign Viewer to every proxy-authenticated user.
+Keep one deployment-configured mapping only for Investigator, Approver, and
+Breakglass groups. PodPilot continues to read group membership without creating
+or synchronizing groups, and highest-role precedence remains deterministic.
+
+Consequences: Any authenticated cluster identity can open PodPilot and view its
+cluster-wide findings, including collected logs and ConfigMap evidence. This is
+an explicit PoC disclosure boundary. Human identities still receive no direct
+cluster-reading or mutation RBAC, and all non-Viewer operations remain protected
+by application authorization, CSRF, typed-action, approval, and audit controls.

@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -28,7 +28,8 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 The current single Pod contains two containers. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
 `127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
-highest matching role from the four named OpenShift groups, renders the dashboard,
+highest matching elevated role from deployment-configured OpenShift Group lists
+or defaults the authenticated user to Viewer, renders the dashboard,
 and persists schema state in SQLite on the `podpilot-data` PVC. An init container
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.

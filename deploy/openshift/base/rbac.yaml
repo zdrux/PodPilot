@@ -29,9 +29,22 @@ roleRef:
   name: cluster-monitoring-view
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: Role
 metadata:
   name: podpilot-alertmanager-api-view
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/name: podpilot
+rules:
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["alertmanagers/api"]
+    resourceNames: ["main"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: podpilot-alertmanager-api-access
   namespace: openshift-monitoring
   labels:
     app.kubernetes.io/name: podpilot
@@ -42,4 +55,4 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: monitoring-alertmanager-view
+  name: podpilot-alertmanager-api-view

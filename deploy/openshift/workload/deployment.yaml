@@ -33,9 +33,30 @@ spec:
           args: ["-c", "apps/api/alembic.ini", "upgrade", "head"]
           env: &podpilot-env
             - name: PODPILOT_ENVIRONMENT
-              value: sno-lab
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: environment
             - name: PODPILOT_CLUSTER_NAME
-              value: sno.192-168-0-200.sslip.io
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: cluster_name
+            - name: PODPILOT_ROLE_INVESTIGATOR_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: role_investigator_groups
+            - name: PODPILOT_ROLE_APPROVER_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: role_approver_groups
+            - name: PODPILOT_ROLE_BREAKGLASS_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: role_breakglass_groups
             - name: PODPILOT_DATA_DIR
               value: /var/lib/podpilot
             - name: PODPILOT_DATABASE_URL

@@ -455,7 +455,12 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
-        cache_seconds=app_settings.role_cache_seconds
+        cache_seconds=app_settings.role_cache_seconds,
+        role_groups=(
+            (Role.BREAKGLASS, tuple(app_settings.role_breakglass_groups)),
+            (Role.APPROVER, tuple(app_settings.role_approver_groups)),
+            (Role.INVESTIGATOR, tuple(app_settings.role_investigator_groups)),
+        ),
     )
     alerts = alert_source or _make_alert_source(app_settings)
     workloads = workload_source or _make_workload_source(app_settings)

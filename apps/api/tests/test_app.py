@@ -449,7 +449,7 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.status_code == 200
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
-        assert "Milestone 10 adds" in response.text
+        assert "bounded, read-only cluster investigation" in response.text
         assert "PodPilot 0.11.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
@@ -1685,7 +1685,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
                 "chat_model": "test-model",
                 "api_token": "test-api-token",
                 "tls_mode": "custom_ca",
-                "custom_ca_pem": "-----BEGIN PRIVATE KEY-----",
+                "custom_ca_pem": "PRIVATE KEY MATERIAL MUST BE REJECTED",
             },
         )
         assert rejected_ca.status_code == 422

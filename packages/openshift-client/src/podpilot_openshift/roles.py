@@ -7,11 +7,12 @@ from kubernetes.dynamic import DynamicClient
 
 from podpilot_api.auth import Role
 
-ROLE_GROUPS: tuple[tuple[Role, str], ...] = (
-    (Role.BREAKGLASS, "podpilot-breakglass"),
-    (Role.APPROVER, "podpilot-approvers"),
-    (Role.INVESTIGATOR, "podpilot-investigators"),
-    (Role.VIEWER, "podpilot-viewers"),
+RoleGroups = tuple[tuple[Role, tuple[str, ...]], ...]
+
+DEFAULT_ROLE_GROUPS: RoleGroups = (
+    (Role.BREAKGLASS, ("podpilot-breakglass",)),
+    (Role.APPROVER, ("podpilot-approvers",)),
+    (Role.INVESTIGATOR, ("podpilot-investigators",)),
 )
 
 
@@ -35,16 +36,26 @@ class DynamicGroupReader:
 class OpenShiftGroupRoleResolver:
     reader: GroupReader
     cache_seconds: int = 30
+    role_groups: RoleGroups = DEFAULT_ROLE_GROUPS
+    default_role: Role | None = Role.VIEWER
     _cache: dict[str, tuple[float, Role | None]] = field(default_factory=dict)
 
     @classmethod
-    def from_environment(cls, cache_seconds: int = 30) -> "OpenShiftGroupRoleResolver":
+    def from_environment(
+        cls,
+        cache_seconds: int = 30,
+        role_groups: RoleGroups = DEFAULT_ROLE_GROUPS,
+    ) -> "OpenShiftGroupRoleResolver":
         try:
             config.load_incluster_config()
         except config.ConfigException:
             config.load_kube_config()
         api_client = client.ApiClient()
-        return cls(DynamicGroupReader(DynamicClient(api_client)), cache_seconds)
+        return cls(
+            DynamicGroupReader(DynamicClient(api_client)),
+            cache_seconds=cache_seconds,
+            role_groups=role_groups,
+        )
 
     def resolve(self, username: str) -> Role | None:
         now = monotonic()
@@ -52,10 +63,15 @@ class OpenShiftGroupRoleResolver:
         if cached is not None and cached[0] >= now:
             return cached[1]
 
-        resolved: Role | None = None
-        for role, group_name in ROLE_GROUPS:
-            if username in self.reader.users(group_name):
-                resolved = role
+        resolved = self.default_role
+        matched = False
+        for role, group_names in self.role_groups:
+            for group_name in group_names:
+                if username in self.reader.users(group_name):
+                    resolved = role
+                    matched = True
+                    break
+            if matched:
                 break
 
         self._cache[username] = (now + self.cache_seconds, resolved)
@@ -65,11 +81,13 @@ class OpenShiftGroupRoleResolver:
 @dataclass
 class LazyOpenShiftGroupRoleResolver:
     cache_seconds: int = 30
+    role_groups: RoleGroups = DEFAULT_ROLE_GROUPS
     _resolver: OpenShiftGroupRoleResolver | None = None
 
     def resolve(self, username: str) -> Role | None:
         if self._resolver is None:
             self._resolver = OpenShiftGroupRoleResolver.from_environment(
-                cache_seconds=self.cache_seconds
+                cache_seconds=self.cache_seconds,
+                role_groups=self.role_groups,
             )
         return self._resolver.resolve(username)

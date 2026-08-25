@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ../../auth/group-rbac
+  - ../../workload
+images:
+  # Replace this example image with the immutable image built for the target
+  # cluster before applying the overlay.
+  - name: podpilot
+    newName: registry.example.com/your-org/podpilot
+    newTag: 0.11.0
+patches:
+  - path: runtime-config-patch.yaml

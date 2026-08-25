@@ -1,6 +1,6 @@
 # PodPilot Codebase Map
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: top-level structure, core tooling, or verification commands change.
 
 ## Workspaces
@@ -11,7 +11,7 @@ Update when: top-level structure, core tooling, or verification commands change.
 | `apps/web/` | operator investigation UI | alert queue, evidence-cited chat, executable safe-check plan, approval, and cancellation |
 | `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
 | `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, diagnostic plan, interpretation, and remediation contracts |
-| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, build, and lab storage | Reader runtime plus separate lab break-glass identity |
+| `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, portable remote overlay, build, and lab storage | Remote reader deployment plus separate lab-only paths |
 | `evals/` | incident fixtures and expected outcomes | synthetic workload alerts plus live remediation and TargetDown fixtures |
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
@@ -27,7 +27,9 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - The provider router uses the official OpenAI Python SDK for Responses and
   strict-schema Chat Completions endpoints. SQLite stores endpoint metadata while
   per-profile tokens remain in the fixed OpenShift credential Secret.
-- SQLite FTS5 on the `podpilot-data` SNO-local PVC provides single-replica PoC state.
+- SQLite FTS5 on `podpilot-data` provides single-replica PoC state. The remote
+  PVC uses the cluster's default StorageClass; local static storage is isolated
+  to the lab overlay.
 - Hash-locked dependencies are generated with `pip-compile`; pytest and coverage are configured in `pyproject.toml`.
 - OpenShift manifests use Kustomize's built-in resource aggregation.
 
@@ -42,7 +44,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `apps/api/src/podpilot_api/model_provider.py`: structured interpretation and
   investigation-chat provider contracts.
 - `apps/web/`: local templates, styles, and JavaScript with no CDN dependency.
-- `packages/openshift-client/src/podpilot_openshift/roles.py`: cached OpenShift group-role resolution.
+- `packages/openshift-client/src/podpilot_openshift/roles.py`: cached,
+  deployment-configured OpenShift group-to-application-role resolution.
 - `packages/openshift-client/src/podpilot_openshift/alerts.py`: TLS-validated, bounded Alertmanager transport.
 - `packages/openshift-client/src/podpilot_openshift/workloads.py`: bounded Pod,
   event, owner-chain, log, and scheduling evidence collection.
@@ -57,12 +60,16 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/diagnostics/src/podpilot_diagnostics/checks.py`: portable diagnostic
   plan, result, and executor contracts.
 - `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
-- `deploy/openshift/rbac.yaml`: read-only observer permissions.
+- `deploy/openshift/base/rbac.yaml`: read-only cluster, Thanos, and explicit
+  namespaced Alertmanager API permissions.
+- `deploy/openshift/overlays/remote-poc/`: portable remote-cluster Kustomize entry point.
+- `docs/remote-poc-deployment.md`: ordered build, authorization, install,
+  validation, and rollback procedure.
 - `deploy/openshift/workload/`: Deployment, OAuth-protected Service/Route, and NetworkPolicy.
 - `deploy/openshift/build/sno-binary/`: lab ImageStream and binary BuildConfig.
 - `deploy/openshift/overlays/sno-milestone-one/`: complete SNO application overlay.
 - `deploy/openshift/overlays/poc-cluster-admin/`: additive cluster-admin exception for the disposable SNO lab.
-- `deploy/openshift/auth/poc-htpasswd/`: hierarchical PoC application groups and minimal OAuth-proxy access RBAC.
+- `deploy/openshift/auth/poc-htpasswd/`: elevated PoC application groups and authenticated-user OAuth-proxy access RBAC.
 - `deploy/openshift/storage/sno-local/`: non-default static local storage for the disposable SNO lab.
 - `docs/ocp-inventory-reuse.md`: reviewed boundary for selectively extracting adjacent project patterns.
 - `scripts/connect-sno.ps1`: generates a short-lived observer kubeconfig outside the repository.

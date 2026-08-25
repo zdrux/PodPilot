@@ -10,3 +10,5 @@ images:
     newTag: latest
 patches:
   - path: pod-security-context.yaml
+  - path: storage-class-patch.yaml
+  - path: runtime-config-patch.yaml

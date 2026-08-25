@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     auth_mode: Literal["proxy", "test"] = "proxy"
     proxy_user_header: str = "x-forwarded-user"
     role_cache_seconds: int = Field(default=30, ge=0, le=300)
+    role_investigator_groups: list[str] = Field(
+        default_factory=lambda: ["podpilot-investigators"]
+    )
+    role_approver_groups: list[str] = Field(default_factory=lambda: ["podpilot-approvers"])
+    role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
     alertmanager_url: str = "https://alertmanager-main.openshift-monitoring.svc:9094"
     service_account_token_path: Path = Path(
         "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -53,6 +58,34 @@ class Settings(BaseSettings):
     model_secret_name: str = "podpilot-model-credentials"
     model_secret_key: str = "api_key"
     poc_mode: bool = False
+
+    @field_validator(
+        "role_investigator_groups",
+        "role_approver_groups",
+        "role_breakglass_groups",
+    )
+    @classmethod
+    def normalize_role_groups(cls, groups: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_name in groups:
+            name = raw_name.strip()
+            if not name or len(name) > 253:
+                raise ValueError("OpenShift role group names must contain 1 to 253 characters")
+            if name not in normalized:
+                normalized.append(name)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_role_group_mapping(self) -> "Settings":
+        role_groups = (
+            self.role_investigator_groups,
+            self.role_approver_groups,
+            self.role_breakglass_groups,
+        )
+        configured = [name for groups in role_groups for name in groups]
+        if len(configured) != len(set(configured)):
+            raise ValueError("An OpenShift group may be mapped to only one PodPilot role")
+        return self
 
 
 @lru_cache

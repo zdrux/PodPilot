@@ -1,7 +1,16 @@
 # PodPilot Operations
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: setup, environment variables, deployment, external services, or runbooks change.
+
+## Remote OpenShift PoC
+
+Use [`remote-poc-deployment.md`](remote-poc-deployment.md) for a methodical
+deployment on an existing OpenShift cluster. That path builds and pushes the root
+`Dockerfile`, requests storage from the target's default StorageClass, uses
+existing OAuth identities, and applies only read-only runtime and monitoring
+permissions. The local SNO sections below remain development-lab procedures and
+must not be combined with the remote overlay.
 
 ## Local Setup
 
@@ -67,8 +76,8 @@ The helper:
 - validates the resulting identity and confirms the expected PoC cluster-admin permissions
 - never prints either kubeconfig or token
 
-The current external bootstrap kubeconfig is used as the helper's fallback path.
-If it moves, set the path for the current shell without copying the file:
+Set the external bootstrap kubeconfig path for the current shell without copying
+the file into this repository:
 
 ```powershell
 $env:PODPILOT_BOOTSTRAP_KUBECONFIG = 'C:\secure\external\kubeconfig'
@@ -119,7 +128,9 @@ The durable
 
 The HTPasswd provider authenticates users to OpenShift. The deployed OAuth proxy
 protects the Route and supplies the authenticated username to the loopback-only
-backend. PodPilot resolves its application role from the named OpenShift groups.
+backend. Every authenticated user receives Viewer. Lab groups map the three
+elevated roles; the remote overlay accepts arrays of existing LDAP-synchronized
+groups for those roles.
 
 ### Troubleshoot an interactive login loop
 
@@ -149,6 +160,15 @@ The current deployment uses these variables:
 - `PODPILOT_DATABASE_URL`, `sqlite:////var/lib/podpilot/podpilot.db` in the SNO overlay
 - `PODPILOT_AUTH_MODE=proxy`
 - `PODPILOT_ROLE_CACHE_SECONDS`, default `30`
+- `PODPILOT_ROLE_INVESTIGATOR_GROUPS`, JSON array defaulting to
+  `["podpilot-investigators"]`
+- `PODPILOT_ROLE_APPROVER_GROUPS`, JSON array defaulting to `["podpilot-approvers"]`
+- `PODPILOT_ROLE_BREAKGLASS_GROUPS`, JSON array defaulting to `["podpilot-breakglass"]`;
+  arrays may contain multiple existing groups or be empty, but the same group
+  cannot map to more than one role; all arrays may be empty, leaving every
+  authenticated user at Viewer
+- role-mapping environment changes require a Pod rollout; membership changes in
+  an already configured OpenShift Group are observed after the role cache expires
 - `PODPILOT_ALERTMANAGER_URL`, defaulting to the in-cluster
   `https://alertmanager-main.openshift-monitoring.svc:9094`
 - `PODPILOT_SERVICE_ACCOUNT_TOKEN_PATH`, default projected token path
@@ -278,7 +298,7 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    oc -n ai-ops exec $pod -c api -- python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health/ready').read().decode())"
    ```
 
-Review `deploy/openshift/rbac.yaml` whenever a diagnostic adds a new API dependency.
+Review `deploy/openshift/base/rbac.yaml` whenever a diagnostic adds a new API dependency.
 Production packaging must omit both SNO overlays, use a supported storage class,
 and pin an immutable application image digest.
 
@@ -361,10 +381,11 @@ queries.
 
 The in-cluster URL, bearer-token pattern, and `cluster-monitoring-view` binding
 for Thanos follow Red Hat's [OpenShift 4.22 monitoring API CLI guidance](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.22/html/accessing_metrics/accessing-monitoring-apis-by-using-the-cli).
-Alertmanager is separate: `podpilot-investigator` is bound to the existing
-namespaced `monitoring-alertmanager-view` **Role** in `openshift-monitoring`.
-Do not reference it as a ClusterRole; that creates an inert binding and the
-authenticated Alertmanager proxy returns HTTP 403.
+Alertmanager is separate: PodPilot defines and binds its own narrow namespaced
+`podpilot-alertmanager-api-view` **Role** in `openshift-monitoring`. It grants
+`get`/`list` only on `monitoring.coreos.com` `alertmanagers/api` named `main`.
+Do not reference this as a ClusterRole or place it in `openshift-logging`; either
+mistake leaves the authenticated platform Alertmanager request unauthorized.
 The normalized vector shape follows the [Prometheus HTTP API](https://prometheus.io/docs/prometheus/latest/querying/api/).
 
 ### Investigation-scoped chat

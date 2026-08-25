@@ -10,7 +10,8 @@ spec:
   accessModes:
     - ReadWriteOnce
   volumeMode: Filesystem
-  storageClassName: podpilot-local
+  # Deliberately omit storageClassName so the cluster's default StorageClass
+  # dynamically provisions the volume.
   resources:
     requests:
       storage: 5Gi

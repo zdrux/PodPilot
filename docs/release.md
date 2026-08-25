@@ -1,6 +1,6 @@
 # PodPilot Release And QA
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: release surfaces, QA coverage, migrations, rollback, or deployment gates change.
 
 ## Release Surfaces
@@ -20,6 +20,18 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Verify TLS validation, timeouts, bounded retries, and model-call redaction.
 - Exercise degraded paths for unavailable Kubernetes, Thanos, Alertmanager, and model APIs.
 - Confirm image digests, resource limits, probes, NetworkPolicy, and rollback instructions.
+- For a remote PoC, confirm the rendered overlay contains no static PV,
+  `storageClassName`, node selector, lab hostname, cluster-admin binding, or
+  credential value; verify the target has exactly one suitable default
+  StorageClass before creating the PVC.
+- Verify `system:authenticated` receives only the namespace-local exact-Service
+  Role and that cluster-reading RBAC is attached only to `podpilot-investigator`.
+- Verify an authenticated user without a configured mapping receives Viewer;
+  each elevated role accepts multiple existing OpenShift Groups; all elevated
+  mappings may be empty; duplicate cross-role mappings are rejected; and
+  highest-role precedence is deterministic.
+- Verify the named Alertmanager API permission exists in `openshift-monitoring`;
+  do not create an Alertmanager role in `openshift-logging`.
 
 ## Initial QA Matrix
 

@@ -74,6 +74,6 @@ Do not record transient debug output or credentials.
 - Never copy the administrator kubeconfig into this repository.
 - `scripts/connect-sno.ps1` uses the external bootstrap kubeconfig only to mint a short-lived token for the PoC cluster-admin identity `ai-ops/ai-observer`.
 - Because Codex command invocations use fresh shells, dot-source the script in the same command that runs `oc`, tests, or the local application: `. .\scripts\connect-sno.ps1; <command>`.
-- Override the external bootstrap path with `PODPILOT_BOOTSTRAP_KUBECONFIG` or the script's `-BootstrapKubeconfig` parameter if it moves.
+- Provide the external bootstrap path with `PODPILOT_BOOTSTRAP_KUBECONFIG` or the script's `-BootstrapKubeconfig` parameter.
 - The helper refuses a cluster API other than the documented SNO endpoint. Update the script and `docs/cluster-lab.md` together if the lab endpoint changes.
 - All broad access is specific to the disposable lab. Production packaging must default to the read-only base RBAC and introduce a separate approval-gated action identity.

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podpilot-runtime
+  namespace: ai-ops
+data:
+  environment: remote-poc
+  # Replace with a recognizable target name before applying this overlay.
+  cluster_name: replace-with-target-cluster-name
+  # Every authenticated OpenShift user is a Viewer. Use exact existing OpenShift
+  # Group resource names only for elevated roles. JSON arrays permit more than
+  # one LDAP-synchronized group per role; use [] for an unused role.
+  role_investigator_groups: '["replace-with-ldap-investigator-group"]'
+  role_approver_groups: '["replace-with-ldap-approver-group"]'
+  role_breakglass_groups: '["replace-with-ldap-breakglass-group"]'

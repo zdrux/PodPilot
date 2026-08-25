@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podpilot-runtime
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: configuration
+data:
+  environment: openshift-poc
+  cluster_name: configure-cluster-name
+  role_investigator_groups: '["podpilot-investigators"]'
+  role_approver_groups: '["podpilot-approvers"]'
+  role_breakglass_groups: '["podpilot-breakglass"]'

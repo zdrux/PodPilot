@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podpilot-data
+  namespace: ai-ops
+spec:
+  storageClassName: podpilot-local

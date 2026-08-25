@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -14,7 +14,7 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 - OpenShift RBAC is the hard ceiling on cluster capability.
 - Monitoring access remains read-only and split by platform API: the Thanos API
   uses `cluster-monitoring-view`, while Alertmanager uses the namespaced
-  `openshift-monitoring/monitoring-alertmanager-view` Role.
+  `openshift-monitoring/podpilot-alertmanager-api-view` Role.
 
 ## Credentials That Must Never Be Committed
 
@@ -79,36 +79,39 @@ conversations.
   can be intercepted. Prefer system trust or a custom CA and do not enable this
   mode for production endpoints.
 
-## PoC Authentication And Application Roles
+## OpenShift Authentication And Application Roles
 
-The SNO lab uses the cluster's built-in OAuth server with the
-`podpilot-htpasswd` identity provider. PodPilot places an OAuth-aware proxy in
-front of its Route, accepts identity only from that proxy, and maps these OpenShift
-groups to application permissions:
+PodPilot places an OAuth-aware proxy in front of its Route, accepts identity only
+from that proxy, and maps authenticated identities and selected OpenShift groups
+to application permissions. A
+remote cluster uses its existing identity provider; the disposable SNO lab uses
+its local `podpilot-htpasswd` provider.
 
-| Group | PodPilot permission |
+| Configured role | PodPilot permission |
 | --- | --- |
-| `podpilot-viewers` | View health, alerts, investigations, and audit history |
-| `podpilot-investigators` | Start analyses and use investigation-scoped chat |
-| `podpilot-approvers` | Approve registered low/moderate-risk actions |
-| `podpilot-breakglass` | Enter future high-risk approval workflows; no direct cluster-admin grant |
+| Any authenticated OpenShift user | Viewer: view health, alerts, investigations, collected evidence, and audit history |
+| Investigator groups | Start analyses and use investigation-scoped chat |
+| Approver groups | Approve registered low/moderate-risk actions |
+| Breakglass groups | Enter future high-risk approval workflows; no direct cluster-admin grant |
 
-The group hierarchy is expressed by placing higher-role test users in each lower
-group. Human users do not receive mutation RBAC; the executor service account
-performs approved changes and the application records the authenticated actor.
+The GUI RoleBinding admits the built-in `system:authenticated` group to the exact
+PodPilot Service. The application defaults authenticated users to Viewer, accepts
+multiple existing LDAP-synchronized OpenShift Groups for each elevated role, and
+assigns the highest match. Human users
+do not receive `cluster-reader` or mutation RBAC; the application records the
+authenticated actor separately from its runtime ServiceAccount.
 
 The Route and Service expose only the OAuth proxy. FastAPI listens on Pod loopback,
 so clients cannot directly forge `X-Forwarded-User`. The proxy does not forward
 access tokens or bearer tokens upstream, uses secure same-site cookies, and
 performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
-granting access. The API then reads only the four configured Group objects to
-derive the application role.
+granting access. The API reads only configured elevated-role Group objects; no
+Group lookup is required to assign Viewer.
 
 OpenShift usernames may contain colons, including virtual users and service-account
-identities. PodPilot accepts that identity syntax but still denies access unless
-the resolved user belongs to a configured PodPilot application-role group. A valid
-upstream identity with no application role is an authorization failure (403), not
-an authentication failure (401).
+identities. PodPilot accepts that identity syntax. A valid proxy-authenticated
+identity without an elevated mapping receives Viewer; a missing or invalid proxy
+identity remains an authentication failure (401).
 
 Milestone 3 introduced one state-changing application operation: creating a local
 investigation record. It requires Investigator-or-higher application role and a

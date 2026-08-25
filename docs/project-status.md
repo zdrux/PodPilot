@@ -9,9 +9,10 @@ selected.
 
 PodPilot 0.11.0 is implemented and deployed on the disposable SNO lab. Milestone
 10 remains the investigation baseline; 0.11 adds the multi-provider model registry.
-The model-registry workspace is deployed but not yet committed. Start a new
-session by reading this file and `AGENTS.md`, then verify `git status --short`
-before making changes.
+That release is committed at `717737a`. A portable remote-cluster PoC deployment
+path is prepared and locally validated but has not yet been exercised on a second
+cluster. Start a new session by reading this file and `AGENTS.md`, then verify
+`git status --short` before making changes.
 
 The product is an OpenShift-first investigation and Day-2 operations companion.
 It presents active Alertmanager signals, builds bounded evidence-backed
@@ -92,13 +93,21 @@ records remain, but execution now awaits a separate approval-gated action servic
   results are redacted before becoming evidence.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
   `0009_model_registry`.
+- A remote Kustomize overlay composes the read-only base, explicit
+  `openshift-monitoring` Alertmanager API Role, group-based OAuth GUI admission,
+  default-StorageClass PVC, and single-replica workload. The accompanying runbook
+  covers Docker/Podman build and push, immutable image selection, out-of-band
+  Secrets, existing LDAP-synchronized elevated-role mapping, server dry-run,
+  RBAC checks, rollout, and rollback. Every authenticated user receives Viewer;
+  each elevated application role accepts multiple existing groups; no remote
+  Group or membership is created by PodPilot.
 
 ## Last Verified State
 
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 77 tests passing with 82% aggregate branch coverage.
+- Automated suite: 89 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

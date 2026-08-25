@@ -38,6 +38,7 @@ APIs are supported.
 - [Security model](docs/security.md)
 - [Hyper-V SNO lab](docs/cluster-lab.md)
 - [Operations](docs/operations.md)
+- [Remote OpenShift PoC deployment](docs/remote-poc-deployment.md)
 - [ocp-inventory reuse boundary](docs/ocp-inventory-reuse.md)
 
 ## Repository Shape
@@ -60,6 +61,12 @@ normal runtime identity is `podpilot-investigator`; the disposable PoC lab keeps
 `ai-observer` as a separate break-glass identity with an explicit cluster-admin
 overlay. Every product mutation still requires a preview
 and fresh user approval.
+
+The remote PoC overlay deliberately excludes that lab identity and cluster-admin
+binding. It runs the application with read-only `cluster-reader` plus narrow
+monitoring access. Every authenticated OpenShift user receives the Viewer role;
+existing LDAP-synchronized Groups are mapped only to elevated PodPilot roles,
+without PodPilot managing their membership.
 
 ## Develop Locally
 
