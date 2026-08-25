@@ -403,15 +403,29 @@
       }
     });
   }
+  const evidenceDialog = document.querySelector("[data-evidence-dialog]");
+  const openEvidence = () => {
+    if (!evidenceDialog) return false;
+    if (!evidenceDialog.open) evidenceDialog.showModal();
+    return true;
+  };
+  document.querySelector("[data-evidence-open]")?.addEventListener("click", openEvidence);
+  document.querySelector("[data-evidence-close]")?.addEventListener("click", () => evidenceDialog?.close());
+  evidenceDialog?.addEventListener("click", (event) => {
+    if (event.target === evidenceDialog) evidenceDialog.close();
+  });
   document.querySelectorAll('.chat-citations a[href^="#evidence-"]').forEach((link) => {
     link.addEventListener("click", (event) => {
       const target = document.getElementById(link.hash.slice(1));
       if (!target) return;
       event.preventDefault();
+      openEvidence();
       document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
       target.classList.add("evidence-focus");
-      target.scrollIntoView({behavior: "smooth", block: "center"});
-      target.focus({preventScroll: true});
+      requestAnimationFrame(() => {
+        target.scrollIntoView({behavior: "smooth", block: "center"});
+        target.focus({preventScroll: true});
+      });
       window.history.replaceState(null, "", link.hash);
     });
   });
@@ -421,7 +435,7 @@
       if (!csrf || !form.dataset.deleteUrl) return;
       if (!window.confirm("Delete this conversation and its collected evidence? This cannot be undone.")) return;
       const button = form.querySelector('button[type="submit"]');
-      if (button) { button.disabled = true; button.textContent = "Deleting…"; }
+      if (button) { button.disabled = true; button.classList.add("is-busy"); button.setAttribute("aria-busy", "true"); }
       try {
         const response = await fetch(form.dataset.deleteUrl, {
           method: "POST", headers: {"X-PodPilot-CSRF": csrf}, credentials: "same-origin",
@@ -433,7 +447,7 @@
         window.location.assign(response.url);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
-        if (button) { button.disabled = false; button.textContent = "Delete conversation"; }
+        if (button) { button.disabled = false; button.classList.remove("is-busy"); button.removeAttribute("aria-busy"); }
       }
     });
   });

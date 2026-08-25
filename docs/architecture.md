@@ -215,9 +215,17 @@ matching evidence card, including when the evidence drawer has its own scroll ar
 Chat content is rendered server-side through a CommonMark parser with raw HTML
 disabled and unsafe link schemes rejected. The UI supports structured headings,
 lists, emphasis, inline and fenced code, blockquotes, and tables without trusting
-model- or cluster-supplied markup. Ask PodPilot initializes its bounded chat
-viewport at the newest message after navigation while retaining normal manual
-scrolling afterward.
+model- or cluster-supplied markup. Ask answer normalization preserves Markdown
+paragraph boundaries, removes inline evidence-ID markers that the citation UI
+renders separately, and promotes recognized inline labels such as `Root cause:`
+and `Remediation:` into headings only when the provider returned otherwise
+unstructured prose. Ask PodPilot initializes its bounded chat viewport at the
+newest message after navigation while retaining normal manual scrolling afterward.
+Private Ask sessions are rendered as a nested list beneath the primary Ask
+PodPilot navigation item and expose owner-authorized deletion controls. Collected
+evidence no longer consumes a permanent content column: a count in the chat header
+opens a modal provenance drawer, and answer citations open that drawer focused on
+the matching evidence card.
 
 ## Investigation Flow
 

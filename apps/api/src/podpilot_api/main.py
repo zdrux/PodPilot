@@ -252,7 +252,10 @@ def _validated_adhoc_answer(
         if bounded in known_evidence_ids and bounded not in citations:
             citations.append(bounded)
     mode = answer.answer_mode
-    content = _clean_adhoc_markdown(redact_text(answer.answer))[:4000]
+    content = _clean_adhoc_markdown(
+        redact_text(answer.answer),
+        known_evidence_ids=known_evidence_ids,
+    )[:4000]
     rbac_limitation = next((
         item for item in (collection_limitations or [])
         if item.startswith("OpenShift RBAC denied ")
@@ -280,11 +283,66 @@ _INTERNAL_EVIDENCE_PATH = re.compile(
 )
 
 
-def _clean_adhoc_markdown(value: str) -> str:
-    """Remove provider-facing evidence paths that are not user-facing citations."""
+_ADHOC_SECTION_LABEL = re.compile(
+    r"(^|[.!?])\s*(?:\*\*)?"
+    r"(summary|findings?|evidence|root cause|impact|remediation|recommended action|"
+    r"next steps?|limitations?)"
+    r"(?:\*\*)?\s*:\s*",
+    re.IGNORECASE,
+)
+_ADHOC_SECTION_TITLES = {
+    "summary": "Summary",
+    "finding": "Finding",
+    "findings": "Findings",
+    "evidence": "Evidence",
+    "root cause": "Root cause",
+    "impact": "Impact",
+    "remediation": "Remediation",
+    "recommended action": "Recommended action",
+    "next step": "Next step",
+    "next steps": "Next steps",
+    "limitation": "Limitation",
+    "limitations": "Limitations",
+}
+
+
+def _clean_adhoc_markdown(
+    value: str,
+    *,
+    known_evidence_ids: set[str] | None = None,
+) -> str:
+    """Preserve readable Markdown while removing provider-facing citation syntax."""
 
     cleaned = _INTERNAL_EVIDENCE_PATH.sub("", value)
-    return "\n".join(line.rstrip() for line in cleaned.splitlines() if line.strip()).strip()
+    evidence_ids = sorted(known_evidence_ids or set(), key=len, reverse=True)
+    if evidence_ids:
+        inline_citations = re.compile(
+            r"\s*\[(?:" + "|".join(re.escape(item) for item in evidence_ids) + r")\]"
+        )
+        cleaned = inline_citations.sub("", cleaned)
+
+    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    # Smaller chat-completions models sometimes return an otherwise useful answer as
+    # one paragraph with inline labels. Convert only that unstructured shape; leave
+    # authored Markdown headings, lists, tables, and paragraphs untouched.
+    has_block_structure = "\n\n" in cleaned or bool(
+        re.search(r"(?m)^\s*(?:#{1,4}\s|[-*+]\s|\d+[.)]\s|```|>)", cleaned)
+    )
+    if not has_block_structure:
+        cleaned = _ADHOC_SECTION_LABEL.sub(
+            lambda match: (
+                match.group(1)
+                + "\n\n### "
+                + _ADHOC_SECTION_TITLES[match.group(2).lower()]
+                + "\n\n"
+            ),
+            cleaned,
+        ).strip()
+
+    return cleaned
 
 
 def _deterministic_inventory_answer(

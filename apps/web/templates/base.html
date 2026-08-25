@@ -34,10 +34,39 @@
           <span class="nav-icon" aria-hidden="true">◎</span>
           Investigations
         </a>
-        <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
-          <span class="nav-icon" aria-hidden="true">✦</span>
-          Ask PodPilot
-        </a>
+        <div class="nav-tree {% if request.url.path.startswith('/ask') %}expanded{% endif %}">
+          <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
+            <span class="nav-icon" aria-hidden="true">✦</span>
+            Ask PodPilot
+          </a>
+          {% if request.url.path.startswith('/ask') and recent_conversations is defined %}
+          <div class="nav-subtree" aria-label="Ask PodPilot conversations">
+            <div class="nav-subtree-heading">
+              <span>Sessions</span>
+              <a href="/ask" title="New conversation" aria-label="New conversation">+</a>
+            </div>
+            {% if recent_conversations %}
+            <ul class="nav-session-list">
+              {% for item in recent_conversations %}
+              <li class="{% if conversation is defined and conversation and item.id == conversation.id %}active{% endif %}">
+                <a class="nav-session-link" href="/ask/{{ item.id }}" title="{{ item.title }}">
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ item.updated_at.strftime('%b %d · %H:%M') }}</small>
+                </a>
+                <form class="delete-chat-form nav-session-delete" data-delete-url="/api/v1/adhoc-conversations/{{ item.id }}/delete">
+                  <button type="submit" title="Delete conversation" aria-label="Delete conversation: {{ item.title }}">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+                  </button>
+                </form>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="nav-session-empty">Your conversations will appear here.</p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
         <span class="nav-link disabled" aria-disabled="true">
           <span class="nav-icon" aria-hidden="true">↗</span>
           Actions

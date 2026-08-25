@@ -10,9 +10,6 @@
   {% if conversation %}
   <div class="topbar-actions">
     <a class="button secondary" href="/ask">New conversation</a>
-    <form class="delete-chat-form" data-delete-url="/api/v1/adhoc-conversations/{{ conversation.id }}/delete">
-      <button class="button danger" type="submit">Delete conversation</button>
-    </form>
   </div>
   {% endif %}
 </header>
@@ -29,7 +26,13 @@
   <section class="panel ask-panel">
     <div class="panel-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
+      {% if evidence_by_id %}
+      <button class="evidence-toggle" type="button" data-evidence-open>
+        <span>Collected evidence</span><strong>{{ evidence_by_id | length }}</strong>
+      </button>
+      {% else %}
       <span class="tag">Evidence first</span>
+      {% endif %}
     </div>
 
     {% if messages %}
@@ -100,19 +103,18 @@
     {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and successfully tests a model profile.</p></div>{% endif %}
   </section>
 
-  <aside class="ask-sidebar">
-    <section class="panel">
-      <div class="panel-header"><div><p class="eyebrow">Private history</p><h2>My conversations</h2></div><a class="button secondary compact-button" href="/ask">New</a></div>
-      {% if recent_conversations %}<ul class="investigation-list">{% for item in recent_conversations %}<li><a href="/ask/{{ item.id }}"><strong>{{ item.title }}</strong><span>Private to {{ item.created_by }}</span><small>{{ item.updated_at.strftime('%Y-%m-%d %H:%M UTC') }}</small></a></li>{% endfor %}</ul>{% else %}<div class="side-empty"><strong>No conversations yet</strong><p>Conversations are private to your OpenShift user. Your first question creates an attributed audit record.</p></div>{% endif %}
-    </section>
-    {% if evidence_by_id %}
-    <section class="panel evidence-drawer">
-      <div class="panel-header"><div><p class="eyebrow">Provenance</p><h2>Collected evidence</h2></div><span class="tag">{{ evidence_by_id | length }}</span></div>
-      <div class="evidence-list">{% for id, item in evidence_by_id.items() %}<article id="evidence-{{ id }}" tabindex="-1"><span class="evidence-id">{{ item.tool }}</span><h3>{{ item.summary }}</h3><p>{{ item.source }}</p><small>{{ item.collected_at }}</small></article>{% endfor %}</div>
-    </section>
-    {% endif %}
-  </aside>
 </div>
+
+{% if evidence_by_id %}
+<dialog class="evidence-dialog" data-evidence-dialog aria-labelledby="evidence-dialog-title">
+  <div class="evidence-dialog-header">
+    <div><p class="eyebrow">Provenance</p><h2 id="evidence-dialog-title">Collected evidence</h2></div>
+    <button type="button" data-evidence-close aria-label="Close collected evidence">×</button>
+  </div>
+  <p class="evidence-dialog-intro">Cluster observations used in this conversation. Select an evidence citation in a reply to jump to its source.</p>
+  <div class="evidence-list">{% for id, item in evidence_by_id.items() %}<article id="evidence-{{ id }}" tabindex="-1"><span class="evidence-id">{{ item.tool }}</span><h3>{{ item.summary }}</h3><p>{{ item.source }}</p><small>{{ item.collected_at }}</small></article>{% endfor %}</div>
+</dialog>
+{% endif %}
 
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
 {% endblock %}

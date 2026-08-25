@@ -79,6 +79,46 @@ def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths()
     assert "observations.0" not in str(validated["content"])
 
 
+def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        answer=(
+            "### Summary\n\nThe collector is restarting.\n\n"
+            "### Recommended action\n\n- Correct the processor name.\n- Redeploy the collector."
+        ),
+        cited_evidence_ids=["cluster-pod-1"],
+        limitations=[],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={"cluster-pod-1"},
+    )
+
+    assert validated["content"] == answer.answer
+
+
+def test_adhoc_answer_structures_inline_labels_and_removes_inline_citations() -> None:
+    evidence_id = "cluster-pod-7"
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        answer=(
+            f"The collector is repeatedly crashing [{evidence_id}]. "
+            "Root cause: Its configuration names an unsupported processor. "
+            "Remediation: Correct the processor name and redeploy the collector."
+        ),
+        cited_evidence_ids=[evidence_id],
+        limitations=[],
+    )
+
+    validated = _validated_adhoc_answer(answer, known_evidence_ids={evidence_id})
+    content = str(validated["content"])
+
+    assert f"[{evidence_id}]" not in content
+    assert "\n\n### Root cause\n\n" in content
+    assert "\n\n### Remediation\n\n" in content
+
+
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
     invented = ReadPlan(
         scope_summary="Inspect a guessed collector.",
@@ -1722,6 +1762,9 @@ def test_ask_worker_requeues_interrupted_persisted_run_on_startup(tmp_path: Path
 
 def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     template = (ROOT / "apps" / "web" / "templates" / "ask.html").read_text()
+    base_template = (ROOT / "apps" / "web" / "templates" / "base.html").read_text(
+        encoding="utf-8"
+    )
     script = (ROOT / "apps" / "web" / "static" / "app.js").read_text()
     assert "Conversation budget reached" not in template
     assert "Enter to send" in template and "Shift+Enter for a new line" in template
@@ -1743,6 +1786,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template
+    assert "ask-sidebar" not in template
+    assert "data-evidence-dialog" in template and "data-evidence-open" in template
+    assert "recent_conversations" in base_template
+    assert "nav-session-list" in base_template
+    assert "nav-session-delete" in base_template
+    assert "evidenceDialog.showModal()" in script
 
 
 def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Path) -> None:
