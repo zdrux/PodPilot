@@ -489,6 +489,16 @@ more matches exist. `detailsTruncated: true` means only verbose detail was omitt
 it does not make the collected name list incomplete. Provider-facing observation
 paths are not valid citations and are removed from displayed answers.
 
+For Pod lists, evidence additionally stores a bounded `logCandidates` projection
+containing exact Pod and container coordinates. These are not extra Kubernetes
+requests. Later planning receives opaque candidate IDs and cannot replace their
+coordinates. Application logs record `podpilot.adhoc.plan_repair` with
+`reason=invalid_log_target` when a provider invents a target, and
+`podpilot.adhoc.log_target_fallback` when normal code selects up to three exact
+candidates after the repair also fails. Rejected proposals do not count against
+`PODPILOT_ADHOC_MAX_READS_PER_TURN`. A later `OpenShift RBAC denied ... pods/log`
+message means the exact request reached the ServiceAccount authorization boundary.
+
 The default inventory ceiling is 250 objects per LIST and may be set from 50 to
 500 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests, edit
 `data.adhoc_inventory_max_objects` in `podpilot-runtime`; the Deployment maps it

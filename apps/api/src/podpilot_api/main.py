@@ -46,11 +46,15 @@ from podpilot_api.models import (
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.adhoc import (
+    PodLogCandidate,
+    ReadIntent,
     ReadOnlyExplorer,
+    ReadPlan,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
+    pod_log_candidates_from_evidence,
 )
 from podpilot_diagnostics.checks import (
     DiagnosticCheckExecutor,
@@ -406,6 +410,117 @@ def _read_progress_message(intent) -> str:
     return f"Getting a list of {resource}{scope}."
 
 
+def _bind_pod_log_intent(
+    intent: ReadIntent,
+    candidates: list[PodLogCandidate],
+) -> tuple[ReadIntent | None, str | None]:
+    """Resolve a model-selected log candidate to exact server-observed coordinates."""
+
+    if intent.tool != "pod_logs" or not candidates:
+        return intent, None
+    candidate = None
+    if intent.candidate_id:
+        candidate = next((item for item in candidates if item.id == intent.candidate_id), None)
+        if candidate is None:
+            return None, "The requested Pod log candidate ID was not present in collected evidence."
+    else:
+        matches = [
+            item for item in candidates
+            if item.namespace == intent.namespace
+            and item.pod == intent.name
+            and (intent.container is None or item.container == intent.container)
+        ]
+        if len(matches) == 1:
+            candidate = matches[0]
+        elif not matches:
+            return None, "The requested Pod/container was not present in collected evidence."
+        else:
+            return None, "The discovered Pod has multiple containers; select an exact log candidate ID."
+    return intent.model_copy(update={
+        "candidate_id": candidate.id,
+        "namespace": candidate.namespace,
+        "name": candidate.pod,
+        "container": candidate.container,
+        "previous": bool(intent.previous and candidate.restart_count > 0),
+    }), None
+
+
+def _bind_plan_log_intents(
+    plan: ReadPlan,
+    candidates: list[PodLogCandidate],
+) -> tuple[ReadPlan, list[str], list[ReadIntent]]:
+    bound: list[ReadIntent] = []
+    errors: list[str] = []
+    rejected: list[ReadIntent] = []
+    for intent in plan.intents:
+        normalized = normalize_read_intent(intent)
+        resolved, error = _bind_pod_log_intent(normalized, candidates)
+        if error:
+            errors.append(error)
+            rejected.append(normalized)
+        elif resolved is not None:
+            bound.append(resolved)
+    if errors:
+        return plan, list(dict.fromkeys(errors)), rejected
+    return plan.model_copy(update={"intents": bound}), [], []
+
+
+def _fallback_pod_log_plan(
+    *,
+    question: str,
+    candidates: list[PodLogCandidate],
+    rejected: list[ReadIntent],
+    limit: int,
+) -> ReadPlan | None:
+    if (
+        limit <= 0
+        or not candidates
+        or (not rejected and not re.search(r"\blogs?\b", question, re.IGNORECASE))
+    ):
+        return None
+    normalized_question = re.sub(r"[^a-z0-9]", "", question.lower())
+    hints = [normalized_question]
+    hints.extend(
+        re.sub(r"[^a-z0-9]", "", str(value).lower())
+        for intent in rejected
+        for value in (intent.name, intent.container)
+        if value
+    )
+
+    def relevance(candidate: PodLogCandidate) -> int:
+        pod = re.sub(r"[^a-z0-9]", "", candidate.pod.lower())
+        container = re.sub(r"[^a-z0-9]", "", (candidate.container or "").lower())
+        return max((
+            100 if container and container in hint else
+            80 if pod and pod in hint else
+            60 if container and hint and hint in container else
+            0
+            for hint in hints
+        ), default=0)
+
+    relevant = [candidate for candidate in candidates if relevance(candidate) > 0]
+    pool = relevant or candidates
+    selected = sorted(pool, key=lambda candidate: (
+        -relevance(candidate), -candidate.restart_count,
+        candidate.pod, candidate.container or "",
+    ))[: min(3, limit)]
+    previous_requested = bool(re.search(
+        r"\b(?:previous|restart(?:ed|s|ing)?|crash(?:ed|es|ing)?|terminated)\b",
+        question,
+        re.IGNORECASE,
+    ))
+    return ReadPlan(
+        goal_type="logs",
+        decision="collect",
+        scope_summary="Collect bounded logs from exact Pods discovered in cluster evidence.",
+        intents=[ReadIntent(
+            tool="pod_logs",
+            candidate_id=item.id,
+            previous=bool(previous_requested and item.restart_count > 0),
+        ) for item in selected],
+    )
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -479,8 +594,9 @@ async def _collect_bounded_cluster_reads(
         )
 
     def planner_context(
-        *, round_number: int, remaining_reads: int, feedback: dict[str, str] | None = None
+        *, round_number: int, remaining_reads: int, feedback: dict[str, object] | None = None
     ) -> dict[str, object]:
+        log_candidates = pod_log_candidates_from_evidence(evidence)
         context: dict[str, object] = {
             "cluster": settings.cluster_name,
             "question": question,
@@ -496,6 +612,9 @@ async def _collect_bounded_cluster_reads(
             "tool_policy": {
                 "available": ["get_resource", "list_resources", "pod_logs"],
                 "resource_catalog": catalog_entries,
+                "pod_log_candidates": [
+                    candidate.model_dump() for candidate in log_candidates[:100]
+                ],
                 "max_rounds": settings.adhoc_max_rounds,
                 "max_reads_total": settings.adhoc_max_reads_per_turn,
                 "remaining_reads": remaining_reads,
@@ -519,7 +638,9 @@ async def _collect_bounded_cluster_reads(
         else:
             plan = None
             planner_error: ModelProviderError | None = None
-            feedback: dict[str, str] | None = None
+            feedback: dict[str, object] | None = None
+            target_errors: list[str] = []
+            rejected_log_intents: list[ReadIntent] = []
             for planning_attempt in range(1, 3):
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -537,19 +658,34 @@ async def _collect_bounded_cluster_reads(
                 except ModelProviderError as exc:
                     planner_error = exc
                     break
-                if not plan_requires_repair(plan, round_number=round_number):
+                candidates = pod_log_candidates_from_evidence(evidence)
+                bound_plan, target_errors, rejected = _bind_plan_log_intents(
+                    plan, candidates
+                )
+                rejected_log_intents.extend(rejected)
+                if not plan_requires_repair(plan, round_number=round_number) and not target_errors:
+                    plan = bound_plan
                     break
                 LOGGER.warning(
                     "podpilot.adhoc.plan_repair actor=%s workflow_id=%s round=%s attempt=%s "
-                    "goal=%s decision=%s",
+                    "goal=%s decision=%s reason=%s",
                     actor,
                     workflow_id,
                     round_number,
                     planning_attempt,
                     plan.goal_type,
                     plan.decision,
+                    "invalid_log_target" if target_errors else "unsupported_answer",
                 )
-                feedback = {
+                feedback = ({
+                    "code": "pod_log_target_not_observed",
+                    "message": (
+                        "One or more Pod log targets were not exact candidates from collected "
+                        "evidence. Select candidate_id values only from "
+                        "tool_policy.pod_log_candidates. Do not construct Pod or container names."
+                    ),
+                    "errors": target_errors,
+                } if target_errors else {
                     "code": "actionable_goal_requires_evidence",
                     "message": (
                         "The operational question has no valid supporting evidence, and the live "
@@ -557,11 +693,36 @@ async def _collect_bounded_cluster_reads(
                         "with safe read intents from the catalog. Only request clarification if no "
                         "catalog target can answer the question."
                     ),
-                }
+                })
             needs_fallback = plan is None or plan_requires_repair(
                 plan, round_number=round_number
-            )
-            if needs_fallback and round_number == 1 and catalog_fallback is not None:
+            ) or bool(target_errors)
+            log_fallback = _fallback_pod_log_plan(
+                question=question,
+                candidates=pod_log_candidates_from_evidence(evidence),
+                rejected=rejected_log_intents,
+                limit=remaining_reads,
+            ) if target_errors else None
+            if needs_fallback and log_fallback is not None:
+                plan = log_fallback
+                target_errors = []
+                limitations.append(
+                    "PodPilot rejected model-authored log targets that were not present in collected "
+                    "evidence and used exact discovered Pod/container targets instead."
+                )
+                if progress:
+                    await progress(
+                        "planning",
+                        f"Using {len(plan.intents)} exact Pod/container target"
+                        f"{'s' if len(plan.intents) != 1 else ''} from collected evidence.",
+                    )
+                LOGGER.info(
+                    "podpilot.adhoc.log_target_fallback actor=%s workflow_id=%s candidates=%s",
+                    actor,
+                    workflow_id,
+                    len(plan.intents),
+                )
+            elif needs_fallback and round_number == 1 and catalog_fallback is not None:
                 plan, terminal_plan = catalog_fallback
                 LOGGER.info(
                     "podpilot.adhoc.catalog_fallback actor=%s workflow_id=%s goal=%s",
@@ -581,8 +742,16 @@ async def _collect_bounded_cluster_reads(
             assert plan is not None
         scope_summary = plan.scope_summary
         new_intents = []
+        current_log_candidates = pod_log_candidates_from_evidence(evidence)
         for proposed_intent in plan.intents[:remaining_reads]:
             intent = normalize_read_intent(proposed_intent)
+            intent, binding_error = _bind_pod_log_intent(intent, current_log_candidates)
+            if binding_error:
+                limitations.append(
+                    f"A model-authored Pod log target was rejected before collection: {binding_error}"
+                )
+                continue
+            assert intent is not None
             signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
             if signature not in seen_intents:
                 seen_intents.add(signature)

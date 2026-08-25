@@ -128,6 +128,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   failures separately. A missing retained previous container stream falls back to
   bounded current logs and preserves that distinction as a limitation. Evidence
   citations scroll, focus, and highlight their matching provenance card.
+- Pod discovery now emits bounded exact log candidates. Planner-selected opaque
+  IDs are bound to observed namespace/Pod/container coordinates before execution;
+  invented targets receive one budget-free repair, followed by a disclosed
+  server-owned fallback across at most three relevant candidates. This improves
+  discover-then-log autonomy without expanding the investigator ServiceAccount.
 - Ask PodPilot opens the bounded conversation viewport at the newest response.
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe
@@ -155,7 +160,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 142 tests passing with 83% aggregate branch coverage.
+- Automated suite: 146 tests passing with 83% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

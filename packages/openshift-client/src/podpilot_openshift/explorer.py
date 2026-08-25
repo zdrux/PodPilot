@@ -133,6 +133,39 @@ def _compact_container_statuses(statuses: object) -> list[dict[str, Any]]:
     return compact
 
 
+def _pod_log_candidate_projection(raw: dict[str, Any], namespace: str | None) -> dict[str, Any]:
+    metadata = raw.get("metadata") or {}
+    spec = raw.get("spec") or {}
+    status = raw.get("status") or {}
+    statuses = _compact_container_statuses(
+        status.get("containerStatuses") or status.get("container_statuses") or []
+    )
+    container_names = [
+        str(item.get("name"))[:253]
+        for item in statuses
+        if item.get("name")
+    ]
+    if not container_names:
+        configured = spec.get("containers") or []
+        if isinstance(configured, list):
+            container_names = [
+                str(item.get("name"))[:253]
+                for item in configured
+                if isinstance(item, dict) and item.get("name")
+            ][:40]
+    return _sanitize({
+        "namespace": metadata.get("namespace") or metadata.get("namespace_") or namespace,
+        "pod": metadata.get("name"),
+        "containers": container_names,
+        "phase": status.get("phase"),
+        "ready": bool(statuses) and all(item.get("ready") is True for item in statuses),
+        "restartCount": max(
+            (int(item.get("restartCount") or 0) for item in statuses),
+            default=0,
+        ),
+    })
+
+
 def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_projection(raw)
     spec = raw.get("spec") or {}
@@ -359,12 +392,26 @@ class KubernetesReadOnlyExplorer:
             projections = []
             projected_bytes = 0
             payload_truncated = False
+            log_candidates: list[dict[str, Any]] = []
+            log_candidates_truncated = False
+            log_candidate_bytes = 0
+            log_candidate_budget = max(512, min(32_768, self._max_payload_bytes // 3))
             bounded_items = items[: intent.limit]
             object_names: list[str] = []
             for obj in bounded_items:
                 raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
                 metadata = raw.get("metadata") or {}
                 object_names.append(str(metadata.get("name") or "unnamed")[:253])
+                if kind == "Pod":
+                    log_candidate = _pod_log_candidate_projection(raw, namespace)
+                    candidate_bytes = len(json.dumps(
+                        log_candidate, sort_keys=True, default=str
+                    ).encode("utf-8"))
+                    if log_candidate_bytes + candidate_bytes <= log_candidate_budget:
+                        log_candidates.append(log_candidate)
+                        log_candidate_bytes += candidate_bytes
+                    else:
+                        log_candidates_truncated = True
                 projection = _list_projection(kind, raw)
                 projection_bytes = len(json.dumps(
                     projection, sort_keys=True, default=str
@@ -387,6 +434,10 @@ class KubernetesReadOnlyExplorer:
                     f"PodPilot retained all {len(object_names)} collected {kind} names, but detailed "
                     f"status for only {len(projections)} objects fit the evidence payload ceiling."
                 )
+            if log_candidates_truncated:
+                limitations.append(
+                    "The compact Pod log-target candidate list reached its evidence payload ceiling."
+                )
             if not bounded_items:
                 limitations.append(f"No {kind} resources matched the bounded query.")
             return ReadResult((AdHocObservation(
@@ -403,6 +454,8 @@ class KubernetesReadOnlyExplorer:
                     "count": len(bounded_items),
                     "names": object_names,
                     "items": projections,
+                    "logCandidates": log_candidates,
+                    "logCandidatesTruncated": log_candidates_truncated,
                     "objectListComplete": not bool(token),
                     "detailsTruncated": payload_truncated,
                     "truncated": bool(token),

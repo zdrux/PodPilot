@@ -349,6 +349,14 @@ the planner once with bounded feedback, and may compile a matching safe LIST fro
 live discovery after a second refusal. No wording-specific object allowlist is
 required, and neither inference nor fallback can exceed broker policy or RBAC.
 
+When a Pod inventory is needed before logs, PodPilot must derive exact log-target
+candidates from the returned objects and let the planner select opaque IDs rather
+than synthesize resource names. Invalid selections must be repaired without using
+the cluster-read budget. After repeated invalid selection, PodPilot may fan out to
+at most three relevant observed candidates and must disclose that deterministic
+fallback. RBAC denial, invalid planning, missing resources, unavailable previous
+streams, and successful log collection must remain distinct outcomes.
+
 List collection follows server continue tokens within the object ceiling and uses
 kind-aware compact projections; object- or payload-ceiling truncation is explicit.
 The object ceiling is operator-configurable, defaults to 250, and remains bounded

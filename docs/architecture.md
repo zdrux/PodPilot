@@ -173,6 +173,16 @@ maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
 cannot omit the requested resource list.
 
+Pod LIST observations also retain a separately bounded registry of exact Pod and
+container log candidates. Each candidate receives an opaque server-derived ID.
+When candidates exist, a model may select only those IDs; normal code binds the ID
+back to the observed namespace, Pod, and container before calling `pods/log`.
+Fabricated or ambiguous names are rejected during planning and consume no cluster
+read budget. The planner receives one structured repair attempt. If it repeats an
+invalid log selection, server code may collect current logs from at most three
+question-relevant observed candidates; previous logs are selected only for an
+explicit restart/crash/terminated question and an observed positive restart count.
+
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and
 evidence; deletion leaves a content-free audit event. There is no per-conversation

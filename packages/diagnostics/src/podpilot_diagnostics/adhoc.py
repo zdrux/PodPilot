@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from hashlib import sha256
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, model_validator
@@ -19,8 +20,15 @@ class ReadIntent(BaseModel):
     name: str | None = Field(default=None, max_length=253)
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
+    candidate_id: str | None = Field(default=None, max_length=80)
     previous: bool = False
     limit: int = Field(default=20, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def validate_candidate_usage(self) -> "ReadIntent":
+        if self.candidate_id and self.tool != "pod_logs":
+            raise ValueError("candidate_id is valid only for pod_logs")
+        return self
 
 
 class ReadPlan(BaseModel):
@@ -45,6 +53,133 @@ class ReadPlan(BaseModel):
         if self.decision != "collect" and self.intents:
             raise ValueError("read intents require a collect decision")
         return self
+
+
+class PodLogCandidate(BaseModel):
+    """An exact server-derived Pod/container target a model may select by opaque ID."""
+
+    id: str = Field(min_length=8, max_length=80)
+    evidence_id: str = Field(min_length=1, max_length=128)
+    namespace: str = Field(min_length=1, max_length=253)
+    pod: str = Field(min_length=1, max_length=253)
+    container: str | None = Field(default=None, max_length=253)
+    phase: str | None = Field(default=None, max_length=64)
+    ready: bool | None = None
+    restart_count: int = Field(default=0, ge=0)
+
+
+def _candidate_id(evidence_id: str, namespace: str, pod: str, container: str | None) -> str:
+    digest = sha256(
+        f"{evidence_id}\0{namespace}\0{pod}\0{container or ''}".encode("utf-8")
+    ).hexdigest()[:20]
+    return f"podlog-{digest}"
+
+
+def pod_log_candidates_from_evidence(
+    evidence: list[dict[str, object]],
+) -> list[PodLogCandidate]:
+    """Extract exact Pod/container targets from normalized list observations."""
+
+    candidates: list[PodLogCandidate] = []
+    seen: set[tuple[str, str, str | None]] = set()
+
+    def add(
+        *, evidence_id: str, namespace: object, pod: object, container: object = None,
+        phase: object = None, ready: object = None, restart_count: object = 0,
+    ) -> None:
+        namespace_text = str(namespace or "")[:253]
+        pod_text = str(pod or "")[:253]
+        container_text = str(container)[:253] if container else None
+        if not namespace_text or namespace_text == "cluster" or not pod_text:
+            return
+        key = (namespace_text, pod_text, container_text)
+        if key in seen:
+            return
+        seen.add(key)
+        try:
+            restarts = max(0, int(restart_count or 0))
+        except (TypeError, ValueError):
+            restarts = 0
+        candidates.append(PodLogCandidate(
+            id=_candidate_id(evidence_id, namespace_text, pod_text, container_text),
+            evidence_id=evidence_id,
+            namespace=namespace_text,
+            pod=pod_text,
+            container=container_text,
+            phase=str(phase)[:64] if phase else None,
+            ready=ready if isinstance(ready, bool) else None,
+            restart_count=restarts,
+        ))
+
+    for observation in evidence:
+        if observation.get("tool") != "list_resources":
+            continue
+        evidence_id = str(observation.get("id") or "")[:128]
+        data = observation.get("data")
+        if not evidence_id or not isinstance(data, dict):
+            continue
+        explicit = data.get("logCandidates")
+        if isinstance(explicit, list):
+            for item in explicit:
+                if not isinstance(item, dict):
+                    continue
+                containers = item.get("containers") or [None]
+                if not isinstance(containers, list):
+                    containers = [None]
+                for container in containers or [None]:
+                    add(
+                        evidence_id=evidence_id,
+                        namespace=item.get("namespace") or data.get("scope"),
+                        pod=item.get("pod") or item.get("name"),
+                        container=container,
+                        phase=item.get("phase"),
+                        ready=item.get("ready"),
+                        restart_count=item.get("restartCount"),
+                    )
+            continue
+
+        items = data.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                status = item.get("status") if isinstance(item.get("status"), dict) else {}
+                statuses = status.get("containerStatuses")
+                if isinstance(statuses, list) and statuses:
+                    for container_status in statuses:
+                        if not isinstance(container_status, dict):
+                            continue
+                        add(
+                            evidence_id=evidence_id,
+                            namespace=metadata.get("namespace") or data.get("scope"),
+                            pod=metadata.get("name"),
+                            container=container_status.get("name"),
+                            phase=status.get("phase"),
+                            ready=container_status.get("ready"),
+                            restart_count=container_status.get("restartCount"),
+                        )
+                else:
+                    add(
+                        evidence_id=evidence_id,
+                        namespace=metadata.get("namespace") or data.get("scope"),
+                        pod=metadata.get("name"),
+                        phase=status.get("phase"),
+                    )
+            continue
+
+        containers = data.get("containers") or [None]
+        if not isinstance(containers, list):
+            containers = [None]
+        for container in containers or [None]:
+            add(
+                evidence_id=evidence_id,
+                namespace=data.get("namespace") or data.get("scope"),
+                pod=data.get("pod") or data.get("name"),
+                container=container,
+                phase=data.get("phase"),
+            )
+    return candidates
 
 
 def plan_needs_evidence_repair(

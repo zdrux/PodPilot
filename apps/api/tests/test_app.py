@@ -279,10 +279,12 @@ class DiscoveryThenLogsProvider(FakeModelProvider):
                 )],
             )
         if round_number == 2:
-            assert context["observations"][-1]["data"]["containers"] == ["kube-apiserver"]
+            candidates = context["tool_policy"]["pod_log_candidates"]
+            assert candidates[0]["pod"] == "kube-apiserver-sno1"
+            assert candidates[0]["container"] == "kube-apiserver"
             return ReadPlan(scope_summary="Inspect the discovered kube-apiserver logs.", intents=[ReadIntent(
-                tool="pod_logs", namespace="openshift-kube-apiserver",
-                name="kube-apiserver-sno1", container="kube-apiserver",
+                tool="pod_logs", candidate_id=candidates[0]["id"],
+                namespace="invented", name="not-the-observed-pod", container="wrong-container",
             )])
         return ReadPlan(scope_summary="The log evidence is sufficient.", intents=[])
 
@@ -307,12 +309,118 @@ class DiscoveryThenLogsExplorer:
                 summary="Discovered kube-apiserver-sno1.",
                 source="kubernetes:v1:Pod:openshift-kube-apiserver/kube-apiserver-sno1",
                 collected_at=datetime.now(timezone.utc),
-                data={"name": "kube-apiserver-sno1", "containers": ["kube-apiserver"]},
+                data={
+                    "namespace": "openshift-kube-apiserver",
+                    "name": "kube-apiserver-sno1",
+                    "containers": ["kube-apiserver"],
+                },
             ),))
         return ReadResult((AdHocObservation(
             id="cluster-api-logs", tool="pod_logs", summary="Collected kube-apiserver logs.",
             source="kubernetes:v1:Pod/log:openshift-kube-apiserver/kube-apiserver-sno1",
             collected_at=datetime.now(timezone.utc), data={"tail": "request completed successfully"},
+        ),))
+
+
+class InvalidLogTargetsThenFallbackProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if any(item["tool"] == "pod_logs" for item in context["observations"]):
+            log_ids = [
+                item["id"] for item in context["observations"] if item["tool"] == "pod_logs"
+            ]
+            return ReadPlan(
+                goal_type="logs",
+                decision="answer_from_evidence",
+                scope_summary="The collected kube-apiserver logs answer the question.",
+                supporting_evidence_ids=log_ids,
+            )
+        if context["completed_reads"]:
+            return ReadPlan(
+                goal_type="logs",
+                scope_summary="Read synthesized kube-apiserver targets.",
+                intents=[
+                    ReadIntent(
+                        tool="pod_logs",
+                        namespace="openshift-kube-apiserver",
+                        name=f"kube-apiserver/cluster-{index}",
+                        container="kube-apiserver",
+                    )
+                    for index in range(3)
+                ],
+            )
+        return ReadPlan(
+            goal_type="logs",
+            scope_summary="Discover kube-apiserver Pods before reading logs.",
+            intents=[ReadIntent(
+                tool="list_resources", api_version="v1", kind="Pod",
+                namespace="openshift-kube-apiserver", limit=20,
+            )],
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        logs = [item for item in context["observations"] if item["tool"] == "pod_logs"]
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer="PodPilot collected current logs from all three observed kube-apiserver containers.",
+            cited_evidence_ids=[item["id"] for item in logs],
+            limitations=[],
+        )
+
+
+class ExactCandidateFallbackExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        if intent.tool == "list_resources":
+            return ReadResult((AdHocObservation(
+                id="cluster-kube-api-pods",
+                tool="list_resources",
+                summary="Discovered kube-apiserver Pods.",
+                source="kubernetes:v1:Pod:openshift-kube-apiserver/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "scope": "openshift-kube-apiserver",
+                    "logCandidates": [
+                        {
+                            "namespace": "openshift-kube-apiserver",
+                            "pod": f"kube-apiserver-master-{index}",
+                            "containers": ["kube-apiserver"],
+                            "phase": "Running",
+                            "ready": True,
+                            "restartCount": index,
+                        }
+                        for index in range(3)
+                    ] + [{
+                        "namespace": "openshift-kube-apiserver",
+                        "pod": "installer-12-master-0",
+                        "containers": ["installer"],
+                        "phase": "Succeeded",
+                        "ready": False,
+                        "restartCount": 0,
+                    }],
+                },
+            ),))
+        assert intent.candidate_id
+        assert intent.name in {
+            "kube-apiserver-master-0",
+            "kube-apiserver-master-1",
+            "kube-apiserver-master-2",
+        }
+        assert intent.container == "kube-apiserver"
+        return ReadResult((AdHocObservation(
+            id=f"logs-{intent.name}",
+            tool="pod_logs",
+            summary=f"Collected logs for {intent.name}.",
+            source=(
+                "kubernetes:v1:Pod/log:openshift-kube-apiserver/"
+                f"{intent.name}?current"
+            ),
+            collected_at=datetime.now(timezone.utc),
+            data={"container": intent.container, "previous": False, "tail": "request completed"},
         ),))
 
 
@@ -1039,6 +1147,55 @@ def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Pa
     assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == 5
     assert provider.adhoc_plan_calls[1]["completed_reads"][0]["round"] == 1
     assert provider.adhoc_plan_calls[2]["observations"][-1]["tool"] == "pod_logs"
+
+
+def test_ask_rejects_synthesized_log_targets_and_falls_back_to_exact_candidates(
+    tmp_path: Path,
+) -> None:
+    provider = InvalidLogTargetsThenFallbackProvider()
+    explorer = ExactCandidateFallbackExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check the latest kube API server logs for errors."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "collected current logs from all three" in rendered.text
+    assert "used exact discovered Pod/container targets" in rendered.text
+    assert [call.tool for call in explorer.calls] == [
+        "list_resources", "pod_logs", "pod_logs", "pod_logs",
+    ]
+    assert all("/" not in call.name for call in explorer.calls if call.tool == "pod_logs")
+    repaired_contexts = [
+        context for context in provider.adhoc_plan_calls
+        if context.get("planner_feedback", {}).get("code") == "pod_log_target_not_observed"
+    ]
+    assert len(repaired_contexts) == 1
+    assert len(repaired_contexts[0]["tool_policy"]["pod_log_candidates"]) == 4
 
 
 def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:

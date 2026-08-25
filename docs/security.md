@@ -50,6 +50,13 @@ Secrets, access-review resources, exec/attach/port-forward/proxy paths, and ever
 mutation. Because `cluster-reader` is aggregated, release checks audit its effective
 permissions as well as the broker policy.
 
+Pod-log autonomy does not give the model a free-form log client. Pod LIST evidence
+creates bounded opaque candidate IDs for exact observed namespace/Pod/container
+tuples. The broker resolves those IDs, rejects invented names before a Kubernetes
+request, and caps deterministic fallback fan-out at three candidates within the
+existing per-turn budget. Candidate rejection does not widen ServiceAccount RBAC;
+a subsequent Kubernetes `pods/log` 403 remains an explicit RBAC limitation.
+
 Standalone conversations are authorization-scoped to their immutable
 `created_by` OpenShift username. Other users receive a not-found response and do
 not see the conversation in history, including users with a higher PodPilot role.

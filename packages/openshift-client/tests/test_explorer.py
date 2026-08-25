@@ -172,6 +172,43 @@ def test_bounded_list_follows_continue_tokens_until_complete():
     ]
 
 
+def test_pod_list_exposes_compact_exact_log_candidates():
+    pod = FakeObject(payload={
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": "kube-apiserver-master-0",
+            "namespace": "openshift-kube-apiserver",
+        },
+        "spec": {"containers": [{"name": "kube-apiserver"}]},
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "kube-apiserver",
+                "ready": True,
+                "restartCount": 1,
+                "state": {"running": {}},
+            }],
+        },
+    })
+    target, _, _ = explorer(FakeResource([pod]))
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", api_version="v1", kind="Pod",
+        namespace="openshift-kube-apiserver", limit=20,
+    ))
+
+    assert result.observations[0].data["logCandidates"] == [{
+        "namespace": "openshift-kube-apiserver",
+        "pod": "kube-apiserver-master-0",
+        "containers": ["kube-apiserver"],
+        "phase": "Running",
+        "ready": True,
+        "restartCount": 1,
+    }]
+    assert result.observations[0].data["logCandidatesTruncated"] is False
+
+
 def test_compact_list_enforces_payload_budget_with_explicit_truncation():
     objects = [FakeObject(name=f"pod-{index}", payload={
         "apiVersion": "v1",

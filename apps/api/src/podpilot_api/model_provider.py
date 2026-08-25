@@ -339,7 +339,9 @@ class OpenAIResponsesProvider:
                     "Kind values. Prefer namespace-scoped, named reads and small limits, but allow a "
                     "cluster-wide LIST when the operator asks for inventory and supplies no namespace. "
                     "Use pod_logs only when an exact Pod, namespace, and relevant container are identified "
-                    "by the operator or supplied observations. Never request "
+                    "by the operator or supplied observations. When tool_policy.pod_log_candidates is "
+                    "non-empty, select its opaque candidate_id and never construct or modify Pod, namespace, "
+                    "or container names. Never request "
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
                     "mutations, exec, attach, proxy, port-forward, or network connections. If scope is "
                     "missing, return no reads and explain what identifier is needed."
@@ -576,8 +578,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "plan just because the wording is unfamiliar. "
                 "Prefer the resource field with an exact plural name from resource_catalog; the server resolves API "
                 "coordinates and scope. A cluster-wide LIST is allowed for inventory when no namespace "
-                "was supplied; named GET reads still require exact scope. Never request Secrets, "
-                "identity/token/access-review resources, "
+                "was supplied; named GET reads still require exact scope. "
+                "When tool_policy.pod_log_candidates is non-empty, pod_logs must select an exact opaque "
+                "candidate_id from that list instead of constructing Pod or container names. "
+                "Never request Secrets, identity/token/access-review resources, "
                 "subresources, commands, probes, or mutations."
             ),
             payload=context, limit=min(profile.max_output_tokens, 1400),

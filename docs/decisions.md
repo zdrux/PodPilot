@@ -458,3 +458,23 @@ no longer wait for the full model workflow. The design intentionally supports on
 application replica; horizontal workers require a database-backed claim/lease
 design beyond SQLite. A crash may repeat a read-only inference job, but cannot
 perform cluster mutations, and terminal reply persistence remains atomic.
+
+## 2026-08-25 - Pod logs bind to exact evidence-derived candidates
+
+Context: Iterative planning could successfully list Pods and then lose autonomy
+because a model synthesized invalid Pod names for `pod_logs`. The broker correctly
+rejected them, but each proposal consumed a read slot and the final response
+looked like logs were unavailable rather than a planner-target failure.
+
+Decision: Retain a separately bounded namespace/Pod/container projection in Pod
+list evidence and assign opaque candidate IDs. Require planners to select those
+IDs whenever available, validate before accounting a cluster read, retry invalid
+selection once, and then allow a server-owned fallback across at most three
+question-relevant candidates. Previous logs require both explicit operator intent
+and an observed restart hint.
+
+Consequences: Common discover-then-log investigations recover from weak model
+target selection without wider RBAC or arbitrary log access. Candidate creation,
+binding, fan-out, budget accounting, redaction, and error classification remain
+deterministic. The compact candidate projection has its own payload ceiling, so a
+very large Pod inventory can still require narrower scope.

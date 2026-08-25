@@ -172,6 +172,12 @@ state. Tests must cover restart recovery, one active turn per conversation,
 active-conversation deletion refusal, owner-only status/SSE access, SSE completion,
 and optimistic composer clearing. Progress text must remain server-authored and
 must not include prompts, evidence bodies, credentials, or chain-of-thought.
+Pod-log resiliency gates must prove that Pod lists emit bounded exact candidate
+tuples, candidate IDs are stable within persisted evidence, and model-authored
+names cannot override them. Invalid targets must trigger one repair without
+spending the read budget; repeated invalid targets must use no more than three
+relevant exact candidates. Tests must distinguish planner rejection, `pods/log`
+RBAC denial, missing previous streams, and successful current/previous collection.
 
 ## Rollback
 

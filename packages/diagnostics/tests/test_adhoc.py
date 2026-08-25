@@ -1,3 +1,4 @@
+import pytest
 from pydantic import ValidationError
 
 from podpilot_diagnostics.adhoc import (
@@ -7,6 +8,7 @@ from podpilot_diagnostics.adhoc import (
     plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
+    pod_log_candidates_from_evidence,
 )
 
 
@@ -44,6 +46,34 @@ def test_pod_log_coordinates_are_not_rewritten() -> None:
     )
 
     assert normalize_read_intent(proposed) == proposed
+
+
+def test_pod_log_candidates_are_exact_stable_targets_from_list_evidence() -> None:
+    evidence = [{
+        "id": "cluster-pods-1",
+        "tool": "list_resources",
+        "data": {
+            "scope": "openshift-kube-apiserver",
+            "logCandidates": [{
+                "namespace": "openshift-kube-apiserver",
+                "pod": "kube-apiserver-master-0",
+                "containers": ["kube-apiserver", "kube-apiserver-cert-syncer"],
+                "phase": "Running",
+                "ready": True,
+                "restartCount": 2,
+            }],
+        },
+    }]
+
+    first = pod_log_candidates_from_evidence(evidence)
+    second = pod_log_candidates_from_evidence(evidence)
+
+    assert [item.id for item in first] == [item.id for item in second]
+    assert [(item.namespace, item.pod, item.container) for item in first] == [
+        ("openshift-kube-apiserver", "kube-apiserver-master-0", "kube-apiserver"),
+        ("openshift-kube-apiserver", "kube-apiserver-master-0", "kube-apiserver-cert-syncer"),
+    ]
+    assert first[0].restart_count == 2
 
 
 def test_storageclass_inventory_is_deterministic_and_terminal() -> None:
@@ -170,6 +200,17 @@ def test_collect_decision_requires_a_typed_read_intent() -> None:
         assert "collect decisions require at least one read intent" in str(exc)
     else:
         raise AssertionError("An empty collect decision must fail schema validation")
+
+
+def test_log_candidate_id_is_rejected_for_non_log_tools() -> None:
+    with pytest.raises(ValidationError, match="candidate_id is valid only for pod_logs"):
+        ReadIntent(
+            tool="get_resource",
+            candidate_id="podlog-1234567890",
+            resource="pods",
+            namespace="payments",
+            name="api",
+        )
 
 
 def test_live_catalog_health_fallback_uses_discovered_cluster_operator() -> None:
