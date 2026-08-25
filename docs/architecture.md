@@ -53,13 +53,21 @@ scheduling summaries for unscheduled Pods. Collection failures are retained as
 limitations, and all event, status-message, image, and log text is redacted before
 persistence. It contains no model call, PromQL query, chat, or cluster mutation.
 
-Milestone 4 adds a singleton provider profile and a provider-neutral interpretation
-contract. Metadata and capability results live in SQLite; the token lives only in
-the resourceName-restricted `ai-ops/podpilot-model-credentials` Secret. An
-Approver can save the profile and run an explicit capability probe. Only a profile
-that passes endpoint, TLS, authentication, model, streaming, tool-call, structured
-output, and configured embedding checks is used for investigations. The first
-adapter uses the official OpenAI SDK and Responses API with `store=false`.
+The provider registry keeps endpoint metadata and capability results in SQLite;
+tokens live only as per-profile data keys in the resourceName-restricted
+`ai-ops/podpilot-model-credentials` Secret. An Approver can add, edit, probe,
+activate, and delete endpoints without restarting the Pod. Exactly one successfully
+probed profile is active. The API rereads its token key from the Secret for every
+model call. Provider-neutral contracts route either to the official OpenAI
+Responses API adapter (`store=false`) or a strict JSON-schema Chat Completions
+adapter for compatible internal gateways. System trust, a SQLite-held custom CA,
+or an explicitly insecure TLS mode can be selected per endpoint; insecure mode is
+reported as accepted rather than verified.
+
+Only a profile that passes endpoint, TLS acceptance, authentication, model,
+structured-output, and configured embedding checks is usable. Streaming and tool
+calling are recorded capabilities but are not required because the current agent
+loop exchanges schema-validated read plans rather than provider-native tool calls.
 Schema-validated interpretation is displayed separately from deterministic facts.
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
@@ -178,7 +186,9 @@ scrolling afterward.
 - Official Kubernetes Python dynamic client; no `oc` binary in the application image.
 - Thanos Querier Prometheus-compatible API.
 - Alertmanager v2 API.
-- OpenAI Responses API through the first provider adapter and official Python SDK, using `gpt-5.6-terra` initially; internal OpenAI-compatible endpoints can be configured later.
+- OpenAI Responses and strict-schema Chat Completions APIs through the provider
+  router and official Python SDK. Public and internal compatible endpoints are
+  stored in the model registry with one probed active profile.
 - SQLite FTS5 on the SNO-lab `podpilot-data` PVC for single-replica investigations and memory.
 
 ## Open Questions

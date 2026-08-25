@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -45,10 +45,18 @@ class Investigation(Base):
 class ModelProfile(Base):
     __tablename__ = "model_profiles"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     provider_label: Mapped[str] = mapped_column(String(100), nullable=False)
     base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     chat_model: Mapped[str] = mapped_column(String(253), nullable=False)
+    api_type: Mapped[str] = mapped_column(String(32), nullable=False, default="responses")
+    credential_key: Mapped[str] = mapped_column(String(253), nullable=False, default="api_key")
+    tls_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="system")
+    custom_ca_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=128_000)
+    tool_calling_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    vision_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     embedding_model: Mapped[str | None] = mapped_column(String(253), nullable=True)
     timeout_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)

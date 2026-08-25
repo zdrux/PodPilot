@@ -26,7 +26,7 @@ from podpilot_api.model_provider import (
     ModelProfileConfig,
     ModelProvider,
     ModelProviderError,
-    OpenAIResponsesProvider,
+    OpenAIProviderRouter,
 )
 from podpilot_api.models import (
     AdHocConversation,
@@ -120,6 +120,16 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         embedding_model=profile.embedding_model,
         timeout_seconds=profile.timeout_seconds,
         max_output_tokens=profile.max_output_tokens,
+        api_type=profile.api_type,
+        tls_mode=profile.tls_mode,
+        custom_ca_pem=profile.custom_ca_pem,
+        max_input_tokens=profile.max_input_tokens,
+    )
+
+
+def _active_profile(db_session: Session) -> ModelProfile | None:
+    return db_session.scalar(
+        select(ModelProfile).where(ModelProfile.is_active.is_(True)).order_by(ModelProfile.id).limit(1)
     )
 
 
@@ -450,7 +460,7 @@ def create_app(
     alerts = alert_source or _make_alert_source(app_settings)
     workloads = workload_source or _make_workload_source(app_settings)
     credentials = credential_store or _make_credential_store(app_settings)
-    provider = model_provider or OpenAIResponsesProvider()
+    provider = model_provider or OpenAIProviderRouter()
     executor = remediation_executor or KubernetesRemediationExecutor()
     check_executor = diagnostic_executor or KubernetesDiagnosticCheckExecutor(
         max_events=app_settings.workload_max_events,
@@ -476,7 +486,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.10.0",
+        version="0.11.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -539,8 +549,9 @@ def create_app(
                 summary_char_limit=app_settings.adhoc_context_summary_chars,
             )
             context_summary = conversation.context_summary
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
 
         activity: list[dict[str, object]] = []
@@ -554,7 +565,7 @@ def create_app(
         }
         if profile_snapshot:
             try:
-                api_key = await run_in_threadpool(credentials.get)
+                api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 seen_intents: set[str] = set()
@@ -686,7 +697,7 @@ def create_app(
                 select(AdHocConversation).where(AdHocConversation.created_by == user.username)
                 .order_by(AdHocConversation.updated_at.desc()).limit(20)
             ))
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
@@ -720,7 +731,7 @@ def create_app(
                 select(AdHocConversation).where(AdHocConversation.created_by == user.username)
                 .order_by(AdHocConversation.updated_at.desc()).limit(20)
             ))
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
         messages = [{
             "role": row.role, "actor": row.actor, "content": row.content,
             "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
@@ -814,26 +825,32 @@ def create_app(
     ):
         csrf_token, csrf_is_new = _csrf_token(request)
         with Session(request.app.state.engine) as db_session:
-            profile = db_session.get(ModelProfile, 1)
-            profile_view = None
-            if profile:
-                profile_view = {
-                    "provider_label": profile.provider_label,
-                    "base_url": profile.base_url,
-                    "chat_model": profile.chat_model,
-                    "embedding_model": profile.embedding_model or "",
-                    "timeout_seconds": profile.timeout_seconds,
-                    "max_output_tokens": profile.max_output_tokens,
-                    "status": profile.status,
-                    "capabilities": json.loads(profile.capabilities_json),
-                    "last_error": profile.last_error,
-                    "last_probe_at": profile.last_probe_at,
-                    "updated_by": profile.updated_by,
-                    "updated_at": profile.updated_at,
+            rows = list(db_session.scalars(select(ModelProfile).order_by(ModelProfile.id)))
+            requested_id = request.query_params.get("edit")
+            profile = next((row for row in rows if str(row.id) == requested_id), None)
+            if profile is None and request.query_params.get("new") != "1":
+                profile = next((row for row in rows if row.is_active), None)
+            def view(row: ModelProfile) -> dict[str, object]:
+                return {
+                    "id": row.id,
+                    "provider_label": row.provider_label,
+                    "base_url": row.base_url, "chat_model": row.chat_model,
+                    "embedding_model": row.embedding_model or "", "api_type": row.api_type,
+                    "tls_mode": row.tls_mode, "custom_ca_pem": row.custom_ca_pem or "",
+                    "max_input_tokens": row.max_input_tokens,
+                    "max_output_tokens": row.max_output_tokens,
+                    "timeout_seconds": row.timeout_seconds, "status": row.status,
+                    "capabilities": json.loads(row.capabilities_json),
+                    "tool_calling_hint": row.tool_calling_hint, "vision_hint": row.vision_hint,
+                    "is_active": row.is_active, "last_error": row.last_error,
+                    "last_probe_at": row.last_probe_at, "updated_by": row.updated_by,
+                    "updated_at": row.updated_at,
                 }
+            profile_view = view(profile) if profile else None
+            profile_views = [view(row) for row in rows]
         credential_error = None
         try:
-            token_configured = bool(credentials.get())
+            token_configured = bool(credentials.get(profile.credential_key)) if profile else False
         except CredentialStoreError as exc:
             token_configured = False
             credential_error = str(exc)
@@ -843,6 +860,7 @@ def create_app(
             context={
                 "user": user,
                 "profile": profile_view,
+                "profiles": profile_views,
                 "token_configured": token_configured,
                 "credential_error": credential_error,
                 "csrf_token": csrf_token,
@@ -868,11 +886,15 @@ def create_app(
         if user.role < Role.APPROVER:
             raise HTTPException(status_code=403, detail="Model settings require the Approver role or higher.")
         form = await _urlencoded(request)
+        profile_id_text = form.get("profile_id", "").strip()
         provider_label = form.get("provider_label", "").strip()
         base_url = form.get("base_url", "").strip().rstrip("/")
         chat_model = form.get("chat_model", "").strip()
         embedding_model = form.get("embedding_model", "").strip() or None
         token = form.get("api_token", "").strip()
+        api_type = form.get("api_type", "responses").strip()
+        tls_mode = form.get("tls_mode", "system").strip()
+        custom_ca_pem = form.get("custom_ca_pem", "").strip() or None
         parsed_url = urlparse(base_url)
         if not provider_label or len(provider_label) > 100:
             raise HTTPException(status_code=422, detail="Provider label is required and must be at most 100 characters.")
@@ -880,34 +902,68 @@ def create_app(
             raise HTTPException(status_code=422, detail="Base URL must be an HTTPS endpoint without embedded credentials.")
         if not chat_model or len(chat_model) > 253:
             raise HTTPException(status_code=422, detail="A valid chat model name is required.")
+        if api_type not in {"responses", "chat-completions"}:
+            raise HTTPException(status_code=422, detail="API type must be Responses or Chat Completions.")
+        if tls_mode not in {"system", "custom_ca", "insecure"}:
+            raise HTTPException(status_code=422, detail="TLS mode is invalid.")
+        if tls_mode == "custom_ca" and not custom_ca_pem:
+            raise HTTPException(status_code=422, detail="Custom-CA mode requires a PEM CA bundle.")
+        if custom_ca_pem and len(custom_ca_pem) > 65_536:
+            raise HTTPException(status_code=422, detail="The custom CA bundle is too large.")
+        if custom_ca_pem and "PRIVATE KEY" in custom_ca_pem.upper():
+            raise HTTPException(status_code=422, detail="Custom CA input must not contain a private key.")
         try:
             timeout_seconds = float(form.get("timeout_seconds", "30"))
+            max_input_tokens = int(form.get("max_input_tokens", "128000"))
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="Timeout and token budget must be numeric.") from exc
-        if not 3 <= timeout_seconds <= 120 or not 128 <= max_output_tokens <= 16_384:
+        if (not 3 <= timeout_seconds <= 120 or not 1_024 <= max_input_tokens <= 2_000_000
+                or not 128 <= max_output_tokens <= 131_072):
             raise HTTPException(status_code=422, detail="Timeout or token budget is outside the allowed range.")
+        try:
+            profile_id = int(profile_id_text) if profile_id_text else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Model profile ID is invalid.") from exc
+        with Session(request.app.state.engine) as db_session:
+            existing_profile = db_session.get(ModelProfile, profile_id) if profile_id else None
+            if profile_id and existing_profile is None:
+                raise HTTPException(status_code=404, detail="Model profile not found.")
+            credential_key = (
+                existing_profile.credential_key if existing_profile else f"model_{uuid4().hex}"
+            )
         if token:
             if len(token) < 8 or len(token) > 8192:
                 raise HTTPException(status_code=422, detail="The submitted token length is invalid.")
             try:
-                await run_in_threadpool(credentials.set, token)
+                await run_in_threadpool(credentials.set, token, credential_key)
             except CredentialStoreError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
         else:
             try:
-                if not await run_in_threadpool(credentials.get):
+                if not await run_in_threadpool(credentials.get, credential_key):
                     raise HTTPException(status_code=422, detail="An API token is required for the first profile save.")
             except CredentialStoreError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
-            profile = db_session.get(ModelProfile, 1) or ModelProfile(id=1, updated_by=user.username)
+            profile = db_session.get(ModelProfile, profile_id) if profile_id else None
+            if profile is None:
+                profile = ModelProfile(
+                    updated_by=user.username, credential_key=credential_key,
+                    is_active=db_session.scalar(select(func.count(ModelProfile.id))) == 0,
+                )
             profile.provider_label = provider_label
             profile.base_url = base_url
             profile.chat_model = chat_model
             profile.embedding_model = embedding_model
+            profile.api_type = api_type
+            profile.tls_mode = tls_mode
+            profile.custom_ca_pem = custom_ca_pem if tls_mode == "custom_ca" else None
+            profile.max_input_tokens = max_input_tokens
+            profile.tool_calling_hint = form.get("tool_calling_hint") == "true"
+            profile.vision_hint = form.get("vision_hint") == "true"
             profile.timeout_seconds = timeout_seconds
             profile.max_output_tokens = max_output_tokens
             profile.status = "not_tested"
@@ -924,23 +980,27 @@ def create_app(
                 details_json=json.dumps({"provider_label": provider_label, "base_url": base_url, "chat_model": chat_model}, sort_keys=True),
             ))
             db_session.commit()
-        return JSONResponse({"status": "saved", "token_configured": True})
+            saved_profile_id = profile.id
+        return JSONResponse({"status": "saved", "token_configured": True, "profile_id": saved_profile_id})
 
+    @app.post("/api/v1/model-profiles/{profile_id}/probe")
     @app.post("/api/v1/model-profile/probe")
     async def probe_model_profile(
         request: Request,
+        profile_id: int | None = None,
         user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
         _verify_csrf(request)
         if user.role < Role.APPROVER:
             raise HTTPException(status_code=403, detail="Testing model settings requires the Approver role or higher.")
         with Session(request.app.state.engine) as db_session:
-            profile = db_session.get(ModelProfile, 1)
+            profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)
             if profile is None:
                 raise HTTPException(status_code=409, detail="Save a model profile before testing it.")
             config_snapshot = _profile_config(profile)
+            credential_key = profile.credential_key
         try:
-            api_key = await run_in_threadpool(credentials.get)
+            api_key = await run_in_threadpool(credentials.get, credential_key)
             if not api_key:
                 raise ModelProviderError("No model API token is configured.")
             report = await run_in_threadpool(provider.probe, config_snapshot, api_key)
@@ -953,7 +1013,7 @@ def create_app(
             error = str(exc)
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
-            profile = db_session.get(ModelProfile, 1)
+            profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)
             if profile is None:
                 raise HTTPException(status_code=409, detail="The model profile changed during the probe.")
             profile.status = outcome
@@ -968,6 +1028,48 @@ def create_app(
             ))
             db_session.commit()
         return JSONResponse({"status": outcome, "capabilities": capabilities, "detail": error})
+
+    @app.post("/api/v1/model-profiles/{profile_id}/activate")
+    async def activate_model_profile(request: Request, profile_id: int, user: AuthContext = Depends(current_user)):
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Activating models requires the Approver role or higher.")
+        with Session(request.app.state.engine) as db_session:
+            profile = db_session.get(ModelProfile, profile_id)
+            if profile is None:
+                raise HTTPException(status_code=404, detail="Model profile not found.")
+            if profile.status != "ready":
+                raise HTTPException(status_code=409, detail="Test the model successfully before activation.")
+            db_session.execute(update(ModelProfile).values(is_active=False))
+            profile.is_active = True
+            db_session.add(AuditEvent(actor=user.username, action="model_profile.activate", outcome="ready", details_json=json.dumps({"profile_id": profile.id})))
+            db_session.commit()
+        return JSONResponse({"status": "active", "profile_id": profile_id})
+
+    @app.post("/api/v1/model-profiles/{profile_id}/delete")
+    async def delete_model_profile(request: Request, profile_id: int, user: AuthContext = Depends(current_user)):
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Deleting models requires the Approver role or higher.")
+        with Session(request.app.state.engine) as db_session:
+            profile = db_session.get(ModelProfile, profile_id)
+            if profile is None:
+                raise HTTPException(status_code=404, detail="Model profile not found.")
+            if profile.is_active:
+                raise HTTPException(status_code=409, detail="Activate another model before deleting this one.")
+            credential_key = profile.credential_key
+        try:
+            await run_in_threadpool(credentials.delete, credential_key)
+        except CredentialStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        with Session(request.app.state.engine) as db_session:
+            profile = db_session.get(ModelProfile, profile_id)
+            if profile is None or profile.is_active:
+                raise HTTPException(status_code=409, detail="The model profile changed before deletion.")
+            db_session.delete(profile)
+            db_session.add(AuditEvent(actor=user.username, action="model_profile.delete", outcome="deleted", details_json=json.dumps({"profile_id": profile_id})))
+            db_session.commit()
+        return JSONResponse({"status": "deleted"})
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
@@ -1146,11 +1248,12 @@ def create_app(
         analysis_payload = analysis.to_dict()
         model_result: dict[str, object] = {"status": "not_configured"}
         with Session(request.app.state.engine) as db_session:
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            credential_key = profile.credential_key if profile_snapshot else None
         if profile_snapshot:
             try:
-                api_key = await run_in_threadpool(credentials.get)
+                api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 interpretation = await run_in_threadpool(
@@ -1609,8 +1712,9 @@ def create_app(
                 {"role": item.role, "content": item.content}
                 for item in reversed(history_rows)
             ]
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            credential_key = profile.credential_key if profile_snapshot else None
             alert_name = investigation.alert_name
 
         provider_status = "not_configured"
@@ -1622,7 +1726,7 @@ def create_app(
         }
         if profile_snapshot:
             try:
-                api_key = await run_in_threadpool(credentials.get)
+                api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 answer = await run_in_threadpool(
@@ -1825,13 +1929,14 @@ def create_app(
                         limitations.append(limitation)
             analysis_payload["limitations"] = limitations
             analysis_payload["diagnostic_results"] = diagnostic_results
-            profile = db_session.get(ModelProfile, 1)
+            profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            credential_key = profile.credential_key if profile_snapshot else None
 
         model_result: dict[str, object] = analysis_payload.get("model", {"status": "not_configured"})
         if profile_snapshot:
             try:
-                api_key = await run_in_threadpool(credentials.get)
+                api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 interpretation = await run_in_threadpool(

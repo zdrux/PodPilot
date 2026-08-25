@@ -200,6 +200,26 @@ read-only; the workload adds a narrow Role that can update but neither create no
 list exactly one credential Secret. Custom CA upload remains a later internal-
 provider hardening increment.
 
+## 2026-08-24 - SQLite model registry with per-profile Secret keys
+
+Context: The lab must switch between public OpenAI and internal compatible
+gateways without changing manifests or restarting the Pod. Provider catalogs use
+both Responses and Chat Completions conventions, and internal endpoints may use a
+private CA.
+
+Decision: Replace the singleton with a SQLite registry of endpoint metadata and
+one active, successfully probed profile. Keep bearer tokens out of SQLite. Each
+profile owns an opaque data key in the fixed, resourceName-restricted OpenShift
+Secret; the API patches that key and rereads it for every inference. Support
+Responses and strict-schema Chat Completions adapters plus system trust, custom
+CA, and an explicitly unsafe PoC-only TLS mode.
+
+Consequences: Endpoint and token changes do not require a rollout. Deleting an
+inactive profile also removes its Secret key; an active profile cannot be deleted.
+Chat Completions compatibility now means more than accepting the URL: the probe
+must prove authentication, selected-model access, and strict structured output.
+TLS bypass remains visible as accepted, never as verified.
+
 ## 2026-08-23 - Typed single-use remediation instead of generated commands
 
 Context: The PoC service account has cluster-admin, but broad RBAC cannot make a

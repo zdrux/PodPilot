@@ -176,17 +176,20 @@ The current deployment uses these variables:
 - `PODPILOT_MODEL_SECRET_KEY`, default `api_key`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
-Model profile metadata (base URL, model names, timeout, and output-token budget)
-is configured through `/settings/model`, not environment variables. Local
-development reads `OPENAI_API_KEY` without persisting it. OpenShift uses the fixed
-Secret above; the UI never reads the saved value back.
+Model profile metadata (API type, base URL, model names, TLS mode/custom CA,
+capability hints, timeout, and token budgets) is configured through
+`/settings/model` and stored in SQLite. Local development reads `OPENAI_API_KEY`
+without persisting it. In OpenShift, every profile has an opaque key in the fixed
+Secret above. Saving a token sends it through the OAuth-protected HTTPS Route;
+FastAPI patches only that key through the Kubernetes API using the runtime
+ServiceAccount. The UI never reads the saved value back. Model calls reread the
+key, so token creation and rotation require no Deployment restart.
 
 Later integrations may add:
 
 - investigation limits and timeouts
 - Ask PodPilot read rounds, reads per turn, recent-context size, context-digest
   size, display history, evidence retention, and per-user request-rate limits
-- optional custom CA Secret reference for internal providers
 - optional OpenShift API override for local development
 - `PODPILOT_BOOTSTRAP_KUBECONFIG` for the external local bootstrap credential path
 - logging and tracing configuration
@@ -238,10 +241,14 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    oc -n ai-ops create secret generic podpilot-model-credentials --from-literal=api_key=$env:OPENAI_API_KEY --dry-run=client -o yaml | oc apply -f -
    ```
 
-   Open `/settings/model` as an Approver, save the metadata with the token field
-   blank, and run **Test connection**. A profile is used only when every required
-   capability passes. Rotate the provider key if it ever appears in terminal or
-   application output.
+   Open `/settings/model` as an Approver to add one or more endpoints. Choose
+   **Responses** for providers implementing `/responses`, or **Chat Completions**
+   for gateways implementing `/chat/completions`; enter the token on first save,
+   then run **Test connection** and activate a ready profile. A blank token field
+   preserves the existing Secret value. Prefer system trust or a custom CA.
+   **Insecure** disables certificate and hostname verification and is intended
+   only for a disposable PoC endpoint. Rotate the provider key if it ever appears
+   in terminal or application output.
 
    `model-credentials.yaml` documents the fixed Secret identity but is deliberately
    excluded from the workload kustomization so a later manifest apply cannot erase

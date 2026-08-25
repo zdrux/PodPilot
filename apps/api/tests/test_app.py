@@ -79,12 +79,17 @@ class FailingWorkloadSource:
 class MemoryCredentialStore:
     def __init__(self, value: str | None = None) -> None:
         self.value = value
+        self.values: dict[str, str] = {}
 
-    def get(self) -> str | None:
-        return self.value
+    def get(self, key: str | None = None) -> str | None:
+        return self.values.get(key or "api_key", self.value)
 
-    def set(self, value: str) -> None:
+    def set(self, value: str, key: str | None = None) -> None:
         self.value = value
+        self.values[key or "api_key"] = value
+
+    def delete(self, key: str | None = None) -> None:
+        self.values.pop(key or "api_key", None)
 
 
 class FakeModelProvider:
@@ -445,7 +450,7 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
         assert "Milestone 10 adds" in response.text
-        assert "PodPilot 0.10.0" in response.text
+        assert "PodPilot 0.11.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -1671,6 +1676,20 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
+        rejected_ca = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "provider_label": "Unsafe CA",
+                "base_url": "https://models.example.test/v1",
+                "chat_model": "test-model",
+                "api_token": "test-api-token",
+                "tls_mode": "custom_ca",
+                "custom_ca_pem": "-----BEGIN PRIVATE KEY-----",
+            },
+        )
+        assert rejected_ca.status_code == 422
+        assert "must not contain a private key" in rejected_ca.json()["detail"]
         saved = client.post(
             "/api/v1/model-profile",
             headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
@@ -1684,7 +1703,9 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
                 "max_output_tokens": "1200",
             },
         )
-        assert saved.json() == {"status": "saved", "token_configured": True}
+        assert saved.json()["status"] == "saved"
+        assert saved.json()["token_configured"] is True
+        assert saved.json()["profile_id"] == 1
         rendered = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
         assert "Token configured" in rendered.text
         assert "test-api-token" not in rendered.text
@@ -1701,6 +1722,84 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         assert profile is not None and profile.status == "ready"
         assert "test-api-token" not in profile.capabilities_json
         assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == 2
+    engine.dispose()
+
+
+def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore()
+    provider = FakeModelProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        credential_store=credentials,
+        model_provider=provider,
+    )
+    with TestClient(app) as client:
+        page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        first = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                "provider_label": "Public OpenAI",
+                "base_url": "https://api.openai.com/v1",
+                "chat_model": "gpt-5.6-terra",
+                "api_token": "test-api-token",
+                "timeout_seconds": "30",
+                "max_input_tokens": "128000",
+                "max_output_tokens": "1200",
+            },
+        )
+        second = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                "provider_label": "Enterprise gateway",
+                "base_url": "https://models.example.test/v1",
+                "chat_model": "gemma-4-31b-it",
+                "api_type": "chat-completions",
+                "api_token": "test-api-token",
+                "tls_mode": "insecure",
+                "timeout_seconds": "45",
+                "max_input_tokens": "128000",
+                "max_output_tokens": "10000",
+                "tool_calling_hint": "true",
+                "vision_hint": "true",
+            },
+        )
+        first_id = first.json()["profile_id"]
+        second_id = second.json()["profile_id"]
+        assert first_id != second_id
+        assert len(credentials.values) == 2
+        credential_keys = set(credentials.values)
+
+        probe = client.post(f"/api/v1/model-profiles/{second_id}/probe", headers=headers, data={})
+        assert probe.json()["status"] == "ready"
+        activated = client.post(
+            f"/api/v1/model-profiles/{second_id}/activate", headers=headers, data={}
+        )
+        assert activated.json() == {"status": "active", "profile_id": second_id}
+        deleted = client.post(
+            f"/api/v1/model-profiles/{first_id}/delete", headers=headers, data={}
+        )
+        assert deleted.json() == {"status": "deleted"}
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        profiles = list(db_session.scalars(select(ModelProfile).order_by(ModelProfile.id)))
+        assert len(profiles) == 1
+        assert profiles[0].id == second_id
+        assert profiles[0].is_active is True
+        assert profiles[0].api_type == "chat-completions"
+        assert profiles[0].tls_mode == "insecure"
+        assert profiles[0].tool_calling_hint is True
+        assert profiles[0].vision_hint is True
+        assert profiles[0].credential_key in credentials.values
+    assert len(credentials.values) == 1
+    assert set(credentials.values) < credential_keys
     engine.dispose()
 
 

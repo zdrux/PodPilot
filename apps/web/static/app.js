@@ -65,8 +65,8 @@
       const submit = settingsForm.querySelector('button[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
       try {
-        await sendSettingsRequest(settingsForm.dataset.saveUrl, new URLSearchParams(new FormData(settingsForm)));
-        window.location.reload();
+        const payload = await sendSettingsRequest(settingsForm.dataset.saveUrl, new URLSearchParams(new FormData(settingsForm)));
+        window.location.assign(`/settings/model?edit=${encodeURIComponent(payload.profile_id)}`);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = "Save profile"; }
@@ -87,6 +87,20 @@
       }
     });
   }
+  document.querySelectorAll(".model-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!csrf || !button.dataset.actionUrl) return;
+      if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
+      button.disabled = true;
+      try {
+        await sendSettingsRequest(button.dataset.actionUrl, "");
+        window.location.assign("/settings/model");
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+      }
+    });
+  });
 
   document.querySelectorAll(".review-action").forEach((button) => {
     button.addEventListener("click", () => {

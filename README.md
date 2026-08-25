@@ -23,6 +23,12 @@ It can plan and perform bounded resource, ConfigMap, and Pod-log reads, then ans
 with persisted evidence citations. Secrets, exec-like subresources, and mutations
 are excluded from this workflow.
 
+The model registry supports multiple OpenAI-compatible endpoints with one tested
+active model. Endpoint metadata is stored in SQLite; each token stays under an
+opaque key in one restricted OpenShift Secret and can be rotated from the GUI
+without restarting PodPilot. Both Responses and strict-schema Chat Completions
+APIs are supported.
+
 ## Start Here
 
 - [Current project status](docs/project-status.md)

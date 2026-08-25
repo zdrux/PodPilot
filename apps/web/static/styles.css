@@ -50,14 +50,29 @@ a { color: inherit; }
 
 .main { min-width: 0; padding: 34px clamp(24px, 4vw, 58px) 22px; }
 .settings-grid { margin-top: 13px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, .6fr); gap: 13px; }
+.model-registry-layout { margin-top: 13px; display: grid; grid-template-columns: minmax(240px, .55fr) minmax(460px, 1.25fr) minmax(260px, .6fr); gap: 13px; align-items: start; }
 .settings-panel { overflow: visible; }
 .settings-form, .model-analysis-body { padding: 22px; }
 .settings-form label { display: grid; gap: 7px; color: #b7c3d4; font-size: 11px; font-weight: 700; }
-.settings-form input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #0a111d; }
+.settings-form input, .settings-form select, .settings-form textarea { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #0a111d; font: inherit; }
+.settings-form textarea { padding-block: 10px; resize: vertical; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+.settings-form select { appearance: auto; }
 .settings-form small, .muted-copy { color: var(--muted); font-size: 10px; font-weight: 400; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
 .settings-form > * + * { margin-top: 17px; }
 .form-actions { display: flex; gap: 9px; }
+.capability-hints { display: flex; flex-wrap: wrap; gap: 18px; }
+.capability-hints label { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+.capability-hints input { width: 18px; min-height: 18px; }
+.model-profile-list { margin: 0; padding: 8px; list-style: none; }
+.model-profile-list li { border: 1px solid transparent; border-radius: 9px; }
+.model-profile-list li.selected { border-color: rgba(69, 212, 232, .25); background: var(--cyan-soft); }
+.model-profile-list a { display: grid; gap: 5px; padding: 12px; text-decoration: none; }
+.model-profile-list span { display: flex; justify-content: space-between; gap: 8px; }
+.model-profile-list strong { font-size: 13px; }
+.model-profile-list em { color: var(--green); font-size: 10px; font-style: normal; text-transform: uppercase; }
+.model-profile-list b { overflow-wrap: anywhere; color: #d3dfec; font-size: 12px; }
+.model-profile-list small { color: var(--muted); font-size: 11px; }
 .capability-list { padding: 16px 20px 20px; }
 .capability-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 .capability-list strong { color: var(--text); }
@@ -291,6 +306,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 
 @media (max-width: 1050px) {
   .settings-grid { grid-template-columns: 1fr; }
+  .model-registry-layout { grid-template-columns: 1fr; }
   .action-details { grid-template-columns: 1fr; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .content-grid { grid-template-columns: 1fr; }

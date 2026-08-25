@@ -1,14 +1,15 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.10.0 / Milestone 10 is implemented and deployed on the disposable SNO
-lab. The Milestone 10 workspace is deployed but not yet committed. Start a new
+PodPilot 0.11.0 is implemented and deployed on the disposable SNO lab. Milestone
+10 remains the investigation baseline; 0.11 adds the multi-provider model registry.
+The model-registry workspace is deployed but not yet committed. Start a new
 session by reading this file and `AGENTS.md`, then verify `git status --short`
 before making changes.
 
@@ -26,9 +27,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   investigations.
 - Bounded Pod status, event, current/previous log, owner-chain, rollout, and node
   scheduling evidence.
-- Provider-neutral model boundary with an OpenAI Responses API implementation,
-  server-side Secret storage, capability probing, structured output, redaction,
-  and deterministic fallback.
+- Provider-neutral model boundary with OpenAI Responses and strict-schema Chat
+  Completions implementations, capability probing, structured output, redaction,
+  and deterministic fallback. Multiple endpoint profiles live in SQLite with one
+  tested active profile. Per-profile API tokens remain under opaque keys in the
+  fixed OpenShift Secret and are dynamically created, rotated, and removed without
+  a Pod restart. TLS modes include system trust, custom CA, and a visibly insecure
+  PoC-only override.
 - Typed remediation for one controller-owned failed Pod replacement and one
   Deployment, StatefulSet, or DaemonSet rollout restart.
 - Server dry-run, exact UID/resourceVersion preconditions, ten-minute preview
@@ -86,14 +91,14 @@ records remain, but execution now awaits a separate approval-gated action servic
   labels are escaped, responses are capped at 64 KiB and 20 retained series, and
   results are redacted before becoming evidence.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
-  `0008_conversation_management`.
+  `0009_model_registry`.
 
 ## Last Verified State
 
-- Application version: `0.10.0`.
+- Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 73 tests passing with 83% aggregate branch coverage.
+- Automated suite: 77 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source
@@ -162,6 +167,14 @@ records remain, but execution now awaits a separate approval-gated action servic
   `openshift-monitoring/podpilot-alertmanager-api-view` binding references the
   existing namespaced Role. Live collection then returned a complete snapshot of
   five alerts, and the obsolete binding was removed.
+- The model registry was deployed as OpenShift build `podpilot-29` at image digest
+  `sha256:1244c165107ce2f545bab9e83aeafa9ea58a20041f165ac8222d817162889b62`.
+  The init container upgraded the live PVC from `0008_conversation_management` to
+  `0009_model_registry`, preserving the ready OpenAI profile as active with its
+  existing `api_key`. A live, OAuth-attributed API exercise created a temporary
+  Chat Completions profile, patched its opaque token key into the fixed credential
+  Secret, deleted the profile and key, and confirmed the API container did not
+  restart. The database and Secret returned to the original single-profile state.
 
 These observations are a handoff snapshot, not a substitute for checking the
 current repository and cluster state.

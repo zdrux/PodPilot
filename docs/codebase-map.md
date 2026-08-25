@@ -24,7 +24,9 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - FastAPI, Pydantic, Uvicorn, SQLAlchemy, and Alembic form the initial API stack.
 - Jinja2, HTMX, and Server-Sent Events provide the single-image interactive GUI.
 - The official Kubernetes Python dynamic client replaces a runtime dependency on `oc`.
-- The official OpenAI Python SDK and Responses API provide model access.
+- The provider router uses the official OpenAI Python SDK for Responses and
+  strict-schema Chat Completions endpoints. SQLite stores endpoint metadata while
+  per-profile tokens remain in the fixed OpenShift credential Secret.
 - SQLite FTS5 on the `podpilot-data` SNO-local PVC provides single-replica PoC state.
 - Hash-locked dependencies are generated with `pip-compile`; pytest and coverage are configured in `pyproject.toml`.
 - OpenShift manifests use Kustomize's built-in resource aggregation.

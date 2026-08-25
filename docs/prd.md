@@ -131,14 +131,17 @@ values to the model by default, even though the PoC identity can read them.
 
 ### 5.1 Settings and model connection
 
-An administrator can configure one OpenAI-compatible model profile:
+An administrator can configure multiple OpenAI-compatible model profiles and
+activate one successfully tested profile:
 
 - provider label and API base URL, defaulting to OpenAI at `https://api.openai.com/v1`
-- API token stored server-side in an OpenShift Secret
-- API mode/capabilities discovered by a connection probe
+- API token stored under a per-profile key in one server-side OpenShift Secret
+- Responses or Chat Completions API mode, selected explicitly and checked by a
+  connection probe
 - reasoning/chat model name, initially `gpt-5.6-terra`
 - optional embedding model, initially `text-embedding-3-small`
-- optional custom CA bundle
+- system TLS trust, an optional custom CA bundle, or an explicitly warned insecure
+  PoC mode
 - request timeout and maximum investigation token budget
 
 The UI must never read the saved token back. A connection test must report:
@@ -151,11 +154,12 @@ The UI must never read the saved token back. A connection test must report:
 - structured-output/JSON-schema support
 - embedding support, when configured
 
-The first provider adapter uses the official OpenAI Python SDK and Responses API
-with `store=false`. Investigation and diagnostic code depend on PodPilot's own
+The provider adapters use the official OpenAI Python SDK. Responses calls use
+`store=false`; Chat Completions calls require strict JSON-schema output.
+Investigation and diagnostic code depend on PodPilot's own
 provider-neutral interface, not SDK response objects. A later internal endpoint
-can supply its own base URL, token, model names, CA, and supported features without
-changing the agent workflow; profiles that lack required capabilities must fail
+An internal endpoint can supply its own base URL, token, model names, CA, and
+supported features without changing the agent workflow; profiles that lack required capabilities must fail
 closed or run in a clearly labeled reduced-capability mode.
 
 The local Windows user environment contains a validated `OPENAI_API_KEY` with
@@ -434,7 +438,8 @@ not become durable reusable memory automatically.
   its latest published release is 0.13.2 from 2023 and classified alpha.
 - Use in-cluster service-account configuration in the Pod and kubeconfig only for local tests.
 - Use `httpx` for bounded Thanos and Alertmanager HTTP requests.
-- Use the official `openai` Python SDK and Responses API for model calls.
+- Use the official `openai` Python SDK behind provider-neutral Responses and
+  strict-schema Chat Completions adapters.
 
 The dynamic client performs API discovery, allowing PodPilot to work with core
 Kubernetes resources, OpenShift resources such as Routes and ClusterOperators,
@@ -447,7 +452,8 @@ and later-installed CRDs without generated clients for every API group.
 - **podpilot-web**: Jinja2 templates and HTMX/static assets served by the API in the same image.
 - **SQLite on `podpilot-data` PVC**: single-replica investigations, audit events,
   and memory on lab-local storage.
-- **OpenShift Secret**: model token and optional CA/config values.
+- **OpenShift Secret**: per-profile model tokens only; endpoint metadata and
+  public custom CA certificates remain in SQLite.
 - **Service/Route**: authenticated web and API access.
 - **OAuth-aware Route proxy**: authenticates users with the cluster's
   `podpilot-htpasswd` provider and supplies a trusted OpenShift identity to the app.

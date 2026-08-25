@@ -66,6 +66,18 @@ conversations.
 - Preserve provenance through stable object references and timestamps, not raw credentials.
 - Do not retain raw evidence by default until retention and deletion rules are defined.
 - Evals must use synthetic or explicitly sanitized incident data.
+- Model endpoint metadata, TLS mode, and optional public CA certificates are stored
+  in SQLite. API tokens are not: each profile references an opaque key in the one
+  resourceName-restricted credential Secret.
+- The OAuth-protected GUI sends a new token once to FastAPI. The runtime uses its
+  projected ServiceAccount identity to patch only that Secret key, never returns
+  the value, and rereads it before inference. Kubernetes Secret `data` is base64
+  encoding, not application-level encryption; cluster encryption-at-rest and
+  Secret-access controls remain administrator responsibilities.
+- `insecure` TLS mode is an explicit PoC compatibility escape hatch. It disables
+  server certificate and hostname verification, so a bearer token and model data
+  can be intercepted. Prefer system trust or a custom CA and do not enable this
+  mode for production endpoints.
 
 ## PoC Authentication And Application Roles
 

@@ -105,6 +105,13 @@ message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace
 presentation without reducing surrounding prose readability.
 
+Model-registry gates cover multiple auto-incremented profiles, distinct opaque
+Secret keys, exactly one active profile, probe-before-activation, active-profile
+deletion denial, credential deletion with inactive profiles, token non-disclosure,
+Responses versus Chat Completions routing, strict schema validation, configured
+embedding probes, and invalid custom-CA handling. Insecure TLS must be visibly
+distinguished from verified TLS and documented as a PoC-only exception.
+
 ## Rollback
 
 Reapply the previous immutable application image digest and matching manifest
