@@ -212,6 +212,10 @@ class KubernetesReadOnlyExplorer:
             return self._catalog.prompt_entries(query=query, limit=limit)
         except ResourceCatalogError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
+        except Exception as exc:
+            raise ReadOnlyExplorerError(
+                "Kubernetes API discovery is temporarily unavailable."
+            ) from exc
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         try:

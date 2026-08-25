@@ -129,7 +129,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 119 tests passing with 82% aggregate branch coverage.
+- Automated suite: 122 tests passing with 83% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

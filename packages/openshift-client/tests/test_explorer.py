@@ -144,6 +144,18 @@ def test_resource_name_resolves_from_discovery_and_compacts_list_payload():
     assert result.observations[0].data["items"][0]["spec"]["host"] == "api.example.test"
 
 
+def test_catalog_client_failure_is_contained_as_safe_explorer_error():
+    class FailingCatalog:
+        def prompt_entries(self, **_kwargs):
+            raise RuntimeError("unexpected dynamic client failure")
+
+    target, _, _ = explorer()
+    target._catalog = FailingCatalog()
+
+    with pytest.raises(ReadOnlyExplorerError, match="temporarily unavailable"):
+        target.resource_catalog(query="show ingress controllers")
+
+
 def test_bounded_list_follows_continue_tokens_until_complete():
     resource = FakePagedResource()
     target, _, _ = explorer(resource)

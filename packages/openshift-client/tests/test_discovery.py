@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from kubernetes.dynamic.resource import ResourceList
 
 from podpilot_openshift.discovery import (
     ResourceCatalog,
@@ -98,6 +99,42 @@ def test_prompt_catalog_ranks_question_match_before_alphabetical_limit() -> None
     prompt = catalog.prompt_entries(query="which zebras are available?", limit=2)
 
     assert prompt[0]["resource"] == "zebras"
+
+
+def test_prompt_catalog_matches_operator_domain_term_without_full_kind_name() -> None:
+    catalog = ResourceCatalog(lambda **_kwargs: [
+        resource("deployments", "apps/v1", "Deployment"),
+        resource(
+            "ingresscontrollers", "operator.openshift.io/v1", "IngressController",
+            namespaced=True,
+        ),
+    ])
+
+    prompt = catalog.prompt_entries(query="what are the cluster ingress IPs?", limit=1)
+
+    assert prompt[0]["kind"] == "IngressController"
+
+
+def test_catalog_skips_lazy_resource_list_without_resolving_its_base_resource() -> None:
+    class FailingResources:
+        def get(self, **_kwargs):
+            raise RuntimeError("Template base resource is not available")
+
+    lazy_template_list = ResourceList(
+        client=SimpleNamespace(resources=FailingResources()),
+        group="template.openshift.io",
+        api_version="v1",
+        base_kind="Template",
+        base_resource_lookup={
+            "group": "template.openshift.io", "api_version": "v1", "kind": "Template",
+        },
+    )
+    catalog = ResourceCatalog(lambda **_kwargs: [
+        lazy_template_list,
+        resource("pods", "v1", "Pod"),
+    ])
+
+    assert [entry.name for entry in catalog.entries()] == ["pods"]
 
 
 def test_policy_denies_sensitive_descriptor_even_when_get_is_advertised() -> None:

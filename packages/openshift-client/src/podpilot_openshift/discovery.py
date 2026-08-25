@@ -105,24 +105,38 @@ class ResourceCatalog:
             raise ResourceCatalogError("Kubernetes API discovery is temporarily unavailable.") from exc
         entries: dict[tuple[str, str], ResourceDescriptor] = {}
         for resource in resources:
-            name = str(getattr(resource, "name", "") or "")
-            kind = str(getattr(resource, "kind", "") or "")
+            # kubernetes.dynamic also returns ResourceList objects. Their
+            # __getattr__ performs a live base-resource lookup, so even probing
+            # an absent optional attribute can fail discovery for the whole
+            # catalog. Read constructor metadata directly and skip list wrappers.
+            try:
+                stored = vars(resource)
+            except TypeError:
+                continue
+            name = str(stored.get("name") or "")
+            kind = str(stored.get("kind") or "")
+            group = str(stored.get("group") or "")
+            version = str(stored.get("api_version") or "")
             api_version = str(
-                getattr(resource, "group_version", None)
-                or getattr(resource, "api_version", None)
+                stored.get("group_version")
+                or (f"{group}/{version}" if group and version else version)
                 or ""
             )
             if not name or not kind or not api_version:
                 continue
-            verbs = tuple(sorted(str(item) for item in (getattr(resource, "verbs", ()) or ())))
+            verbs = tuple(sorted(str(item) for item in (stored.get("verbs") or ())))
             descriptor = ResourceDescriptor(
                 name=name,
                 api_version=api_version,
                 kind=kind,
-                namespaced=bool(getattr(resource, "namespaced", False)),
+                namespaced=bool(stored.get("namespaced", False)),
                 verbs=verbs,
-                singular_name=(str(getattr(resource, "singular_name", "") or "") or None),
-                short_names=tuple(str(item) for item in (getattr(resource, "short_names", ()) or ())),
+                singular_name=(str(
+                    stored.get("singular_name") or stored.get("singularName") or ""
+                ) or None),
+                short_names=tuple(str(item) for item in (
+                    stored.get("short_names") or stored.get("shortNames") or ()
+                )),
             )
             if resource_is_safe(descriptor):
                 group = api_version.split("/", 1)[0] if "/" in api_version else "core"
@@ -173,13 +187,17 @@ class ResourceCatalog:
         for item in entries:
             counts[item.name] = counts.get(item.name, 0) + 1
         normalized_query = _normalized_words(query)
+        query_terms = _search_terms(query)
 
-        def score(item: ResourceDescriptor) -> tuple[int, str, str]:
+        def score(item: ResourceDescriptor) -> tuple[int, int, str, str]:
             aliases = (item.name, item.kind, item.singular_name or "", *item.short_names)
-            relevant = any(
+            exact = any(
                 alias and _normalized_words(alias) in normalized_query for alias in aliases
             )
-            return (0 if relevant else 1, item.name, item.api_version)
+            overlap = len(query_terms.intersection(
+                term for alias in aliases for term in _search_terms(alias)
+            ))
+            return (0 if exact else 1 if overlap else 2, -overlap, item.name, item.api_version)
 
         selected = sorted(entries, key=score)[: max(1, min(limit, 200))]
         return [
@@ -190,6 +208,17 @@ class ResourceCatalog:
 
 def _normalized_words(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def _search_terms(value: str) -> set[str]:
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value).lower()
+    ignored = {"the", "are", "what", "which", "show", "list", "from", "available"}
+    terms = set()
+    for term in re.findall(r"[a-z0-9]+", expanded):
+        if len(term) < 3 or term in ignored:
+            continue
+        terms.add(term[:-1] if term.endswith("s") and len(term) > 3 else term)
+    return terms
 
 
 def _version_rank(api_version: str) -> tuple[int, int, int]:
