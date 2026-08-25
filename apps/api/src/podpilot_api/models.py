@@ -176,3 +176,25 @@ class AdHocMessage(Base):
     citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     tool_activity_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class AdHocRun(Base):
+    __tablename__ = "adhoc_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("adhoc_conversations.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False,
+        index=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    phase: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
+    progress_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    assistant_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)

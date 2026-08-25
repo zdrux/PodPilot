@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     adhoc_context_summary_chars: int = Field(default=4000, ge=1000, le=12000)
     adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)
     adhoc_display_messages: int = Field(default=100, ge=20, le=500)
+    adhoc_job_worker_enabled: bool = True
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
     model_secret_name: str = "podpilot-model-credentials"

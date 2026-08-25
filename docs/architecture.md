@@ -180,6 +180,19 @@ question limit. The model receives the ten most recent messages plus a bounded,
 durable digest of older messages. UI rendering is capped independently, evidence
 retains its existing bounded window, and a per-user one-minute request limit
 controls cost and accidental rapid submission without ending a conversation.
+
+Ask turns are persisted as `AdHocRun` jobs before execution. The single-replica
+SQLite deployment runs one in-process worker, permits one queued or running turn
+per conversation, and atomically stores the assistant reply with the terminal job
+state. A restart changes interrupted `running` jobs back to `queued`, so the worker
+can recover them from the PVC. The browser receives an immediate redirect, renders
+the submitted question optimistically, and follows owner-authorized Server-Sent
+Events for durable `starting`, `discovering`, `planning`, `collecting`, `answering`,
+and terminal updates. Reloading reconstructs the same state from SQLite, and an
+SSE heartbeat keeps the OpenShift Route connection active. These events describe
+server-observed workflow actions; PodPilot does not expose model chain-of-thought.
+The final schema-validated answer remains a complete response rather than token
+streaming.
 Pod-log collection distinguishes authorization, missing-resource, and invalid-log
 stream failures. When Kubernetes reports that a requested previous terminated
 container log is no longer retained, the read broker performs one bounded current

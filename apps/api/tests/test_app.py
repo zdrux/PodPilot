@@ -1,5 +1,7 @@
 import json
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from podpilot_api.model_provider import (
 from podpilot_api.models import (
     AdHocConversation,
     AdHocMessage,
+    AdHocRun,
     AuditEvent,
     Base,
     ChatMessage,
@@ -233,6 +236,19 @@ class FailingAdHocProvider(FakeModelProvider):
             "Provider returned content that failed schema validation "
             "(scope_summary: string_too_short)."
         )
+
+
+class BlockingAdHocProvider(FakeModelProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.answer_started = threading.Event()
+        self.release_answer = threading.Event()
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.answer_started.set()
+        if not self.release_answer.wait(timeout=5):
+            raise ModelProviderError("Synthetic background answer timed out.")
+        return super().answer_ad_hoc(profile, api_key, context)
 
 
 class FakeReadExplorer:
@@ -649,6 +665,8 @@ def make_app(
     read_explorer: FakeReadExplorer | None = None,
     settings_overrides: dict[str, object] | None = None,
 ):
+    test_settings = {"adhoc_job_worker_enabled": False}
+    test_settings.update(settings_overrides or {})
     settings = Settings(
         environment="test",
         cluster_name="test-cluster",
@@ -657,7 +675,7 @@ def make_app(
         web_dir=ROOT / "apps" / "web",
         auth_mode="test",
         poc_mode=True,
-        **(settings_overrides or {}),
+        **test_settings,
     )
     engine = build_engine(settings)
     Base.metadata.create_all(engine)
@@ -1187,6 +1205,186 @@ def test_adhoc_rate_limit_is_per_user_not_per_conversation(tmp_path: Path) -> No
         assert limited.status_code == 429
 
 
+def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path) -> None:
+    provider = BlockingAdHocProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+        settings_overrides={"adhoc_job_worker_enabled": True},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Why is pod api-7d9 pending in payments?"},
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        assert provider.answer_started.wait(timeout=2)
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+
+        pending_page = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Working on your question" in pending_page.text
+        assert "thinking-spinner" in pending_page.text
+        run_match = re.search(r'data-adhoc-run-id="([^"]+)"', pending_page.text)
+        assert run_match is not None
+        run_id = run_match.group(1)
+
+        status_response = client.get(
+            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["status"] == "running"
+        assert any(
+            event["phase"] in {"planning", "collecting", "answering"}
+            for event in status_response.json()["events"]
+        )
+        hidden = client.get(
+            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ada"}
+        )
+        assert hidden.status_code == 404
+        hidden_events = client.get(
+            f"/api/v1/adhoc-runs/{run_id}/events", headers={"x-forwarded-user": "ada"}
+        )
+        assert hidden_events.status_code == 404
+        overlapping = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Run another check while this one is active."},
+        )
+        assert overlapping.status_code == 409
+        delete_active = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/delete",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert delete_active.status_code == 409
+
+        provider.release_answer.set()
+        terminal = None
+        for _ in range(40):
+            terminal = client.get(
+                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+            ).json()
+            if terminal["status"] == "succeeded":
+                break
+            time.sleep(0.05)
+        assert terminal is not None and terminal["status"] == "succeeded"
+        assert terminal["phase"] == "complete"
+
+        event_stream = client.get(
+            f"/api/v1/adhoc-runs/{run_id}/events",
+            headers={"x-forwarded-user": "ivy"},
+        )
+        assert event_stream.status_code == 200
+        assert "event: progress" in event_stream.text
+        assert "event: complete" in event_stream.text
+        assert "Preparing an evidence-backed answer" in event_stream.text
+
+        completed = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "selector does not match" in completed.text
+        assert "Working on your question" not in completed.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.get(AdHocRun, run_id)
+        assert run is not None and run.status == "succeeded"
+        assert run.assistant_message_id is not None
+    engine.dispose()
+
+
+def test_ask_worker_requeues_interrupted_persisted_run_on_startup(tmp_path: Path) -> None:
+    run_id = "00000000-0000-0000-0000-000000000094"
+    conversation_id = "00000000-0000-0000-0000-000000000095"
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=FakeModelProvider(),
+        read_explorer=FakeReadExplorer(),
+        settings_overrides={"adhoc_job_worker_enabled": True},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.add(AdHocConversation(
+            id=conversation_id,
+            created_by="ivy",
+            title="Interrupted question",
+            status="active",
+            evidence_json="[]",
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000096",
+            conversation_id=conversation_id,
+            role="user",
+            actor="ivy",
+            content="Why is pod api-7d9 pending in payments?",
+        ))
+        db_session.add(AdHocRun(
+            id=run_id,
+            conversation_id=conversation_id,
+            created_by="ivy",
+            message_text="Why is pod api-7d9 pending in payments?",
+            status="running",
+            phase="answering",
+            progress_json=json.dumps([{
+                "seq": 0,
+                "phase": "answering",
+                "message": "Preparing an answer before restart.",
+                "at": datetime.now(timezone.utc).isoformat(),
+            }]),
+            started_at=datetime.now(timezone.utc),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        terminal = None
+        for _ in range(40):
+            response = client.get(
+                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+            )
+            terminal = response.json()
+            if terminal["status"] == "succeeded":
+                break
+            time.sleep(0.05)
+        assert terminal is not None and terminal["status"] == "succeeded"
+        rendered = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert "selector does not match" in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.get(AdHocRun, run_id)
+        assert run is not None
+        assert run.started_at is not None
+        assert run.completed_at is not None
+        assert run.assistant_message_id is not None
+    engine.dispose()
+
+
 def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     template = (ROOT / "apps" / "web" / "templates" / "ask.html").read_text()
     script = (ROOT / "apps" / "web" / "static" / "app.js").read_text()
@@ -1194,6 +1392,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "Enter to send" in template and "Shift+Enter for a new line" in template
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
+    assert "appendOptimisticTurn" in script
+    assert "new URLSearchParams({message: question})" in script
+    assert 'textarea.value = ""' in script
+    assert "new EventSource" in script
+    assert "thinking-spinner" in template
+    assert "data-progress-current" in template
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script
     assert 'tabindex="-1"' in template
@@ -2337,6 +2541,78 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
         assert profiles[0].credential_key in credentials.values
     assert len(credentials.values) == 1
     assert set(credentials.values) < credential_keys
+    engine.dispose()
+
+
+def test_model_registry_allows_plain_http_only_for_cluster_service_dns(
+    tmp_path: Path,
+) -> None:
+    credentials = MemoryCredentialStore()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        credential_store=credentials,
+        model_provider=FakeModelProvider(),
+    )
+    with TestClient(app) as client:
+        page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
+        assert "Plain HTTP — in-cluster Service only" in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        common = {
+            "provider_label": "Internal model",
+            "chat_model": "gpt-oss-120b-rhoai",
+            "api_type": "chat-completions",
+            "api_token": "test-api-token",
+            "timeout_seconds": "120",
+            "max_input_tokens": "60000",
+            "max_output_tokens": "4096",
+        }
+        external = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                **common,
+                "base_url": "http://models.example.test/v1",
+                "tls_mode": "plaintext",
+            },
+        )
+        assert external.status_code == 422
+        assert "only for service.namespace.svc" in external.json()["detail"]
+
+        mismatched = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                **common,
+                "base_url": "http://model.spt-llm.svc:8000/v1",
+                "tls_mode": "system",
+            },
+        )
+        assert mismatched.status_code == 422
+        assert "requires Plain HTTP" in mismatched.json()["detail"]
+
+        saved = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                **common,
+                "base_url": "http://model.spt-llm.svc:8000/v1",
+                "tls_mode": "plaintext",
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json()["status"] == "saved"
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        profile = db_session.get(ModelProfile, saved.json()["profile_id"])
+        assert profile is not None
+        assert profile.base_url == "http://model.spt-llm.svc:8000/v1"
+        assert profile.tls_mode == "plaintext"
+        assert profile.custom_ca_pem is None
     engine.dispose()
 
 

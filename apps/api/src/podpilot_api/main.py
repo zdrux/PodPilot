@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete, func, select, update
@@ -29,10 +30,12 @@ from podpilot_api.model_provider import (
     ModelProvider,
     ModelProviderError,
     OpenAIProviderRouter,
+    validate_model_endpoint,
 )
 from podpilot_api.models import (
     AdHocConversation,
     AdHocMessage,
+    AdHocRun,
     AuditEvent,
     ChatMessage,
     DiagnosticCheck,
@@ -389,6 +392,20 @@ class _BoundedReadCollection:
     scope_summary: str
 
 
+ProgressReporter = Callable[[str, str], Awaitable[None]]
+
+
+def _read_progress_message(intent) -> str:
+    resource = intent.kind or intent.resource or "cluster resource"
+    scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
+    if intent.tool == "pod_logs":
+        container = f" container {intent.container}" if intent.container else ""
+        return f"Checking logs for Pod {intent.namespace}/{intent.name}{container}."
+    if intent.tool == "get_resource":
+        return f"Inspecting {resource} {intent.namespace or 'cluster'}/{intent.name}."
+    return f"Getting a list of {resource}{scope}."
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -404,6 +421,7 @@ async def _collect_bounded_cluster_reads(
     earlier_context_summary: str = "",
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
+    progress: ProgressReporter | None = None,
 ) -> _BoundedReadCollection:
     evidence = list(existing_evidence)
     activity: list[dict[str, object]] = []
@@ -420,6 +438,8 @@ async def _collect_bounded_cluster_reads(
     catalog_entries: list[dict[str, object]] = []
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
     if callable(catalog_reader):
+        if progress:
+            await progress("discovering", "Discovering available cluster resources.")
         try:
             catalog_entries = await run_in_threadpool(
                 catalog_reader, query=question, limit=120
@@ -501,6 +521,8 @@ async def _collect_bounded_cluster_reads(
             planner_error: ModelProviderError | None = None
             feedback: dict[str, str] | None = None
             for planning_attempt in range(1, 3):
+                if progress:
+                    await progress("planning", "Planning safe read-only checks.")
                 try:
                     plan = await run_in_threadpool(
                         model_provider.plan_ad_hoc,
@@ -568,6 +590,8 @@ async def _collect_bounded_cluster_reads(
         if not new_intents:
             break
         for intent in new_intents:
+            if progress:
+                await progress("collecting", _read_progress_message(intent))
             reads_used += 1
             entry: dict[str, object] = {
                 "round": round_number,
@@ -584,6 +608,12 @@ async def _collect_bounded_cluster_reads(
                 entry["status"] = "succeeded"
                 entry["observations"] = len(result.observations)
                 entry["evidence_ids"] = [item.id for item in result.observations]
+                if progress:
+                    await progress(
+                        "collecting",
+                        f"Collected {len(result.observations)} evidence item"
+                        f"{'s' if len(result.observations) != 1 else ''}.",
+                    )
             except ReadOnlyExplorerError as exc:
                 LOGGER.warning(
                     "podpilot.cluster_read.failed actor=%s workflow_id=%s tool=%s target=%s error=%s",
@@ -806,8 +836,27 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
         application.state.engine = build_engine(app_settings)
-        yield
-        application.state.engine.dispose()
+        worker_task = None
+        if app_settings.adhoc_job_worker_enabled:
+            with Session(application.state.engine) as db_session:
+                db_session.execute(
+                    update(AdHocRun)
+                    .where(AdHocRun.status == "running")
+                    .values(status="queued", phase="queued", started_at=None)
+                )
+                db_session.commit()
+            application.state.adhoc_wake = asyncio.Event()
+            worker_task = asyncio.create_task(_adhoc_worker(application))
+        try:
+            yield
+        finally:
+            if worker_task is not None:
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
+            application.state.engine.dispose()
 
     app = FastAPI(
         title="PodPilot",
@@ -840,30 +889,13 @@ def create_app(
 
     current_user = auth_dependency(app_settings, resolver)
 
-    async def _run_adhoc_turn(
-        *, request: Request, user: AuthContext, conversation_id: str, message_text: str
-    ) -> None:
-        now = datetime.now(timezone.utc)
-        with Session(request.app.state.engine) as db_session:
-            conversation = db_session.get(AdHocConversation, conversation_id)
-            if conversation is None or conversation.created_by != user.username:
-                raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
-            _enforce_adhoc_rate_limit(
-                db_session, username=user.username, now=now,
-                limit=app_settings.adhoc_rate_limit_per_minute,
-            )
-            db_session.add(AdHocMessage(
-                id=str(uuid4()), conversation_id=conversation_id, role="user",
-                actor=user.username, content=message_text,
-            ))
-            db_session.add(AuditEvent(
-                actor=user.username, action="adhoc.message", outcome="accepted",
-                details_json=json.dumps({"conversation_id": conversation_id}, sort_keys=True),
-            ))
-            conversation.updated_at = now
-            db_session.commit()
-
-        with Session(request.app.state.engine) as db_session:
+    async def _execute_adhoc_turn(
+        *, engine, username: str, conversation_id: str, message_text: str,
+        run_id: str, progress: ProgressReporter | None = None,
+    ) -> str:
+        if progress:
+            await progress("starting", "Starting the read-only investigation.")
+        with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
             evidence = list(json.loads(conversation.evidence_json))
@@ -897,7 +929,7 @@ def create_app(
             try:
                 LOGGER.info(
                     "podpilot.adhoc.provider_start actor=%s conversation_id=%s profile_id=%s api_type=%s",
-                    user.username,
+                    username,
                     conversation_id,
                     profile_id,
                     profile_snapshot.api_type,
@@ -912,17 +944,24 @@ def create_app(
                     profile=profile_snapshot,
                     api_key=api_key,
                     settings=app_settings,
-                    actor=user.username,
+                    actor=username,
                     workflow_id=conversation_id,
                     question=message_text,
                     conversation=history,
                     earlier_context_summary=context_summary,
                     existing_evidence=evidence,
+                    progress=progress,
                 )
                 evidence = collected.evidence
                 activity = collected.activity
                 limitations = collected.limitations
                 provider_phase = "final_answer"
+                if progress:
+                    await progress(
+                        "answering",
+                        f"Preparing an evidence-backed answer from {len(evidence)} observation"
+                        f"{'s' if len(evidence) != 1 else ''}.",
+                    )
                 answer = await run_in_threadpool(
                     provider.answer_ad_hoc,
                     profile_snapshot,
@@ -957,7 +996,7 @@ def create_app(
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",
-                    user.username,
+                    username,
                     conversation_id,
                     profile_id,
                     len(activity),
@@ -967,7 +1006,7 @@ def create_app(
                 LOGGER.warning(
                     "podpilot.adhoc.provider_failed actor=%s conversation_id=%s "
                     "profile_id=%s phase=%s error=%s",
-                    user.username,
+                    username,
                     conversation_id,
                     profile_id,
                     provider_phase,
@@ -980,13 +1019,16 @@ def create_app(
                     "citations": [],
                     "limitations": [str(exc)],
                 }
-        with Session(request.app.state.engine) as db_session:
+        assistant_message_id = str(uuid4())
+        with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
+            run = db_session.get(AdHocRun, run_id)
+            assert run is not None
             conversation.evidence_json = json.dumps(evidence, default=_json_default, sort_keys=True)
             conversation.updated_at = datetime.now(timezone.utc)
             db_session.add(AdHocMessage(
-                id=str(uuid4()), conversation_id=conversation_id, role="assistant", actor=None,
+                id=assistant_message_id, conversation_id=conversation_id, role="assistant", actor=None,
                 content=str(validated["content"]), answer_mode=str(validated["answer_mode"]),
                 citations_json=json.dumps(validated["citations"], sort_keys=True),
                 tool_activity_json=json.dumps(
@@ -1003,7 +1045,222 @@ def create_app(
                     "citation_count": len(validated["citations"]),
                 }, sort_keys=True),
             ))
+            progress_events = list(json.loads(run.progress_json))
+            progress_events.append({
+                "seq": (int(progress_events[-1]["seq"]) + 1) if progress_events else 0,
+                "phase": "complete",
+                "message": "Investigation complete.",
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+            run.status = "succeeded"
+            run.phase = "complete"
+            run.progress_json = json.dumps(progress_events[-40:], sort_keys=True)
+            run.assistant_message_id = assistant_message_id
+            run.completed_at = datetime.now(timezone.utc)
             db_session.commit()
+        return assistant_message_id
+
+    async def _record_run_progress(
+        engine, run_id: str, phase: str, message: str
+    ) -> None:
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.status not in {"queued", "running"}:
+                return
+            events = list(json.loads(run.progress_json))
+            if events and events[-1].get("phase") == phase and events[-1].get("message") == message:
+                return
+            events.append({
+                "seq": (int(events[-1]["seq"]) + 1) if events else 0,
+                "phase": phase,
+                "message": redact_text(message)[:500],
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+            run.phase = phase
+            run.progress_json = json.dumps(events[-40:], sort_keys=True)
+            db_session.commit()
+
+    def _claim_adhoc_run(engine, run_id: str | None = None) -> str | None:
+        with Session(engine) as db_session:
+            query = select(AdHocRun.id).where(AdHocRun.status == "queued")
+            if run_id:
+                query = query.where(AdHocRun.id == run_id)
+            selected = db_session.scalar(query.order_by(AdHocRun.created_at).limit(1))
+            if selected is None:
+                return None
+            claimed = db_session.execute(
+                update(AdHocRun)
+                .where(AdHocRun.id == selected, AdHocRun.status == "queued")
+                .values(
+                    status="running",
+                    phase="starting",
+                    started_at=datetime.now(timezone.utc),
+                    error_detail=None,
+                )
+            )
+            db_session.commit()
+            return selected if claimed.rowcount == 1 else None
+
+    async def _run_persisted_adhoc_job(application: FastAPI, run_id: str) -> None:
+        engine = application.state.engine
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.status != "running":
+                return
+            username = run.created_by
+            conversation_id = run.conversation_id
+            message_text = run.message_text
+
+        async def report(phase: str, message: str) -> None:
+            await _record_run_progress(engine, run_id, phase, message)
+
+        try:
+            await _execute_adhoc_turn(
+                engine=engine,
+                username=username,
+                conversation_id=conversation_id,
+                message_text=message_text,
+                run_id=run_id,
+                progress=report,
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "podpilot.adhoc.run_failed actor=%s conversation_id=%s run_id=%s error_type=%s",
+                username,
+                conversation_id,
+                run_id,
+                type(exc).__name__,
+            )
+            now = datetime.now(timezone.utc)
+            assistant_message_id = str(uuid4())
+            with Session(engine) as db_session:
+                run = db_session.get(AdHocRun, run_id)
+                conversation = db_session.get(AdHocConversation, conversation_id)
+                if run is None or conversation is None:
+                    return
+                events = list(json.loads(run.progress_json))
+                events.append({
+                    "seq": (int(events[-1]["seq"]) + 1) if events else 0,
+                    "phase": "failed",
+                    "message": "The investigation could not be completed.",
+                    "at": now.isoformat(),
+                })
+                run.status = "failed"
+                run.phase = "failed"
+                run.progress_json = json.dumps(events[-40:], sort_keys=True)
+                run.error_detail = f"Internal job failure ({type(exc).__name__})."
+                run.assistant_message_id = assistant_message_id
+                run.completed_at = now
+                conversation.updated_at = now
+                db_session.add(AdHocMessage(
+                    id=assistant_message_id,
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    actor=None,
+                    content=(
+                        "PodPilot could not complete this investigation. No cluster changes were "
+                        "attempted. Retry the question or review the application logs."
+                    ),
+                    answer_mode="insufficient_evidence",
+                    citations_json="[]",
+                    tool_activity_json=json.dumps({
+                        "reads": [],
+                        "limitations": [run.error_detail],
+                    }, sort_keys=True),
+                    provider_status="unavailable",
+                ))
+                db_session.add(AuditEvent(
+                    actor="system:podpilot",
+                    action="adhoc.run",
+                    outcome="failed",
+                    details_json=json.dumps({
+                        "conversation_id": conversation_id,
+                        "run_id": run_id,
+                        "error_type": type(exc).__name__,
+                    }, sort_keys=True),
+                ))
+                db_session.commit()
+
+    async def _adhoc_worker(application: FastAPI) -> None:
+        wake = application.state.adhoc_wake
+        while True:
+            wake.clear()
+            run_id = _claim_adhoc_run(application.state.engine)
+            if run_id is not None:
+                await _run_persisted_adhoc_job(application, run_id)
+                continue
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=1.0)
+            except TimeoutError:
+                pass
+
+    def _queue_adhoc_run(
+        db_session: Session,
+        *,
+        conversation: AdHocConversation,
+        username: str,
+        message_text: str,
+    ) -> str:
+        now = datetime.now(timezone.utc)
+        _enforce_adhoc_rate_limit(
+            db_session,
+            username=username,
+            now=now,
+            limit=app_settings.adhoc_rate_limit_per_minute,
+        )
+        active = db_session.scalar(
+            select(func.count()).select_from(AdHocRun).where(
+                AdHocRun.conversation_id == conversation.id,
+                AdHocRun.status.in_(("queued", "running")),
+            )
+        ) or 0
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail="Wait for the current PodPilot investigation to finish.",
+            )
+        run_id = str(uuid4())
+        events = [{
+            "seq": 0,
+            "phase": "queued",
+            "message": "Question queued for investigation.",
+            "at": now.isoformat(),
+        }]
+        db_session.add(AdHocMessage(
+            id=str(uuid4()),
+            conversation_id=conversation.id,
+            role="user",
+            actor=username,
+            content=message_text,
+        ))
+        db_session.add(AdHocRun(
+            id=run_id,
+            conversation_id=conversation.id,
+            created_by=username,
+            message_text=message_text,
+            status="queued",
+            phase="queued",
+            progress_json=json.dumps(events, sort_keys=True),
+        ))
+        db_session.add(AuditEvent(
+            actor=username,
+            action="adhoc.message",
+            outcome="accepted",
+            details_json=json.dumps({
+                "conversation_id": conversation.id,
+                "run_id": run_id,
+            }, sort_keys=True),
+        ))
+        conversation.updated_at = now
+        return run_id
+
+    async def _start_queued_run(request: Request, run_id: str) -> None:
+        if app_settings.adhoc_job_worker_enabled:
+            request.app.state.adhoc_wake.set()
+            return
+        claimed = _claim_adhoc_run(request.app.state.engine, run_id)
+        if claimed:
+            await _run_persisted_adhoc_job(request.app, claimed)
 
     @app.get("/ask", response_class=HTMLResponse)
     async def ask_podpilot(
@@ -1022,6 +1279,7 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "model_ready": bool(profile and profile.status == "ready"),
+                "active_run": None,
             },
         )
         if csrf_is_new:
@@ -1050,6 +1308,12 @@ def create_app(
                 .order_by(AdHocConversation.updated_at.desc()).limit(20)
             ))
             profile = _active_profile(db_session)
+            active_run_row = db_session.scalar(
+                select(AdHocRun).where(
+                    AdHocRun.conversation_id == conversation_id,
+                    AdHocRun.status.in_(("queued", "running")),
+                ).order_by(AdHocRun.created_at.desc()).limit(1)
+            )
         messages = [{
             "role": row.role, "actor": row.actor, "content": row.content,
             "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
@@ -1064,6 +1328,12 @@ def create_app(
                 "chat_max_chars": app_settings.chat_max_chars,
                 "model_ready": bool(profile and profile.status == "ready"),
                 "messages_truncated": conversation.summarized_message_count > 0,
+                "active_run": ({
+                    "id": active_run_row.id,
+                    "status": active_run_row.status,
+                    "phase": active_run_row.phase,
+                    "events": json.loads(active_run_row.progress_json),
+                } if active_run_row else None),
             },
         )
         if csrf_is_new:
@@ -1085,16 +1355,19 @@ def create_app(
         message = redact_text(raw_message)[:app_settings.chat_max_chars]
         conversation_id = str(uuid4())
         with Session(request.app.state.engine) as db_session:
-            _enforce_adhoc_rate_limit(
-                db_session, username=user.username, now=datetime.now(timezone.utc),
-                limit=app_settings.adhoc_rate_limit_per_minute,
-            )
-            db_session.add(AdHocConversation(
+            conversation = AdHocConversation(
                 id=conversation_id, created_by=user.username,
                 title=message.replace("\n", " ")[:100], status="active", evidence_json="[]",
-            ))
+            )
+            db_session.add(conversation)
+            run_id = _queue_adhoc_run(
+                db_session,
+                conversation=conversation,
+                username=user.username,
+                message_text=message,
+            )
             db_session.commit()
-        await _run_adhoc_turn(request=request, user=user, conversation_id=conversation_id, message_text=message)
+        await _start_queued_run(request, run_id)
         return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
 
     @app.post("/api/v1/adhoc-conversations/{conversation_id}/messages")
@@ -1108,11 +1381,98 @@ def create_app(
         raw_message = form.get("message", "").strip()
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
             raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
-        await _run_adhoc_turn(
-            request=request, user=user, conversation_id=conversation_id,
-            message_text=redact_text(raw_message)[:app_settings.chat_max_chars],
-        )
+        message = redact_text(raw_message)[:app_settings.chat_max_chars]
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(
+                    status_code=404,
+                    detail="That PodPilot conversation does not exist.",
+                )
+            run_id = _queue_adhoc_run(
+                db_session,
+                conversation=conversation,
+                username=user.username,
+                message_text=message,
+            )
+            db_session.commit()
+        await _start_queued_run(request, run_id)
         return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
+
+    @app.get("/api/v1/adhoc-runs/{run_id}")
+    async def adhoc_run_status(
+        run_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        with Session(request.app.state.engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot run does not exist.")
+            return JSONResponse({
+                "id": run.id,
+                "conversation_id": run.conversation_id,
+                "status": run.status,
+                "phase": run.phase,
+                "events": json.loads(run.progress_json),
+                "location": f"/ask/{run.conversation_id}",
+            })
+
+    @app.get("/api/v1/adhoc-runs/{run_id}/events")
+    async def adhoc_run_events(
+        run_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> StreamingResponse:
+        with Session(request.app.state.engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot run does not exist.")
+
+        try:
+            last_event_id = int(request.headers.get("last-event-id", "-1"))
+        except ValueError:
+            last_event_id = -1
+
+        async def stream() -> AsyncIterator[str]:
+            last_seen = last_event_id
+            heartbeat_at = datetime.now(timezone.utc)
+            while True:
+                if await request.is_disconnected():
+                    return
+                with Session(request.app.state.engine) as db_session:
+                    current = db_session.get(AdHocRun, run_id)
+                    if current is None or current.created_by != user.username:
+                        return
+                    events = list(json.loads(current.progress_json))
+                    status_value = current.status
+                    location = f"/ask/{current.conversation_id}"
+                for event in events:
+                    seq = int(event.get("seq", -1))
+                    if seq <= last_seen:
+                        continue
+                    last_seen = seq
+                    yield (
+                        f"id: {seq}\n"
+                        "event: progress\n"
+                        f"data: {json.dumps(event, sort_keys=True)}\n\n"
+                    )
+                if status_value in {"succeeded", "failed"}:
+                    yield (
+                        "event: complete\n"
+                        f"data: {json.dumps({'status': status_value, 'location': location})}\n\n"
+                    )
+                    return
+                now = datetime.now(timezone.utc)
+                if (now - heartbeat_at).total_seconds() >= 10:
+                    yield ": heartbeat\n\n"
+                    heartbeat_at = now
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-store",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.post("/api/v1/adhoc-conversations/{conversation_id}/delete")
     async def delete_adhoc_conversation(
@@ -1123,6 +1483,20 @@ def create_app(
             conversation = db_session.get(AdHocConversation, conversation_id)
             if conversation is None or conversation.created_by != user.username:
                 raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            active_runs = db_session.scalar(
+                select(func.count()).select_from(AdHocRun).where(
+                    AdHocRun.conversation_id == conversation_id,
+                    AdHocRun.status.in_(("queued", "running")),
+                )
+            ) or 0
+            if active_runs:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Wait for the current investigation before deleting this conversation.",
+                )
+            db_session.execute(
+                delete(AdHocRun).where(AdHocRun.conversation_id == conversation_id)
+            )
             db_session.execute(
                 delete(AdHocMessage).where(AdHocMessage.conversation_id == conversation_id)
             )
@@ -1213,16 +1587,17 @@ def create_app(
         api_type = form.get("api_type", "responses").strip()
         tls_mode = form.get("tls_mode", "system").strip()
         custom_ca_pem = form.get("custom_ca_pem", "").strip() or None
-        parsed_url = urlparse(base_url)
         if not provider_label or len(provider_label) > 100:
             raise HTTPException(status_code=422, detail="Provider label is required and must be at most 100 characters.")
-        if parsed_url.scheme != "https" or not parsed_url.netloc or parsed_url.username or parsed_url.password:
-            raise HTTPException(status_code=422, detail="Base URL must be an HTTPS endpoint without embedded credentials.")
+        try:
+            validate_model_endpoint(base_url, tls_mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not chat_model or len(chat_model) > 253:
             raise HTTPException(status_code=422, detail="A valid chat model name is required.")
         if api_type not in {"responses", "chat-completions"}:
             raise HTTPException(status_code=422, detail="API type must be Responses or Chat Completions.")
-        if tls_mode not in {"system", "custom_ca", "insecure"}:
+        if tls_mode not in {"system", "custom_ca", "insecure", "plaintext"}:
             raise HTTPException(status_code=422, detail="TLS mode is invalid.")
         if tls_mode == "custom_ca" and not custom_ca_pem:
             raise HTTPException(status_code=422, detail="Custom-CA mode requires a PEM CA bundle.")

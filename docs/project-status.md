@@ -33,8 +33,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   and deterministic fallback. Multiple endpoint profiles live in SQLite with one
   tested active profile. Per-profile API tokens remain under opaque keys in the
   fixed OpenShift Secret and are dynamically created, rotated, and removed without
-  a Pod restart. TLS modes include system trust, custom CA, and a visibly insecure
-  PoC-only override. Capability probing now separately validates the live Ask
+  a Pod restart. Transport modes include system trust, custom CA, a visibly
+  insecure HTTPS override, and explicit plain HTTP restricted to Kubernetes
+  Service DNS endpoints. Capability probing now separately validates the live Ask
   PodPilot planning and answer schemas, shows an explicit result notification,
   emits sanitized phase/outcome events for provider troubleshooting, and gives
   Chat Completions models one bounded field/type-only schema correction attempt.
@@ -118,6 +119,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline.
+- Ask questions are persisted as recoverable jobs and processed by the
+  single-replica worker. Submission clears the composer immediately and adds an
+  optimistic user turn plus pulsating assistant placeholder. Owner-only SSE
+  updates report real discovery, planning, collection, and answer phases; reloads
+  recover progress from SQLite, and interrupted jobs are requeued on startup.
 - Ad-hoc Pod-log reads report authorization, missing-target, and invalid-stream
   failures separately. A missing retained previous container stream falls back to
   bounded current logs and preserves that distinction as a limitation. Evidence
@@ -134,7 +140,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   labels are escaped, responses are capped at 64 KiB and 20 retained series, and
   results are redacted before becoming evidence.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
-  `0009_model_registry`.
+  `0010_adhoc_runs`.
 - A remote Kustomize overlay composes the read-only base, explicit
   `openshift-monitoring` Alertmanager API Role, group-based OAuth GUI admission,
   default-StorageClass PVC, and single-replica workload. The accompanying runbook
@@ -149,7 +155,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 134 tests passing with 83% aggregate branch coverage.
+- Automated suite: 142 tests passing with 83% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

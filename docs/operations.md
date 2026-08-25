@@ -277,6 +277,13 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    for gateways implementing `/chat/completions`; enter the token on first save,
    then run **Test connection** and activate a ready profile. A blank token field
    preserves the existing Secret value. Prefer system trust or a custom CA.
+   For a model exposed directly by an in-cluster Service without TLS, select
+   **Plain HTTP — in-cluster Service only** and use an explicit URL such as
+   `http://model-server.spt-llm.svc:8000/v1` or
+   `http://model-server.spt-llm.svc.cluster.local:8000/v1`. PodPilot rejects
+   plaintext external hosts and IP literals. Confirm that NetworkPolicy permits
+   egress from `ai-ops/podpilot` to the model Service; the token and prompts are
+   unencrypted on this path.
    The connection test checks endpoint reachability, authentication, the selected
    model, streaming/tool behavior, basic structured output, and the exact
    `ReadPlan` and `AdHocAnswer` schemas used by Ask PodPilot. The page displays a
@@ -490,6 +497,29 @@ the Deployment after changing the ConfigMap. Explicit list requests render a
 server-generated Markdown table containing every collected name. If the table
 states that the object list is incomplete, increase the ceiling deliberately
 rather than removing the bound.
+
+### Ask PodPilot job progress
+
+Each question creates an `adhoc_runs` row before execution. The production default
+starts one in-process worker because the supported SQLite deployment has one API
+replica. The browser redirects immediately and subscribes to
+`/api/v1/adhoc-runs/<id>/events`; 10-second SSE heartbeats reduce idle Route
+disconnects, and EventSource reconnects automatically. The current phase is also
+available from `/api/v1/adhoc-runs/<id>` and is reconstructed on page reload.
+Both endpoints are visible only to the conversation owner.
+
+On Pod startup, interrupted `running` rows are returned to `queued` and retried.
+The work is read-only, but a restart can therefore repeat model inference and
+bounded reads. While a run is active, a second turn and conversation deletion
+return HTTP 409. Inspect phase transitions without payloads through
+`podpilot.adhoc.*` application logs. Progress updates deliberately describe
+server-observed actions and do not stream model reasoning. The final structured
+answer appears after the job reaches `succeeded` or `failed`.
+
+Migration `0010_adhoc_runs` creates the durable job table. The workload migration
+init container runs Alembic before the API starts; apply the matching image and
+manifests together and verify the migration completes before troubleshooting the
+worker.
 
 ### Trust the SNO router CA for interactive login
 

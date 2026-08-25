@@ -1,15 +1,53 @@
 from __future__ import annotations
 
 import json
+import re
 import ssl
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
 import httpx
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 from podpilot_diagnostics.adhoc import ReadPlan
+
+
+def validate_model_endpoint(
+    base_url: str,
+    tls_mode: str,
+) -> None:
+    """Validate model transport without allowing external plaintext credentials."""
+
+    if tls_mode not in {"system", "custom_ca", "insecure", "plaintext"}:
+        raise ValueError("Model endpoint transport mode is invalid.")
+    parsed = urlparse(base_url)
+    if not parsed.netloc or parsed.username or parsed.password:
+        raise ValueError("Base URL must be an endpoint without embedded credentials.")
+    if parsed.scheme == "https":
+        if tls_mode == "plaintext":
+            raise ValueError("Plain HTTP mode requires an http:// Kubernetes Service URL.")
+        return
+    if parsed.scheme != "http":
+        raise ValueError("Base URL must use HTTPS or an approved in-cluster HTTP Service URL.")
+    if tls_mode != "plaintext":
+        raise ValueError("An http:// model endpoint requires Plain HTTP transport mode.")
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    labels = hostname.split(".")
+    is_service_name = len(labels) == 3 and labels[2] == "svc"
+    is_cluster_local_service = (
+        len(labels) == 5 and labels[2:] == ["svc", "cluster", "local"]
+    )
+    dns_label = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
+    if (
+        not (is_service_name or is_cluster_local_service)
+        or not all(dns_label.fullmatch(label) for label in labels[:2])
+    ):
+        raise ValueError(
+            "Plain HTTP is allowed only for service.namespace.svc or "
+            "service.namespace.svc.cluster.local endpoints."
+        )
 
 
 @dataclass(frozen=True)
@@ -21,7 +59,7 @@ class ModelProfileConfig:
     timeout_seconds: float
     max_output_tokens: int
     api_type: Literal["responses", "chat-completions"] = "responses"
-    tls_mode: Literal["system", "custom_ca", "insecure"] = "system"
+    tls_mode: Literal["system", "custom_ca", "insecure", "plaintext"] = "system"
     custom_ca_pem: str | None = None
     max_input_tokens: int = 128_000
 
@@ -38,13 +76,14 @@ class CapabilityReport:
     ask_schemas: bool = False
     embeddings: bool | None = None
     tls_accepted: bool = False
+    plaintext_accepted: bool = False
     ask_schema_error: str | None = None
 
     @property
     def ready(self) -> bool:
         required = (
             self.reachable,
-            self.tls_valid or self.tls_accepted,
+            self.tls_valid or self.tls_accepted or self.plaintext_accepted,
             self.authenticated,
             self.model_available,
             self.structured_output,
@@ -104,6 +143,10 @@ class OpenAIResponsesProvider:
     @staticmethod
     def _client(profile: ModelProfileConfig, api_key: str) -> OpenAI:
         try:
+            validate_model_endpoint(profile.base_url, profile.tls_mode)
+        except ValueError as exc:
+            raise ModelProviderError(str(exc)) from exc
+        try:
             verify: bool | ssl.SSLContext = True
             if profile.tls_mode == "insecure":
                 verify = False
@@ -131,7 +174,8 @@ class OpenAIResponsesProvider:
         try:
             client.models.retrieve(profile.chat_model)
             reached = authenticated = model = True
-            tls = profile.tls_mode != "insecure"
+            plaintext = urlparse(profile.base_url).scheme == "http"
+            tls = not plaintext and profile.tls_mode != "insecure"
             parsed = client.responses.parse(
                 model=profile.chat_model,
                 instructions="Return the requested capability probe object only.",
@@ -191,6 +235,7 @@ class OpenAIResponsesProvider:
             ask_schemas=ask_schemas,
             embeddings=embeddings,
             tls_accepted=profile.tls_mode == "insecure" and reached,
+            plaintext_accepted=plaintext and reached,
             ask_schema_error=ask_schema_error,
         )
 
@@ -486,11 +531,15 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             except Exception:
                 embeddings = False
         ask_schemas, ask_schema_error = self._probe_ask_schemas(profile, api_key)
+        plaintext = urlparse(profile.base_url).scheme == "http"
         return CapabilityReport(
-            reachable=True, tls_valid=profile.tls_mode != "insecure", authenticated=True,
+            reachable=True,
+            tls_valid=not plaintext and profile.tls_mode != "insecure",
+            authenticated=True,
             model_available=True, streaming=streaming, tool_calls=tools,
             structured_output=structured, ask_schemas=ask_schemas, embeddings=embeddings,
             tls_accepted=profile.tls_mode == "insecure",
+            plaintext_accepted=plaintext,
             ask_schema_error=ask_schema_error,
         )
 

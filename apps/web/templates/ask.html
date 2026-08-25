@@ -61,6 +61,18 @@
         {% endif %}
       </article>
       {% endfor %}
+      {% if active_run %}
+      <article class="chat-message chat-assistant chat-pending" data-adhoc-run-id="{{ active_run.id }}" data-events-url="/api/v1/adhoc-runs/{{ active_run.id }}/events" data-status-url="/api/v1/adhoc-runs/{{ active_run.id }}">
+        <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
+        <div class="thinking-state" role="status" aria-live="polite">
+          <span class="thinking-spinner" aria-hidden="true"></span>
+          <div><strong>Working on your question</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+        </div>
+        <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
+          {% for event in active_run.events[-5:] %}<li data-seq="{{ event.seq }}"><span></span>{{ event.message }}</li>{% endfor %}
+        </ol>
+      </article>
+      {% endif %}
     </div>
     {% else %}
     <div class="ask-empty">
@@ -79,8 +91,8 @@
     <form class="chat-form adhoc-chat-form" method="post"
       data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
       <label for="adhoc-message">Question or symptom</label>
-      <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="Include a namespace, Pod, Service, node, or other known scope…"></textarea>
-      <div><small>Each question: up to 6 read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready %}disabled{% endif %}>Investigate</button></div>
+      <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
+      <div><small>Each question: up to 6 read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button></div>
     </form>
     {% elif user.role.value < 20 %}
     <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>

@@ -58,6 +58,14 @@ evidence but preserves an audit record containing the conversation ID and actor,
 not message content. A per-user rate limit applies across all of that user's
 conversations.
 
+Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
+endpoints return not found to every identity except the conversation creator,
+regardless of that user's higher PodPilot role. Progress records contain bounded
+server-authored phase labels and target summaries, never provider reasoning,
+tokens, prompts, raw logs, or response bodies. A conversation with an active job
+cannot accept another turn or be deleted. The browser reconnects with its existing
+same-origin OAuth session; the API rechecks ownership before opening the stream.
+
 ## Model Data Policy
 
 - Minimize collected fields before redaction.
@@ -78,6 +86,13 @@ conversations.
   server certificate and hostname verification, so a bearer token and model data
   can be intercepted. Prefer system trust or a custom CA and do not enable this
   mode for production endpoints.
+- `plaintext` transport is a separate explicit exception for model workloads
+  reached directly through Kubernetes Service DNS. It accepts only
+  `service.namespace.svc` and `service.namespace.svc.cluster.local` HTTP hosts;
+  external HTTP names, IP addresses, embedded credentials, and mismatched
+  transport selections are rejected. Traffic and bearer tokens are still
+  unencrypted inside the cluster, so production deployments should prefer HTTPS,
+  NetworkPolicy, and a trusted service certificate.
 
 ## OpenShift Authentication And Application Roles
 

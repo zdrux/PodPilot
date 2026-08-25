@@ -224,6 +224,22 @@ Chat Completions compatibility now means more than accepting the URL: the probe
 must prove authentication, selected-model access, and strict structured output.
 TLS bypass remains visible as accepted, never as verified.
 
+## 2026-08-25 - Plain HTTP is limited to direct Kubernetes model Services
+
+Context: Internal model inference is sometimes available only over an HTTP
+Kubernetes Service. Forcing its external Route adds router timeouts and an
+unnecessary cluster-internal hairpin, while allowing arbitrary plaintext URLs
+would expose bearer credentials outside the intended trust boundary.
+
+Decision: Add an explicit `plaintext` model transport that accepts only
+`service.namespace.svc` or `service.namespace.svc.cluster.local` URLs. Keep HTTPS
+as the default and reject external HTTP hosts, IP literals, embedded credentials,
+and mismatched scheme/transport combinations.
+
+Consequences: PodPilot can reach an in-cluster model Service without an OpenShift
+Route, but prompts and credentials are unencrypted on that network path. Operators
+must use NetworkPolicy and should migrate production endpoints to trusted TLS.
+
 ## 2026-08-23 - Typed single-use remediation instead of generated commands
 
 Context: The PoC service account has cluster-admin, but broad RBAC cannot make a
@@ -422,3 +438,23 @@ Consequences: Operators can use natural language without a growing static object
 list. The model selects intent but never receives execution authority; discovery,
 broker validation, limits, redaction, ServiceAccount RBAC, persistence, and
 citation enforcement remain server-owned.
+
+## 2026-08-25 - Ask turns use durable single-worker jobs and server-owned progress
+
+Context: Holding one browser request open through discovery, multiple cluster
+reads, and model inference provides little feedback, is vulnerable to Route and
+client timeouts, and loses visible state on navigation. Streaming model tokens
+would not explain which trusted server actions actually occurred.
+
+Decision: Persist every Ask turn before execution and process queued turns with
+one in-process worker in the single-replica SQLite deployment. Publish durable,
+owner-authorized SSE events only for server-observed phases and exact bounded-read
+activity. Requeue interrupted work at startup, allow one active turn per
+conversation, and commit the final assistant message and terminal job state in
+one transaction. Keep the final model call schema-validated and non-token-streamed.
+
+Consequences: Operators get immediate, reconnectable progress and Route requests
+no longer wait for the full model workflow. The design intentionally supports one
+application replica; horizontal workers require a database-backed claim/lease
+design beyond SQLite. A crash may repeat a read-only inference job, but cannot
+perform cluster mutations, and terminal reply persistence remains atomic.

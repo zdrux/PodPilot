@@ -10,6 +10,7 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
+    validate_model_endpoint,
 )
 from podpilot_diagnostics.adhoc import ReadPlan
 
@@ -119,6 +120,41 @@ def test_invalid_custom_ca_is_reported_as_provider_error() -> None:
             profile(tls_mode="custom_ca", custom_ca_pem="not a certificate"),
             "secret-token",
         )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://model.spt-llm.svc:8000/v1",
+        "http://model.spt-llm.svc.cluster.local:8000/v1",
+    ],
+)
+def test_plain_http_accepts_explicit_kubernetes_service_dns(base_url: str) -> None:
+    validate_model_endpoint(base_url, "plaintext")
+    report = CapabilityReport(
+        reachable=True,
+        plaintext_accepted=True,
+        authenticated=True,
+        model_available=True,
+        structured_output=True,
+        ask_schemas=True,
+    )
+    assert report.ready is True
+
+
+@pytest.mark.parametrize(
+    ("base_url", "tls_mode", "detail"),
+    [
+        ("http://models.example.test/v1", "plaintext", "only for service.namespace.svc"),
+        ("http://model.spt-llm.svc/v1", "system", "requires Plain HTTP"),
+        ("https://models.example.test/v1", "plaintext", "requires an http://"),
+    ],
+)
+def test_plain_http_rejects_external_or_mismatched_transport(
+    base_url: str, tls_mode: str, detail: str
+) -> None:
+    with pytest.raises(ValueError, match=detail):
+        validate_model_endpoint(base_url, tls_mode)
 
 
 def test_chat_completions_schema_failure_names_contract_without_echoing_content() -> None:

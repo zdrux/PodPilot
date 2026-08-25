@@ -142,6 +142,8 @@ activate one successfully tested profile:
 - optional embedding model, initially `text-embedding-3-small`
 - system TLS trust, an optional custom CA bundle, or an explicitly warned insecure
   PoC mode
+- explicitly selected plain HTTP only for direct Kubernetes Service DNS endpoints;
+  external plaintext endpoints remain prohibited
 - request timeout and maximum investigation token budget
 
 The UI must never read the saved token back. A connection test must report:
@@ -366,6 +368,14 @@ The model context uses a sliding recent-message window plus a bounded durable
 digest of older messages. Per-user request throttling, per-turn read/model budgets,
 bounded evidence retention, and independent UI message limits replace a session
 turn cap. Enter submits the question; Shift+Enter inserts a newline.
+
+Submitting a turn must clear the composer immediately, place the attributed user
+message in the timeline, and show a pulsating/spinner assistant placeholder. The
+API must persist the turn as a recoverable job and stream truthful workflow phases
+such as resource discovery, safe-read planning, exact resource/log collection,
+and evidence-backed answer preparation. Reloads and reconnects must preserve the
+current phase. Progress must not claim an action before it starts and must not
+expose model chain-of-thought. Only one turn may run in a conversation at a time.
 
 ## 6. Cluster Memory
 

@@ -236,18 +236,129 @@
     });
   }
   const adhocForm = document.querySelector(".adhoc-chat-form");
+  const appendOptimisticTurn = (question) => {
+    const panel = document.querySelector(".ask-panel");
+    if (!panel) return null;
+    const empty = panel.querySelector(".ask-empty");
+    if (empty) empty.hidden = true;
+    let thread = panel.querySelector(".ask-thread");
+    if (!thread) {
+      thread = document.createElement("div");
+      thread.className = "chat-thread ask-thread";
+      thread.dataset.scrollLatest = "";
+      panel.querySelector(".panel-header")?.insertAdjacentElement("afterend", thread);
+    }
+    const userMessage = document.createElement("article");
+    userMessage.className = "chat-message chat-user optimistic-message";
+    const userMeta = document.createElement("div");
+    userMeta.className = "chat-meta";
+    const userName = document.querySelector(".identity-copy strong")?.textContent || "You";
+    const userStrong = document.createElement("strong");
+    userStrong.textContent = userName;
+    userMeta.append(userStrong);
+    const userContent = document.createElement("div");
+    userContent.className = "chat-markdown";
+    userContent.textContent = question;
+    userMessage.append(userMeta, userContent);
+
+    const pending = document.createElement("article");
+    pending.className = "chat-message chat-assistant chat-pending optimistic-message";
+    const pendingMeta = document.createElement("div");
+    pendingMeta.className = "chat-meta";
+    const pendingStrong = document.createElement("strong");
+    pendingStrong.textContent = "PodPilot";
+    const pendingLabel = document.createElement("span");
+    pendingLabel.textContent = "investigating";
+    pendingMeta.append(pendingStrong, pendingLabel);
+    const thinking = document.createElement("div");
+    thinking.className = "thinking-state";
+    thinking.setAttribute("role", "status");
+    thinking.setAttribute("aria-live", "polite");
+    const spinner = document.createElement("span");
+    spinner.className = "thinking-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const thinkingCopy = document.createElement("div");
+    const thinkingTitle = document.createElement("strong");
+    thinkingTitle.textContent = "Working on your question";
+    const thinkingStatus = document.createElement("p");
+    thinkingStatus.textContent = "Submitting the investigation…";
+    thinkingCopy.append(thinkingTitle, thinkingStatus);
+    thinking.append(spinner, thinkingCopy);
+    pending.append(pendingMeta, thinking);
+    thread.append(userMessage, pending);
+    thread.scrollTop = thread.scrollHeight;
+    return {empty, thread, nodes: [userMessage, pending]};
+  };
+
+  const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
+  if (pendingRun) {
+    const current = pendingRun.querySelector("[data-progress-current]");
+    const log = pendingRun.querySelector("[data-progress-log]");
+    let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
+    const addProgress = (event) => {
+      const seq = Number.parseInt(event.seq, 10);
+      if (Number.isFinite(seq) && seq <= lastSeq) return;
+      if (Number.isFinite(seq)) lastSeq = seq;
+      if (current) current.textContent = event.message || "Investigation in progress.";
+      if (log && event.message) {
+        const item = document.createElement("li");
+        if (Number.isFinite(seq)) item.dataset.seq = String(seq);
+        item.append(document.createElement("span"), document.createTextNode(event.message));
+        log.append(item);
+        while (log.children.length > 5) log.firstElementChild?.remove();
+      }
+      const thread = pendingRun.closest(".ask-thread");
+      thread?.scrollTo({top: thread.scrollHeight});
+    };
+    const finish = (payload) => {
+      window.location.assign(payload.location || window.location.pathname);
+    };
+    if (window.EventSource && pendingRun.dataset.eventsUrl) {
+      const source = new EventSource(pendingRun.dataset.eventsUrl);
+      source.addEventListener("progress", (event) => {
+        try { addProgress(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
+      });
+      source.addEventListener("complete", (event) => {
+        source.close();
+        try { finish(JSON.parse(event.data)); } catch (_error) { window.location.reload(); }
+      });
+      source.onerror = () => {
+        if (current) current.textContent = "Progress connection interrupted; reconnecting…";
+      };
+    } else if (pendingRun.dataset.statusUrl) {
+      const poll = window.setInterval(async () => {
+        try {
+          const response = await fetch(pendingRun.dataset.statusUrl, {credentials: "same-origin"});
+          if (!response.ok) return;
+          const payload = await response.json();
+          payload.events?.forEach(addProgress);
+          if (["succeeded", "failed"].includes(payload.status)) {
+            window.clearInterval(poll);
+            finish(payload);
+          }
+        } catch (_error) { /* retry the bounded status poll */ }
+      }, 1500);
+    }
+  }
+
   if (adhocForm?.dataset.chatUrl) {
     adhocForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!csrf) return;
       const submit = adhocForm.querySelector('button[type="submit"]');
+      const textarea = adhocForm.querySelector("textarea");
+      const question = textarea?.value.trim() || "";
+      if (!question) return;
+      const requestBody = new URLSearchParams({message: question});
+      const optimistic = appendOptimisticTurn(question);
+      if (textarea) textarea.value = "";
       if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
       try {
         const response = await fetch(adhocForm.dataset.chatUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
           credentials: "same-origin",
-          body: new URLSearchParams(new FormData(adhocForm)),
+          body: requestBody,
         });
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
@@ -256,6 +367,9 @@
         window.location.assign(response.url);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        optimistic?.nodes.forEach((node) => node.remove());
+        if (optimistic?.empty) optimistic.empty.hidden = false;
+        if (textarea) textarea.value = question;
         if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
       }
     });

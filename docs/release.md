@@ -140,6 +140,9 @@ credential deletion, token non-disclosure,
 Responses versus Chat Completions routing, strict schema validation, configured
 embedding probes, and invalid custom-CA handling. Insecure TLS must be visibly
 distinguished from verified TLS and documented as a PoC-only exception.
+Plain HTTP tests must accept only explicit Kubernetes Service DNS names when the
+plaintext mode is selected, reject external hosts and mismatched modes, display
+the unencrypted-credential warning, and report plaintext separately from TLS.
 Ask creation with an active but non-ready profile must persist the setup response
 and provider status without accessing ORM state after its session closes.
 The connection test must visibly report its result and separately exercise the
@@ -162,6 +165,13 @@ no-read answers, one structured repair attempt, valid supporting-evidence reuse,
 and discovery-backed fallback after repeated refusal. Tests must prove that the
 fallback uses only a live policy-filtered catalog entry and still passes through
 the normal read broker and RBAC boundary.
+Ask-job gates must prove that submission returns before model completion, the
+question and job are durable before execution, progress phases reflect actual
+server actions, and the final assistant message is atomically linked to terminal
+state. Tests must cover restart recovery, one active turn per conversation,
+active-conversation deletion refusal, owner-only status/SSE access, SSE completion,
+and optimistic composer clearing. Progress text must remain server-authored and
+must not include prompts, evidence bodies, credentials, or chain-of-thought.
 
 ## Rollback
 
