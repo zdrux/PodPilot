@@ -13,6 +13,19 @@
 
   const csrf = document.querySelector('meta[name="podpilot-csrf"]')?.content;
   const toast = document.querySelector("#action-toast");
+  const pendingNotice = window.sessionStorage.getItem("podpilot-action-notice");
+  if (pendingNotice && toast) {
+    window.sessionStorage.removeItem("podpilot-action-notice");
+    try {
+      const notice = JSON.parse(pendingNotice);
+      toast.textContent = notice.message;
+      toast.classList.toggle("success", notice.tone === "success");
+      toast.classList.toggle("warning", notice.tone === "warning");
+      toast.hidden = false;
+    } catch (_error) {
+      window.sessionStorage.removeItem("podpilot-action-notice");
+    }
+  }
   const latestThread = document.querySelector(".ask-thread[data-scroll-latest]");
   if (latestThread) {
     window.requestAnimationFrame(() => {
@@ -78,7 +91,13 @@
       probeButton.disabled = true;
       probeButton.textContent = "Testing…";
       try {
-        await sendSettingsRequest(probeButton.dataset.probeUrl, "");
+        const payload = await sendSettingsRequest(probeButton.dataset.probeUrl, "");
+        const notice = payload.status === "ready"
+          ? {tone: "success", message: "Connection test passed. This model is ready for PodPilot workflows."}
+          : payload.status === "reduced_capability"
+            ? {tone: "warning", message: payload.detail || "The endpoint was reached, but a required capability check failed."}
+            : {tone: "error", message: payload.detail || "The model endpoint is unavailable."};
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify(notice));
         window.location.reload();
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }

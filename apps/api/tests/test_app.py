@@ -110,7 +110,17 @@ class FakeModelProvider:
 
     def probe(self, profile, api_key: str) -> CapabilityReport:
         assert api_key == "test-api-token"
-        return CapabilityReport(True, True, True, True, True, True, True, True)
+        return CapabilityReport(
+            reachable=True,
+            tls_valid=True,
+            authenticated=True,
+            model_available=True,
+            streaming=True,
+            tool_calls=True,
+            structured_output=True,
+            ask_schemas=True,
+            embeddings=True,
+        )
 
     def interpret(self, profile, api_key: str, evidence: dict[str, object]) -> ModelInterpretation:
         if self.fail_interpretation:
@@ -155,6 +165,15 @@ class FakeModelProvider:
             answer="The Pod selector does not match an available node.",
             cited_evidence_ids=[evidence_id],
             limitations=["No scheduler event was collected."],
+        )
+
+
+class FailingAdHocProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        raise ModelProviderError(
+            "Provider response does not match ReadPlan. "
+            "Provider returned content that failed schema validation "
+            "(scope_summary: string_too_short)."
         )
 
 
@@ -510,6 +529,49 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         actions = list(db_session.scalars(select(AuditEvent.action)))
         assert "adhoc.message" in actions and "adhoc.answer" in actions
     engine.dispose()
+
+
+def test_ask_provider_failure_is_visible_and_logged_without_question(
+    tmp_path: Path, caplog
+) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=FailingAdHocProvider(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    secret_question = "Which storage classes contain customer-secret-phrase?"
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": secret_question},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "does not match ReadPlan" in rendered.text
+        assert "scope_summary: string_too_short" in rendered.text
+
+    log_text = caplog.text
+    assert "podpilot.adhoc.provider_start" in log_text
+    assert "podpilot.adhoc.provider_failed" in log_text
+    assert "phase=read_plan_round_1" in log_text
+    assert "scope_summary: string_too_short" in log_text
+    assert secret_question not in log_text
 
 
 def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
@@ -1778,6 +1840,11 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
 
         probe = client.post(f"/api/v1/model-profiles/{second_id}/probe", headers=headers, data={})
         assert probe.json()["status"] == "ready"
+        assert probe.json()["capabilities"]["ask_schemas"] is True
+        rendered = client.get(
+            f"/settings/model?profile_id={second_id}", headers={"x-forwarded-user": "ada"}
+        )
+        assert "Ask PodPilot schemas" in rendered.text
         activated = client.post(
             f"/api/v1/model-profiles/{second_id}/activate", headers=headers, data={}
         )

@@ -138,18 +138,36 @@ oc apply -f deploy/openshift/base/namespace.yaml
 Create a random OAuth cookie key without printing or committing it. PowerShell:
 
 ```powershell
-$cookie = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-oc -n ai-ops create secret generic podpilot-oauth-cookie --from-literal=session_secret=$cookie --dry-run=client -o yaml | oc apply -f -
-Remove-Variable cookie
+$cookieFile = Join-Path ([IO.Path]::GetTempPath()) ("podpilot-oauth-cookie-{0}" -f [guid]::NewGuid())
+try {
+    [IO.File]::WriteAllBytes($cookieFile, [Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    oc -n ai-ops create secret generic podpilot-oauth-cookie "--from-file=session_secret=$cookieFile" --dry-run=client -o yaml | oc apply -f -
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to create the OAuth cookie Secret.' }
+}
+finally {
+    Remove-Item -LiteralPath $cookieFile -Force -ErrorAction SilentlyContinue
+}
 ```
 
 Bash:
 
 ```bash
-cookie="$(openssl rand -base64 32)"
+cookie_file="$(mktemp)"
+trap 'rm -f "$cookie_file"' EXIT
+chmod 600 "$cookie_file"
+openssl rand 32 > "$cookie_file"
 oc -n ai-ops create secret generic podpilot-oauth-cookie \
-  --from-literal=session_secret="$cookie" --dry-run=client -o yaml | oc apply -f -
-unset cookie
+  --from-file="session_secret=$cookie_file" --dry-run=client -o yaml | oc apply -f -
+rm -f "$cookie_file"
+trap - EXIT
+```
+
+The mounted Secret value must be exactly 16, 24, or 32 raw bytes because cookie
+refresh uses AES. Confirm the generated value is 32 bytes without printing it:
+
+```bash
+test "$(oc get secret podpilot-oauth-cookie -n ai-ops \
+  -o jsonpath='{.data.session_secret}' | base64 -d | wc -c)" -eq 32
 ```
 
 Create the empty, fixed-name model credential Secret. Approvers add model tokens

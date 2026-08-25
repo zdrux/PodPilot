@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -76,6 +77,7 @@ from podpilot_openshift.workloads import (
 )
 
 CSRF_COOKIE = "podpilot_csrf"
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 def _json_default(value: object) -> str:
@@ -556,6 +558,7 @@ def create_app(
             context_summary = conversation.context_summary
             profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
 
@@ -569,7 +572,15 @@ def create_app(
             "limitations": [],
         }
         if profile_snapshot:
+            provider_phase = "credential_read"
             try:
+                LOGGER.info(
+                    "podpilot.adhoc.provider_start actor=%s conversation_id=%s profile_id=%s api_type=%s",
+                    user.username,
+                    conversation_id,
+                    profile_id,
+                    profile_snapshot.api_type,
+                )
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
@@ -581,6 +592,7 @@ def create_app(
                     remaining_reads = app_settings.adhoc_max_reads_per_turn - reads_used
                     if remaining_reads <= 0:
                         break
+                    provider_phase = f"read_plan_round_{round_number}"
                     plan = await run_in_threadpool(
                         provider.plan_ad_hoc,
                         profile_snapshot,
@@ -630,12 +642,22 @@ def create_app(
                             entry["status"] = "succeeded"
                             entry["observations"] = len(result.observations)
                         except ReadOnlyExplorerError as exc:
+                            LOGGER.warning(
+                                "podpilot.adhoc.cluster_read_failed actor=%s conversation_id=%s "
+                                "tool=%s target=%s error=%s",
+                                user.username,
+                                conversation_id,
+                                intent.tool,
+                                entry["target"],
+                                str(exc),
+                            )
                             limitations.append(str(exc))
                             entry["status"] = "denied_or_unavailable"
                             entry["detail"] = str(exc)
                         activity.append(entry)
                     evidence = evidence[-app_settings.adhoc_max_evidence :]
                 limitations.extend(plan_limitations)
+                provider_phase = "final_answer"
                 answer = await run_in_threadpool(
                     provider.answer_ad_hoc,
                     profile_snapshot,
@@ -656,7 +678,25 @@ def create_app(
                 validated["limitations"] = list(dict.fromkeys(
                     [*limitations, *list(validated["limitations"])]
                 ))[:8]
+                LOGGER.info(
+                    "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
+                    "profile_id=%s reads=%s evidence=%s",
+                    user.username,
+                    conversation_id,
+                    profile_id,
+                    len(activity),
+                    len(evidence),
+                )
             except (CredentialStoreError, ModelProviderError) as exc:
+                LOGGER.warning(
+                    "podpilot.adhoc.provider_failed actor=%s conversation_id=%s "
+                    "profile_id=%s phase=%s error=%s",
+                    user.username,
+                    conversation_id,
+                    profile_id,
+                    provider_phase,
+                    str(exc),
+                )
                 provider_status = "unavailable"
                 validated = {
                     "answer_mode": "insufficient_evidence",
@@ -1004,6 +1044,15 @@ def create_app(
                 raise HTTPException(status_code=409, detail="Save a model profile before testing it.")
             config_snapshot = _profile_config(profile)
             credential_key = profile.credential_key
+            provider_label = profile.provider_label
+        LOGGER.info(
+            "podpilot.model_probe.start actor=%s profile_id=%s provider=%s api_type=%s model=%s",
+            user.username,
+            profile_id,
+            provider_label,
+            config_snapshot.api_type,
+            config_snapshot.chat_model,
+        )
         try:
             api_key = await run_in_threadpool(credentials.get, credential_key)
             if not api_key:
@@ -1011,11 +1060,32 @@ def create_app(
             report = await run_in_threadpool(provider.probe, config_snapshot, api_key)
             outcome = "ready" if report.ready else "reduced_capability"
             capabilities = report.to_dict()
-            error = None if report.ready else "The endpoint lacks one or more required capabilities."
+            error = None if report.ready else (
+                report.ask_schema_error
+                or "The endpoint lacks one or more required capabilities."
+            )
+            log_method = LOGGER.info if report.ready else LOGGER.warning
+            log_method(
+                "podpilot.model_probe.complete actor=%s profile_id=%s outcome=%s "
+                "structured_output=%s ask_schemas=%s streaming=%s tool_calls=%s",
+                user.username,
+                profile_id,
+                outcome,
+                report.structured_output,
+                report.ask_schemas,
+                report.streaming,
+                report.tool_calls,
+            )
         except (CredentialStoreError, ModelProviderError) as exc:
             outcome = "unavailable"
             capabilities = {}
             error = str(exc)
+            LOGGER.warning(
+                "podpilot.model_probe.failed actor=%s profile_id=%s error=%s",
+                user.username,
+                profile_id,
+                error,
+            )
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)

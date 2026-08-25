@@ -130,11 +130,20 @@ the server never returns it, stores it in SQLite, includes it in audit details, 
 sends it to model prompts. Model profile save and probe operations require the
 same-site CSRF token and create audit events. Provider errors are normalized to
 type and HTTP status without response bodies that may echo sensitive material.
+Operational logs record provider-probe and Ask workflow phase/outcome metadata.
+For schema failures they may include only bounded Pydantic field locations and
+error types; tokens, prompts/questions, response bodies, and evidence are never
+logged.
 
 Normalized alert and workload evidence is framed as untrusted JSON for every
 model call. Responses must pass PodPilot's Pydantic schema and remain advisory;
 they cannot register or execute actions. `store=false`, bounded timeouts, disabled
 SDK retries, and output-token limits apply to both probes and investigations.
+Capability readiness also requires the provider to return schema-valid
+`ReadPlan` and `AdHocAnswer` objects, rather than relying on a simpler structured
+output probe as a proxy for the live Ask workflow. A Chat Completions validation
+failure receives at most one explicit correction attempt containing only bounded
+field/type diagnostics, not the rejected response body.
 
 ## PoC Storage Exception
 

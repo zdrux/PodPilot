@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 
 import httpx
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from podpilot_diagnostics.adhoc import ReadPlan
 
@@ -35,8 +35,10 @@ class CapabilityReport:
     streaming: bool = False
     tool_calls: bool = False
     structured_output: bool = False
+    ask_schemas: bool = False
     embeddings: bool | None = None
     tls_accepted: bool = False
+    ask_schema_error: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -46,10 +48,11 @@ class CapabilityReport:
             self.authenticated,
             self.model_available,
             self.structured_output,
+            self.ask_schemas,
         )
         return all(required) and self.embeddings is not False
 
-    def to_dict(self) -> dict[str, bool | None]:
+    def to_dict(self) -> dict[str, bool | str | None]:
         return asdict(self)
 
 
@@ -174,6 +177,7 @@ class OpenAIResponsesProvider:
                     input="PodPilot capability probe",
                 )
                 embeddings = bool(embedding.data and embedding.data[0].embedding)
+            ask_schemas, ask_schema_error = self._probe_ask_schemas(profile, api_key)
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
         return CapabilityReport(
@@ -184,9 +188,37 @@ class OpenAIResponsesProvider:
             streaming=streaming,
             tool_calls=tools,
             structured_output=structured,
+            ask_schemas=ask_schemas,
             embeddings=embeddings,
             tls_accepted=profile.tls_mode == "insecure" and reached,
+            ask_schema_error=ask_schema_error,
         )
+
+    def _probe_ask_schemas(
+        self, profile: ModelProfileConfig, api_key: str
+    ) -> tuple[bool, str | None]:
+        try:
+            self.plan_ad_hoc(
+                profile,
+                api_key,
+                {
+                    "capability_probe": True,
+                    "question": "Return a schema-valid read plan with no reads.",
+                    "tool_policy": {"available": [], "remaining_reads": 0},
+                },
+            )
+            self.answer_ad_hoc(
+                profile,
+                api_key,
+                {
+                    "capability_probe": True,
+                    "question": "Return a schema-valid general-guidance answer.",
+                    "observations": [],
+                },
+            )
+        except ModelProviderError as exc:
+            return False, str(exc)
+        return True, None
 
     def interpret(
         self, profile: ModelProfileConfig, api_key: str, evidence: dict[str, object]
@@ -295,6 +327,13 @@ class OpenAIResponsesProvider:
 
     @staticmethod
     def _safe_error(exc: Exception) -> str:
+        if isinstance(exc, ValidationError):
+            fields = []
+            for item in exc.errors(include_url=False, include_input=False)[:4]:
+                location = ".".join(str(part) for part in item.get("loc", ())) or "response"
+                fields.append(f"{location}: {item.get('type', 'invalid')}")
+            detail = ", ".join(fields) or "invalid response shape"
+            return f"Provider returned content that failed schema validation ({detail})."
         name = type(exc).__name__
         status_code = getattr(exc, "status_code", None)
         if status_code:
@@ -306,29 +345,60 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     """Strict JSON-schema adapter for OpenAI-compatible Chat Completions APIs."""
 
     def _parse(self, profile, api_key, *, schema, instructions: str, payload: object, limit=None):
+        client = self._client(profile, api_key)
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema.__name__.lower(),
+                "strict": True,
+                "schema": schema.model_json_schema(),
+            },
+        }
+        messages = [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": json.dumps(payload, sort_keys=True, default=str)},
+        ]
         try:
-            response = self._client(profile, api_key).chat.completions.create(
+            response = client.chat.completions.create(
                 model=profile.chat_model,
-                messages=[
-                    {"role": "system", "content": instructions},
-                    {"role": "user", "content": json.dumps(payload, sort_keys=True, default=str)},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema.__name__.lower(),
-                        "strict": True,
-                        "schema": schema.model_json_schema(),
-                    },
-                },
+                messages=messages,
+                response_format=response_format,
                 max_tokens=limit or profile.max_output_tokens,
             )
             content = response.choices[0].message.content
             if not content:
                 raise ModelProviderError("The provider returned no structured response content.")
-            return schema.model_validate_json(content)
+            try:
+                return schema.model_validate_json(content)
+            except ValidationError as first_error:
+                validation_detail = self._safe_error(first_error)
+                correction = client.chat.completions.create(
+                    model=profile.chat_model,
+                    messages=[
+                        *messages,
+                        {
+                            "role": "system",
+                            "content": (
+                                "The previous response did not satisfy the required JSON schema. "
+                                f"Correct these validation issues: {validation_detail} "
+                                "Return a complete corrected object only."
+                            ),
+                        },
+                    ],
+                    response_format=response_format,
+                    max_tokens=limit or profile.max_output_tokens,
+                )
+                corrected_content = correction.choices[0].message.content
+                if not corrected_content:
+                    raise ModelProviderError("The provider returned no corrected structured response content.")
+                return schema.model_validate_json(corrected_content)
         except ModelProviderError:
             raise
+        except ValidationError as exc:
+            detail = self._safe_error(exc)
+            raise ModelProviderError(
+                f"Provider response does not match {schema.__name__}. {detail}"
+            ) from exc
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
 
@@ -382,11 +452,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 embeddings = bool(embedding.data and embedding.data[0].embedding)
             except Exception:
                 embeddings = False
+        ask_schemas, ask_schema_error = self._probe_ask_schemas(profile, api_key)
         return CapabilityReport(
             reachable=True, tls_valid=profile.tls_mode != "insecure", authenticated=True,
             model_available=True, streaming=streaming, tool_calls=tools,
-            structured_output=structured, embeddings=embeddings,
+            structured_output=structured, ask_schemas=ask_schemas, embeddings=embeddings,
             tls_accepted=profile.tls_mode == "insecure",
+            ask_schema_error=ask_schema_error,
         )
 
     def interpret(self, profile, api_key, evidence):

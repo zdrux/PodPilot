@@ -249,10 +249,20 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
 4. Create the generated OAuth cookie key without putting its value in Git:
 
    ```powershell
-   $cookie = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
-   oc -n ai-ops create secret generic podpilot-oauth-cookie --from-literal=session_secret=$cookie --dry-run=client -o yaml | oc apply -f -
-   Remove-Variable cookie
+   $cookieFile = Join-Path ([IO.Path]::GetTempPath()) ("podpilot-oauth-cookie-{0}" -f [guid]::NewGuid())
+   try {
+       [IO.File]::WriteAllBytes($cookieFile, [Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+       oc -n ai-ops create secret generic podpilot-oauth-cookie "--from-file=session_secret=$cookieFile" --dry-run=client -o yaml | oc apply -f -
+       if ($LASTEXITCODE -ne 0) { throw 'Unable to create the OAuth cookie Secret.' }
+   }
+   finally {
+       Remove-Item -LiteralPath $cookieFile -Force -ErrorAction SilentlyContinue
+   }
    ```
+
+   Do not Base64-encode the random bytes before passing them to `--from-literal`.
+   That stores a 44-byte string, while the OAuth proxy requires the mounted file
+   to contain exactly 16, 24, or 32 raw bytes when cookie refresh is enabled.
 
    Create or replace the model Secret directly from the local OpenAI key
    without printing it or writing it to disk:
@@ -267,6 +277,15 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    for gateways implementing `/chat/completions`; enter the token on first save,
    then run **Test connection** and activate a ready profile. A blank token field
    preserves the existing Secret value. Prefer system trust or a custom CA.
+   The connection test checks endpoint reachability, authentication, the selected
+   model, streaming/tool behavior, basic structured output, and the exact
+   `ReadPlan` and `AdHocAnswer` schemas used by Ask PodPilot. The page displays a
+   success or failure notification after the test and lists **Ask PodPilot
+   schemas** separately. A reachable model that cannot satisfy those operational
+   schemas remains reduced-capability and cannot be activated as ready.
+   For Chat Completions endpoints, PodPilot makes one bounded correction attempt
+   when a response fails schema validation. The retry includes only validation
+   field locations/types and never echoes the rejected model response.
    **Insecure** disables certificate and hostname verification and is intended
    only for a disposable PoC endpoint. Rotate the provider key if it ever appears
    in terminal or application output.
@@ -297,7 +316,14 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    oc -n ai-ops get deployment,pod,service,route,pvc
    $pod = oc -n ai-ops get pod -l app.kubernetes.io/name=podpilot -o jsonpath='{.items[0].metadata.name}'
    oc -n ai-ops exec $pod -c api -- python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health/ready').read().decode())"
+   oc -n ai-ops logs deployment/podpilot -c api --since=10m | Select-String 'podpilot\.'
    ```
+
+   The `podpilot.model_probe.*` and `podpilot.adhoc.*` events identify the actor,
+   profile, workflow phase, outcome, and bounded schema-validation field/type.
+   They deliberately omit API tokens, prompts/questions, model response bodies,
+   and collected evidence. HTTP access logs remain disabled to avoid logging
+   request paths and routine probe noise.
 
 Review `deploy/openshift/base/rbac.yaml` whenever a diagnostic adds a new API dependency.
 Production packaging must omit both SNO overlays, use a supported storage class,

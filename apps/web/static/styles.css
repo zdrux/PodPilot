@@ -266,6 +266,8 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .side-empty strong { font-size: 12px; }
 .side-empty p { margin-top: 6px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .toast { position: fixed; right: 24px; bottom: 24px; max-width: 420px; padding: 13px 16px; border: 1px solid rgba(255, 100, 100, 0.35); border-radius: 10px; color: #ffd2d2; background: #2a1419; box-shadow: var(--shadow); font-size: 11px; }
+.toast.success { border-color: rgba(69, 224, 156, 0.4); color: #c9ffe6; background: #10271f; }
+.toast.warning { border-color: rgba(255, 159, 92, 0.45); color: #ffe0c7; background: #2b1d13; }
 .investigation-header { margin-bottom: 24px; }
 .evidence-notice { margin-top: 0; }
 .investigation-summary { margin-top: 13px; padding: 24px; }

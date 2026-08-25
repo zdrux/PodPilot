@@ -34,7 +34,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   tested active profile. Per-profile API tokens remain under opaque keys in the
   fixed OpenShift Secret and are dynamically created, rotated, and removed without
   a Pod restart. TLS modes include system trust, custom CA, and a visibly insecure
-  PoC-only override.
+  PoC-only override. Capability probing now separately validates the live Ask
+  PodPilot planning and answer schemas, shows an explicit result notification,
+  emits sanitized phase/outcome events for provider troubleshooting, and gives
+  Chat Completions models one bounded field/type-only schema correction attempt.
 - Typed remediation for one controller-owned failed Pod replacement and one
   Deployment, StatefulSet, or DaemonSet rollout restart.
 - Server dry-run, exact UID/resourceVersion preconditions, ten-minute preview
@@ -107,7 +110,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 90 tests passing with 82% aggregate branch coverage.
+- Automated suite: 95 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

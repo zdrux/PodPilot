@@ -22,6 +22,8 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Confirm production image digests—or the explicitly accepted versioned
   ImageStreamTag for a remote PoC—plus resource limits, probes, NetworkPolicy,
   and rollback instructions.
+- Confirm the mounted OAuth `session_secret` decodes to exactly 16, 24, or 32
+  raw bytes; Base64 text passed through `--from-literal` is not valid key material.
 - For a remote PoC, confirm the rendered overlay contains no static PV,
   `storageClassName`, node selector, lab hostname, cluster-admin binding, or
   credential value; verify the target has exactly one suitable default
@@ -125,6 +127,12 @@ deletion denial, credential deletion with inactive profiles, token non-disclosur
 Responses versus Chat Completions routing, strict schema validation, configured
 embedding probes, and invalid custom-CA handling. Insecure TLS must be visibly
 distinguished from verified TLS and documented as a PoC-only exception.
+The connection test must visibly report its result and separately exercise the
+live Ask PodPilot `ReadPlan` and `AdHocAnswer` contracts. Provider failures must
+produce phase-specific operational events while tests prove that questions,
+tokens, response bodies, and evidence do not enter application logs.
+Chat Completions tests must also prove that one invalid structured response can
+be corrected once without copying the rejected content into the repair prompt.
 
 ## Rollback
 
