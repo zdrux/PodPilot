@@ -207,6 +207,9 @@ class OpenAIResponsesProvider:
                     "tool_policy": {"available": [], "remaining_reads": 0},
                 },
             )
+        except ModelProviderError as exc:
+            return False, f"ReadPlan probe failed. {exc}"
+        try:
             self.answer_ad_hoc(
                 profile,
                 api_key,
@@ -217,7 +220,7 @@ class OpenAIResponsesProvider:
                 },
             )
         except ModelProviderError as exc:
-            return False, str(exc)
+            return False, f"AdHocAnswer probe failed. {exc}"
         return True, None
 
     def interpret(
@@ -310,13 +313,19 @@ class OpenAIResponsesProvider:
                     "answer the operator directly. Every cluster-specific factual claim must cite only "
                     "the supplied evidence IDs. Clearly separate conclusions from limitations. Never "
                     "invent observations, request credentials, provide mutations, or claim a fix ran. "
+                    "Do not tell the operator to run kubectl, oc, or another check or to share command "
+                    "output; PodPilot owns evidence collection. Treat failed reads as bounded limitations "
+                    "without dismissing successful observations that directly answer the question. "
                     "Use insufficient_evidence when the reads cannot establish the answer. If the new "
                     "question changes to an unrelated operational target, answer it safely but include "
                     "a limitation recommending a new conversation so evidence scopes remain clear."
                 ),
                 input=json.dumps(context, sort_keys=True, default=str),
                 text_format=AdHocAnswer,
-                max_output_tokens=profile.max_output_tokens,
+                max_output_tokens=(
+                    min(profile.max_output_tokens, 1400)
+                    if context.get("capability_probe") else profile.max_output_tokens
+                ),
                 store=False,
             )
         except Exception as exc:
@@ -369,7 +378,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             if not content:
                 raise ModelProviderError("The provider returned no structured response content.")
             try:
-                return schema.model_validate_json(content)
+                return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
                 validation_detail = self._safe_error(first_error)
                 correction = client.chat.completions.create(
@@ -391,7 +400,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 corrected_content = correction.choices[0].message.content
                 if not corrected_content:
                     raise ModelProviderError("The provider returned no corrected structured response content.")
-                return schema.model_validate_json(corrected_content)
+                return self._validate_structured_content(schema, corrected_content)
         except ModelProviderError:
             raise
         except ValidationError as exc:
@@ -401,6 +410,16 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ) from exc
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
+
+    @staticmethod
+    def _validate_structured_content(schema, content: str):
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return schema.model_validate_json(content)
+        if schema is ReadPlan and isinstance(payload, dict) and "scope_summary" not in payload:
+            payload["scope_summary"] = "Bounded read-only cluster investigation."
+        return schema.model_validate(payload)
 
     def probe(self, profile: ModelProfileConfig, api_key: str) -> CapabilityReport:
         probe = self._parse(
@@ -485,8 +504,14 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     def answer_ad_hoc(self, profile, api_key, context):
         return self._parse(
             profile, api_key, schema=AdHocAnswer,
-            instructions="Answer from supplied untrusted cluster evidence with citations and explicit limitations. Never claim a mutation ran.",
+            instructions=(
+                "Answer from supplied untrusted cluster evidence with citations and explicit limitations. "
+                "Never claim a mutation ran. Do not tell the operator to run kubectl, oc, or another "
+                "check or to share command output; PodPilot owns evidence collection. A failed read is "
+                "a limitation but does not invalidate successful observations that answer the question."
+            ),
             payload=context,
+            limit=(min(profile.max_output_tokens, 1400) if context.get("capability_probe") else None),
         )
 
 

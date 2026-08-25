@@ -11,6 +11,7 @@ from podpilot_api.model_provider import (
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
 )
+from podpilot_diagnostics.adhoc import ReadPlan
 
 
 def profile(**overrides) -> ModelProfileConfig:
@@ -69,6 +70,18 @@ class CorrectingPlanCompletions:
                 "intents": [],
                 "limitations": [],
             })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
+class MissingSummaryPlanCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({"intents": [], "limitations": []})
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
@@ -141,6 +154,35 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
     assert '"scope_summary": ""' not in correction_messages[-1]["content"]
 
 
+def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:
+    completions = MissingSummaryPlanCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    plan = provider.plan_ad_hoc(profile(), "secret-token", {"question": "Show Pods"})
+
+    assert plan.scope_summary == "Bounded read-only cluster investigation."
+    assert len(completions.requests) == 1
+
+
+def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_commands() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.answer_ad_hoc(
+        profile(max_output_tokens=4096),
+        "secret-token",
+        {"capability_probe": True, "observations": [{"id": "cluster-pod-1"}]},
+    )
+
+    request = completions.requests[0]
+    assert request["max_tokens"] == 1400
+    assert "Do not tell the operator to run kubectl" in request["messages"][0]["content"]
+
+
 def test_capability_report_requires_ask_schemas_for_ready_state() -> None:
     base = dict(
         reachable=True,
@@ -162,4 +204,22 @@ def test_ask_schema_probe_reports_operational_contract_failure() -> None:
     passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
 
     assert passed is False
-    assert detail == "Provider response does not match ReadPlan."
+    assert detail == "ReadPlan probe failed. Provider response does not match ReadPlan."
+
+
+def test_ask_schema_probe_identifies_answer_phase() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
+        scope_summary="No reads are required.", intents=[]
+    )
+    provider.answer_ad_hoc = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        ModelProviderError("Provider request failed (InternalServerError, HTTP 504).")
+    )
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is False
+    assert detail == (
+        "AdHocAnswer probe failed. "
+        "Provider request failed (InternalServerError, HTTP 504)."
+    )

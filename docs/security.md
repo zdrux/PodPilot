@@ -144,6 +144,13 @@ Capability readiness also requires the provider to return schema-valid
 output probe as a proxy for the live Ask workflow. A Chat Completions validation
 failure receives at most one explicit correction attempt containing only bounded
 field/type diagnostics, not the rejected response body.
+The API supplies a fixed descriptive default when only `ReadPlan.scope_summary`
+is absent; this field never controls a cluster read. Before execution, well-known
+Kubernetes and OpenShift Kind/apiVersion pairs are canonicalized from a static
+allowlist. Custom resource coordinates remain subject to exact broker validation.
+Only limitations produced by the trusted read broker are promoted as collection
+limitations; model-authored planning caveats are not represented as observed
+collection failures.
 
 ## PoC Storage Exception
 

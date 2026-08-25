@@ -112,7 +112,15 @@
       if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
       button.disabled = true;
       try {
-        await sendSettingsRequest(button.dataset.actionUrl, "");
+        const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
+        if (button.dataset.actionKind === "delete") {
+          const message = Object.prototype.hasOwnProperty.call(payload, "activated_profile_id")
+            ? payload.activated_profile_id
+              ? "Model deleted. Another ready model was activated automatically."
+              : "Model deleted. PodPilot will run without AI until a model is configured and activated."
+            : "Model deleted.";
+          window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({tone: "success", message}));
+        }
         window.location.assign("/settings/model");
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }

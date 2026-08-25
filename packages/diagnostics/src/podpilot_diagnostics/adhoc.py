@@ -27,6 +27,41 @@ class ReadPlan(BaseModel):
     limitations: list[str] = Field(default_factory=list, max_length=5)
 
 
+_BUILTIN_RESOURCE_TYPES: dict[str, tuple[str, str]] = {
+    "configmap": ("v1", "ConfigMap"), "configmaps": ("v1", "ConfigMap"),
+    "daemonset": ("apps/v1", "DaemonSet"), "daemonsets": ("apps/v1", "DaemonSet"),
+    "deployment": ("apps/v1", "Deployment"), "deployments": ("apps/v1", "Deployment"),
+    "event": ("v1", "Event"), "events": ("v1", "Event"),
+    "ingresscontroller": ("operator.openshift.io/v1", "IngressController"),
+    "ingresscontrollers": ("operator.openshift.io/v1", "IngressController"),
+    "namespace": ("v1", "Namespace"), "namespaces": ("v1", "Namespace"),
+    "networkpolicy": ("networking.k8s.io/v1", "NetworkPolicy"),
+    "networkpolicies": ("networking.k8s.io/v1", "NetworkPolicy"),
+    "node": ("v1", "Node"), "nodes": ("v1", "Node"),
+    "persistentvolume": ("v1", "PersistentVolume"),
+    "persistentvolumeclaim": ("v1", "PersistentVolumeClaim"),
+    "pod": ("v1", "Pod"), "pods": ("v1", "Pod"),
+    "replicaset": ("apps/v1", "ReplicaSet"), "replicasets": ("apps/v1", "ReplicaSet"),
+    "route": ("route.openshift.io/v1", "Route"), "routes": ("route.openshift.io/v1", "Route"),
+    "service": ("v1", "Service"), "services": ("v1", "Service"),
+    "statefulset": ("apps/v1", "StatefulSet"), "statefulsets": ("apps/v1", "StatefulSet"),
+    "storageclass": ("storage.k8s.io/v1", "StorageClass"),
+    "storageclasses": ("storage.k8s.io/v1", "StorageClass"),
+}
+
+
+def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
+    """Canonicalize trusted built-in resource coordinates before broker validation."""
+
+    if intent.tool == "pod_logs" or not intent.kind:
+        return intent
+    coordinates = _BUILTIN_RESOURCE_TYPES.get(intent.kind.lower())
+    if not coordinates:
+        return intent
+    api_version, kind = coordinates
+    return intent.model_copy(update={"api_version": api_version, "kind": kind})
+
+
 @dataclass(frozen=True)
 class AdHocObservation:
     id: str

@@ -41,7 +41,7 @@ from podpilot_api.models import (
 )
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
-from podpilot_diagnostics.adhoc import ReadOnlyExplorer
+from podpilot_diagnostics.adhoc import ReadOnlyExplorer, normalize_read_intent
 from podpilot_diagnostics.checks import (
     DiagnosticCheckExecutor,
     DiagnosticCheckSpec,
@@ -587,7 +587,6 @@ def create_app(
                 seen_intents: set[str] = set()
                 reads_used = 0
                 scope_summary = "Bounded read-only cluster investigation."
-                plan_limitations: list[str] = []
                 for round_number in range(1, app_settings.adhoc_max_rounds + 1):
                     remaining_reads = app_settings.adhoc_max_reads_per_turn - reads_used
                     if remaining_reads <= 0:
@@ -616,9 +615,9 @@ def create_app(
                         },
                     )
                     scope_summary = plan.scope_summary
-                    plan_limitations = list(plan.limitations)
                     new_intents = []
-                    for intent in plan.intents[:remaining_reads]:
+                    for proposed_intent in plan.intents[:remaining_reads]:
+                        intent = normalize_read_intent(proposed_intent)
                         signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
                         if signature not in seen_intents:
                             seen_intents.add(signature)
@@ -656,7 +655,6 @@ def create_app(
                             entry["detail"] = str(exc)
                         activity.append(entry)
                     evidence = evidence[-app_settings.adhoc_max_evidence :]
-                limitations.extend(plan_limitations)
                 provider_phase = "final_answer"
                 answer = await run_in_threadpool(
                     provider.answer_ad_hoc,
@@ -1067,7 +1065,7 @@ def create_app(
             log_method = LOGGER.info if report.ready else LOGGER.warning
             log_method(
                 "podpilot.model_probe.complete actor=%s profile_id=%s outcome=%s "
-                "structured_output=%s ask_schemas=%s streaming=%s tool_calls=%s",
+                "structured_output=%s ask_schemas=%s streaming=%s tool_calls=%s error=%s",
                 user.username,
                 profile_id,
                 outcome,
@@ -1075,6 +1073,7 @@ def create_app(
                 report.ask_schemas,
                 report.streaming,
                 report.tool_calls,
+                error,
             )
         except (CredentialStoreError, ModelProviderError) as exc:
             outcome = "unavailable"
@@ -1130,8 +1129,6 @@ def create_app(
             profile = db_session.get(ModelProfile, profile_id)
             if profile is None:
                 raise HTTPException(status_code=404, detail="Model profile not found.")
-            if profile.is_active:
-                raise HTTPException(status_code=409, detail="Activate another model before deleting this one.")
             credential_key = profile.credential_key
         try:
             await run_in_threadpool(credentials.delete, credential_key)
@@ -1139,12 +1136,36 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id)
-            if profile is None or profile.is_active:
+            if profile is None:
                 raise HTTPException(status_code=409, detail="The model profile changed before deletion.")
+            was_active = profile.is_active
             db_session.delete(profile)
-            db_session.add(AuditEvent(actor=user.username, action="model_profile.delete", outcome="deleted", details_json=json.dumps({"profile_id": profile_id})))
+            replacement = None
+            if was_active:
+                replacement = db_session.scalar(
+                    select(ModelProfile)
+                    .where(ModelProfile.id != profile_id, ModelProfile.status == "ready")
+                    .order_by(ModelProfile.last_probe_at.desc(), ModelProfile.updated_at.desc())
+                    .limit(1)
+                )
+                if replacement:
+                    replacement.is_active = True
+            replacement_id = replacement.id if replacement else None
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="model_profile.delete",
+                outcome="deleted",
+                details_json=json.dumps({
+                    "profile_id": profile_id,
+                    "was_active": was_active,
+                    "activated_profile_id": replacement_id,
+                }),
+            ))
             db_session.commit()
-        return JSONResponse({"status": "deleted"})
+        response = {"status": "deleted"}
+        if was_active:
+            response["activated_profile_id"] = replacement_id
+        return JSONResponse(response)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):

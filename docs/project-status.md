@@ -38,6 +38,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   PodPilot planning and answer schemas, shows an explicit result notification,
   emits sanitized phase/outcome events for provider troubleshooting, and gives
   Chat Completions models one bounded field/type-only schema correction attempt.
+  The compatibility boundary safely defaults a missing descriptive plan summary,
+  uses a smaller synthetic answer budget during probes, canonicalizes known
+  Kubernetes/OpenShift Kind and apiVersion pairs, and keeps model-authored plan
+  caveats separate from trusted evidence-collection limitations.
+  Approvers can delete active or inactive profiles in the GUI. Active deletion
+  selects the most recently probed ready fallback when available, otherwise the
+  application continues in its deterministic model-free mode.
 - Typed remediation for one controller-owned failed Pod replacement and one
   Deployment, StatefulSet, or DaemonSet rollout restart.
 - Server dry-run, exact UID/resourceVersion preconditions, ten-minute preview
@@ -110,7 +117,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 95 tests passing with 82% aggregate branch coverage.
+- Automated suite: 102 tests passing with 82% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

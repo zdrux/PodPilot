@@ -1870,6 +1870,60 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
     engine.dispose()
 
 
+def test_active_model_can_be_deleted_with_ready_fallback_or_no_model(tmp_path: Path) -> None:
+    credentials = MemoryCredentialStore()
+    credentials.set("first-token", "model_first")
+    credentials.set("second-token", "model_second")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        credential_store=credentials,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add_all([
+            ModelProfile(
+                id=1, provider_label="First", base_url="https://first.example.test/v1",
+                chat_model="first-model", credential_key="model_first",
+                embedding_model=None, timeout_seconds=30, max_output_tokens=1200,
+                status="ready", capabilities_json="{}", updated_by="ada", is_active=True,
+                last_probe_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+            ModelProfile(
+                id=2, provider_label="Fallback", base_url="https://second.example.test/v1",
+                chat_model="second-model", credential_key="model_second",
+                embedding_model=None, timeout_seconds=30, max_output_tokens=1200,
+                status="ready", capabilities_json="{}", updated_by="ada", is_active=False,
+                last_probe_at=datetime.now(timezone.utc),
+            ),
+        ])
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/settings/model?edit=1", headers={"x-forwarded-user": "ada"})
+        assert 'data-action-kind="delete"' in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        first_delete = client.post("/api/v1/model-profiles/1/delete", headers=headers, data={})
+        assert first_delete.json() == {"status": "deleted", "activated_profile_id": 2}
+        second_delete = client.post("/api/v1/model-profiles/2/delete", headers=headers, data={})
+        assert second_delete.json() == {"status": "deleted", "activated_profile_id": None}
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.scalar(select(func.count()).select_from(ModelProfile)) == 0
+        events = list(db_session.scalars(
+            select(AuditEvent).where(AuditEvent.action == "model_profile.delete")
+        ))
+        assert len(events) == 2
+        assert json.loads(events[0].details_json)["activated_profile_id"] == 2
+        assert json.loads(events[1].details_json)["activated_profile_id"] is None
+    engine.dispose()
+    assert credentials.values == {}
+
+
 def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path) -> None:
     credentials = MemoryCredentialStore("test-api-token")
     provider = FakeModelProvider()

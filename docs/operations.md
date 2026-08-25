@@ -286,6 +286,14 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    For Chat Completions endpoints, PodPilot makes one bounded correction attempt
    when a response fails schema validation. The retry includes only validation
    field locations/types and never echoes the rejected model response.
+   Ask-schema probes cap their synthetic final-answer budget at 1,400 tokens even
+   when the profile permits larger operational answers. This reduces probe load
+   on slower on-premises models without changing the configured live-answer cap.
+   Approvers can delete any model from its edit page, including the active model.
+   Deleting a profile also removes its opaque credential key. If the deleted
+   profile was active, PodPilot activates the most recently probed ready profile;
+   when none exists, it continues safely without AI until another model is tested
+   and activated.
    **Insecure** disables certificate and hostname verification and is intended
    only for a disposable PoC endpoint. Rotate the provider key if it ever appears
    in terminal or application output.
@@ -321,6 +329,9 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
 
    The `podpilot.model_probe.*` and `podpilot.adhoc.*` events identify the actor,
    profile, workflow phase, outcome, and bounded schema-validation field/type.
+   Reduced model-probe events identify whether the operational failure occurred
+   in the `ReadPlan` or `AdHocAnswer` contract and include the sanitized provider
+   error class/status.
    They deliberately omit API tokens, prompts/questions, model response bodies,
    and collected evidence. HTTP access logs remain disabled to avoid logging
    request paths and routine probe noise.
@@ -332,6 +343,10 @@ and pin an immutable application image digest.
 Milestone 10 binds the normal `podpilot-investigator` runtime to OpenShift
 `cluster-reader`. The application broker supports ConfigMaps and bounded Pod logs
 but denies Secrets, access-review resources, arbitrary subresources, and mutations.
+For well-known built-in resources, the broker canonicalizes plural/case variants
+and their authoritative apiVersion (for example, `pods` becomes `v1`/`Pod`) before
+validation. This prevents model syntax variation from becoming a failed cluster
+read; it does not broaden RBAC or permit unknown resource coordinates.
 
 ### Typed remediation in the PoC lab
 

@@ -123,7 +123,8 @@ presentation without reducing surrounding prose readability.
 
 Model-registry gates cover multiple auto-incremented profiles, distinct opaque
 Secret keys, exactly one active profile, probe-before-activation, active-profile
-deletion denial, credential deletion with inactive profiles, token non-disclosure,
+deletion with deterministic ready-profile fallback, zero-model fallback,
+credential deletion, token non-disclosure,
 Responses versus Chat Completions routing, strict schema validation, configured
 embedding probes, and invalid custom-CA handling. Insecure TLS must be visibly
 distinguished from verified TLS and documented as a PoC-only exception.
@@ -133,6 +134,10 @@ produce phase-specific operational events while tests prove that questions,
 tokens, response bodies, and evidence do not enter application logs.
 Chat Completions tests must also prove that one invalid structured response can
 be corrected once without copying the rejected content into the repair prompt.
+Compatibility gates cover a missing descriptive `ReadPlan` summary, reduced
+probe output budgets, canonical built-in Kind/apiVersion coordinates, unchanged
+custom-resource validation, and suppression of model-authored planning caveats
+from trusted collection-limit displays.
 
 ## Rollback
 
