@@ -89,6 +89,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift, and installed CRD objects. Normal code resolves versions, group
   collisions, scope, and verbs. Lists paginate and persist compact, explicitly
   truncated collection evidence rather than one observation per object.
+- Model planning now infers natural-language goal and decision types. Unsupported
+  operational no-read answers receive one structured repair attempt; when live
+  discovery identifies a safe matching inventory or health target, a repeated
+  refusal falls back to the discovery-compiled read without expanding broker or
+  RBAC permissions.
 - Cluster-wide inventory LISTs no longer require the operator to invent a
   namespace. OpenShift API 403 responses identify the investigator ServiceAccount,
   verb, resource, and scope in the answer. List evidence retains all collected
@@ -144,7 +149,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Application version: `0.11.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Automated suite: 129 tests passing with 82% aggregate branch coverage.
+- Automated suite: 134 tests passing with 83% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

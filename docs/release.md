@@ -157,6 +157,11 @@ persist redacted observations before answering, validate citations against the
 expanded evidence set, audit targets without payloads, and retain the separate
 operator click for registered checks. Deterministic planning gates cover
 StorageClass inventory, namespaced built-in lists, and exact failed-Job alert scope.
+Natural-language planner gates must cover implied operational intent, unsupported
+no-read answers, one structured repair attempt, valid supporting-evidence reuse,
+and discovery-backed fallback after repeated refusal. Tests must prove that the
+fallback uses only a live policy-filtered catalog entry and still passes through
+the normal read broker and RBAC boundary.
 
 ## Rollback
 

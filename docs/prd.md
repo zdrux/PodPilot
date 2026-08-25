@@ -340,6 +340,12 @@ receives prior observations, allowing Pod discovery to lead to exact container-l
 collection without requiring an operator follow-up. ConfigMaps
 and logs are first-class evidence; Secrets, access-review resources, arbitrary
 subresources, commands, active network probes, and mutations are rejected.
+The model infers inventory, health, diagnosis, log, comparison, and explanation
+goals from natural language and returns an explicit collect, evidence-answer, or
+clarification decision. The API rejects unsupported operational answers, retries
+the planner once with bounded feedback, and may compile a matching safe LIST from
+live discovery after a second refusal. No wording-specific object allowlist is
+required, and neither inference nor fallback can exceed broker policy or RBAC.
 
 List collection follows server continue tokens within the object ceiling and uses
 kind-aware compact projections; object- or payload-ceiling truncation is explicit.

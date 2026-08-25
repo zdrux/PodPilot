@@ -360,6 +360,91 @@ class StorageClassExplorer:
         ),))
 
 
+class ImpliedHealthProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if context.get("completed_reads"):
+            return ReadPlan(
+                goal_type="health",
+                decision="answer_from_evidence",
+                scope_summary="The ClusterOperator evidence is sufficient.",
+                supporting_evidence_ids=["cluster-operators-1"],
+            )
+        if context.get("planner_feedback"):
+            return ReadPlan(
+                goal_type="health",
+                decision="collect",
+                scope_summary="Read current ClusterOperator conditions.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="clusteroperators",
+                    limit=250,
+                )],
+            )
+        return ReadPlan(
+            goal_type="health",
+            decision="answer_from_evidence",
+            scope_summary="Assess ClusterOperator health.",
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer="All observed ClusterOperators are Available and none are Degraded.",
+            cited_evidence_ids=["cluster-operators-1"],
+            limitations=[],
+        )
+
+
+class ClusterOperatorExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def resource_catalog(self, *, query: str = "", limit: int = 120):
+        return [{
+            "resource": "clusteroperators",
+            "apiVersion": "config.openshift.io/v1",
+            "kind": "ClusterOperator",
+            "namespaced": False,
+        }]
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        return ReadResult((AdHocObservation(
+            id="cluster-operators-1",
+            tool="list_resources",
+            summary="Read current ClusterOperator conditions.",
+            source="kubernetes:config.openshift.io/v1:ClusterOperator:cluster/*",
+            collected_at=datetime.now(timezone.utc),
+            data={
+                "kind": "ClusterOperator",
+                "scope": "cluster",
+                "names": ["authentication", "console"],
+                "objectListComplete": True,
+                "detailsTruncated": False,
+                "items": [{
+                    "metadata": {"name": "authentication"},
+                    "status": {"conditions": [
+                        {"type": "Available", "status": "True"},
+                        {"type": "Degraded", "status": "False"},
+                    ]},
+                }],
+            },
+        ),))
+
+
+class RefusingCatalogProvider(ImpliedHealthProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        return ReadPlan(
+            goal_type="health",
+            decision="needs_clarification",
+            scope_summary="Ask the operator for a specific resource name.",
+            clarification="Provide a ClusterOperator name.",
+        )
+
+
 class FakeRemediationExecutor:
     def __init__(self, outcome: str = "resolved", validation: str = "current") -> None:
         self.outcome = outcome
@@ -753,6 +838,99 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"
     assert explorer.calls[0].limit == 250
+
+
+def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(
+    tmp_path: Path,
+) -> None:
+    provider = ImpliedHealthProvider()
+    explorer = ClusterOperatorExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check the status of the cluster operators"},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert rendered.status_code == 200
+        assert "All observed ClusterOperators are Available" in rendered.text
+        assert "cluster-operators-1" in rendered.text
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].resource == "clusteroperators"
+    assert explorer.calls[0].limit == 250
+    assert len(provider.adhoc_plan_calls) == 3
+    catalog = provider.adhoc_plan_calls[0]["tool_policy"]["resource_catalog"]
+    assert catalog[0]["kind"] == "ClusterOperator"
+    assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
+        "actionable_goal_requires_evidence"
+    )
+    assert provider.adhoc_plan_calls[2]["completed_reads"][0]["status"] == "succeeded"
+
+
+def test_ask_uses_discovery_fallback_when_model_refuses_safe_catalog_read(
+    tmp_path: Path,
+) -> None:
+    provider = RefusingCatalogProvider()
+    explorer = ClusterOperatorExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check the status of the cluster operators"},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "All observed ClusterOperators are Available" in rendered.text
+        assert "cluster-operators-1" in rendered.text
+
+    assert len(provider.adhoc_plan_calls) == 2
+    assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
+        "actionable_goal_requires_evidence"
+    )
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].resource == "clusteroperators"
 
 
 def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(

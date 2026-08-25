@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ReadIntent(BaseModel):
@@ -24,9 +24,45 @@ class ReadIntent(BaseModel):
 
 
 class ReadPlan(BaseModel):
+    goal_type: Literal[
+        "inventory", "health", "diagnose", "logs", "compare", "explain"
+    ] = "diagnose"
+    decision: Literal[
+        "collect", "answer_from_evidence", "needs_clarification"
+    ] | None = None
     scope_summary: str = Field(min_length=1, max_length=500)
     intents: list[ReadIntent] = Field(default_factory=list, max_length=6)
     limitations: list[str] = Field(default_factory=list, max_length=5)
+    clarification: str | None = Field(default=None, max_length=500)
+    supporting_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def normalize_decision(self) -> "ReadPlan":
+        if self.decision is None:
+            self.decision = "collect" if self.intents else "answer_from_evidence"
+        if self.decision == "collect" and not self.intents:
+            raise ValueError("collect decisions require at least one read intent")
+        if self.decision != "collect" and self.intents:
+            raise ValueError("read intents require a collect decision")
+        return self
+
+
+def plan_needs_evidence_repair(
+    plan: ReadPlan,
+    *,
+    known_evidence_ids: set[str],
+    has_completed_reads: bool,
+) -> bool:
+    """Reject an unsupported no-read answer for a model-classified operational goal."""
+
+    actionable = {"inventory", "health", "diagnose", "logs", "compare"}
+    has_valid_support = bool(known_evidence_ids.intersection(plan.supporting_evidence_ids))
+    return (
+        plan.goal_type in actionable
+        and plan.decision == "answer_from_evidence"
+        and not has_valid_support
+        and not has_completed_reads
+    )
 
 
 _BUILTIN_RESOURCE_TYPES: dict[str, tuple[str, str]] = {
@@ -158,9 +194,15 @@ def plan_catalog_read(
     *,
     inventory_limit: int = 250,
 ) -> tuple[ReadPlan, bool] | None:
-    """Compile an explicit inventory question against the live safe resource catalog."""
+    """Compile a generic inventory/health fallback against the live safe catalog."""
 
-    if not re.search(r"\b(?:show|list|display|what|which)\b", question, re.IGNORECASE):
+    inventory_request = bool(re.search(
+        r"\b(?:show|list|display|what|which)\b", question, re.IGNORECASE
+    ))
+    health_request = bool(re.search(
+        r"\b(?:check|inspect|status|health|healthy|degraded)\b", question, re.IGNORECASE
+    ))
+    if not inventory_request and not health_request:
         return None
     lowered = question.lower()
     namespace_match = re.search(
@@ -194,6 +236,7 @@ def plan_catalog_read(
     kind = str(entry["kind"])
     return (
         ReadPlan(
+            goal_type="health" if health_request else "inventory",
             scope_summary=f"List {kind} resources in {namespace or 'the cluster'}.",
             intents=[ReadIntent(
                 tool="list_resources",

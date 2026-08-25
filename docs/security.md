@@ -241,6 +241,12 @@ An API `403` becomes an explicit operator-facing limitation naming the
 the need for an administrator-granted permission. The answer validator prepends
 that RBAC boundary when no evidence could be collected rather than replacing it
 with a generic request for a narrower question.
+Model intent classification does not authorize access. Planner decisions and
+supporting evidence IDs are schema-validated; unsupported operational answers
+are repaired once, and a generic fallback may compile only a matching read from
+the same policy-filtered live catalog. The broker still validates scope and verb,
+applies limits and redaction, and submits the request using the investigator
+ServiceAccount, so Kubernetes RBAC remains the maximum read boundary.
 
 Milestone 9 treats Prometheus label values as untrusted selectors, not query text
 or network destinations. The server owns both supported PromQL expressions and

@@ -404,3 +404,21 @@ handwritten domain pack merely to collect evidence. RBAC remains the final acces
 ceiling, provider output remains non-executable data, and remediation still
 requires separately reviewed typed actions, preconditions, approval, and
 verification. Newly served APIs may take up to five minutes to enter the catalog.
+
+## 2026-08-25 - Natural-language planning is model-first with bounded repair
+
+Context: Exact phrase matching cannot cover normal operator language, but blindly
+accepting a model's empty plan can withhold evidence even when live discovery
+contains an obvious safe target.
+
+Decision: Require the model to classify the goal and explicitly choose collection,
+evidence-backed answer, or clarification. Reject unsupported operational answers
+and retry planning once with structured feedback. If a policy-filtered live
+catalog match proves that a safe inventory or health read is available, compile
+that read after a second refusal. Keep exact built-in planners only for a few
+high-confidence compatibility and alert-scoped paths.
+
+Consequences: Operators can use natural language without a growing static object
+list. The model selects intent but never receives execution authority; discovery,
+broker validation, limits, redaction, ServiceAccount RBAC, persistence, and
+citation enforcement remain server-owned.

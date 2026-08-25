@@ -47,6 +47,7 @@ from podpilot_diagnostics.adhoc import (
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
+    plan_needs_evidence_repair,
 )
 from podpilot_diagnostics.checks import (
     DiagnosticCheckExecutor,
@@ -410,7 +411,7 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set()
     reads_used = 0
     scope_summary = "Bounded read-only cluster investigation."
-    known_plan = plan_known_read(
+    deterministic_plan = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
         alert_name=alert_name,
@@ -430,51 +431,132 @@ async def _collect_bounded_cluster_reads(
                 workflow_id,
                 str(exc),
             )
-    if known_plan is None and catalog_entries:
-        known_plan = plan_catalog_read(
+    catalog_fallback = None
+    if catalog_entries:
+        catalog_fallback = plan_catalog_read(
             question,
             catalog_entries,
             inventory_limit=settings.adhoc_inventory_max_objects,
         )
+
+    def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
+        known_evidence_ids = {str(item.get("id")) for item in evidence}
+        if plan_needs_evidence_repair(
+            plan,
+            known_evidence_ids=known_evidence_ids,
+            has_completed_reads=bool(activity),
+        ):
+            return True
+        has_valid_support = bool(
+            known_evidence_ids.intersection(plan.supporting_evidence_ids)
+        )
+        return (
+            round_number == 1
+            and catalog_fallback is not None
+            and not activity
+            and plan.decision != "collect"
+            and not has_valid_support
+        )
+
+    def planner_context(
+        *, round_number: int, remaining_reads: int, feedback: dict[str, str] | None = None
+    ) -> dict[str, object]:
+        context: dict[str, object] = {
+            "cluster": settings.cluster_name,
+            "question": question,
+            "conversation": conversation,
+            "earlier_context_summary": earlier_context_summary,
+            "alert_scope": (
+                {"alert_name": alert_name, "labels": alert_labels or {}}
+                if alert_name else None
+            ),
+            "observations": evidence[-settings.adhoc_max_evidence :],
+            "completed_reads": activity,
+            "investigation_round": round_number,
+            "tool_policy": {
+                "available": ["get_resource", "list_resources", "pod_logs"],
+                "resource_catalog": catalog_entries,
+                "max_rounds": settings.adhoc_max_rounds,
+                "max_reads_total": settings.adhoc_max_reads_per_turn,
+                "remaining_reads": remaining_reads,
+                "max_list_objects": settings.adhoc_inventory_max_objects,
+                "cluster_wide_inventory_allowed": True,
+                "logs_and_configmaps_allowed": True,
+                "secrets_and_mutations_allowed": False,
+            },
+        }
+        if feedback:
+            context["planner_feedback"] = feedback
+        return context
+
     for round_number in range(1, settings.adhoc_max_rounds + 1):
         remaining_reads = settings.adhoc_max_reads_per_turn - reads_used
         if remaining_reads <= 0:
             break
         terminal_plan = False
-        if round_number == 1 and known_plan:
-            plan, terminal_plan = known_plan
+        if round_number == 1 and deterministic_plan:
+            plan, terminal_plan = deterministic_plan
         else:
-            try:
-                plan = await run_in_threadpool(
-                    model_provider.plan_ad_hoc,
-                    profile,
-                    api_key,
-                    {
-                        "cluster": settings.cluster_name,
-                        "question": question,
-                        "conversation": conversation,
-                        "earlier_context_summary": earlier_context_summary,
-                        "alert_scope": (
-                            {"alert_name": alert_name, "labels": alert_labels or {}}
-                            if alert_name else None
+            plan = None
+            planner_error: ModelProviderError | None = None
+            feedback: dict[str, str] | None = None
+            for planning_attempt in range(1, 3):
+                try:
+                    plan = await run_in_threadpool(
+                        model_provider.plan_ad_hoc,
+                        profile,
+                        api_key,
+                        planner_context(
+                            round_number=round_number,
+                            remaining_reads=remaining_reads,
+                            feedback=feedback,
                         ),
-                        "observations": evidence[-settings.adhoc_max_evidence :],
-                        "completed_reads": activity,
-                        "investigation_round": round_number,
-                        "tool_policy": {
-                            "available": ["get_resource", "list_resources", "pod_logs"],
-                            "resource_catalog": catalog_entries,
-                            "max_rounds": settings.adhoc_max_rounds,
-                            "max_reads_total": settings.adhoc_max_reads_per_turn,
-                            "remaining_reads": remaining_reads,
-                            "max_list_objects": settings.adhoc_inventory_max_objects,
-                            "logs_and_configmaps_allowed": True,
-                            "secrets_and_mutations_allowed": False,
-                        },
-                    },
+                    )
+                except ModelProviderError as exc:
+                    planner_error = exc
+                    break
+                if not plan_requires_repair(plan, round_number=round_number):
+                    break
+                LOGGER.warning(
+                    "podpilot.adhoc.plan_repair actor=%s workflow_id=%s round=%s attempt=%s "
+                    "goal=%s decision=%s",
+                    actor,
+                    workflow_id,
+                    round_number,
+                    planning_attempt,
+                    plan.goal_type,
+                    plan.decision,
                 )
-            except ModelProviderError as exc:
-                raise ModelProviderError(f"ReadPlan round {round_number} failed. {exc}") from exc
+                feedback = {
+                    "code": "actionable_goal_requires_evidence",
+                    "message": (
+                        "The operational question has no valid supporting evidence, and the live "
+                        "resource catalog contains a safe matching target. Return decision=collect "
+                        "with safe read intents from the catalog. Only request clarification if no "
+                        "catalog target can answer the question."
+                    ),
+                }
+            needs_fallback = plan is None or plan_requires_repair(
+                plan, round_number=round_number
+            )
+            if needs_fallback and round_number == 1 and catalog_fallback is not None:
+                plan, terminal_plan = catalog_fallback
+                LOGGER.info(
+                    "podpilot.adhoc.catalog_fallback actor=%s workflow_id=%s goal=%s",
+                    actor,
+                    workflow_id,
+                    plan.goal_type,
+                )
+            elif needs_fallback and planner_error is not None:
+                raise ModelProviderError(
+                    f"ReadPlan round {round_number} failed. {planner_error}"
+                ) from planner_error
+            elif needs_fallback:
+                limitations.append(
+                    "The model planner did not select a safe evidence read for its actionable goal."
+                )
+                break
+            assert plan is not None
         scope_summary = plan.scope_summary
         new_intents = []
         for proposed_intent in plan.intents[:remaining_reads]:

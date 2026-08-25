@@ -148,6 +148,14 @@ apiVersion, Kind, namespaced scope, and advertised read verb. Unambiguous
 inventory questions compile directly from that live catalog so a model cannot
 omit the only required intent. The small built-in canonicalization table remains
 only as a compatibility path for older model output.
+The planner classifies natural-language intent as inventory, health, diagnosis,
+logs, comparison, or explanation and explicitly chooses whether to collect,
+answer from cited evidence, or request clarification. If an operational answer
+has no valid evidence—or a matching safe catalog target exists but the model
+declines to read it—the API supplies structured feedback and retries planning
+once. A second refusal falls back to the read compiled from live discovery. This
+fallback is generic across served resources; it does not grant a model a client
+or require a static list of OpenShift object types.
 ConfigMaps and bounded logs are intentional evidence sources. Secrets,
 access-review resources, arbitrary subresources, commands, network probes, and
 mutations are rejected. A final model pass receives normalized, redacted

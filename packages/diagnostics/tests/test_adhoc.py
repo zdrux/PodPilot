@@ -1,8 +1,12 @@
+from pydantic import ValidationError
+
 from podpilot_diagnostics.adhoc import (
     ReadIntent,
+    ReadPlan,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
+    plan_needs_evidence_repair,
 )
 
 
@@ -130,3 +134,55 @@ def test_inventory_limit_can_be_increased_within_broker_ceiling() -> None:
 
     assert planned is not None
     assert planned[0].intents[0].limit == 500
+
+
+def test_actionable_model_goal_requires_reads_or_valid_supporting_evidence() -> None:
+    empty_health_plan = ReadPlan(
+        goal_type="health",
+        decision="answer_from_evidence",
+        scope_summary="Assess ClusterOperator health.",
+        supporting_evidence_ids=[],
+    )
+
+    assert plan_needs_evidence_repair(
+        empty_health_plan,
+        known_evidence_ids=set(),
+        has_completed_reads=False,
+    ) is True
+    supported = empty_health_plan.model_copy(update={
+        "supporting_evidence_ids": ["cluster-operators-1"],
+    })
+    assert plan_needs_evidence_repair(
+        supported,
+        known_evidence_ids={"cluster-operators-1"},
+        has_completed_reads=False,
+    ) is False
+
+
+def test_collect_decision_requires_a_typed_read_intent() -> None:
+    try:
+        ReadPlan(
+            goal_type="health",
+            decision="collect",
+            scope_summary="Assess ClusterOperator health.",
+        )
+    except ValidationError as exc:
+        assert "collect decisions require at least one read intent" in str(exc)
+    else:
+        raise AssertionError("An empty collect decision must fail schema validation")
+
+
+def test_live_catalog_health_fallback_uses_discovered_cluster_operator() -> None:
+    planned = plan_catalog_read("Check the status of the cluster operators", [{
+        "resource": "clusteroperators",
+        "apiVersion": "config.openshift.io/v1",
+        "kind": "ClusterOperator",
+        "namespaced": False,
+    }])
+
+    assert planned is not None
+    plan, terminal = planned
+    assert plan.goal_type == "health"
+    assert plan.decision == "collect"
+    assert plan.intents[0].resource == "clusteroperators"
+    assert terminal is True

@@ -460,6 +460,15 @@ question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
 requires the configured model.
 
+The planner infers a goal and collection decision from natural language; users do
+not need to use exact command-like phrases. An operational no-read response is
+retried once with structured feedback. When live discovery already identifies a
+safe matching inventory or health target, a second refusal uses the
+discovery-compiled LIST instead. Application logs record
+`podpilot.adhoc.plan_repair` and `podpilot.adhoc.catalog_fallback` without the
+question or evidence payload. A later `403` is an RBAC limitation, not a planner
+failure, and the UI names the denied ServiceAccount, resource, verb, and scope.
+
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name
 collisions are represented as `resource.group` (for example,
