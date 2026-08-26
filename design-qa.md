@@ -1,83 +1,72 @@
-# Ask PodPilot pinned-session layout QA
+# Ask PodPilot message-card height QA
 
-- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-63365a39-70cb-4b62-9e14-3cfa063ef4e4.png`
-- Implementation screenshot: `C:\Users\zdrux\AppData\Local\Temp\podpilot-ask-pinned-layout-final.png`
-- Desktop viewport: 2101 × 1012 CSS px at device scale factor 1
-- Source pixels: 2101 × 1012
-- Implementation pixels: 2101 × 1012
-- Density normalization: none; source and implementation were captured at identical pixel dimensions
-- State: desktop dark theme. The source shows a populated conversation; the isolated QA database shows the empty-session state. The shared header, transcript region, cluster selector, and composer shell are directly comparable.
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-7ca933cc-6391-4f9e-9df2-5b0a0cb56a23.png`
+- Browser-rendered implementation: `C:\Users\zdrux\AppData\Local\Temp\podpilot-chat-card-height-fixed-1861.png`
+- Viewport: 1861 × 1001 CSS px at device scale factor 1
+- Source pixels: 1861 × 1001
+- Implementation pixels: 1861 × 1001
+- Density normalization: none
+- State: dark desktop Ask PodPilot conversation with one user message and one active investigation card containing five progress events
 
 ## Full-view comparison evidence
 
-The supplied source and the final browser-rendered screenshot were opened together at the same 2101 × 1012 size. The implementation preserves the sidebar and dark blue-grey chat hue while removing the previous inset outer panel. The main session now fills the complete area to the right of the 248px sidebar. The 88px header begins at viewport top, the composer terminates exactly at viewport bottom, and the center region consumes the remaining height.
+The source and corrected browser render were opened together at identical dimensions and state. In the source, the two automatic CSS Grid rows stretch vertically to fill the 649px transcript area, leaving large empty regions inside both cards. In the corrected render, the cards are content-sized and the unused transcript height appears below the message stack, where it belongs.
 
-Measured final desktop geometry:
+Measured corrected geometry:
 
-- Session surface: left 248, top 0, right 2101, bottom 1012
-- Header: top 0, bottom 88
-- Composer in the model-not-ready QA state: top 658, bottom 1012
-- Body scroll height: 1012, equal to viewport height
-- Outer panel border: 0px none
-- Outer panel radius: 0px
-- Outer panel shadow: none
+- Transcript height: 649px
+- User card: 126.34px rendered height, 124px scroll height
+- Active investigation card: 243.95px rendered height, 242px scroll height
+- Grid automatic rows: `max-content`
+- Grid content alignment: `start`
+- Page scroll height: 1001px, equal to the viewport height
 
 ## Focused region comparison evidence
 
-Separate crops were not needed because the full-resolution captures keep the header and composer typography, controls, spacing, and divider lines readable. Focused inspection confirmed:
-
-- Header: brief session summary and title remain left-aligned; status controls remain right-aligned; the bottom divider is subtle and continuous.
-- Conversation: the retained dark blue-grey field has no outer card edge; message cards remain available as intentional attribution boundaries when messages exist.
-- Composer: cluster selection and message input are grouped in one bottom region with a continuous top divider. Permission and model-readiness notices stay inside the same pinned region.
+The message region is legible at native size in the full-view pair, so a separate crop was unnecessary. Focused inspection confirmed that card widths, padding, borders, typography, progress markers, and the 12px inter-card gap are unchanged. Only the unintended vertical stretching was removed.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: existing Inter/system stack, sizes, weights, wrapping, and hierarchy are unchanged. No new type styles were introduced.
-- Spacing and layout rhythm: the old page padding and panel inset are removed only for Ask PodPilot. Header, transcript, and composer form a full-height three-row grid. Existing internal 18–20px spacing remains consistent.
-- Colors and visual tokens: existing dark blue-grey surfaces, cyan accents, orange boundary status, muted text, and border tokens are preserved. Divider opacity uses the existing blue-grey palette.
-- Image quality and asset fidelity: the screen contains no new raster assets. Existing brand and UI marks were left unchanged.
-- Copy and content: all existing product copy, evidence labels, cluster-selection guidance, composer help, and empty-state prompts are unchanged.
+- Fonts and typography: unchanged; existing Inter/system stack, font sizes, weights, line heights, and wrapping are preserved.
+- Spacing and layout rhythm: card padding and the inter-card gap are unchanged. Automatic rows now use intrinsic content height and the message stack is anchored to the transcript top.
+- Colors and visual tokens: unchanged; dark blue-grey surfaces, cyan borders, and semantic progress colors remain intact.
+- Image quality and asset fidelity: no image or icon assets were added, replaced, or altered.
+- Copy and content: the user message, active investigation status, and progress entries render unchanged.
 
-## Interaction and responsive verification
+## Interaction and browser verification
 
-- Opened the cluster picker successfully.
-- Filled and cleared the question textarea successfully.
-- Submit was intentionally not attempted because the isolated QA model profile was not configured.
-- At 700 × 900, the sidebar collapses to the top, the main area fills the remaining 765px, the header and composer remain bounded inside it, and body scroll height remains equal to viewport height.
+- Verified the populated active-investigation state from a seeded isolated QA database.
+- Confirmed the transcript remains independently scrollable when content exceeds its fixed region.
 - Browser console errors checked: none.
+- Model execution and form submission were intentionally not triggered; this change affects only message-row sizing.
 
 ## Comparison history
 
 ### Pass 1
 
-- [P2] The generic `.panel` rule appeared later in the cascade and restored a faint 1px outer border and 16px radius around the Ask session.
-- Fix: increased selector specificity to `.ask-page .ask-panel`, preserving the edge-to-edge overrides against the generic panel rule.
-- Post-fix evidence: the final screenshot and computed styles show no border, no radius, and no shadow; the session bounds exactly match the main viewport bounds.
+- [P1] Message cards expanded to consume unused transcript height.
+- Cause: the fixed-height `.ask-thread` remained a grid whose implicit auto rows participated in `align-content: normal`, allowing the rows to stretch.
+- Fix: set `grid-auto-rows: max-content` and `align-content: start` on `.ask-thread`.
 
 ### Pass 2
 
-No actionable P0, P1, or P2 differences remain for the requested layout change.
+- Post-fix browser evidence shows both cards matching their content height with unused space below the stack.
+- No actionable P0, P1, or P2 findings remain.
 
 ## Findings
 
-No blocking visual, interaction, accessibility, or responsive findings remain.
-
-## Open questions
-
-None.
+No blocking visual, interaction, accessibility, or responsive findings remain for this correction.
 
 ## Implementation checklist
 
-- [x] Remove Ask page outer card inset, border, radius, and shadow.
-- [x] Pin the session summary header to the top region.
-- [x] Make the transcript the only independently scrolling region when messages overflow.
-- [x] Pin cluster selection and the message composer to the bottom region.
-- [x] Add subtle continuous separators between all three regions.
-- [x] Preserve the existing dark blue-grey chat background and sidebar contrast.
-- [x] Verify desktop and responsive geometry, core controls, and browser console.
+- [x] Prevent implicit transcript rows from stretching.
+- [x] Keep messages anchored at the top of the scrolling region.
+- [x] Preserve card padding, width, styling, and message content.
+- [x] Verify against the reported active-investigation state at the same viewport.
+- [x] Check browser console and existing API UI tests.
 
 ## Follow-up polish
 
-No P3 follow-up is required for this scoped change.
+No P3 follow-up is required.
 
 final result: passed
