@@ -525,6 +525,8 @@ class OpenAIResponsesProvider:
                     "or bracket citation markers in the answer text; citations belong only in "
                     "cited_evidence_ids. Distinguish an incomplete object list from compacted object "
                     "details using objectListComplete and detailsTruncated. "
+                    "When raw JSON is genuinely useful, put it in a fenced json code block; prefer concise "
+                    "prose, bullets, or a focused table over dumping an entire object. "
                     "Unless the operator explicitly requested only a list or count, do not answer with object "
                     "names alone. Explain the material observed "
                     "spec/status fields, how they relate to the question, and what remains unverified. "
@@ -823,8 +825,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "spec/status fields, their meaning, and any missing proof. "
                 "Do not print JSON paths, observations[...] expressions, or bracket citation markers in "
                 "answer text; use only cited_evidence_ids for citations. Distinguish objectListComplete "
-                "from detailsTruncated when describing completeness. If answer_feedback is present, "
-                "the prior answer was rejected as incomplete; follow its bounded correction message and "
+                "from detailsTruncated when describing completeness. "
+                "When raw JSON is genuinely useful, put it in a fenced json code block; prefer concise "
+                "prose, bullets, or a focused table over dumping an entire object. "
+                "If answer_feedback is present, the prior answer was rejected as incomplete; follow its "
+                "bounded correction message and "
                 "return substantive prose or bullets beneath useful headings, never headings alone."
             ),
             payload=context,

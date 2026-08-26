@@ -277,9 +277,13 @@ questions. Explicit list and count questions remain inventory-only. When a
 validated list evidence into a useful final answer, PodPilot renders that evidence as a
 deterministic table instead.
 If the model still returns an incomplete non-inventory answer after the bounded correction, exact
-object reads are rendered as a redacted, bounded `spec`/`status` field summary with evidence
-citations. This preserves useful configuration detail without treating intended configuration as
-proof that an external system received traffic or data.
+object reads feed a redacted, question-focused deterministic answer with evidence citations.
+Known relationships such as CLF Kafka outputs and their pipelines are summarized directly;
+other resources expose at most a small set of fields matching the question. The fallback never
+renders the whole object and does not treat intended configuration as proof of external behavior.
+The active Ask page uses one session header for the conversation title, cluster-lock boundary,
+and evidence count. Agent JSON supplied as a fenced block or standalone JSON paragraph is
+validated and pretty-printed in a scrollable monospace block; invalid JSON remains ordinary text.
 For namespaced resources, including operator-managed custom resources such as Strimzi
 `Kafka`, the table preserves cluster, namespace, resource name, observed `Ready` condition,
 and whether the bounded list was complete. A cluster-scoped read can therefore return more

@@ -1,21 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Ask PodPilot{% endblock %}
 {% block content %}
-<header class="topbar">
-  <div>
-    <h1>Ask PodPilot</h1>
-    <p class="subtitle"><span class="subtitle-context">Read-only cluster assistant</span><span aria-hidden="true"> · </span>Describe a symptom. PodPilot will inspect bounded cluster evidence before answering. Conversations are private to your OpenShift user.</p>
-  </div>
-  {% if conversation %}
-  <div class="topbar-actions">
-    <a class="button secondary" href="/ask">New conversation</a>
-  </div>
-  {% endif %}
-</header>
-
 <div class="ask-layout">
   <section class="panel ask-panel">
-    <div class="panel-header">
+    <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
         <span class="boundary-pill" tabindex="0"
@@ -202,7 +190,7 @@
         <summary>View technical details</summary>
         {% if item.excerpt %}<h4>Bounded log excerpt</h4><pre><code>{{ item.excerpt }}</code></pre>{% endif %}
         <h4>Redacted collected payload</h4>
-        <pre><code>{{ item.data_json }}</code></pre>
+        <pre><code class="language-json">{{ item.data_json }}</code></pre>
       </details>
     </article>
   {% endfor %}

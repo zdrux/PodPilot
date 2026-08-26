@@ -214,8 +214,9 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .chat-markdown a { color: var(--cyan); text-underline-offset: 3px; }
 .chat-markdown code, .chat-markdown pre { font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .chat-markdown code { padding: .12em .35em; border: 1px solid rgba(69, 212, 232, .15); border-radius: 4px; color: #9be7f1; background: rgba(69, 212, 232, .07); font-size: .9em; }
-.chat-markdown pre { overflow-x: auto; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; background: #070d16; }
+.chat-markdown pre { max-width: 100%; overflow-x: auto; padding: 13px 15px; border: 1px solid var(--border); border-radius: 8px; background: #070d16; white-space: pre; tab-size: 2; }
 .chat-markdown pre code { padding: 0; border: 0; color: #c9d8e8; background: transparent; }
+.chat-markdown pre code.language-json { color: #bfe8ee; }
 .chat-markdown blockquote { margin: .85em 0; padding: .2em 0 .2em 1em; border-left: 3px solid var(--border-bright); color: var(--muted); }
 .chat-markdown table { width: 100%; margin: .85em 0 1em; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
 .chat-markdown th, .chat-markdown td { padding: 8px 10px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
@@ -282,8 +283,9 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .checkbox-field input { width: auto !important; min-height: auto !important; }
 .inline-warning { padding: 10px 12px; border: 1px solid rgba(255, 169, 77, .35); border-radius: 8px; color: var(--orange); background: rgba(255, 169, 77, .07); font-size: 10px; }
 .evidence-cluster { display: inline-block; margin: 0 0 8px; padding: 4px 7px; border: 1px solid rgba(255, 169, 77, .25); border-radius: 999px; }
-.ask-layout { margin-top: 13px; }
+.ask-layout { margin-top: 0; }
 .ask-panel { width: 100%; }
+.ask-session-header { border-color: rgba(69, 212, 232, .16); background: rgba(18, 29, 45, .72); }
 .ask-thread { min-height: 260px; max-height: 62vh; overflow-y: auto; }
 .subtitle-context { color: inherit; }
 .panel-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
@@ -426,6 +428,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .evidence-technical summary { color: var(--cyan); cursor: pointer; font-size: 12px; font-weight: 700; }
 .evidence-technical h4 { margin: 14px 0 7px; color: var(--muted); font-size: 11px; text-transform: uppercase; }
 .evidence-technical pre { max-height: 360px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 7px; color: #cbd8e5; background: #060c14; font: 11px/1.55 "Cascadia Code", "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.evidence-technical code.language-json { color: #bfe8ee; }
 .confidence-high { color: var(--green); background: rgba(74, 222, 154, 0.1); }
 .confidence-medium { color: var(--cyan); background: var(--cyan-soft); }
 .confidence-low { color: var(--orange); background: rgba(255, 157, 102, 0.1); }

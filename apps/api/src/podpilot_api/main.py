@@ -871,8 +871,9 @@ def _deterministic_evidence_fallback_answer(
 
 def _deterministic_resource_detail_answer(
     *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+    question: str = "",
 ) -> dict[str, object] | None:
-    """Render bounded exact-object fields when model interpretation remains incomplete."""
+    """Render a bounded question-focused answer from exact-object evidence."""
 
     current_ids = {
         str(evidence_id)
@@ -889,17 +890,191 @@ def _deterministic_resource_detail_answer(
     if not observations:
         return None
 
-    def bounded_value(value: object, *, limit: int = 900) -> str:
+    def bounded_value(value: object, *, limit: int = 450) -> str:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
         safe = redact_text(encoded).replace("|", "\\|").replace("`", "'")
         return safe if len(safe) <= limit else safe[:limit] + "…"
 
+    def string_list(value: object) -> list[str]:
+        return [str(item) for item in value] if isinstance(value, list) else []
+
+    def matching_items(value: object, terms: set[str]) -> list[dict[str, object]]:
+        return [
+            item for item in value if isinstance(item, dict)
+            and any(term in json.dumps(item, sort_keys=True, default=str).casefold() for term in terms)
+        ] if isinstance(value, list) else []
+
+    def endpoint_summary(output: dict[str, object]) -> str:
+        candidates: list[str] = []
+        def visit(value: object, *, depth: int = 0) -> None:
+            if depth > 4:
+                return
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if str(key).casefold() in {
+                        "url", "urls", "brokers", "bootstrapservers", "bootstrap_servers",
+                    }:
+                        candidates.extend(string_list(item) or ([str(item)] if item else []))
+                    else:
+                        visit(item, depth=depth + 1)
+            elif isinstance(value, list):
+                for item in value[:12]:
+                    visit(item, depth=depth + 1)
+        visit(output)
+        return ", ".join(dict.fromkeys(redact_text(item)[:253] for item in candidates)) or "not exposed"
+
+    def input_summary(item: dict[str, object]) -> str:
+        name = str(item.get("name") or "unnamed")
+        input_type = str(item.get("type") or "unspecified type")
+        includes = 0
+        namespaces: list[str] = []
+        def visit(value: object) -> None:
+            nonlocal includes
+            if isinstance(value, dict):
+                if value.get("namespace"):
+                    includes += 1
+                    namespaces.append(str(value["namespace"]))
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        visit(item)
+        sample = ", ".join(f"`{value}`" for value in namespaces[:4])
+        scope = (
+            f"; {includes} namespace include rule{'s' if includes != 1 else ''}"
+            + (f" ({sample}{', …' if includes > 4 else ''})" if sample else "")
+            if includes else ""
+        )
+        return f"`{name}` ({input_type}{scope})"
+
+    kafka_observations = [
+        item for item in observations
+        if str(item["data"].get("kind") or "").casefold() == "clusterlogforwarder"
+        and "kafka" in question.casefold()
+    ]
+    if kafka_observations:
+        cluster_sections: list[str] = []
+        configured_clusters: list[str] = []
+        citations: list[str] = []
+        for observation in kafka_observations:
+            data = observation["data"]
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+            status = data.get("status") if isinstance(data.get("status"), dict) else {}
+            cluster = str(
+                observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+            )[:253]
+            namespace = str(metadata.get("namespace") or "cluster")[:253]
+            name = str(metadata.get("name") or "unnamed")[:253]
+            outputs = matching_items(spec.get("outputs"), {"kafka"})
+            output_names = {str(item.get("name")) for item in outputs if item.get("name")}
+            pipelines = [
+                item for item in (spec.get("pipelines") or []) if isinstance(item, dict)
+                and (
+                    output_names.intersection(string_list(
+                        item.get("outputRefs") or item.get("output_refs")
+                    ))
+                    or "kafka" in json.dumps(item, sort_keys=True, default=str).casefold()
+                )
+            ]
+            if outputs and pipelines:
+                configured_clusters.append(cluster)
+            input_names = {
+                value for pipeline in pipelines
+                for value in string_list(pipeline.get("inputRefs") or pipeline.get("input_refs"))
+            }
+            inputs = [
+                item for item in (spec.get("inputs") or [])
+                if isinstance(item, dict) and str(item.get("name") or "") in input_names
+            ]
+            conditions = [
+                condition
+                for key, value in status.items()
+                if str(key).casefold().endswith("conditions") and isinstance(value, list)
+                for condition in value
+                if isinstance(condition, dict) and (
+                    "kafka" in json.dumps(condition, sort_keys=True, default=str).casefold()
+                    or any(name.casefold() in json.dumps(condition, default=str).casefold()
+                           for name in output_names)
+                    or any(str(pipeline.get("name") or "").casefold()
+                           in json.dumps(condition, default=str).casefold()
+                           for pipeline in pipelines if pipeline.get("name"))
+                )
+            ][:6]
+            cluster_sections.extend([
+                "",
+                f"### {cluster} · `{namespace}/{name}`",
+                "",
+            ])
+            if not outputs:
+                cluster_sections.append("- **Kafka output:** No Kafka output was found in the exact CLF read.")
+            else:
+                cluster_sections.extend(
+                    f"- **Kafka output `{str(output.get('name') or 'unnamed')}`:** "
+                    f"type `{str(output.get('type') or 'kafka')}`; destination `{endpoint_summary(output)}`."
+                    for output in outputs[:4]
+                )
+            if pipelines:
+                for pipeline in pipelines[:6]:
+                    pipeline_name = str(pipeline.get("name") or "unnamed")
+                    input_refs = string_list(pipeline.get("inputRefs") or pipeline.get("input_refs"))
+                    output_refs = string_list(pipeline.get("outputRefs") or pipeline.get("output_refs"))
+                    pipeline_filters = string_list(pipeline.get("filterRefs") or pipeline.get("filter_refs"))
+                    cluster_sections.append(
+                        f"- **Pipeline `{pipeline_name}`:** inputs "
+                        f"{', '.join(f'`{item}`' for item in input_refs) or 'none'} → "
+                        f"outputs {', '.join(f'`{item}`' for item in output_refs) or 'none'}"
+                        + (f"; filters {', '.join(f'`{item}`' for item in pipeline_filters)}." if pipeline_filters else ".")
+                    )
+            elif outputs:
+                cluster_sections.append("- **Pipeline linkage:** No pipeline referencing the Kafka output was found.")
+            if inputs:
+                cluster_sections.append(
+                    "- **Referenced inputs:** " + "; ".join(input_summary(item) for item in inputs[:6]) + "."
+                )
+            if conditions:
+                cluster_sections.append("- **Validation:** " + "; ".join(
+                    f"{str(item.get('type') or 'condition')}=`{str(item.get('status') or 'Unknown')}`"
+                    + (f" ({str(item.get('message'))[:180]})" if item.get("message") else "")
+                    for item in conditions
+                ) + ".")
+            citations.append(str(observation["id"]))
+        all_configured = len(configured_clusters) == len(kafka_observations)
+        summary = (
+            "Yes. Every inspected cluster has a Kafka output referenced by at least one CLF pipeline."
+            if all_configured else
+            f"Kafka forwarding is fully linked on {len(configured_clusters)} of "
+            f"{len(kafka_observations)} inspected clusters."
+        )
+        return {
+            "answer_mode": "evidence_based",
+            "content": "\n".join([
+                "## Kafka forwarding answer", "", summary,
+                *cluster_sections,
+                "", "## Verification boundary", "",
+                (
+                    "This proves the observed CLF configuration and validation state. It does not "
+                    "prove that Kafka received logs; that requires destination-side or delivery evidence."
+                ),
+            ]),
+            "citations": citations,
+        }
+
+    stopwords = {
+        "about", "cluster", "configuration", "details", "each", "from", "have", "show",
+        "that", "their", "these", "this", "what", "which", "with", "your",
+    }
+    terms = {
+        token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", question)
+        if token.casefold() not in stopwords
+    }
     sections = [
-        "## Detailed resource evidence",
+        "## Question-focused resource evidence",
         "",
         (
             "The model provider did not return a complete interpretation after one correction, "
-            "so PodPilot rendered the material fields from the successful exact object reads."
+            "so PodPilot rendered only the exact-object fields most relevant to the question."
         ),
     ]
     citations: list[str] = []
@@ -920,19 +1095,22 @@ def _deterministic_resource_detail_answer(
             "|---|---|",
         ])
         fields: list[tuple[str, object]] = []
-        if data.get("apiVersion"):
-            fields.append(("apiVersion", data["apiVersion"]))
         for section_name in ("spec", "status"):
             section = data.get(section_name)
             if isinstance(section, dict):
-                fields.extend(
+                candidates = [
                     (f"{section_name}.{key}", value)
-                    for key, value in list(section.items())[:16]
-                )
+                    for key, value in section.items()
+                    if not terms or any(
+                        term in f"{key} {json.dumps(value, default=str)}".casefold()
+                        for term in terms
+                    )
+                ]
+                fields.extend(candidates[:6])
         if not fields and data.get("truncated_json"):
             fields.append(("object", data["truncated_json"]))
         if not fields:
-            fields.append(("object", "No material spec or status fields were returned."))
+            fields.append(("result", "No exact-object fields matched the question terms."))
         sections.extend(
             f"| `{field}` | `{bounded_value(value)}` |" for field, value in fields
         )
@@ -942,9 +1120,8 @@ def _deterministic_resource_detail_answer(
         "## Interpretation boundary",
         "",
         (
-            "Named references inside these fields describe the observed object relationships. "
-            "They show intended configuration, but do not by themselves prove that an external "
-            "destination received traffic or data."
+            "These are question-matched observed fields, not a complete object dump. Configuration "
+            "shows intended state and does not by itself prove external behavior."
         ),
     ])
     return {
@@ -2829,6 +3006,7 @@ def create_app(
                 resource_detail_answer = _deterministic_resource_detail_answer(
                     evidence=evidence,
                     activity=activity,
+                    question=message_text,
                 )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,

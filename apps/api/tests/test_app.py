@@ -1054,6 +1054,7 @@ def test_configuration_question_does_not_fall_back_to_names_only_inventory() -> 
 
 def test_exact_resource_fallback_renders_material_configuration_fields() -> None:
     rendered = _deterministic_resource_detail_answer(
+        question="Are the ClusterLogForwarders set up to forward logs to Kafka?",
         evidence=[{
             "id": "cluster-clf-detail",
             "cluster_id": "central",
@@ -1064,16 +1065,25 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
                 "kind": "ClusterLogForwarder",
                 "metadata": {"namespace": "openshift-logging", "name": "instance"},
                 "spec": {
+                    "inputs": [{
+                        "name": "audit", "type": "application",
+                        "application": {"includes": [
+                            {"namespace": "payments"}, {"namespace": "orders"},
+                        ]},
+                    }],
                     "outputs": [{
                         "name": "audit-kafka", "type": "kafka",
                         "kafka": {"url": "tcp://kafka.example.test:9092/audit"},
                     }],
                     "pipelines": [{
                         "name": "audit", "inputRefs": ["audit"],
-                        "outputRefs": ["audit-kafka"],
+                        "filterRefs": ["parse-json"], "outputRefs": ["audit-kafka"],
                     }],
                 },
-                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                "status": {"outputConditions": [{
+                    "type": "ValidOutput-audit-kafka", "status": "True",
+                    "message": "output audit-kafka is valid",
+                }]},
             },
         }],
         activity=[{
@@ -1084,11 +1094,17 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
 
     assert rendered is not None
     content = str(rendered["content"])
-    assert "Central DEV · ClusterLogForwarder `openshift-logging/instance`" in content
-    assert "spec.outputs" in content
+    assert "Yes. Every inspected cluster has a Kafka output" in content
+    assert "Central DEV · `openshift-logging/instance`" in content
+    assert "Kafka output `audit-kafka`" in content
     assert "audit-kafka" in content
     assert "kafka.example.test:9092/audit" in content
-    assert "spec.pipelines" in content
+    assert "Pipeline `audit`" in content
+    assert "inputs `audit` → outputs `audit-kafka`" in content
+    assert "2 namespace include rules (`payments`, `orders`)" in content
+    assert "filters `parse-json`" in content
+    assert "ValidOutput-audit-kafka=`True`" in content
+    assert "status.outputConditions" not in content
     assert rendered["citations"] == ["cluster-clf-detail"]
 
 
@@ -2297,7 +2313,8 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert page.status_code == 200
         assert "Investigation mode cannot change the cluster" in page.text
         assert '<section class="notice"' not in page.text
-        assert "Read-only cluster assistant</span><span" in page.text
+        assert "Read-only cluster assistant" not in page.text
+        assert 'class="panel-header ask-session-header"' in page.text
         assert 'class="boundary-pill"' in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         created = client.post(
@@ -3777,6 +3794,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template
+    assert '<h1>Ask PodPilot</h1>' not in template
+    assert "Read-only cluster assistant" not in template
+    assert 'class="panel-header ask-session-header"' in template
+    assert template.index('class="panel-header ask-session-header"') < template.index(
+        'class="chat-thread ask-thread"'
+    )
     assert "ask-sidebar" not in template
     assert "data-evidence-dialog" in template and "data-evidence-open" in template
     assert "tool-activity" not in template
