@@ -78,3 +78,11 @@ def test_adhoc_run_deadline_is_bounded() -> None:
         Settings(adhoc_run_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(adhoc_run_timeout_seconds=901)
+
+
+def test_model_timeout_ceiling_is_bounded() -> None:
+    assert Settings(model_timeout_max_seconds=240).model_timeout_max_seconds == 240
+    with pytest.raises(ValidationError):
+        Settings(model_timeout_max_seconds=29)
+    with pytest.raises(ValidationError):
+        Settings(model_timeout_max_seconds=301)

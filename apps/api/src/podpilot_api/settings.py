@@ -61,7 +61,8 @@ class Settings(BaseSettings):
     adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)
     adhoc_display_messages: int = Field(default=100, ge=20, le=500)
     adhoc_job_worker_enabled: bool = True
-    adhoc_run_timeout_seconds: float = Field(default=180.0, ge=1.0, le=900.0)
+    adhoc_run_timeout_seconds: float = Field(default=300.0, ge=1.0, le=900.0)
+    model_timeout_max_seconds: float = Field(default=240.0, ge=30.0, le=300.0)
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
     model_secret_name: str = "podpilot-model-credentials"

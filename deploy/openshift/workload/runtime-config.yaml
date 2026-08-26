@@ -17,7 +17,8 @@ data:
   adhoc_max_reads_per_turn: "12"
   adhoc_http_probe_timeout_seconds: "8"
   adhoc_http_probe_max_bytes: "16384"
-  adhoc_run_timeout_seconds: "180"
+  adhoc_run_timeout_seconds: "300"
+  model_timeout_max_seconds: "240"
   role_investigator_groups: '["podpilot-investigators"]'
   role_approver_groups: '["podpilot-approvers"]'
   role_breakglass_groups: '["podpilot-breakglass"]'

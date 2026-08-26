@@ -4639,7 +4639,7 @@ def test_model_registry_allows_plain_http_only_for_cluster_service_dns(
             "chat_model": "gpt-oss-120b-rhoai",
             "api_type": "chat-completions",
             "api_token": "test-api-token",
-            "timeout_seconds": "120",
+            "timeout_seconds": "240",
             "max_input_tokens": "60000",
             "max_output_tokens": "4096",
         }
@@ -4667,6 +4667,19 @@ def test_model_registry_allows_plain_http_only_for_cluster_service_dns(
         assert mismatched.status_code == 422
         assert "requires Plain HTTP" in mismatched.json()["detail"]
 
+        too_slow = client.post(
+            "/api/v1/model-profile",
+            headers=headers,
+            data={
+                **common,
+                "base_url": "http://model.spt-llm.svc:8000/v1",
+                "tls_mode": "plaintext",
+                "timeout_seconds": "241",
+            },
+        )
+        assert too_slow.status_code == 422
+        assert "outside the allowed range" in too_slow.json()["detail"]
+
         saved = client.post(
             "/api/v1/model-profile",
             headers=headers,
@@ -4685,6 +4698,7 @@ def test_model_registry_allows_plain_http_only_for_cluster_service_dns(
         assert profile is not None
         assert profile.base_url == "http://model.spt-llm.svc:8000/v1"
         assert profile.tls_mode == "plaintext"
+        assert profile.timeout_seconds == 240
         assert profile.custom_ca_pem is None
     engine.dispose()
 

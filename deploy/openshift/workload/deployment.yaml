@@ -87,6 +87,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_run_timeout_seconds
+            - name: PODPILOT_MODEL_TIMEOUT_MAX_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: model_timeout_max_seconds
             - name: PODPILOT_ROLE_INVESTIGATOR_GROUPS
               valueFrom:
                 configMapKeyRef:
@@ -180,7 +185,7 @@ spec:
             - --http-address=0.0.0.0:4180
             - --https-address=
             - --upstream=http://127.0.0.1:8080
-            - --upstream-timeout=60s
+            - --upstream-timeout=300s
             - --cookie-secret-file=/etc/oauth-cookie/session_secret
             - --cookie-name=_podpilot_oauth
             - --cookie-refresh=1h

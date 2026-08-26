@@ -3525,6 +3525,7 @@ def create_app(
                 "profiles": profile_views,
                 "token_configured": token_configured,
                 "credential_error": credential_error,
+                "model_timeout_max_seconds": app_settings.model_timeout_max_seconds,
                 "csrf_token": csrf_token,
             },
         )
@@ -3581,7 +3582,8 @@ def create_app(
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="Timeout and token budget must be numeric.") from exc
-        if (not 3 <= timeout_seconds <= 120 or not 1_024 <= max_input_tokens <= 2_000_000
+        if (not 3 <= timeout_seconds <= app_settings.model_timeout_max_seconds
+                or not 1_024 <= max_input_tokens <= 2_000_000
                 or not 128 <= max_output_tokens <= 131_072):
             raise HTTPException(status_code=422, detail="Timeout or token budget is outside the allowed range.")
         try:

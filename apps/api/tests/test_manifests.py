@@ -95,16 +95,31 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES"
     )
     assert metric_points["valueFrom"]["configMapKeyRef"]["key"] == "adhoc_metrics_max_points_per_series"
-    assert runtime["data"]["adhoc_run_timeout_seconds"] == "180"
+    assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_run_timeout_seconds",
     }
+    assert runtime["data"]["model_timeout_max_seconds"] == "240"
+    model_timeout = next(
+        item for item in env if item["name"] == "PODPILOT_MODEL_TIMEOUT_MAX_SECONDS"
+    )
+    assert model_timeout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "model_timeout_max_seconds",
+    }
     assert runtime["data"]["adhoc_max_rounds"] == "5"
     assert runtime["data"]["adhoc_max_reads_per_turn"] == "12"
     assert runtime["data"]["adhoc_http_probe_timeout_seconds"] == "8"
     assert runtime["data"]["adhoc_http_probe_max_bytes"] == "16384"
+    oauth_proxy = next(
+        container for container in deployment["spec"]["template"]["spec"]["containers"]
+        if container["name"] == "oauth-proxy"
+    )
+    assert "--upstream-timeout=300s" in oauth_proxy["args"]
+    route = yaml.safe_load((workload / "route.yaml").read_text())
+    assert route["metadata"]["annotations"]["haproxy.router.openshift.io/timeout"] == "300s"
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:
