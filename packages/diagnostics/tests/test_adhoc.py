@@ -283,11 +283,48 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         metric_scope="node", name="worker-2",
     )
     assert node.namespace is None
-    with pytest.raises(ValidationError, match="selected metric requires node scope"):
+    namespace = ReadIntent(
+        tool="query_metrics", metric="top_memory_consumers",
+        metric_scope="namespace", namespace="payments",
+    )
+    assert namespace.name is None
+    with pytest.raises(ValidationError, match="requires namespace, deployment, or node scope"):
         ReadIntent(
             tool="query_metrics", metric="top_memory_consumers",
-            metric_scope="namespace", namespace="payments",
+            metric_scope="pod", namespace="payments", name="api-1",
         )
+
+
+@pytest.mark.parametrize(
+    ("question", "metric", "namespace"),
+    [
+        (
+            "What workloads are using the most CPU in openshift-logging?",
+            "top_cpu_consumers",
+            "openshift-logging",
+        ),
+        (
+            "Show the top memory users within namespace payments",
+            "top_memory_consumers",
+            "payments",
+        ),
+    ],
+)
+def test_namespace_top_consumer_question_compiles_to_typed_metric_query(
+    question: str, metric: str, namespace: str,
+) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "compare"
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric=metric,
+        metric_scope="namespace",
+        namespace=namespace,
+    )]
 
 
 def test_route_url_question_compiles_to_exact_host_search() -> None:

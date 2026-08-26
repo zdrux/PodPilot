@@ -140,7 +140,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   authenticated Thanos range queries; the model receives bounded normalized samples and
   statistics but never PromQL control or the ServiceAccount token.
 - Deployment metric scope aggregates all owned ReplicaSet Pods, including rollout overlap.
-  Node scope supports total workload trends and top-10 CPU/memory container rankings with
+  Top-10 CPU/memory rankings support namespace, Deployment, and node scope; common namespace
+  ranking questions compile directly to typed metric reads before model planning. Node scope supports
+  total workload trends and rankings with
   namespace/Pod/container attribution. Standard monitoring still cannot identify arbitrary
   host processes; that would require separate process-exporter/eBPF or node diagnostics.
   Overall node-exporter CPU/memory utilization can be paired with those rankings to reveal

@@ -13,10 +13,13 @@ Decision: Add `query_metrics` to the bounded read broker. The model selects a re
 metric, typed scope, exact coordinates, period, and resolution; normal code compiles the
 PromQL and calls authenticated Thanos `/api/v1/query_range`. The initial catalog covers CPU
 usage/requests/limits/throttling, memory working set/requests/limits, network receive/transmit,
-container restarts, PVC utilization, Pod readiness, Deployment aggregation, and node-level
-top CPU/memory container consumers. Deployment scope joins Deployment-to-ReplicaSet-to-Pod
-ownership at query time. Node scope joins Pod metrics to `kube_pod_info` and ranks monitored
-namespace/Pod/container series; it does not claim visibility into arbitrary host processes.
+container restarts, PVC utilization, Pod readiness, Deployment aggregation, and namespace,
+Deployment, or node top CPU/memory container consumers. Deployment scope joins
+Deployment-to-ReplicaSet-to-Pod ownership at query time. Namespace ranking uses an exact
+namespace selector; node scope joins Pod metrics to `kube_pod_info`. Both retain monitored
+namespace/Pod/container series and do not claim visibility into arbitrary host processes.
+Common namespace top-consumer wording compiles directly to the typed query so a model schema
+failure cannot prevent this basic bounded investigation.
 Separate node-exporter templates report overall node CPU and memory utilization so PodPilot
 can disclose when ranked workload containers do not explain total node pressure.
 Default policy permits 30 days and

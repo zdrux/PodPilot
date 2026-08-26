@@ -698,6 +698,50 @@ class StorageClassExplorer:
         ),))
 
 
+class NamespaceMetricProvider(FakeModelProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        metric = next(item for item in context["observations"] if item["id"] == "metric-cpu-1")
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer="The collector Pod is the largest observed CPU consumer in the namespace.",
+            cited_evidence_ids=[metric["id"]],
+            limitations=[],
+        )
+
+
+class NamespaceMetricExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        return ReadResult((AdHocObservation(
+            id="metric-cpu-1",
+            tool="query_metrics",
+            summary="Ranked CPU consumers in namespace openshift-logging.",
+            source="thanos:query_range/top_cpu_consumers",
+            collected_at=datetime.now(timezone.utc),
+            data={
+                "metric": "top_cpu_consumers",
+                "scope": "namespace",
+                "namespace": "openshift-logging",
+                "unit": "cores",
+                "ranking": [{
+                    "labels": {
+                        "namespace": "openshift-logging",
+                        "pod": "collector-1",
+                        "container": "collector",
+                    },
+                    "current": 0.9,
+                    "average": 0.7,
+                    "maximum": 1.0,
+                }],
+                "complete": True,
+            },
+        ),))
+
+
 class ImpliedHealthProvider(FakeModelProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
@@ -1256,6 +1300,49 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"
     assert explorer.calls[0].limit == 500
+
+
+def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(
+    tmp_path: Path,
+) -> None:
+    provider = NamespaceMetricProvider()
+    explorer = NamespaceMetricExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "What workloads are using the most CPU in openshift-logging?"},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert "collector Pod is the largest observed CPU consumer" in rendered.text
+    assert provider.adhoc_plan_calls == []
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].tool == "query_metrics"
+    assert explorer.calls[0].metric == "top_cpu_consumers"
+    assert explorer.calls[0].metric_scope == "namespace"
+    assert explorer.calls[0].namespace == "openshift-logging"
 
 
 def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(

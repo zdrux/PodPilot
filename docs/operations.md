@@ -558,12 +558,12 @@ substituting another group with different semantics.
 Metric trend questions use authenticated Thanos `/api/v1/query_range` through the
 `podpilot-investigator` ServiceAccount. Supported metrics are CPU usage, requests, limits,
 and throttling; memory working set, requests, and limits; network receive/transmit rate;
-container restarts; PVC utilization percentage; Pod readiness; and top node CPU/memory
-consumers. Pod, namespace, and Deployment scopes require an exact namespace; Pod and
+container restarts; PVC utilization percentage; Pod readiness; and top namespace,
+Deployment, or node CPU/memory consumers. Pod, namespace, and Deployment scopes require an exact namespace; Pod and
 Deployment scopes also require a name. Node scope requires an exact node name and may
 optionally narrow to a namespace. PVC utilization requires an exact namespace/claim.
-Deployment totals follow ReplicaSet/Pod ownership, including multiple ReplicaSets during a
-rollout. Node rankings identify monitored namespace/Pod/container consumers. They cannot
+Deployment totals and rankings follow ReplicaSet/Pod ownership, including multiple ReplicaSets during a
+rollout. Namespace and node rankings identify monitored namespace/Pod/container consumers. They cannot
 identify arbitrary operating-system processes unless separate process-level telemetry is
 installed. Overall node CPU and memory utilization uses node-exporter metrics. For “what is
 using everything” questions, PodPilot collects both the overall node value and top workload

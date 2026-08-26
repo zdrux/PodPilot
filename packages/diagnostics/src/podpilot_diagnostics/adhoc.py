@@ -133,10 +133,14 @@ class ReadIntent(BaseModel):
                 raise ValueError("metric scope coordinates must be exact Kubernetes identifiers")
             if self.metric in {
                 "top_cpu_consumers", "top_memory_consumers",
-                "node_cpu_utilization", "node_memory_utilization",
             }:
+                if self.metric_scope not in {"namespace", "deployment", "node"}:
+                    raise ValueError(
+                        "the selected top-consumer metric requires namespace, deployment, or node scope"
+                    )
+            if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
                 if self.metric_scope != "node":
-                    raise ValueError("the selected metric requires node scope")
+                    raise ValueError("the selected node utilization metric requires node scope")
             if self.metric == "persistent_volume_usage":
                 if self.metric_scope != "persistent_volume_claim":
                     raise ValueError("persistent_volume_usage requires persistent_volume_claim scope")
@@ -416,6 +420,15 @@ _NAMESPACE_RESOURCE_QUERY = re.compile(
     re.IGNORECASE,
 )
 _URL_QUERY = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_NAMESPACE_TOP_CONSUMERS_QUERY = re.compile(
+    r"\b(?:most|top|highest|largest|biggest)\b.*?\b(?P<metric>cpu|memory)\b"
+    r".*?\b(?:in|from|within)\s+(?:the\s+)?(?:namespace\s+)?"
+    r"(?P<namespace>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b|"
+    r"\b(?P<metric_first>cpu|memory)\b.*?\b(?:most|top|highest|largest|biggest)\b"
+    r".*?\b(?:in|from|within)\s+(?:the\s+)?(?:namespace\s+)?"
+    r"(?P<namespace_second>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
+    re.IGNORECASE,
+)
 
 
 def plan_known_read(
@@ -428,6 +441,31 @@ def plan_known_read(
     """Compile unambiguous inventory and alert-scoped reads without model syntax."""
 
     lowered = question.lower()
+    top_consumers = _NAMESPACE_TOP_CONSUMERS_QUERY.search(question)
+    if top_consumers:
+        metric_name = top_consumers.group("metric") or top_consumers.group("metric_first")
+        namespace = (
+            top_consumers.group("namespace") or top_consumers.group("namespace_second")
+        )
+        metric = (
+            "top_cpu_consumers" if metric_name.lower() == "cpu"
+            else "top_memory_consumers"
+        )
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    f"Rank monitored {metric_name.upper()} consumers in namespace {namespace}."
+                ),
+                intents=[ReadIntent(
+                    tool="query_metrics",
+                    metric=metric,
+                    metric_scope="namespace",
+                    namespace=namespace,
+                )],
+            ),
+            True,
+        )
     url_match = _URL_QUERY.search(question)
     if url_match and "route" in lowered:
         try:

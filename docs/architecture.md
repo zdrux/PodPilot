@@ -152,7 +152,9 @@ plus minimum, maximum, average, current, trend, unit, and completeness. Requeste
 is increased automatically when necessary to keep the series within its point ceiling.
 Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
 Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
-and memory queries retain bounded namespace/Pod/container labels and per-series rankings.
+and memory queries support namespace, Deployment, and node scopes while retaining bounded
+namespace/Pod/container labels and per-series rankings. Common namespace top-consumer
+questions compile deterministically so a planner schema failure cannot prevent the typed query.
 These are container/workload observations, not host process telemetry.
 Overall node CPU/memory utilization comes from bounded node-exporter templates joined to
 `node_uname_info`. Resource-exhaustion planning should collect both overall utilization and

@@ -311,8 +311,9 @@ server code owns every PromQL metric name, label, function, and aggregation. The
 model never receive the projected token or a generic PromQL field. Range responses must be
 matrices and remain bounded by time, points, series, bytes, timeout, and redaction policy.
 Deployment and node membership are derived from server-owned kube-state-metrics joins, not
-model-provided selectors. Node consumer rankings expose only already-authorized monitoring
-labels and must be described as container/Pod attribution. No node shell, `/proc` access,
+model-provided selectors. Namespace, Deployment, and node consumer rankings expose only
+already-authorized monitoring labels and must be described as container/Pod attribution.
+No node shell, `/proc` access,
 host PID inspection, privileged DaemonSet, or process-level credential is introduced.
 For private, self-signed, or component-managed certificates, a model may explicitly
 select `tls_verify=false` on one HTTPS troubleshooting probe. SNI remains enabled, the

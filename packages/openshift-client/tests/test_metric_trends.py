@@ -188,6 +188,51 @@ def test_node_top_memory_uses_working_set_not_host_process_metrics() -> None:
     assert "process" not in query
 
 
+@pytest.mark.parametrize(
+    ("metric", "metric_name"),
+    [
+        ("top_cpu_consumers", "container_cpu_usage_seconds_total"),
+        ("top_memory_consumers", "container_memory_working_set_bytes"),
+    ],
+)
+def test_namespace_top_consumers_are_ranked_within_exact_namespace(
+    metric: str, metric_name: str,
+) -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric=metric,
+        metric_scope="namespace",
+        namespace="openshift-logging",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert query.startswith("topk(10")
+    assert metric_name in query
+    assert 'namespace="openshift-logging"' in query
+    assert "sum by (namespace, pod, container)" in query
+
+
+def test_deployment_top_consumers_use_owner_membership() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric="top_cpu_consumers",
+        metric_scope="deployment",
+        namespace="payments",
+        name="api",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert "topk(10" in query
+    assert "kube_pod_owner" in query
+    assert 'owner_kind="Deployment",owner_name="api"' in query
+
+
 @pytest.mark.parametrize(("metric", "needles"), [
     ("node_cpu_utilization", ("node_cpu_seconds_total", 'node_uname_info{nodename="worker-2"}')),
     ("node_memory_utilization", ("node_memory_MemAvailable_bytes", "node_memory_MemTotal_bytes")),

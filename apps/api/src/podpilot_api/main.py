@@ -759,6 +759,13 @@ async def _collect_bounded_cluster_reads(
                     "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
                     "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
                 ],
+                "metric_scope_rules": {
+                    "top_cpu_consumers": ["namespace", "deployment", "node"],
+                    "top_memory_consumers": ["namespace", "deployment", "node"],
+                    "node_cpu_utilization": ["node"],
+                    "node_memory_utilization": ["node"],
+                    "persistent_volume_usage": ["persistent_volume_claim"],
+                },
                 "cluster_wide_inventory_allowed": True,
                 "logs_and_configmaps_allowed": True,
                 "secrets_and_mutations_allowed": False,

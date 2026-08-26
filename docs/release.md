@@ -135,6 +135,7 @@ HTTP probe gates must verify that `tls_verify=false` remains HTTPS-only, keeps H
 SNI unchanged, records `verified: false`, and produces a visible server-identity limitation.
 Metric trend gates must verify authenticated `/query_range` requests, matrix validation,
 server-owned templates for every registered metric, exact scope validation, PromQL escaping,
+namespace/Deployment/node top-consumer rankings, deterministic namespace ranking plans,
 range/step/series/point/body bounds, label redaction, statistics and trend summaries, and a
 clear distinction between usage versus configured requests/limits. Tests must prove the model
 and browser cannot submit PromQL or receive the ServiceAccount token.
