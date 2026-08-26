@@ -28,7 +28,15 @@
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>
       <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
       <label>Bearer token<input name="token" type="password" autocomplete="new-password" placeholder="{% if selected %}Leave blank to keep the current token{% else %}sha256~…{% endif %}"><small>The token is sent once to the credential Secret and is never returned.</small></label>
-      <label>Tags as JSON<textarea name="tags_json" rows="5" placeholder='{"platform":"azure","environment":"prod"}'>{{ selected.tags | tojson if selected else '{}' }}</textarea><small>Exact key/value tags bind curated knowledge to matching clusters.</small></label>
+      <label>Tags
+        <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson if selected else '{}' }}'>
+          <div class="tag-chip-list" data-tag-list aria-live="polite"></div>
+          <input type="text" data-tag-input autocomplete="off" aria-describedby="cluster-tags-help cluster-tags-error" placeholder="Add a tag and press Enter">
+        </div>
+        <input type="hidden" name="tags_json" data-tags-value value='{{ selected.tags | tojson if selected else '{}' }}'>
+        <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
+        <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
+      </label>
       <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if not selected or selected.tls_verify %}checked{% endif %}><span>Verify the Kubernetes API TLS certificate</span></label>
       <input type="hidden" name="tls_verify" value="{{ 'true' if not selected or selected.tls_verify else 'false' }}">
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}

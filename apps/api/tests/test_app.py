@@ -25,6 +25,7 @@ from podpilot_api.main import (
     _deterministic_log_findings_section,
     _deterministic_route_tls_answer,
     _format_est_time,
+    _parse_tags,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -76,6 +77,17 @@ def test_est_time_formatter_uses_the_requested_fixed_utc_minus_four_display() ->
     assert _format_est_time("2026-08-26T05:41:22+00:00", "%Y-%m-%d %H:%M:%S") == (
         "2026-08-26 01:41:22 EST (-4)"
     )
+
+
+def test_cluster_tags_support_labels_and_key_value_pairs() -> None:
+    assert _parse_tags(
+        '{"environment":"prod","production":"","region":"toronto"}',
+        field_name="Cluster tags",
+    ) == {
+        "environment": "prod",
+        "production": "",
+        "region": "toronto",
+    }
 
 
 def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
@@ -2221,7 +2233,7 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
                 "name": "azure-prod-1",
                 "api_url": "https://api.azure-prod-1.example:6443",
                 "token": "sha256~top-secret-cluster-token",
-                "tags_json": '{"environment":"prod","platform":"azure"}',
+                "tags_json": '{"environment":"prod","platform":"azure","production":""}',
                 "tls_verify": "false",
             },
         )
@@ -2233,12 +2245,24 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
             headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
         )
         assert tested.json()["status"] == "ready"
+        edited = client.get(
+            f"/settings/clusters?edit={cluster_id}",
+            headers={"x-forwarded-user": "ada"},
+        )
+        assert "Tags as JSON" not in edited.text
+        assert "data-tag-editor" in edited.text
+        assert "single word" in edited.text
+        assert "production" in edited.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
         cluster = db_session.get(Cluster, cluster_id)
         assert cluster is not None
-        assert json.loads(cluster.tags_json) == {"environment": "prod", "platform": "azure"}
+        assert json.loads(cluster.tags_json) == {
+            "environment": "prod",
+            "platform": "azure",
+            "production": "",
+        }
         assert cluster.tls_verify is False
         assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
         assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"

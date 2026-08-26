@@ -96,6 +96,14 @@ a { color: inherit; }
 .settings-form label { display: grid; gap: 7px; color: #b7c3d4; font-size: 11px; font-weight: 700; }
 .settings-form input, .settings-form select, .settings-form textarea { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #0a111d; font: inherit; }
 .settings-form textarea { padding-block: 10px; resize: vertical; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; }
+.tag-editor { min-height: 46px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 6px 9px; border: 1px solid var(--border-bright); border-radius: 9px; background: #0a111d; cursor: text; }
+.tag-editor:focus-within { border-color: rgba(69, 212, 232, .65); box-shadow: 0 0 0 3px rgba(69, 212, 232, .08); }
+.tag-chip-list { display: contents; }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 5px 3px 9px; border: 1px solid rgba(69, 212, 232, .24); border-radius: 999px; color: #bcecf2; background: var(--cyan-soft); font-size: 11px; font-weight: 700; }
+.tag-chip button { width: 21px; height: 21px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #8eb8bf; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; }
+.tag-chip button:hover, .tag-chip button:focus-visible { color: #071018; background: var(--cyan); }
+.settings-form .tag-editor > input[data-tag-input] { flex: 1 1 190px; width: auto; min-width: 150px; min-height: 32px; padding: 0 3px; border: 0; outline: 0; background: transparent; box-shadow: none; }
+.field-error { color: #ffabab !important; }
 .settings-form select { appearance: auto; }
 .settings-form small, .muted-copy { color: var(--muted); font-size: 10px; font-weight: 400; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }

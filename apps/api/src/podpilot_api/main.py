@@ -199,7 +199,7 @@ def _parse_tags(value: str, *, field_name: str = "Tags") -> dict[str, str]:
         if not isinstance(raw_value, str):
             raise HTTPException(status_code=422, detail=f"{field_name} values must be strings.")
         key, tag_value = str(raw_key).strip(), str(raw_value).strip()
-        if not _TAG_KEY.fullmatch(key) or not _TAG_VALUE.fullmatch(tag_value):
+        if not _TAG_KEY.fullmatch(key) or (tag_value and not _TAG_VALUE.fullmatch(tag_value)):
             raise HTTPException(status_code=422, detail=f"{field_name} contains an invalid key or value.")
         tags[key] = tag_value
     return dict(sorted(tags.items()))

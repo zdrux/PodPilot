@@ -201,11 +201,107 @@
   if (clusterSettingsForm?.dataset.saveUrl) {
     const verifyCheckbox = clusterSettingsForm.querySelector('[name="tls_verify_checkbox"]');
     const verifyValue = clusterSettingsForm.querySelector('[name="tls_verify"]');
+    const tagEditor = clusterSettingsForm.querySelector("[data-tag-editor]");
+    const tagInput = clusterSettingsForm.querySelector("[data-tag-input]");
+    const tagList = clusterSettingsForm.querySelector("[data-tag-list]");
+    const tagValue = clusterSettingsForm.querySelector("[data-tags-value]");
+    const tagError = clusterSettingsForm.querySelector("[data-tag-error]");
+    const clusterTags = new Map();
+    const showTagError = (message = "") => {
+      if (!tagError) return;
+      tagError.textContent = message;
+      tagError.hidden = !message;
+    };
+    const syncClusterTags = () => {
+      if (tagValue) {
+        tagValue.value = JSON.stringify(Object.fromEntries(
+          Array.from(clusterTags.entries()).sort(([left], [right]) => left.localeCompare(right)),
+        ));
+      }
+      if (!tagList) return;
+      tagList.replaceChildren();
+      clusterTags.forEach((value, key) => {
+        const chip = document.createElement("span");
+        chip.className = "tag-chip";
+        const copy = document.createElement("span");
+        copy.textContent = value ? `${key}:${value}` : key;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `Remove tag ${copy.textContent}`);
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          clusterTags.delete(key);
+          syncClusterTags();
+          tagInput?.focus();
+        });
+        chip.append(copy, remove);
+        tagList.append(chip);
+      });
+    };
+    const addClusterTag = (rawTag) => {
+      const tag = rawTag.trim();
+      if (!tag) return true;
+      const separator = tag.indexOf(":");
+      const key = (separator === -1 ? tag : tag.slice(0, separator)).trim();
+      const value = (separator === -1 ? "" : tag.slice(separator + 1)).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(key)) {
+        showTagError("Tag names may use letters, numbers, dots, underscores, and hyphens.");
+        return false;
+      }
+      if (separator !== -1 && !value) {
+        showTagError("Add a value after the colon, or remove the colon for a single-word tag.");
+        return false;
+      }
+      if (value && !/^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,126}$/.test(value)) {
+        showTagError("Tag values may use letters, numbers, spaces, dots, underscores, slashes, colons, and hyphens.");
+        return false;
+      }
+      if (!clusterTags.has(key) && clusterTags.size >= 30) {
+        showTagError("A cluster can have at most 30 tags.");
+        return false;
+      }
+      clusterTags.set(key, value);
+      showTagError();
+      syncClusterTags();
+      return true;
+    };
+    const commitTagInput = () => {
+      if (!tagInput?.value.trim()) return true;
+      const rawTags = tagInput.value.split(",").map((item) => item.trim()).filter(Boolean);
+      for (const rawTag of rawTags) {
+        if (!addClusterTag(rawTag)) return false;
+      }
+      tagInput.value = "";
+      return true;
+    };
+    if (tagEditor) {
+      try {
+        Object.entries(JSON.parse(tagEditor.dataset.tags || "{}")).forEach(([key, value]) => {
+          clusterTags.set(String(key), String(value));
+        });
+      } catch (_error) { /* server data is validated before rendering */ }
+      syncClusterTags();
+      tagInput?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === ",") {
+          event.preventDefault();
+          commitTagInput();
+        } else if (event.key === "Backspace" && !tagInput.value && clusterTags.size) {
+          const lastKey = Array.from(clusterTags.keys()).at(-1);
+          clusterTags.delete(lastKey);
+          syncClusterTags();
+        }
+      });
+      tagInput?.addEventListener("blur", commitTagInput);
+    }
     verifyCheckbox?.addEventListener("change", () => {
       if (verifyValue) verifyValue.value = verifyCheckbox.checked ? "true" : "false";
     });
     clusterSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!commitTagInput()) {
+        tagInput?.focus();
+        return;
+      }
       const submit = clusterSettingsForm.querySelector('button[type="submit"]');
       const priorSubmitText = submit?.textContent || "Save cluster";
       if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }

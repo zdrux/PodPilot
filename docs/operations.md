@@ -250,6 +250,11 @@ and in future runtime-cluster operations without changing the projected service-
 identity or Kubernetes API connection. Historical evidence keeps the cluster name recorded
 when it was collected.
 
+Remote-cluster tags are entered as removable text chips rather than JSON. Use a single-word
+label such as `production` or an exact key/value tag such as `region:toronto`; press Enter or
+comma after each tag. A cluster supports up to 30 tags, and adding another value for an
+existing key replaces that key's earlier value.
+
 Ask PodPilot accepts free-form operational questions; it does not gate cluster reads on a
 catalog of recognized phrases or sentiment. The model may propose only the registered read
 tools, normal code validates every target, sensitive resources remain denied, and the

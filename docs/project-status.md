@@ -23,7 +23,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
-- Ask PodPilot cluster registry with Approver/Breakglass management, exact key/value
+- Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited
   per-cluster insecure exception. The runtime cluster is registered automatically and its
