@@ -555,6 +555,13 @@ qualified choices and the proposed `apiVersion`/`Kind`; ambiguity is a rejected 
 and does not use a cluster-read slot. A 403 for one API group does not justify silently
 substituting another group with different semantics.
 
+For a host-matched OpenShift Route, PodPilot recognizes `spec.to.name` and alternate backend
+names as observed Service targets for exact follow-up reads. TLS interpretation follows the
+Route contract: `edge` means HTTP from router to backend, `reencrypt` means a new backend TLS
+connection, `passthrough` means the backend terminates the original TLS stream, and no TLS
+termination means an unsecured HTTP Route. The answer labels this as configured behavior,
+not a live connectivity result or a complete explanation of an HTTP 500.
+
 Metric trend questions use authenticated Thanos `/api/v1/query_range` through the
 `podpilot-investigator` ServiceAccount. Supported metrics are CPU usage, requests, limits,
 and throttling; memory working set, requests, and limits; network receive/transmit rate;

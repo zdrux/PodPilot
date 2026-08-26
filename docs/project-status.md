@@ -132,6 +132,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   discovery preflight. OpenShift browser Route questions select
   `routes.route.openshift.io`, never an incidental Knative Route; rejected ambiguity does
   not consume the cluster-read budget.
+- Route backend Service references are grounded from projected `spec.to.name` data, allowing
+  exact Route-to-Service follow-up reads. Edge, reencrypt, passthrough, and unsecured Route
+  behavior has a deterministic cited answer when model follow-up planning is incomplete.
 - HTTPS troubleshooting probes keep verification enabled by default but may explicitly
   select `tls_verify=false` for private, self-signed, or component-managed certificates.
   SNI is preserved and both evidence and limitations state that server identity was not verified.

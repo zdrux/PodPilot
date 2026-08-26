@@ -131,6 +131,9 @@ Collision gates must install both `routes.route.openshift.io` and
 `routes.serving.knative.dev`, prove an OpenShift browser Route selects only the former,
 reject mismatched coordinates, and verify ambiguity preflight consumes no read budget.
 Tests must not treat a 403 from one same-plural API as authorization to try another.
+Route investigation gates must prove that projected backend Service references ground exact
+follow-up reads and that edge/reencrypt/passthrough answers cite the matched Route while
+distinguishing configured TLS behavior from live backend reachability.
 HTTP probe gates must verify that `tls_verify=false` remains HTTPS-only, keeps Host and
 SNI unchanged, records `verified: false`, and produces a visible server-identity limitation.
 Metric trend gates must verify authenticated `/query_range` requests, matrix validation,

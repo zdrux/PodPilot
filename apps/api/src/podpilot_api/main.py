@@ -413,6 +413,82 @@ def _deterministic_inventory_answer(
     }
 
 
+def _deterministic_route_tls_answer(
+    *,
+    question: str,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Explain configured Route TLS behavior from a host-matched OpenShift Route."""
+
+    if not (
+        re.search(r"\broute\b", question, re.IGNORECASE)
+        and re.search(r"\b(?:https?|tls|backend|endpoint)\b", question, re.IGNORECASE)
+    ):
+        return None
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "search_resources"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    for observation in reversed(evidence):
+        if str(observation.get("id")) not in current_ids:
+            continue
+        data = observation.get("data")
+        if not isinstance(data, dict) or data.get("kind") != "Route":
+            continue
+        items = data.get("items")
+        if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+            continue
+        route = items[0]
+        metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
+        spec = route.get("spec") if isinstance(route.get("spec"), dict) else {}
+        tls = spec.get("tls") if isinstance(spec.get("tls"), dict) else {}
+        termination = str(tls.get("termination") or "").lower()
+        destination = spec.get("to") if isinstance(spec.get("to"), dict) else {}
+        service = str(destination.get("name") or "")
+        namespace = str(metadata.get("namespace") or data.get("scope") or "")
+        target = f"`{namespace}/{service}`" if namespace and service else "the backend Service"
+        port = spec.get("port") if isinstance(spec.get("port"), dict) else {}
+        target_port = port.get("targetPort")
+        port_text = f" on target port `{target_port}`" if target_port is not None else ""
+        behavior = {
+            "edge": (
+                f"The router terminates client TLS and forwards unencrypted HTTP to {target}{port_text}. "
+                "An HTTP-speaking backend is therefore the expected configuration."
+            ),
+            "reencrypt": (
+                f"The router terminates client TLS, then creates a new TLS connection to {target}{port_text}. "
+                "The backend must speak HTTPS/TLS."
+            ),
+            "passthrough": (
+                f"The router does not terminate TLS; it passes the client TLS stream through to "
+                f"{target}{port_text}. The backend must terminate HTTPS/TLS itself."
+            ),
+            "": (
+                f"The Route has no TLS termination configured and routes unsecured HTTP to "
+                f"{target}{port_text}."
+            ),
+        }.get(termination)
+        if behavior is None:
+            continue
+        configured = f"`{termination}`" if termination else "none (unsecured)"
+        content = (
+            "## Route TLS behavior\n\n"
+            f"**Configured termination:** {configured}\n\n"
+            f"{behavior}\n\n"
+            "This validates the Route configuration, not live backend reachability. An HTTP 500 can "
+            "still originate from the router, backend application, or an upstream dependency."
+        )
+        return {
+            "answer_mode": "evidence_based",
+            "content": content,
+            "citations": [str(observation["id"])],
+        }
+    return None
+
+
 def _compact_adhoc_context(
     db_session: Session,
     *,
@@ -563,6 +639,22 @@ def _bind_plan_log_intents(
                 item_metadata = item.get("metadata") if isinstance(item, dict) else None
                 if isinstance(item_metadata, dict) and item_metadata.get("name"):
                     observed_names.add(str(item_metadata["name"]).lower())
+                item_kind = (
+                    str(item.get("kind") or data.get("kind") or "")
+                    if isinstance(item, dict) else ""
+                )
+                item_spec = item.get("spec") if isinstance(item, dict) else None
+                if item_kind == "Route" and isinstance(item_spec, dict):
+                    destination = item_spec.get("to")
+                    if isinstance(destination, dict) and destination.get("name"):
+                        observed_names.add(str(destination["name"]).lower())
+                    alternate_backends = item_spec.get("alternateBackends")
+                    if isinstance(alternate_backends, list):
+                        observed_names.update(
+                            str(backend["name"]).lower()
+                            for backend in alternate_backends
+                            if isinstance(backend, dict) and backend.get("name")
+                        )
     for intent in plan.intents:
         normalized = normalize_read_intent(intent)
         resolved, error = _bind_pod_log_intent(normalized, candidates)
@@ -1357,8 +1449,20 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                 )
-                if inventory_answer is not None:
-                    validated.update(inventory_answer)
+                route_tls_answer = _deterministic_route_tls_answer(
+                    question=message_text,
+                    evidence=evidence,
+                    activity=activity,
+                )
+                route_fallback_needed = (
+                    validated.get("answer_mode") != "evidence_based"
+                    or not validated.get("citations")
+                )
+                deterministic_answer = (
+                    route_tls_answer if route_fallback_needed else None
+                ) or inventory_answer
+                if deterministic_answer is not None:
+                    validated.update(deterministic_answer)
                     validated["limitations"] = list(dict.fromkeys(limitations))[:8]
                 else:
                     validated["limitations"] = list(dict.fromkeys(

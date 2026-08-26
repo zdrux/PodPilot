@@ -315,6 +315,9 @@ model-provided selectors. Namespace, Deployment, and node consumer rankings expo
 already-authorized monitoring labels and must be described as container/Pod attribution.
 No node shell, `/proc` access,
 host PID inspection, privileged DaemonSet, or process-level credential is introduced.
+Projected Route destination names are treated only as observed Kubernetes object references
+eligible for the existing exact read broker. They do not authorize mutation, arbitrary name
+construction, credential access, or traffic to a new destination.
 For private, self-signed, or component-managed certificates, a model may explicitly
 select `tls_verify=false` on one HTTPS troubleshooting probe. SNI remains enabled, the
 bypass is persisted and displayed as a limitation, and the observation establishes only

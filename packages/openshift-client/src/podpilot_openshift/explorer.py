@@ -205,6 +205,7 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     elif kind == "Route":
         projected["spec"] = {
             "host": spec.get("host"), "to": spec.get("to"), "port": spec.get("port"),
+            "alternateBackends": spec.get("alternateBackends") or [],
             "tls": {"termination": (spec.get("tls") or {}).get("termination")},
         }
         projected["status"] = {"ingress": status.get("ingress") or []}

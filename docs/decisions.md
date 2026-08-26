@@ -57,6 +57,11 @@ When multiple API groups expose the same plural, supplied `apiVersion`/`Kind` co
 disambiguate and must agree with discovery. OpenShift ingress/browser Route questions use
 `routes.route.openshift.io`; Knative Routes are selected only for explicit Knative/Serving
 questions. Discovery ambiguity or coordinate mismatch is rejected before consuming a read.
+Projected OpenShift Route destinations (`spec.to.name` and alternate backends) are accepted
+as observed Service names by the grounding guard. Route TLS questions receive a deterministic
+cited interpretation of edge, reencrypt, passthrough, or unsecured behavior so a later planner
+failure cannot discard directly relevant Route evidence. The interpretation states
+configuration, not live reachability or the origin of an HTTP 500.
 
 ## 2026-08-25 - Broader agentic reads and SNI-aware HTTP probes
 

@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,6 +17,7 @@ from podpilot_api.main import (
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
     _deterministic_inventory_answer,
+    _deterministic_route_tls_answer,
     _validated_adhoc_answer,
     create_app,
 )
@@ -228,6 +230,105 @@ def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
     )
     assert errors == []
     assert grounded.intents[0].name == "opentelemetry-collector-operated"
+
+
+def test_route_backend_service_reference_grounds_exact_followup_read() -> None:
+    followup = ReadPlan(
+        scope_summary="Inspect the backend Service selected by the Route.",
+        intents=[ReadIntent(
+            tool="get_resource", resource="services", api_version="v1", kind="Service",
+            namespace="maas", name="model-server",
+        )],
+    )
+    route_evidence = [{
+        "id": "cluster-route-1",
+        "tool": "search_resources",
+        "data": {
+            "kind": "Route",
+            "items": [{
+                "kind": "Route",
+                "metadata": {"name": "maas", "namespace": "maas"},
+                "spec": {
+                    "to": {"kind": "Service", "name": "model-server"},
+                    "alternateBackends": [{
+                        "kind": "Service", "name": "fallback-server", "weight": 10,
+                    }],
+                },
+            }],
+        },
+    }]
+
+    grounded, errors, _ = _bind_plan_log_intents(
+        followup,
+        [],
+        question="Why does this Route return an internal server error?",
+        evidence=route_evidence,
+    )
+
+    assert errors == []
+    assert grounded.intents == followup.intents
+
+    alternate = followup.model_copy(update={
+        "intents": [followup.intents[0].model_copy(update={"name": "fallback-server"})],
+    })
+    grounded, errors, _ = _bind_plan_log_intents(
+        alternate,
+        [],
+        question="Why does this Route return an internal server error?",
+        evidence=route_evidence,
+    )
+    assert errors == []
+    assert grounded.intents == alternate.intents
+
+
+@pytest.mark.parametrize(
+    ("termination", "expected"),
+    [
+        ("edge", "forwards unencrypted HTTP"),
+        ("reencrypt", "creates a new TLS connection"),
+        ("passthrough", "backend must terminate HTTPS/TLS"),
+        (None, "routes unsecured HTTP"),
+    ],
+)
+def test_route_tls_behavior_has_evidence_backed_deterministic_answer(
+    termination: str | None, expected: str,
+) -> None:
+    evidence = [{
+        "id": "cluster-route-1",
+        "tool": "search_resources",
+        "data": {
+            "kind": "Route",
+            "scope": "maas",
+            "items": [{
+                "kind": "Route",
+                "metadata": {"name": "maas", "namespace": "maas"},
+                "spec": {
+                    "host": "maas.apps.example.test",
+                    "to": {"kind": "Service", "name": "model-server"},
+                    "port": {"targetPort": "http"},
+                    "tls": {"termination": termination},
+                },
+            }],
+        },
+    }]
+    activity = [{
+        "tool": "search_resources",
+        "status": "succeeded",
+        "evidence_ids": ["cluster-route-1"],
+    }]
+
+    answer = _deterministic_route_tls_answer(
+        question=(
+            "This Route returns an error over HTTPS; does its backend endpoint use HTTP?"
+        ),
+        evidence=evidence,
+        activity=activity,
+    )
+
+    assert answer is not None
+    assert expected in answer["content"]
+    assert "`maas/model-server`" in answer["content"]
+    assert answer["citations"] == ["cluster-route-1"]
 
 
 def test_direct_model_pod_log_target_requires_collected_candidate() -> None:
@@ -695,6 +796,77 @@ class StorageClassExplorer:
             source="kubernetes:storage.k8s.io/v1:StorageClass:cluster/managed-premium",
             collected_at=datetime.now(timezone.utc),
             data={"metadata": {"name": "managed-premium"}, "provisioner": "disk.csi.azure.com"},
+        ),))
+
+
+class RouteBackendProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if not any(item.get("tool") == "get_resource" for item in context["completed_reads"]):
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Inspect the Service referenced by the matched Route.",
+                intents=[ReadIntent(
+                    tool="get_resource", resource="services", api_version="v1", kind="Service",
+                    namespace="maas", name="model-server",
+                )],
+            )
+        return ReadPlan(
+            goal_type="diagnose",
+            decision="answer_from_evidence",
+            scope_summary="The Route and Service configuration answer the protocol question.",
+            supporting_evidence_ids=["cluster-route-1", "cluster-service-1"],
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="insufficient_evidence",
+            answer="The model did not produce a usable evidence-backed interpretation.",
+            cited_evidence_ids=[],
+            limitations=[],
+        )
+
+
+class RouteBackendExplorer:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def execute(self, intent):
+        self.calls.append(intent)
+        if intent.tool == "search_resources":
+            return ReadResult((AdHocObservation(
+                id="cluster-route-1",
+                tool="search_resources",
+                summary="Found the matching OpenShift Route.",
+                source="kubernetes:route.openshift.io/v1:Route:maas/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Route",
+                    "scope": "cluster",
+                    "items": [{
+                        "kind": "Route",
+                        "metadata": {"name": "maas", "namespace": "maas"},
+                        "spec": {
+                            "host": "maas.apps.example.test",
+                            "to": {"kind": "Service", "name": "model-server"},
+                            "port": {"targetPort": "http"},
+                            "tls": {"termination": "edge"},
+                        },
+                    }],
+                },
+            ),))
+        assert intent.tool == "get_resource"
+        return ReadResult((AdHocObservation(
+            id="cluster-service-1",
+            tool="get_resource",
+            summary="Read the Route backend Service.",
+            source="kubernetes:v1:Service:maas/model-server",
+            collected_at=datetime.now(timezone.utc),
+            data={
+                "metadata": {"name": "model-server", "namespace": "maas"},
+                "spec": {"ports": [{"name": "http", "port": 8080, "targetPort": 8080}]},
+            },
         ),))
 
 
@@ -1300,6 +1472,53 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"
     assert explorer.calls[0].limit == 500
+
+
+def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
+    tmp_path: Path,
+) -> None:
+    provider = RouteBackendProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    question = (
+        "This Route reports an Internal Server Error over HTTPS, but is the backend HTTP? "
+        "https://maas.apps.example.test/v1/models"
+    )
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": question},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "Configured termination" in rendered.text
+    assert "forwards unencrypted HTTP" in rendered.text
+    assert "maas/model-server" in rendered.text
+    assert "model planner did not select a safe evidence read" not in rendered.text
+    assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
+    assert explorer.calls[1].name == "model-server"
 
 
 def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(

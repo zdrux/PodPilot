@@ -93,6 +93,10 @@ class FakeRouteSearchResource:
             "spec": {
                 "host": "maas.apps.example.test" if index == 275 else f"app-{index}.example.test",
                 "to": {"kind": "Service", "name": f"service-{index}"},
+                "alternateBackends": (
+                    [{"kind": "Service", "name": "fallback-service", "weight": 10}]
+                    if index == 275 else []
+                ),
                 "tls": {"termination": "passthrough" if index == 275 else "edge"},
             },
             "status": {},
@@ -286,6 +290,9 @@ def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
     assert observation.data["items"][0]["metadata"]["name"] == "route-275"
     assert observation.data["items"][0]["metadata"]["namespace"] == "tenant"
     assert observation.data["items"][0]["spec"]["tls"]["termination"] == "passthrough"
+    assert observation.data["items"][0]["spec"]["alternateBackends"] == [{
+        "kind": "Service", "name": "fallback-service", "weight": 10,
+    }]
     assert observation.data["searchComplete"] is True
 
 

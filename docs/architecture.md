@@ -221,6 +221,12 @@ generally, discovery resolves an unqualified plural with supplied `apiVersion` a
 only when both agree with one advertised resource; mismatches fail closed. Preflight performs
 this resolution before the read budget advances. Same-plural APIs such as OpenShift and
 Knative Routes are not treated as interchangeable fallbacks after ambiguity or RBAC denial.
+Projected Route evidence treats `spec.to.name` and `spec.alternateBackends[].name` as
+observed Service references, so exact follow-up Service reads are not rejected as model
+inventions. Route protocol questions also have a deterministic cited interpretation: `edge`
+forwards HTTP after router TLS termination, `reencrypt` establishes new backend TLS, and
+`passthrough` leaves TLS termination to the backend. This states configuration, not live
+backend reachability or the origin of an HTTP 500.
 
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque
