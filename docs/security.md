@@ -346,7 +346,7 @@ only a policy-filtered catalog of resource names, Kinds, scope, and apiVersions;
 it does not receive discovery credentials or callable clients. Secret, OAuth
 token, identity, user/group, access-review, and every subresource entry are
 removed before planning. The broker independently resolves the selected plural
-resource, confirms the requested `get` or `list` verb is advertised, rejects
+resource, confirms the requested `get`, `list`, or `watch` verb is advertised, rejects
 ambiguous names unless group-qualified, and still relies on the investigator
 ServiceAccount's RBAC for the final authorization decision. Recursive redaction
 and compact payload ceilings apply to discovered built-ins and CRDs alike.
@@ -398,5 +398,12 @@ reachability/protocol behavior—not authenticated server identity. This excepti
 applies to Kubernetes API, model-provider, credential-bearing, or default application TLS.
 
 Bounded resource search does not grant a query language or raw API access. Normal code
-allows four projected field paths, scans at most the configured ceiling, returns a small
+allows only validated dot-separated object field paths, scans at most the configured ceiling, returns a small
 match set, applies the existing sensitive-kind deny policy, and redacts the evidence.
+
+Concurrent Ask execution remains bounded inside one application Pod. The default pool has three
+workers and allows at most two running jobs per user, preventing one operator from occupying the
+entire pool when another user's work is queued. Conversation ownership, status/SSE authorization,
+per-user submission rate limits, ContextVar-scoped raw-response capture, read budgets, provider
+timeouts, and ServiceAccount RBAC apply independently to every run. Raising concurrency increases
+model cost and Kubernetes/provider request pressure and must not be treated as expanded authority.

@@ -298,9 +298,12 @@ retains its existing bounded window, and a per-user one-minute request limit
 controls cost and accidental rapid submission without ending a conversation.
 
 Ask turns are persisted as `AdHocRun` jobs before execution. The single-replica
-SQLite deployment runs one in-process worker, permits one queued or running turn
-per conversation, and atomically stores the assistant reply with the terminal job
-state. A restart changes interrupted `running` jobs back to `queued`, so the worker
+SQLite deployment runs a bounded in-process worker pool (three workers by default),
+permits one queued or running turn per conversation, limits each user to two concurrent
+runs by default, and atomically stores the assistant reply with the terminal job state.
+SQLite uses WAL mode, normal synchronization, and a 30-second busy timeout so short progress
+and completion transactions from concurrent runs can coexist. A restart changes interrupted
+`running` jobs back to `queued`, so the workers
 can recover them from the PVC. The browser receives an immediate redirect, renders
 the submitted question optimistically, and follows owner-authorized Server-Sent
 Events for durable `starting`, `discovering`, `planning`, `hypothesis`, `next_check`,

@@ -253,7 +253,8 @@ the normal read broker and RBAC boundary.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal
-state. Tests must cover restart recovery, one active turn per conversation,
+state. Tests must cover restart recovery, one active turn per conversation, simultaneous runs
+for different users, the configured per-user running ceiling, SQLite WAL/busy-timeout settings,
 active-conversation deletion refusal, owner-only status/SSE access, SSE completion,
 and optimistic composer clearing. Progress text must remain server-authored and
 must not include prompts, evidence bodies, credentials, or chain-of-thought.

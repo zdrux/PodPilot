@@ -16,6 +16,8 @@ data:
   adhoc_max_rounds: "10"
   adhoc_max_reads_per_turn: "25"
   adhoc_followup_reserve_units: "5"
+  adhoc_worker_concurrency: "3"
+  adhoc_max_concurrent_runs_per_user: "2"
   adhoc_http_probe_timeout_seconds: "8"
   adhoc_http_probe_max_bytes: "16384"
   adhoc_run_timeout_seconds: "300"

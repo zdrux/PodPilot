@@ -119,12 +119,33 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "adhoc_followup_reserve_units",
     }
+    assert runtime["data"]["adhoc_worker_concurrency"] == "3"
+    assert runtime["data"]["adhoc_max_concurrent_runs_per_user"] == "2"
+    worker_concurrency = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_WORKER_CONCURRENCY"
+    )
+    per_user_concurrency = next(
+        item for item in env
+        if item["name"] == "PODPILOT_ADHOC_MAX_CONCURRENT_RUNS_PER_USER"
+    )
+    assert worker_concurrency["valueFrom"]["configMapKeyRef"]["key"] == (
+        "adhoc_worker_concurrency"
+    )
+    assert per_user_concurrency["valueFrom"]["configMapKeyRef"]["key"] == (
+        "adhoc_max_concurrent_runs_per_user"
+    )
     assert runtime["data"]["adhoc_http_probe_timeout_seconds"] == "8"
     assert runtime["data"]["adhoc_http_probe_max_bytes"] == "16384"
     oauth_proxy = next(
         container for container in deployment["spec"]["template"]["spec"]["containers"]
         if container["name"] == "oauth-proxy"
     )
+    api = next(
+        container for container in deployment["spec"]["template"]["spec"]["containers"]
+        if container["name"] == "api"
+    )
+    assert api["resources"]["requests"] == {"cpu": "250m", "memory": "384Mi"}
+    assert api["resources"]["limits"] == {"cpu": "1500m", "memory": "1Gi"}
     assert "--upstream-timeout=300s" in oauth_proxy["args"]
     route = yaml.safe_load((workload / "route.yaml").read_text())
     assert route["metadata"]["annotations"]["haproxy.router.openshift.io/timeout"] == "300s"

@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
 
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
@@ -2979,7 +2979,7 @@ def create_app(
                 if migrated_targets != legacy_targets:
                     document.target_cluster_ids_json = json.dumps(migrated_targets, sort_keys=True)
             db_session.commit()
-        worker_task = None
+        worker_tasks: list[asyncio.Task[None]] = []
         if app_settings.adhoc_job_worker_enabled:
             with Session(application.state.engine) as db_session:
                 db_session.execute(
@@ -2989,16 +2989,25 @@ def create_app(
                 )
                 db_session.commit()
             application.state.adhoc_wake = asyncio.Event()
-            worker_task = asyncio.create_task(_adhoc_worker(application))
+            worker_tasks = [
+                asyncio.create_task(
+                    _adhoc_worker(application, worker_number),
+                    name=f"podpilot-adhoc-worker-{worker_number}",
+                )
+                for worker_number in range(1, app_settings.adhoc_worker_concurrency + 1)
+            ]
+            LOGGER.info(
+                "podpilot.adhoc.worker_pool_started workers=%s per_user_limit=%s",
+                app_settings.adhoc_worker_concurrency,
+                app_settings.adhoc_max_concurrent_runs_per_user,
+            )
         try:
             yield
         finally:
-            if worker_task is not None:
+            for worker_task in worker_tasks:
                 worker_task.cancel()
-                try:
-                    await worker_task
-                except asyncio.CancelledError:
-                    pass
+            if worker_tasks:
+                await asyncio.gather(*worker_tasks, return_exceptions=True)
             application.state.engine.dispose()
 
     app = FastAPI(
@@ -3694,10 +3703,24 @@ def create_app(
 
     def _claim_adhoc_run(engine, run_id: str | None = None) -> str | None:
         with Session(engine) as db_session:
-            query = select(AdHocRun.id).where(AdHocRun.status == "queued")
+            queued_run = aliased(AdHocRun)
+            running_run = aliased(AdHocRun)
+            running_for_user = (
+                select(func.count(running_run.id))
+                .where(
+                    running_run.status == "running",
+                    running_run.created_by == queued_run.created_by,
+                )
+                .correlate(queued_run)
+                .scalar_subquery()
+            )
+            query = select(queued_run.id).where(
+                queued_run.status == "queued",
+                running_for_user < app_settings.adhoc_max_concurrent_runs_per_user,
+            )
             if run_id:
-                query = query.where(AdHocRun.id == run_id)
-            selected = db_session.scalar(query.order_by(AdHocRun.created_at).limit(1))
+                query = query.where(queued_run.id == run_id)
+            selected = db_session.scalar(query.order_by(queued_run.created_at).limit(1))
             if selected is None:
                 return None
             claimed = db_session.execute(
@@ -3780,12 +3803,17 @@ def create_app(
                 ),
             )
 
-    async def _adhoc_worker(application: FastAPI) -> None:
+    async def _adhoc_worker(application: FastAPI, worker_number: int) -> None:
         wake = application.state.adhoc_wake
         while True:
             wake.clear()
             run_id = _claim_adhoc_run(application.state.engine)
             if run_id is not None:
+                LOGGER.info(
+                    "podpilot.adhoc.worker_claimed worker=%s run_id=%s",
+                    worker_number,
+                    run_id,
+                )
                 await _run_persisted_adhoc_job(application, run_id)
                 continue
             try:
@@ -3823,7 +3851,10 @@ def create_app(
         events = [{
             "seq": 0,
             "phase": "queued",
-            "message": "Question queued for investigation.",
+            "message": (
+                "Question queued. It will start automatically when the investigation "
+                "worker is available."
+            ),
             "at": now.isoformat(),
         }]
         db_session.add(AdHocMessage(
@@ -3956,6 +3987,7 @@ def create_app(
                     "id": active_run_row.id,
                     "status": active_run_row.status,
                     "phase": active_run_row.phase,
+                    "include_raw_response": active_run_row.include_raw_response,
                     "events": json.loads(active_run_row.progress_json),
                 } if active_run_row else None),
                 "clusters": [_cluster_summary(item) for item in available_clusters],

@@ -77,6 +77,16 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_followup_reserve_units
+            - name: PODPILOT_ADHOC_WORKER_CONCURRENCY
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_worker_concurrency
+            - name: PODPILOT_ADHOC_MAX_CONCURRENT_RUNS_PER_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_max_concurrent_runs_per_user
             - name: PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS
               valueFrom:
                 configMapKeyRef:
@@ -170,11 +180,11 @@ spec:
             failureThreshold: 3
           resources:
             requests:
-              cpu: 100m
-              memory: 192Mi
+              cpu: 250m
+              memory: 384Mi
             limits:
-              cpu: 750m
-              memory: 768Mi
+              cpu: 1500m
+              memory: 1Gi
           securityContext: *restricted-context
           volumeMounts:
             - name: data

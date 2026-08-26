@@ -179,7 +179,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   response rather than conversation metadata. Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
-  bounded to twelve reads, and each user is throttled to ten questions per minute.
+  bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline.
@@ -188,8 +188,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   including the initial and PodPilot correction attempts. The owner can expand them beneath
   the final reply as escaped, visibly untrusted debug output; they do not bypass validation,
   citation enforcement, fallback behavior, or action policy.
-- Ask questions are persisted as recoverable jobs and processed by the
-  single-replica worker. Submission clears the composer immediately and adds an
+- Ask questions are persisted as recoverable jobs and processed by a configurable bounded pool
+  inside the single SQLite replica (three workers and two concurrent runs per user by default).
+  SQLite uses WAL plus a 30-second writer wait, and excess work remains durably queued. Submission
+  clears the composer immediately and adds an
   optimistic user turn plus pulsating assistant placeholder. Owner-only SSE
   updates report real discovery, planning, collection, and answer phases; reloads
   recover progress from SQLite, and interrupted jobs are requeued on startup.
@@ -264,7 +266,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Deployed application version: `0.11.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 278 tests passing with 84% aggregate coverage.
+- Local automated suite: 280 tests passing with 84% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

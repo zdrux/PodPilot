@@ -736,3 +736,24 @@ and unavailable RBAC remain outside the broker. Longer runs provide useful progr
 cluttering completed chat history. This supersedes the five-round/twelve-read ceiling in the
 2026-08-25 broader-agentic-reads decision and the shared twelve-read ceiling in the 2026-08-26
 multi-cluster decision.
+
+## 2026-08-26 - A bounded worker pool enables concurrent users on SQLite
+
+Context: Durable Ask jobs were processed by one coroutine, so different users could submit work
+but their investigations ran serially. The current PoC must remain a single application replica
+with SQLite while allowing a small operator team to investigate at the same time.
+
+Decision: Run three configurable in-process Ask workers and allow at most two running jobs per
+user by default. Each worker claims the oldest eligible queued run with the existing conditional
+status update; one active turn per conversation remains mandatory. Configure SQLite connections
+for WAL mode, `synchronous=NORMAL`, and a 30-second busy timeout, and keep transactions short.
+Retain one API Pod and the block-backed PVC. Excess or per-user-saturated work stays queued and
+starts automatically. Increase the API container resource envelope for concurrent inference and
+evidence processing.
+
+Consequences: Several users can run independent read-only investigations concurrently without a
+new service, while one user cannot consume every default worker. Model-provider and Kubernetes API
+load can now overlap and must be capacity-tested. This is not horizontal scaling: multiple API
+replicas, robust crash leases, or sustained write concurrency still require PostgreSQL and an
+atomic cross-process claim design. This supersedes the one-worker limit in the 2026-08-25 durable
+Ask-job decision while preserving its persistence, ownership, and recovery rules.

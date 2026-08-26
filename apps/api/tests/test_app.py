@@ -1519,6 +1519,30 @@ class BlockingAdHocProvider(FakeModelProvider):
         return super().answer_ad_hoc(profile, api_key, context)
 
 
+class ConcurrentBlockingAdHocProvider(FakeModelProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_answers = threading.Event()
+        self.two_answers_started = threading.Event()
+        self._lock = threading.Lock()
+        self.active_answers = 0
+        self.max_active_answers = 0
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        with self._lock:
+            self.active_answers += 1
+            self.max_active_answers = max(self.max_active_answers, self.active_answers)
+            if self.active_answers >= 2:
+                self.two_answers_started.set()
+        try:
+            if not self.release_answers.wait(timeout=5):
+                raise ModelProviderError("Synthetic concurrent answers timed out.")
+            return super().answer_ad_hoc(profile, api_key, context)
+        finally:
+            with self._lock:
+                self.active_answers -= 1
+
+
 class FakeReadExplorer:
     def __init__(self):
         self.calls = []
@@ -3717,7 +3741,10 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
         read_explorer=FakeReadExplorer(),
-        settings_overrides={"adhoc_job_worker_enabled": True},
+        settings_overrides={
+            "adhoc_job_worker_enabled": True,
+            "adhoc_worker_concurrency": 1,
+        },
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -3735,7 +3762,10 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Why is pod api-7d9 pending in payments?"},
+            data={
+                "message": "Why is pod api-7d9 pending in payments?",
+                "include_raw_response": "on",
+            },
             follow_redirects=False,
         )
         assert created.status_code == 303
@@ -3745,6 +3775,9 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         pending_page = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "Live investigation" in pending_page.text
         assert "thinking-spinner" in pending_page.text
+        assert re.search(
+            r'name="include_raw_response"\s+checked\s+disabled', pending_page.text
+        )
         run_match = re.search(r'data-adhoc-run-id="([^"]+)"', pending_page.text)
         assert run_match is not None
         run_id = run_match.group(1)
@@ -3766,6 +3799,19 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
             f"/api/v1/adhoc-runs/{run_id}/events", headers={"x-forwarded-user": "ada"}
         )
         assert hidden_events.status_code == 404
+        second = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Investigate a separate session while the worker is busy."},
+            follow_redirects=False,
+        )
+        assert second.status_code == 303
+        queued_page = client.get(second.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Waiting to investigate" in queued_page.text
+        assert (
+            "Question queued. It will start automatically when the investigation worker is available."
+            in queued_page.text
+        )
         overlapping = client.post(
             f"/api/v1/adhoc-conversations/{conversation_id}/messages",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
@@ -3809,6 +3855,102 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         assert run is not None and run.status == "succeeded"
         assert run.assistant_message_id is not None
     engine.dispose()
+
+
+def test_ask_worker_pool_runs_different_users_concurrently(tmp_path: Path) -> None:
+    provider = ConcurrentBlockingAdHocProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+        settings_overrides={
+            "adhoc_job_worker_enabled": True,
+            "adhoc_worker_concurrency": 3,
+            "adhoc_max_concurrent_runs_per_user": 1,
+        },
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        run_targets = []
+        csrf_tokens = {}
+        for username in ("ivy", "ada"):
+            page = client.get("/ask", headers={"x-forwarded-user": username})
+            csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+            assert csrf is not None
+            csrf_tokens[username] = csrf.group(1)
+            created = client.post(
+                "/api/v1/adhoc-conversations",
+                headers={
+                    "x-forwarded-user": username,
+                    "x-podpilot-csrf": csrf.group(1),
+                },
+                data={
+                    "message": (
+                        f"Investigate pod api-7d9 in namespace payments for {username}."
+                    )
+                },
+                follow_redirects=False,
+            )
+            assert created.status_code == 303
+            conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+            run_targets.append((username, conversation_id))
+
+        assert provider.two_answers_started.wait(timeout=3)
+        assert provider.max_active_answers == 2
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            assert db_session.scalar(
+                select(func.count()).select_from(AdHocRun).where(AdHocRun.status == "running")
+            ) == 2
+        engine.dispose()
+
+        same_user = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={
+                "x-forwarded-user": "ivy",
+                "x-podpilot-csrf": csrf_tokens["ivy"],
+            },
+            data={"message": "Investigate pod api-7d9 in namespace payments again."},
+            follow_redirects=False,
+        )
+        assert same_user.status_code == 303
+        same_user_conversation_id = same_user.headers["location"].rsplit("/", 1)[-1]
+        queued_page = client.get(
+            same_user.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+        assert "Waiting to investigate" in queued_page.text
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            assert db_session.scalar(
+                select(func.count()).select_from(AdHocRun).where(AdHocRun.status == "queued")
+            ) == 1
+        engine.dispose()
+
+        provider.release_answers.set()
+        run_targets.append(("ivy", same_user_conversation_id))
+        for username, conversation_id in run_targets:
+            completed = False
+            for _ in range(60):
+                page = client.get(
+                    f"/ask/{conversation_id}", headers={"x-forwarded-user": username}
+                )
+                if "selector does not match" in page.text:
+                    completed = True
+                    break
+                time.sleep(0.05)
+            assert completed
 
 
 def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(tmp_path: Path) -> None:
@@ -3971,7 +4113,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "appendOptimisticTurn" in script
     assert "new URLSearchParams(new FormData(adhocForm))" in script
     assert 'requestBody.set("message", question)' in script
+    assert "rawResponseToggle.disabled = true" in script
+    assert "rawResponseToggle.disabled = false" in script
     assert "data-cluster-picker" in template
+    assert "cluster-picker-selection" in template
+    assert 'chip.className = "cluster-picker-chip"' in script
+    assert 'pickerLabel.replaceChildren()' in script
     assert 'textarea.value = ""' in script
     assert "new EventSource" in script
     assert "thinking-spinner" in template
@@ -3980,6 +4127,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "reconcileStatus" in script
     assert "exceeded its progress deadline" in script
     assert "data-progress-current" in template
+    assert "data-progress-title" in template
+    assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script

@@ -794,8 +794,10 @@ series/response ceilings, and access failures are returned as explicit limitatio
 ### Ask PodPilot job progress
 
 Each question creates an `adhoc_runs` row before execution. The production default
-starts one in-process worker because the supported SQLite deployment has one API
-replica. The browser redirects immediately and subscribes to
+starts three in-process workers inside the one supported SQLite API replica. At most two
+runs from one user execute concurrently, leaving capacity for another operator when work is
+available. Configure these limits with `PODPILOT_ADHOC_WORKER_CONCURRENCY` and
+`PODPILOT_ADHOC_MAX_CONCURRENT_RUNS_PER_USER`. The browser redirects immediately and subscribes to
 `/api/v1/adhoc-runs/<id>/events`; 10-second SSE heartbeats reduce idle Route
 disconnects, and EventSource reconnects automatically. The current phase is also
 available from `/api/v1/adhoc-runs/<id>` and is reconstructed on page reload.
@@ -811,6 +813,16 @@ check, and summaries of evidence actually found. These transient updates disappe
 final answer replaces the spinner. They are structured plan/action summaries, not hidden model
 reasoning. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
+The supported single-replica SQLite deployment has one bounded global Ask worker pool. A question
+submitted after the pool or the sender's concurrency allowance is full remains queued and starts
+automatically; the pending UI distinguishes this waiting state from an actively running
+investigation. A raw
+model-response request remains visibly checked but disabled while its specific run is pending.
+
+SQLite connections use WAL mode, `synchronous=NORMAL`, a 30-second connection timeout, and a
+30-second `busy_timeout`. Keep the database on the single Pod's block-backed PVC; WAL is not a
+multi-replica or network-filesystem coordination mechanism. Increase API CPU/memory and verify
+model-provider and Kubernetes API quotas before raising concurrency above the default three.
 
 Every run has an overall execution deadline, defaulting to 300 seconds through
 `PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS`. A run that exceeds it is atomically marked

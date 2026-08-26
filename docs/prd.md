@@ -311,8 +311,8 @@ egress boundary exist.
 An Investigator can ask follow-up questions inside one durable investigation.
 PodPilot supplies only that investigation's redacted alert, deterministic analysis,
 persisted evidence, bounded conversation history, alert-scoped read policy, and
-available registered intent names to the configured model. Up to five planning
-rounds may request at most twelve reads through the same typed broker as
+available registered intent names to the configured model. Up to ten planning
+rounds may spend at most 25 weighted investigation units through the same typed broker as
 standalone Ask; successful observations are persisted into the investigation
 before the answer pass. Factual incident answers must cite observation IDs
 that the server can resolve in the investigation; an evidence-based response with
@@ -419,10 +419,11 @@ Why:
   events, curated documents, and retrieval metadata
 - it eliminates another Deployment, service, credential, backup path, and memory consumer
 
-SQLite documents FTS5 as its built-in full-text virtual-table module. If WAL mode
-is used, all database processes must remain on the same host and it must not be
-placed on a network filesystem. A single Pod with a block-backed `ReadWriteOncePod`
-PVC matches those constraints. See [SQLite FTS5](https://www.sqlite.org/fts5.html),
+SQLite documents FTS5 as its built-in full-text virtual-table module. WAL mode allows a bounded
+in-process worker pool to perform concurrent investigations while short database writes wait on
+one another. All database access must remain inside the same Pod/host and the file must not be
+placed on a network filesystem. A single Pod with a block-backed `ReadWriteOncePod` PVC matches
+those constraints. See [SQLite FTS5](https://www.sqlite.org/fts5.html),
 [SQLite WAL constraints](https://www.sqlite.org/wal.html), and
 [Kubernetes single-Pod volume access](https://kubernetes.io/docs/tasks/administer-cluster/change-pv-access-mode-readwriteoncepod/).
 
@@ -433,7 +434,7 @@ extension or service.
 
 ### 6.2 When to move to PostgreSQL plus pgvector
 
-Move when PodPilot requires multiple API replicas, concurrent writers,
+Move when PodPilot requires multiple API replicas, sustained high write concurrency,
 multi-cluster tenancy, materially larger corpora, or database-operated backups and
 high availability. pgvector keeps relational metadata and vectors in PostgreSQL
 and supports exact and approximate search. See the [official pgvector project](https://github.com/pgvector/pgvector).

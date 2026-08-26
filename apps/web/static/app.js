@@ -490,7 +490,23 @@
       const bounded = checkboxes.filter((item) => item.checked);
       if (hidden) hidden.value = JSON.stringify(bounded.map((item) => item.value));
       const names = bounded.map((item) => item.closest("label")?.querySelector("strong")?.textContent || "cluster");
-      if (pickerLabel) pickerLabel.textContent = names.length <= 2 ? names.join(", ") || "Select clusters" : `${names[0]}, ${names[1]} +${names.length - 2}`;
+      if (pickerLabel) {
+        pickerLabel.replaceChildren();
+        if (names.length) {
+          names.forEach((name) => {
+            const chip = document.createElement("span");
+            chip.className = "cluster-picker-chip";
+            chip.textContent = name;
+            pickerLabel.append(chip);
+          });
+        } else {
+          const placeholder = document.createElement("span");
+          placeholder.className = "cluster-picker-placeholder";
+          placeholder.textContent = "Select clusters";
+          pickerLabel.append(placeholder);
+        }
+        pickerLabel.setAttribute("aria-label", names.length ? `Selected clusters: ${names.join(", ")}` : "No clusters selected");
+      }
       if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
     };
     checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => updatePicker(checkbox)));
@@ -558,6 +574,7 @@
 
   const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
   if (pendingRun) {
+    const progressTitle = pendingRun.querySelector("[data-progress-title]");
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
@@ -565,6 +582,9 @@
       const seq = Number.parseInt(event.seq, 10);
       if (Number.isFinite(seq) && seq <= lastSeq) return;
       if (Number.isFinite(seq)) lastSeq = seq;
+      if (progressTitle && event.phase) {
+        progressTitle.textContent = event.phase === "queued" ? "Waiting to investigate" : "Live investigation";
+      }
       if (current) current.textContent = event.message || "Investigation in progress.";
       if (log && event.message) {
         const item = document.createElement("li");
@@ -640,12 +660,14 @@
       if (!csrf) return;
       const submit = adhocForm.querySelector('button[type="submit"]');
       const textarea = adhocForm.querySelector("textarea");
+      const rawResponseToggle = adhocForm.querySelector('input[name="include_raw_response"]');
       const question = textarea?.value.trim() || "";
       if (!question) return;
       const requestBody = new URLSearchParams(new FormData(adhocForm));
       requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
       if (textarea) textarea.value = "";
+      if (rawResponseToggle) rawResponseToggle.disabled = true;
       if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
       try {
         const response = await fetch(adhocForm.dataset.chatUrl, {
@@ -664,6 +686,7 @@
         optimistic?.nodes.forEach((node) => node.remove());
         if (optimistic?.empty) optimistic.empty.hidden = false;
         if (textarea) textarea.value = question;
+        if (rawResponseToggle) rawResponseToggle.disabled = false;
         if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
       }
     });

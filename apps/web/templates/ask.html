@@ -123,7 +123,7 @@
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>
-          <div><strong>Live investigation</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+          <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
           {% for event in active_run.events[-6:] %}<li data-seq="{{ event.seq }}" data-phase="{{ event.phase }}"><span></span><div><small>{{ event.phase | replace('_', ' ') }}</small>{{ event.message }}</div></li>{% endfor %}
@@ -151,7 +151,12 @@
         <div class="cluster-composer-row">
           <label>Send requests to</label>
           <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if conversation or active_run %}data-locked="true"{% endif %}>
-            <summary><span data-cluster-picker-label>Select clusters</span><small data-cluster-picker-count></small></summary>
+            <summary>
+              <span class="cluster-picker-selection" data-cluster-picker-label aria-label="Selected clusters">
+                <span class="cluster-picker-placeholder">Select clusters</span>
+              </span>
+              <small data-cluster-picker-count></small>
+            </summary>
             <div class="cluster-picker-menu">
               <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
               <div class="cluster-options">
@@ -174,7 +179,7 @@
         <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
         <div class="composer-actions">
           <label class="raw-response-switch">
-            <input type="checkbox" role="switch" name="include_raw_response" {% if active_run %}disabled{% endif %}>
+            <input type="checkbox" role="switch" name="include_raw_response" {% if active_run and active_run.include_raw_response %}checked{% endif %} {% if active_run %}disabled{% endif %}>
             <span aria-hidden="true"></span>
             <span><strong>Show raw model response</strong><small>For this question only</small></span>
           </label>
