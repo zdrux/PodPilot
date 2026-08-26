@@ -91,6 +91,21 @@ def test_catalog_prefers_stable_version_and_qualifies_cross_group_collisions() -
     assert event_names == {"events.core", "events.events.k8s.io"}
 
 
+def test_catalog_uses_exact_coordinates_to_disambiguate_same_plural() -> None:
+    catalog = ResourceCatalog(lambda **_kwargs: [
+        resource("routes", "route.openshift.io/v1", "Route"),
+        resource("routes", "serving.knative.dev/v1", "Route"),
+    ])
+
+    selected = catalog.resolve(
+        "routes", verb="list", api_version="route.openshift.io/v1", kind="Route"
+    )
+
+    assert selected.api_version == "route.openshift.io/v1"
+    with pytest.raises(ResourceCatalogError, match="coordinates do not match"):
+        catalog.resolve("routes.route.openshift.io", verb="list", api_version="v1", kind="Pod")
+
+
 def test_prompt_catalog_ranks_question_match_before_alphabetical_limit() -> None:
     catalog = ResourceCatalog(lambda **_kwargs: [
         resource(f"aaa{index}", "example.io/v1", f"Aaa{index}") for index in range(10)

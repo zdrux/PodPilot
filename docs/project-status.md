@@ -128,6 +128,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   returning only a bounded match set. Route URL questions compile to exact `spec.host`
   searches, and planner guidance covers named GETs, label selectors, Route hosts,
   Route backend Services, and follow-up reads from discovered coordinates.
+- Cross-group plural collisions use matching `apiVersion`/`Kind` coordinates during
+  discovery preflight. OpenShift browser Route questions select
+  `routes.route.openshift.io`, never an incidental Knative Route; rejected ambiguity does
+  not consume the cluster-read budget.
 - HTTPS troubleshooting probes keep verification enabled by default but may explicitly
   select `tls_verify=false` for private, self-signed, or component-managed certificates.
   SNI is preserved and both evidence and limitations state that server identity was not verified.

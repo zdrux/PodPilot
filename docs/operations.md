@@ -548,6 +548,12 @@ accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
 `metadata.namespace`, `spec.host`, and `spec.to.name`. A Route URL in the question is
 compiled to an exact hostname search automatically. Search evidence reports both match
 count and scanned count, plus whether a ceiling stopped the scan.
+OpenShift ingress and browser Route lookups are qualified as
+`routes.route.openshift.io`. `routes.serving.knative.dev` is reserved for questions that
+explicitly concern Knative or Serving. If logs report an ambiguous plural, inspect the
+qualified choices and the proposed `apiVersion`/`Kind`; ambiguity is a rejected preflight
+and does not use a cluster-read slot. A 403 for one API group does not justify silently
+substituting another group with different semantics.
 
 Metric trend questions use authenticated Thanos `/api/v1/query_range` through the
 `podpilot-investigator` ServiceAccount. Supported metrics are CPU usage, requests, limits,

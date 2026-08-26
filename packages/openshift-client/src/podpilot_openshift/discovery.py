@@ -146,7 +146,14 @@ class ResourceCatalog:
                     entries[key] = descriptor
         return tuple(sorted(entries.values(), key=lambda item: (item.name, item.api_version)))
 
-    def resolve(self, alias: str, *, verb: str) -> ResourceDescriptor:
+    def resolve(
+        self,
+        alias: str,
+        *,
+        verb: str,
+        api_version: str | None = None,
+        kind: str | None = None,
+    ) -> ResourceDescriptor:
         normalized = alias.strip().lower()
         if not normalized or "/" in normalized:
             raise ResourceCatalogError("The requested API resource name is invalid.")
@@ -167,6 +174,23 @@ class ResourceCatalog:
             raise ResourceCatalogError(
                 f"The requested API resource '{alias[:128]}' is unavailable or outside the read policy."
             )
+        if api_version or kind:
+            coordinate_matches = [
+                item for item in candidates
+                if (not api_version or item.api_version == api_version)
+                and (not kind or item.kind.casefold() == kind.casefold())
+            ]
+            if not coordinate_matches:
+                available = ", ".join(
+                    f"{item.name}.{item.api_version.split('/', 1)[0]} "
+                    f"({item.api_version}, {item.kind})"
+                    for item in candidates[:5]
+                )
+                raise ResourceCatalogError(
+                    "The requested API resource coordinates do not match the discovered resource. "
+                    f"Available choices: {available}."
+                )
+            candidates = coordinate_matches
         if len(candidates) == 1:
             return candidates[0]
         core = [item for item in candidates if item.api_version == "v1"]

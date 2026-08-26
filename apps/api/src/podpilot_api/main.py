@@ -914,7 +914,6 @@ async def _collect_bounded_cluster_reads(
         for intent in new_intents:
             if progress:
                 await progress("collecting", _read_progress_message(intent))
-            reads_used += 1
             entry: dict[str, object] = {
                 "round": round_number,
                 "tool": intent.tool,
@@ -931,7 +930,13 @@ async def _collect_bounded_cluster_reads(
                     + (" previous=true" if intent.tool == "pod_logs" and intent.previous else "")
                 ),
             }
+            read_started = False
             try:
+                preflight = getattr(cluster_reader, "preflight", None)
+                if callable(preflight):
+                    await run_in_threadpool(preflight, intent)
+                reads_used += 1
+                read_started = True
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
@@ -948,8 +953,13 @@ async def _collect_bounded_cluster_reads(
                         f"{'s' if len(result.observations) != 1 else ''}.",
                     )
             except ReadOnlyExplorerError as exc:
+                event = (
+                    "podpilot.cluster_read.failed"
+                    if read_started else "podpilot.cluster_read.rejected"
+                )
                 LOGGER.warning(
-                    "podpilot.cluster_read.failed actor=%s workflow_id=%s tool=%s target=%s error=%s",
+                    "%s actor=%s workflow_id=%s tool=%s target=%s error=%s",
+                    event,
                     actor,
                     workflow_id,
                     intent.tool,
@@ -957,7 +967,9 @@ async def _collect_bounded_cluster_reads(
                     str(exc),
                 )
                 limitations.append(str(exc))
-                entry["status"] = "denied_or_unavailable"
+                entry["status"] = (
+                    "denied_or_unavailable" if read_started else "rejected_before_collection"
+                )
                 entry["detail"] = str(exc)
             activity.append(entry)
         evidence = evidence[-settings.adhoc_max_evidence :]

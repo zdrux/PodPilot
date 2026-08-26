@@ -212,6 +212,11 @@ separate scan ceiling (2,000 by default, 5,000 maximum), compares only approved 
 fields (`metadata.name`, `metadata.namespace`, `spec.host`, and `spec.to.name`), and returns
 only bounded compact matches. Route questions containing a URL compile directly to an
 exact `spec.host` search, allowing a later round to GET the discovered namespace/name.
+The deterministic search uses the qualified `routes.route.openshift.io` resource. More
+generally, discovery resolves an unqualified plural with supplied `apiVersion` and `Kind`
+only when both agree with one advertised resource; mismatches fail closed. Preflight performs
+this resolution before the read budget advances. Same-plural APIs such as OpenShift and
+Knative Routes are not treated as interchangeable fallbacks after ambiguity or RBAC denial.
 
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque

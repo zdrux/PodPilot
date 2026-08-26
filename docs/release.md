@@ -127,6 +127,10 @@ Resource-search gates must find projected matches beyond the 250-object inventor
 window, enforce the independent 250–5000 scan ceiling, stop at the match-result ceiling,
 and distinguish a complete search from a scan-ceiling limitation. Route URL planning
 must use exact `spec.host` matching and preserve discovered namespace/name coordinates.
+Collision gates must install both `routes.route.openshift.io` and
+`routes.serving.knative.dev`, prove an OpenShift browser Route selects only the former,
+reject mismatched coordinates, and verify ambiguity preflight consumes no read budget.
+Tests must not treat a 403 from one same-plural API as authorization to try another.
 HTTP probe gates must verify that `tls_verify=false` remains HTTPS-only, keeps Host and
 SNI unchanged, records `verified: false`, and produces a visible server-identity limitation.
 Metric trend gates must verify authenticated `/query_range` requests, matrix validation,

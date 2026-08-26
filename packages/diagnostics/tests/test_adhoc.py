@@ -40,6 +40,17 @@ def test_custom_resource_coordinates_remain_model_proposed_for_broker_validation
     assert normalize_read_intent(proposed) == proposed
 
 
+def test_qualified_same_kind_resource_is_not_rewritten_to_builtin_api() -> None:
+    knative = ReadIntent(
+        tool="list_resources",
+        resource="routes.serving.knative.dev",
+        api_version="serving.knative.dev/v1",
+        kind="Route",
+    )
+
+    assert normalize_read_intent(knative) == knative
+
+
 def test_pod_log_coordinates_are_not_rewritten() -> None:
     proposed = ReadIntent(
         tool="pod_logs", kind="pods", namespace="ai-ops", name="podpilot-1"
@@ -284,7 +295,7 @@ def test_route_url_question_compiles_to_exact_host_search() -> None:
     assert terminal is False
     assert plan.intents == [ReadIntent(
         tool="search_resources",
-        resource="routes",
+        resource="routes.route.openshift.io",
         api_version="route.openshift.io/v1",
         kind="Route",
         match_field="spec.host",

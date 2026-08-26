@@ -20,6 +20,9 @@ _DEFERRED_TARGET = re.compile(
     r")"
 )
 _METRIC_IDENTIFIER = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
+_VALID_API_VERSION = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9.-]*(?:/[A-Za-z0-9][A-Za-z0-9.-]*)?$"
+)
 
 
 def looks_like_deferred_target(value: str | None) -> bool:
@@ -385,6 +388,12 @@ def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
     if not coordinates:
         return intent
     api_version, kind = coordinates
+    if (intent.resource and "." in intent.resource) or (
+        intent.api_version
+        and _VALID_API_VERSION.fullmatch(intent.api_version)
+        and intent.api_version != api_version
+    ):
+        return intent
     return intent.model_copy(update={
         "resource": _KIND_RESOURCE_NAMES[kind],
         "api_version": api_version,
@@ -424,7 +433,7 @@ def plan_known_read(
                     scope_summary=f"Find the OpenShift Route for host {hostname}.",
                     intents=[ReadIntent(
                         tool="search_resources",
-                        resource="routes",
+                        resource="routes.route.openshift.io",
                         api_version="route.openshift.io/v1",
                         kind="Route",
                         match_field="spec.host",

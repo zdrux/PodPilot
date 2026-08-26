@@ -48,6 +48,10 @@ or other credential-bearing transport.
 Consequences: Route-host and backend-Service lookup no longer depends on which 250 objects
 fit ordinary inventory evidence. Insecure probes can demonstrate reachability and SNI
 behavior with internally issued certificates, but cannot establish server identity.
+When multiple API groups expose the same plural, supplied `apiVersion`/`Kind` coordinates
+disambiguate and must agree with discovery. OpenShift ingress/browser Route questions use
+`routes.route.openshift.io`; Knative Routes are selected only for explicit Knative/Serving
+questions. Discovery ambiguity or coordinate mismatch is rejected before consuming a read.
 
 ## 2026-08-25 - Broader agentic reads and SNI-aware HTTP probes
 

@@ -372,14 +372,38 @@ class KubernetesReadOnlyExplorer:
                 "The requested cluster evidence could not be collected because the Kubernetes API client failed."
             ) from exc
 
-    def _resource_read(self, intent: ReadIntent) -> ReadResult:
+    def preflight(self, intent: ReadIntent) -> None:
+        """Validate resource discovery and scope without issuing an evidence read."""
+
+        if intent.tool not in {"get_resource", "list_resources", "search_resources"}:
+            return
+        try:
+            self._ensure_clients()
+            self._resolve_resource_read(intent)
+        except ReadOnlyExplorerError:
+            raise
+        except ResourceCatalogError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
+        except Exception as exc:
+            raise ReadOnlyExplorerError(
+                "Kubernetes API discovery is temporarily unavailable."
+            ) from exc
+
+    def _resolve_resource_read(
+        self, intent: ReadIntent
+    ) -> tuple[str, str, bool | None, str | None, str | None]:
         assert self._dynamic is not None
         verb = "get" if intent.tool == "get_resource" else "list"
         namespaced: bool | None = None
         if intent.resource:
             if self._catalog is None:
                 self._catalog = ResourceCatalog(self._dynamic.resources.search)
-            descriptor = self._catalog.resolve(intent.resource, verb=verb)
+            descriptor = self._catalog.resolve(
+                intent.resource,
+                verb=verb,
+                api_version=intent.api_version,
+                kind=intent.kind,
+            )
             api_version = descriptor.api_version
             kind = descriptor.kind
             namespaced = descriptor.namespaced
@@ -395,6 +419,11 @@ class KubernetesReadOnlyExplorer:
             raise ReadOnlyExplorerError("The requested cluster-scoped resource must not include a namespace.")
         if namespaced is True and intent.tool == "get_resource" and not namespace:
             raise ReadOnlyExplorerError("A namespace is required to read that namespaced resource by name.")
+        return api_version, kind, namespaced, namespace, name
+
+    def _resource_read(self, intent: ReadIntent) -> ReadResult:
+        assert self._dynamic is not None
+        api_version, kind, _namespaced, namespace, name = self._resolve_resource_read(intent)
         resource = self._dynamic.resources.get(api_version=api_version, kind=kind)
         if intent.tool == "get_resource":
             obj = resource.get(name=name, namespace=namespace)

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import threading
@@ -13,6 +14,7 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
     _bind_plan_log_intents,
+    _collect_bounded_cluster_reads,
     _deterministic_inventory_answer,
     _validated_adhoc_answer,
     create_app,
@@ -21,6 +23,7 @@ from podpilot_api.model_provider import (
     AdHocAnswer,
     CapabilityReport,
     InvestigationChatAnswer,
+    ModelProfileConfig,
     ModelInterpretation,
     ModelProviderError,
 )
@@ -52,6 +55,86 @@ from podpilot_openshift.explorer import ReadOnlyExplorerError
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
+    class RepairingProvider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if context["investigation_round"] == 1:
+                return ReadPlan(
+                    scope_summary="Try an ambiguous resource plural.",
+                    intents=[ReadIntent(tool="list_resources", resource="routes")],
+                )
+            if context["investigation_round"] == 2:
+                return ReadPlan(
+                    scope_summary="Use an unambiguous safe resource.",
+                    intents=[ReadIntent(
+                        tool="list_resources", resource="pods", api_version="v1",
+                        kind="Pod", namespace="payments", limit=5,
+                    )],
+                )
+            return ReadPlan(
+                scope_summary="The collected evidence is sufficient.",
+                supporting_evidence_ids=["cluster-pods-1"],
+            )
+
+    class PreflightingExplorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def preflight(self, intent):
+            if intent.resource == "routes":
+                raise ReadOnlyExplorerError(
+                    "The API resource name 'routes' is ambiguous; use one of: "
+                    "routes.route.openshift.io, routes.serving.knative.dev."
+                )
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-pods-1",
+                tool="list_resources",
+                summary="Read Pods in payments.",
+                source="kubernetes:v1:Pod:payments/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Pod", "scope": "payments", "names": ["api"]},
+            ),))
+
+    provider = RepairingProvider()
+    explorer = PreflightingExplorer()
+    settings = Settings(
+        auth_mode="test",
+        role_investigator_groups=[],
+        role_approver_groups=[],
+        role_breakglass_groups=[],
+    )
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=settings,
+        actor="ivy",
+        workflow_id="workflow-preflight",
+        question="Investigate application connectivity.",
+        conversation=[],
+        existing_evidence=[],
+    ))
+
+    assert provider.contexts[1]["tool_policy"]["remaining_reads"] == (
+        settings.adhoc_max_reads_per_turn
+    )
+    assert result.activity[0]["status"] == "rejected_before_collection"
+    assert result.activity[1]["status"] == "succeeded"
+    assert len(explorer.calls) == 1
 
 
 def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths() -> None:

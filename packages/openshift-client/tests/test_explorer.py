@@ -167,6 +167,45 @@ def test_resource_name_resolves_from_discovery_and_compacts_list_payload():
     assert result.observations[0].data["items"][0]["spec"]["host"] == "api.example.test"
 
 
+def test_route_search_selects_openshift_api_when_knative_route_is_also_installed():
+    route = FakeResource([FakeObject(payload={
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {"name": "maas", "namespace": "models"},
+        "spec": {"host": "maas.apps.example.test", "tls": {"termination": "passthrough"}},
+        "status": {},
+    })])
+    descriptors = (
+        SimpleNamespace(
+            name="routes", group_version="route.openshift.io/v1", kind="Route",
+            namespaced=True, verbs=("get", "list"), singular_name="route", short_names=(),
+        ),
+        SimpleNamespace(
+            name="routes", group_version="serving.knative.dev/v1", kind="Route",
+            namespaced=True, verbs=("get", "list"), singular_name="route", short_names=(),
+        ),
+    )
+    resources = FakeResources(route, discovered=descriptors)
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=SimpleNamespace(resources=resources), core_api=FakeCore()
+    )
+    intent = ReadIntent(
+        tool="search_resources",
+        resource="routes.route.openshift.io",
+        api_version="route.openshift.io/v1",
+        kind="Route",
+        match_field="spec.host",
+        match_value="maas.apps.example.test",
+        limit=5,
+    )
+
+    target.preflight(intent)
+    result = target.execute(intent)
+
+    assert resources.calls == [{"api_version": "route.openshift.io/v1", "kind": "Route"}]
+    assert result.observations[0].data["count"] == 1
+
+
 def test_catalog_client_failure_is_contained_as_safe_explorer_error():
     class FailingCatalog:
         def prompt_entries(self, **_kwargs):
