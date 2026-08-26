@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import re
 import ssl
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 from urllib.parse import urlparse
@@ -131,6 +134,32 @@ class AdHocLogAnalysis(BaseModel):
     overview: str = Field(min_length=1, max_length=700)
     issues: list[LogAnalysisIssue] = Field(default_factory=list, max_length=10)
     limitations: list[str] = Field(default_factory=list, max_length=4)
+
+
+_RAW_RESPONSE_CAPTURE: ContextVar[list[str] | None] = ContextVar(
+    "podpilot_raw_response_capture", default=None
+)
+
+
+@contextmanager
+def capture_raw_model_responses(enabled: bool) -> Iterator[list[str]]:
+    """Capture provider answer bodies inside one request/task context."""
+
+    captured: list[str] = []
+    if not enabled:
+        yield captured
+        return
+    token = _RAW_RESPONSE_CAPTURE.set(captured)
+    try:
+        yield captured
+    finally:
+        _RAW_RESPONSE_CAPTURE.reset(token)
+
+
+def _record_raw_response(content: str | None) -> None:
+    capture = _RAW_RESPONSE_CAPTURE.get()
+    if capture is not None and content:
+        capture.append(content)
 
 
 class ModelProviderError(RuntimeError):
@@ -586,7 +615,11 @@ class OpenAIResponsesProvider:
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
         if response.output_parsed is None:
+            _record_raw_response(getattr(response, "output_text", None))
             raise ModelProviderError("The provider returned no schema-valid ad-hoc answer.")
+        _record_raw_response(
+            getattr(response, "output_text", None) or response.output_parsed.model_dump_json()
+        )
         return response.output_parsed
 
     def analyze_logs(
@@ -659,6 +692,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             content = response.choices[0].message.content
             if not content:
                 raise ModelProviderError("The provider returned no structured response content.")
+            _record_raw_response(content)
             try:
                 return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
@@ -682,6 +716,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 corrected_content = correction.choices[0].message.content
                 if not corrected_content:
                     raise ModelProviderError("The provider returned no corrected structured response content.")
+                _record_raw_response(corrected_content)
                 return self._validate_structured_content(schema, corrected_content)
         except ModelProviderError:
             raise

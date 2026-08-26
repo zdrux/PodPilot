@@ -38,6 +38,7 @@ from podpilot_api.model_provider import (
     ModelProvider,
     ModelProviderError,
     OpenAIProviderRouter,
+    capture_raw_model_responses,
     validate_model_endpoint,
 )
 from podpilot_api.models import (
@@ -116,6 +117,20 @@ def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"Cannot serialize {type(value).__name__}")
+
+
+def _bounded_raw_response_attempts(
+    destination: list[dict[str, str]], captured: list[str], *, stage: str
+) -> None:
+    """Persist only bounded, redacted final-answer output requested by the operator."""
+
+    for content in captured:
+        if len(destination) >= 4:
+            return
+        destination.append({
+            "stage": stage,
+            "content": redact_text(str(content))[:16_000],
+        })
 
 
 def _format_est_time(value: object, pattern: str = "%H:%M") -> str:
@@ -2945,7 +2960,8 @@ def create_app(
 
     async def _execute_adhoc_turn(
         *, engine, username: str, conversation_id: str, message_text: str,
-        run_id: str, progress: ProgressReporter | None = None,
+        run_id: str, include_raw_response: bool = False,
+        progress: ProgressReporter | None = None,
     ) -> str:
         if progress:
             await progress("starting", "Starting the read-only investigation.")
@@ -3009,6 +3025,7 @@ def create_app(
 
         activity: list[dict[str, object]] = []
         limitations: list[str] = []
+        raw_responses: list[dict[str, str]] = []
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
@@ -3215,12 +3232,24 @@ def create_app(
                     "model_log_analysis": model_log_analysis,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
-                answer = await run_in_threadpool(
-                    provider.answer_ad_hoc,
-                    profile_snapshot,
-                    api_key,
-                    answer_context,
-                )
+                with capture_raw_model_responses(include_raw_response) as captured:
+                    try:
+                        answer = await run_in_threadpool(
+                            provider.answer_ad_hoc,
+                            profile_snapshot,
+                            api_key,
+                            answer_context,
+                        )
+                    finally:
+                        _bounded_raw_response_attempts(
+                            raw_responses, captured, stage="initial answer"
+                        )
+                if include_raw_response and not captured:
+                    _bounded_raw_response_attempts(
+                        raw_responses,
+                        [answer.model_dump_json() if hasattr(answer, "model_dump_json") else str(answer)],
+                        stage="initial answer",
+                    )
                 validated = _validated_adhoc_answer(
                     answer,
                     known_evidence_ids={str(item.get("id")) for item in evidence},
@@ -3254,12 +3283,28 @@ def create_app(
                         ),
                     }
                     try:
-                        retry_answer = await run_in_threadpool(
-                            provider.answer_ad_hoc,
-                            profile_snapshot,
-                            api_key,
-                            retry_context,
-                        )
+                        with capture_raw_model_responses(include_raw_response) as captured:
+                            try:
+                                retry_answer = await run_in_threadpool(
+                                    provider.answer_ad_hoc,
+                                    profile_snapshot,
+                                    api_key,
+                                    retry_context,
+                                )
+                            finally:
+                                _bounded_raw_response_attempts(
+                                    raw_responses, captured, stage="PodPilot correction"
+                                )
+                        if include_raw_response and not captured:
+                            _bounded_raw_response_attempts(
+                                raw_responses,
+                                [
+                                    retry_answer.model_dump_json()
+                                    if hasattr(retry_answer, "model_dump_json")
+                                    else str(retry_answer)
+                                ],
+                                stage="PodPilot correction",
+                            )
                         retry_validated = _validated_adhoc_answer(
                             retry_answer,
                             known_evidence_ids={str(item.get("id")) for item in evidence},
@@ -3415,6 +3460,7 @@ def create_app(
                     {"reads": activity, "limitations": validated["limitations"]}, sort_keys=True
                 ),
                 provider_status=provider_status,
+                raw_responses_json=json.dumps(raw_responses, sort_keys=True),
             ))
             db_session.add(AuditEvent(
                 actor="system:podpilot", action="adhoc.answer", outcome=provider_status,
@@ -3584,6 +3630,7 @@ def create_app(
             username = run.created_by
             conversation_id = run.conversation_id
             message_text = run.message_text
+            include_raw_response = run.include_raw_response
 
         async def report(phase: str, message: str) -> None:
             await _record_run_progress(engine, run_id, phase, message)
@@ -3596,6 +3643,7 @@ def create_app(
                     conversation_id=conversation_id,
                     message_text=message_text,
                     run_id=run_id,
+                    include_raw_response=include_raw_response,
                     progress=report,
                 ),
                 timeout=app_settings.adhoc_run_timeout_seconds,
@@ -3659,6 +3707,7 @@ def create_app(
         conversation: AdHocConversation,
         username: str,
         message_text: str,
+        include_raw_response: bool = False,
     ) -> str:
         now = datetime.now(timezone.utc)
         _enforce_adhoc_rate_limit(
@@ -3697,6 +3746,7 @@ def create_app(
             conversation_id=conversation.id,
             created_by=username,
             message_text=message_text,
+            include_raw_response=include_raw_response,
             status="queued",
             phase="queued",
             progress_json=json.dumps(events, sort_keys=True),
@@ -3709,6 +3759,7 @@ def create_app(
                 "conversation_id": conversation.id,
                 "run_id": run_id,
                 "cluster_ids": json.loads(conversation.cluster_ids_json or "[]"),
+                "raw_response_requested": include_raw_response,
             }, sort_keys=True),
         ))
         conversation.updated_at = now
@@ -3796,6 +3847,7 @@ def create_app(
             "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
             "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
             "activity": json.loads(row.tool_activity_json), "provider_status": row.provider_status,
+            "raw_responses": json.loads(row.raw_responses_json or "[]"),
             "created_at": row.created_at,
         } for row in rows]
         response = templates.TemplateResponse(
@@ -3836,6 +3888,9 @@ def create_app(
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
             raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
         message = redact_text(raw_message)[:app_settings.chat_max_chars]
+        include_raw_response = form.get("include_raw_response", "").lower() in {
+            "1", "true", "on", "yes"
+        }
         try:
             requested_cluster_ids = [
                 str(item) for item in json.loads(
@@ -3870,6 +3925,7 @@ def create_app(
                 conversation=conversation,
                 username=user.username,
                 message_text=message,
+                include_raw_response=include_raw_response,
             )
             db_session.commit()
         await _start_queued_run(request, run_id)
@@ -3887,6 +3943,9 @@ def create_app(
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
             raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
         message = redact_text(raw_message)[:app_settings.chat_max_chars]
+        include_raw_response = form.get("include_raw_response", "").lower() in {
+            "1", "true", "on", "yes"
+        }
         with Session(request.app.state.engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             if conversation is None or conversation.created_by != user.username:
@@ -3899,6 +3958,7 @@ def create_app(
                 conversation=conversation,
                 username=user.username,
                 message_text=message,
+                include_raw_response=include_raw_response,
             )
             db_session.commit()
         await _start_queued_run(request, run_id)

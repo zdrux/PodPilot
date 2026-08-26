@@ -245,6 +245,7 @@ class AdHocMessage(Base):
     citations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     tool_activity_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    raw_responses_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
 
 class AdHocRun(Base):
@@ -262,6 +263,7 @@ class AdHocRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
+    include_raw_response: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
     progress_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

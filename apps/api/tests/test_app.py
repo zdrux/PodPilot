@@ -2412,6 +2412,7 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert rendered.text.index('class="boundary-pill"') < rendered.text.index("data-evidence-open")
         assert "Inspected 1 cluster target" not in rendered.text
         assert "cluster-pod-1" in rendered.text
+        assert '<details class="raw-model-response">' not in rendered.text
 
     assert len(explorer.calls) == 1
     assert explorer.calls[0].tool == "get_resource"
@@ -2421,8 +2422,81 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
     with Session(engine) as db_session:
         assert db_session.scalar(select(func.count()).select_from(AdHocConversation)) == 1
         assert db_session.scalar(select(func.count()).select_from(AdHocMessage)) == 2
+        run = db_session.scalar(select(AdHocRun))
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert run is not None and run.include_raw_response is False
+        assert assistant is not None and json.loads(assistant.raw_responses_json) == []
         actions = list(db_session.scalars(select(AuditEvent.action)))
         assert "adhoc.message" in actions and "adhoc.answer" in actions
+    engine.dispose()
+
+
+def test_ask_raw_response_toggle_persists_and_displays_both_answer_attempts(
+    tmp_path: Path,
+) -> None:
+    provider = HeadingOnlyThenCompleteProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert "Show raw model response" in page.text
+        assert "For this question only" in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Why is pod api-7d9 pending in payments?",
+                "include_raw_response": "on",
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Raw model response" in rendered.text
+        assert "Untrusted provider output" in rendered.text
+        assert "2 attempts" in rendered.text
+        assert "initial answer" in rendered.text
+        assert "PodPilot correction" in rendered.text
+        assert "Observed objects" in rendered.text
+        assert "exact Pod remains Pending" in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.scalar(select(AdHocRun))
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        event = db_session.scalar(select(AuditEvent).where(
+            AuditEvent.action == "adhoc.message"
+        ))
+        assert run is not None and run.include_raw_response is True
+        assert assistant is not None
+        attempts = json.loads(assistant.raw_responses_json)
+        assert [item["stage"] for item in attempts] == [
+            "initial answer", "PodPilot correction",
+        ]
+        assert event is not None
+        assert json.loads(event.details_json)["raw_response_requested"] is True
     engine.dispose()
 
 
@@ -3914,6 +3988,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "nav-session-list" in base_template
     assert "nav-session-delete" in base_template
     assert "evidenceDialog.showModal()" in script
+    assert 'name="include_raw_response"' in template
+    assert "Show raw model response" in template
+    assert 'class="raw-model-response"' in template
 
 
 def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(

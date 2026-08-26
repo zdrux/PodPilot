@@ -11,6 +11,7 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
+    capture_raw_model_responses,
     validate_model_endpoint,
 )
 from podpilot_diagnostics.adhoc import ReadIntent, ReadPlan
@@ -290,6 +291,26 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     assert "never promote correlation to root cause" in request["messages"][0]["content"]
     assert "If answer_feedback is present" in request["messages"][0]["content"]
     assert "never headings alone" in request["messages"][0]["content"]
+
+
+def test_chat_completions_raw_capture_is_explicit_and_scoped() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    with capture_raw_model_responses(True) as captured:
+        provider.answer_ad_hoc(
+            profile(), "secret-token", {"observations": [{"id": "cluster-pod-1"}]}
+        )
+
+    assert len(captured) == 1
+    assert json.loads(captured[0])["answer"] == "The supplied Pod is pending."
+    with capture_raw_model_responses(False) as disabled:
+        provider.answer_ad_hoc(
+            profile(), "secret-token", {"observations": [{"id": "cluster-pod-1"}]}
+        )
+    assert disabled == []
 
 
 def test_incident_chat_prompt_keeps_read_work_inside_podpilot() -> None:

@@ -8,7 +8,7 @@ selected.
 ## Resume Here
 
 PodPilot 0.11.0 remains deployed on the disposable SNO lab. The 0.12.0 working tree
-is implemented and locally tested at schema head `0012_multi_cluster_ask`, but has
+is implemented and locally tested at schema head `0013_raw_model_responses`, but has
 not been deployed. It adds Ask-only multi-cluster routing, secret-backed cluster
 management, immutable one-to-ten-cluster conversation selections, cluster-attributed
 evidence, and curated-memory prompt integration governed by explicit cluster targets,
@@ -178,6 +178,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline.
+- Each Ask question has a default-off **Show raw model response** switch. When enabled,
+  the durable run retains up to four redacted, size-bounded final-answer provider bodies,
+  including the initial and PodPilot correction attempts. The owner can expand them beneath
+  the final reply as escaped, visibly untrusted debug output; they do not bypass validation,
+  citation enforcement, fallback behavior, or action policy.
 - Ask questions are persisted as recoverable jobs and processed by the
   single-replica worker. Submission clears the composer immediately and adds an
   optimistic user turn plus pulsating assistant placeholder. Owner-only SSE
@@ -239,7 +244,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   labels are escaped, responses are capped at 64 KiB and 20 retained series, and
   results are redacted before becoming evidence.
 - SQLite/Alembic persistence on the SNO-local PVC. Schema head is
-  `0010_adhoc_runs`.
+  `0013_raw_model_responses`.
 - A remote Kustomize overlay composes the read-only base, explicit
   `openshift-monitoring` Alertmanager API Role, group-based OAuth GUI admission,
   default-StorageClass PVC, and single-replica workload. The accompanying runbook
@@ -254,7 +259,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Deployed application version: `0.11.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 247 tests passing with 84% aggregate branch coverage.
+- Local automated suite: 272 tests passing with 84% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

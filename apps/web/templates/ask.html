@@ -39,6 +39,18 @@
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
         </div>
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
+        {% if message.role == 'assistant' and message.raw_responses %}
+        <details class="raw-model-response">
+          <summary><span>Raw model response</span><small>Untrusted provider output · {{ message.raw_responses | length }} attempt{% if message.raw_responses | length != 1 %}s{% endif %}</small></summary>
+          <p>Shown because raw response capture was enabled for this question. PodPilot may have rejected or replaced this output; it is not evidence or an approved action.</p>
+          {% for attempt in message.raw_responses %}
+          <section>
+            <h4>{{ loop.index }}. {{ attempt.stage }}</h4>
+            <pre><code>{{ attempt.content }}</code></pre>
+          </section>
+          {% endfor %}
+        </details>
+        {% endif %}
         {% if message.role == 'assistant' and message.citations %}
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
@@ -154,7 +166,15 @@
         </div>
         <label for="adhoc-message">Question or symptom</label>
         <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
-        <div><small>Each question: up to {{ chat_read_budget }} read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button></div>
+        <div class="composer-actions">
+          <label class="raw-response-switch">
+            <input type="checkbox" role="switch" name="include_raw_response" {% if active_run %}disabled{% endif %}>
+            <span aria-hidden="true"></span>
+            <span><strong>Show raw model response</strong><small>For this question only</small></span>
+          </label>
+          <small>Each question: up to {{ chat_read_budget }} read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small>
+          <button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
+        </div>
       </form>
       {% elif user.role.value < 20 %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>

@@ -300,6 +300,12 @@ SSE heartbeat keeps the OpenShift Route connection active. These events describe
 server-observed workflow actions; PodPilot does not expose model chain-of-thought.
 The final schema-validated answer remains a complete response rather than token
 streaming.
+For an individual Ask question, the operator may opt in to retaining the raw final-answer
+provider bodies. PodPilot stores only bounded, redacted answer attempts (including its one
+correction attempt), never prompts, chain-of-thought, credentials, or unredacted cluster
+payloads. The raw output is visibly labeled untrusted and does not bypass answer validation,
+citation enforcement, deterministic fallback, or action policy. Capture defaults off and is
+recorded on the durable run so asynchronous processing preserves the sender's choice.
 Pod-log collection distinguishes authorization, missing-resource, and invalid-log
 stream failures. When Kubernetes reports that a requested previous terminated
 container log is no longer retained, the read broker performs one bounded current

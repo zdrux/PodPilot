@@ -241,6 +241,14 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .answer-evidence[open] > summary::before { transform: rotate(90deg); }
 .answer-evidence > summary > span { margin-right: auto; }
 .answer-evidence > summary small { margin-left: auto; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.raw-model-response { margin-top: 12px; padding: 11px 13px; border: 1px solid rgba(255, 157, 102, .3); border-radius: 8px; background: rgba(255, 157, 102, .045); }
+.raw-model-response > summary { display: flex; align-items: center; gap: 10px; color: var(--orange); cursor: pointer; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.raw-model-response > summary small { margin-left: auto; color: #baa99f; font-size: 9px; font-weight: 600; text-transform: none; }
+.raw-model-response > p { margin: 11px 0; color: #c8b7ad; font-size: 11px; line-height: 1.5; }
+.raw-model-response section + section { margin-top: 13px; }
+.raw-model-response h4 { margin: 0 0 6px; color: #e4c9b9; font-size: 10px; text-transform: uppercase; }
+.raw-model-response pre { max-height: 360px; margin: 0; overflow: auto; padding: 12px; border: 1px solid rgba(255, 157, 102, .18); border-radius: 7px; background: #070d16; white-space: pre-wrap; overflow-wrap: anywhere; }
+.raw-model-response pre code { color: #d8c8be; font-size: 11px; line-height: 1.5; }
 .answer-evidence-timeline { margin: 9px 0 2px 7px; padding: 1px 0 1px 18px; border-left: 1px solid rgba(69, 212, 232, .22); }
 .answer-evidence-timeline li { padding: 6px 0; list-style: none; }
 .answer-evidence-timeline a { display: grid; grid-template-columns: minmax(94px, auto) minmax(0, 1fr); gap: 11px; align-items: start; padding: 3px 5px; border-radius: 6px; color: inherit; text-decoration: none; }
@@ -262,6 +270,18 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .chat-form textarea { width: 100%; resize: vertical; padding: 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #08101b; font: inherit; font-size: 11px; line-height: 1.55; }
 .chat-form > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 10px; }
 .chat-form small { color: var(--subtle); font-size: 8px; }
+.composer-actions { justify-content: flex-end !important; }
+.composer-actions > small { margin-right: auto; }
+.chat-form .raw-response-switch { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); cursor: pointer; text-transform: none; }
+.raw-response-switch > input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.raw-response-switch > span[aria-hidden] { position: relative; width: 34px; height: 19px; flex: 0 0 34px; border: 1px solid var(--border-bright); border-radius: 999px; background: #08101b; transition: background .15s ease, border-color .15s ease; }
+.raw-response-switch > span[aria-hidden]::after { position: absolute; top: 3px; left: 3px; width: 11px; height: 11px; border-radius: 50%; background: var(--subtle); content: ""; transition: transform .15s ease, background .15s ease; }
+.raw-response-switch > input:checked + span { border-color: rgba(255, 157, 102, .7); background: rgba(255, 157, 102, .16); }
+.raw-response-switch > input:checked + span::after { background: var(--orange); transform: translateX(15px); }
+.raw-response-switch > input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.raw-response-switch > span:last-child { display: grid; gap: 1px; }
+.raw-response-switch strong { font-size: 10px; font-weight: 750; }
+.raw-response-switch small { font-size: 8px; }
 .cluster-composer-row { position: relative; display: grid !important; grid-template-columns: auto minmax(240px, 1fr) auto; align-items: center !important; gap: 10px !important; margin: 0 0 12px !important; }
 .cluster-composer-row > label { margin: 0; }
 .cluster-picker { position: relative; min-width: 0; }
@@ -534,6 +554,8 @@ body { font-size: 15px; }
 .chat-form label { font-size: 12px; }
 .chat-form textarea { min-height: 96px; font-size: 15px; }
 .chat-form small { font-size: 11px; line-height: 1.45; }
+.raw-model-response > summary, .raw-model-response h4, .raw-response-switch strong { font-size: 12px; }
+.raw-model-response > p, .raw-model-response pre code, .raw-model-response > summary small, .raw-response-switch small { font-size: 11px; }
 .prompt-examples span { font-size: 12px; }
 .ask-empty p, .chat-empty p, .chat-budget p { font-size: 13px; }
 .investigation-list strong { font-size: 14px; line-height: 1.4; }

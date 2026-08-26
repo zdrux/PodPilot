@@ -304,7 +304,9 @@ and the SQLite FTS5 virtual table. The application verifies that the FTS table i
 available at startup. `0012_multi_cluster_ask` adds the cluster registry, immutable
 conversation selections, and knowledge target fields. Eligible internal chunks are supplied
 only to standalone Ask planning and answers as guidance; they are not live evidence and do
-not enter investigation or remediation prompts.
+not enter investigation or remediation prompts. `0013_raw_model_responses` adds the
+default-off per-run capture choice and bounded redacted answer bodies stored with the
+assistant message. No new environment variable or credential permission is required.
 
 Later integrations may add:
 

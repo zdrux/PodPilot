@@ -100,6 +100,11 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
   connection strings, Secret values, and other configured patterns.
 - Preserve provenance through stable object references and timestamps, not raw credentials.
 - Do not retain raw evidence by default until retention and deletion rules are defined.
+- Raw final-answer provider output is retained only when the conversation owner enables
+  it for that question. Capture is limited to four redacted 16 KiB answer bodies, including
+  provider/schema and PodPilot correction attempts; prompts and intermediate reasoning are
+  never included. The output remains owner-scoped, is deleted with the conversation, is
+  rendered as escaped text, and has no authority as evidence or an action.
 - Evals must use synthetic or explicitly sanitized incident data.
 - Model endpoint metadata, TLS mode, and optional public CA certificates are stored
   in SQLite. API tokens are not: each profile references an opaque key in the one

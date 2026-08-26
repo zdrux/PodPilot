@@ -224,7 +224,7 @@ probe output budgets, canonical built-in Kind/apiVersion coordinates, unchanged
 custom-resource validation, and suppression of model-authored planning caveats
 from trusted collection-limit displays.
 Cluster-memory and multi-cluster Ask gates must cover a clean Alembic upgrade through
-`0012_multi_cluster_ask`, FTS5 availability, immutable revision history, heading-aware
+`0013_raw_model_responses`, FTS5 availability, immutable revision history, heading-aware
 chunking, safe query-token handling, reviewed/current/enabled/expiry filters,
 global/explicit-cluster/all-required-tag and namespace scope, restricted-entry
 authorization, content-free audit details, and guidance-only eligible memory in standalone
@@ -253,6 +253,10 @@ state. Tests must cover restart recovery, one active turn per conversation,
 active-conversation deletion refusal, owner-only status/SSE access, SSE completion,
 and optimistic composer clearing. Progress text must remain server-authored and
 must not include prompts, evidence bodies, credentials, or chain-of-thought.
+Raw-answer capture gates must prove that the per-question switch defaults off, survives
+durable queue processing, retains both initial and correction answer bodies when present,
+and renders only bounded redacted escaped text to the conversation owner. Raw output must
+not alter provider validation, citations, deterministic fallback, audits, or action policy.
 Pod-log resiliency gates must prove that Pod lists emit bounded exact candidate
 tuples, candidate IDs are stable within persisted evidence, and model-authored
 names cannot override them. Invalid targets must trigger one repair without
