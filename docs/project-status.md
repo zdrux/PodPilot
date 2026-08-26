@@ -139,6 +139,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   through the exact Service, selected Pods, EndpointSlices, and Endpoints. Relevant healthy
   backend containers receive bounded log inspection, so a malformed later ReadPlan cannot
   prevent basic workload evidence collection.
+- Explicit cross-namespace Pod TCP/connectivity questions deterministically collect both exact
+  Pods, both Namespace label sets, and bounded NetworkPolicies from both namespaces. Policy
+  evidence retains ingress/egress selectors and ports for additive source-egress and
+  destination-ingress analysis while disclosing that configuration alone cannot prove a drop.
 - HTTPS troubleshooting probes keep verification enabled by default but may explicitly
   select `tls_verify=false` for private, self-signed, or component-managed certificates.
   SNI is preserved and both evidence and limitations state that server identity was not verified.

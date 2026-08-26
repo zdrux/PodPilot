@@ -220,6 +220,13 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "conditions": status.get("conditions") or [],
             "loadBalancer": status.get("loadBalancer") or status.get("load_balancer") or {},
         }
+    elif kind == "NetworkPolicy":
+        projected["spec"] = {
+            "podSelector": spec.get("podSelector") or spec.get("pod_selector") or {},
+            "policyTypes": spec.get("policyTypes") or spec.get("policy_types") or [],
+            "ingress": spec.get("ingress") or [],
+            "egress": spec.get("egress") or [],
+        }
     elif kind == "EndpointSlice":
         endpoints = raw.get("endpoints") or []
         projected.update({

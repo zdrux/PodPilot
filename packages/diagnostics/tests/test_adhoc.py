@@ -432,6 +432,40 @@ def test_namespace_pod_inventory_is_deterministic_and_terminal() -> None:
     assert plan.intents[0].limit == 500
 
 
+@pytest.mark.parametrize("question", [
+    (
+        "Investigate TCP timeouts from pod client-7d9 in namespace frontend "
+        "to pod database-0 in namespace data on port 5432."
+    ),
+    "Why is the connection from pod frontend/client-7d9 to data/database-0 timing out?",
+])
+def test_cross_namespace_pod_connectivity_collects_policy_selector_evidence(
+    question: str,
+) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is False
+    assert len(plan.intents) == 6
+    assert [intent.kind for intent in plan.intents] == [
+        "Pod", "Pod", "Namespace", "Namespace", "NetworkPolicy", "NetworkPolicy",
+    ]
+    assert [(intent.namespace, intent.name) for intent in plan.intents[:2]] == [
+        ("frontend", "client-7d9"), ("data", "database-0"),
+    ]
+    assert [intent.name for intent in plan.intents[2:4]] == ["frontend", "data"]
+    assert [intent.namespace for intent in plan.intents[4:]] == ["frontend", "data"]
+    assert all(intent.limit == 100 for intent in plan.intents[4:])
+
+
+def test_network_policy_plan_requires_exact_pods_in_two_namespaces() -> None:
+    assert plan_known_read("Investigate TCP timeouts between pods in different namespaces") is None
+    assert plan_known_read(
+        "Investigate TCP from pod client in namespace frontend to pod api in namespace frontend"
+    ) is None
+
+
 def test_failed_job_alert_seeds_exact_job_read_then_allows_followup() -> None:
     planned = plan_known_read(
         "Can you inspect the Job object and find clues?",

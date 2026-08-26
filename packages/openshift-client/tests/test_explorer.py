@@ -53,6 +53,35 @@ def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal
     ]
 
 
+def test_network_policy_projection_preserves_selectors_peers_ports_and_policy_types() -> None:
+    projected = _list_projection("NetworkPolicy", {
+        "metadata": {
+            "name": "allow-frontend", "namespace": "data",
+            "labels": {"owner": "platform"},
+        },
+        "spec": {
+            "podSelector": {"matchLabels": {"app": "database"}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [{
+                "from": [{"namespaceSelector": {"matchLabels": {"team": "frontend"}}}],
+                "ports": [{"protocol": "TCP", "port": 5432}],
+            }],
+            "egress": [],
+        },
+    })
+
+    assert projected["metadata"]["labels"] == {"owner": "platform"}
+    assert projected["spec"] == {
+        "podSelector": {"matchLabels": {"app": "database"}},
+        "policyTypes": ["Ingress", "Egress"],
+        "ingress": [{
+            "from": [{"namespaceSelector": {"matchLabels": {"team": "frontend"}}}],
+            "ports": [{"protocol": "TCP", "port": 5432}],
+        }],
+        "egress": [],
+    }
+
+
 class FakeResource:
     def __init__(self, items):
         self.items = items

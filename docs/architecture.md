@@ -238,6 +238,14 @@ because application failures need not affect Kubernetes health. This determinist
 uses the same twelve-read ceiling, deduplication, redaction, and RBAC boundary as model-planned
 reads; it is a safety net for basic Kubernetes relationships, not unrestricted crawling.
 
+An explicit TCP/connectivity question that names one Pod in each of two namespaces receives a
+separate deterministic policy check before model planning. Normal code reads both exact Pods,
+both Namespace objects, and a bounded list of NetworkPolicies in each namespace. Compact policy
+evidence retains `podSelector`, `policyTypes`, ingress and egress peers, and ports so the answer
+can compare destination ingress isolation with source egress isolation using observed Pod and
+Namespace labels. This configuration evidence identifies a plausible policy factor; it does not
+prove packet drops because PodPilot does not exec a source-originated probe inside the workload.
+
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque
 server-derived ID. A model may call `pods/log` only by selecting one of those IDs;

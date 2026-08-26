@@ -547,6 +547,70 @@ _NAMESPACE_TOP_CONSUMERS_QUERY = re.compile(
     r"(?P<namespace_second>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
     re.IGNORECASE,
 )
+_KUBERNETES_NAME_PATTERN = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+_POD_IN_NAMESPACE_QUERY = re.compile(
+    rf"\bpod\s+[`'\"]?(?P<pod>{_KUBERNETES_NAME_PATTERN})[`'\"]?\s+"
+    rf"(?:in|from)\s+(?:the\s+)?(?:namespace\s+)?"
+    rf"[`'\"]?(?P<namespace>{_KUBERNETES_NAME_PATTERN})[`'\"]?",
+    re.IGNORECASE,
+)
+_NAMESPACE_POD_COORDINATE_QUERY = re.compile(
+    rf"\b(?:from|to|between)\s+(?:the\s+)?(?:pod\s+)?"
+    rf"[`'\"]?(?P<namespace>{_KUBERNETES_NAME_PATTERN})/"
+    rf"(?P<pod>{_KUBERNETES_NAME_PATTERN})[`'\"]?",
+    re.IGNORECASE,
+)
+_CROSS_NAMESPACE_CONNECTIVITY_QUERY = re.compile(
+    r"\b(?:tcp|connect(?:ion|ivity|ing)?|timeout|timed\s+out|unreachable|refused)\b",
+    re.IGNORECASE,
+)
+
+
+def _cross_namespace_network_policy_plan(question: str) -> ReadPlan | None:
+    """Compile an explicit cross-namespace Pod pair into bounded policy evidence reads."""
+
+    if not _CROSS_NAMESPACE_CONNECTIVITY_QUERY.search(question):
+        return None
+    references: list[tuple[int, str, str]] = []
+    for pattern in (_POD_IN_NAMESPACE_QUERY, _NAMESPACE_POD_COORDINATE_QUERY):
+        references.extend(
+            (match.start(), match.group("namespace"), match.group("pod"))
+            for match in pattern.finditer(question)
+        )
+    references.sort(key=lambda item: item[0])
+    pods_by_namespace: dict[str, str] = {}
+    for _, namespace, pod in references:
+        pods_by_namespace.setdefault(namespace.lower(), pod.lower())
+    if len(pods_by_namespace) != 2:
+        return None
+    endpoints = list(pods_by_namespace.items())
+    intents: list[ReadIntent] = []
+    for namespace, pod in endpoints:
+        intents.append(ReadIntent(
+            tool="get_resource", resource="pods", api_version="v1",
+            kind="Pod", namespace=namespace, name=pod,
+        ))
+    for namespace, _ in endpoints:
+        intents.append(ReadIntent(
+            tool="get_resource", resource="namespaces", api_version="v1",
+            kind="Namespace", name=namespace,
+        ))
+    for namespace, _ in endpoints:
+        intents.append(ReadIntent(
+            tool="list_resources", resource="networkpolicies",
+            api_version="networking.k8s.io/v1", kind="NetworkPolicy",
+            namespace=namespace, limit=100,
+        ))
+    source_namespace, source_pod = endpoints[0]
+    destination_namespace, destination_pod = endpoints[1]
+    return ReadPlan(
+        goal_type="diagnose",
+        scope_summary=(
+            f"Inspect cross-namespace policy selectors for {source_namespace}/{source_pod} "
+            f"and {destination_namespace}/{destination_pod}."
+        ),
+        intents=intents,
+    )
 
 
 def plan_known_read(
@@ -559,6 +623,9 @@ def plan_known_read(
     """Compile unambiguous inventory and alert-scoped reads without model syntax."""
 
     lowered = question.lower()
+    network_policy_plan = _cross_namespace_network_policy_plan(question)
+    if network_policy_plan is not None:
+        return network_policy_plan, False
     top_consumers = _NAMESPACE_TOP_CONSUMERS_QUERY.search(question)
     if top_consumers:
         metric_name = top_consumers.group("metric") or top_consumers.group("metric_first")

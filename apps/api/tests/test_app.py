@@ -240,6 +240,79 @@ def test_collection_automatically_retries_tls_trust_failure_without_verification
     assert any("server identity was not verified" in item for item in result.limitations)
 
 
+def test_collection_deterministically_checks_cross_namespace_network_policies() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                scope_summary="The endpoint labels and policies are available.",
+                supporting_evidence_ids=[item["id"] for item in context["observations"]],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id=f"evidence-{len(self.calls)}", tool=intent.tool,
+                summary=f"Read {intent.kind} evidence.",
+                source=(
+                    f"kubernetes:{intent.api_version}:{intent.kind}:"
+                    f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
+                ),
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": intent.api_version, "kind": intent.kind,
+                    "scope": intent.namespace or "cluster",
+                    "metadata": {
+                        "namespace": intent.namespace, "name": intent.name,
+                        "labels": {"app": intent.name or "policy"},
+                    },
+                    "items": [],
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    settings = Settings(
+        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        role_breakglass_groups=[],
+    )
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token", settings=settings, actor="ivy",
+        workflow_id="workflow-network-policy",
+        question=(
+            "Investigate TCP timeouts from pod client-7d9 in namespace frontend "
+            "to pod database-0 in namespace data on port 5432."
+        ),
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [call.kind for call in explorer.calls] == [
+        "Pod", "Pod", "Namespace", "Namespace", "NetworkPolicy", "NetworkPolicy",
+    ]
+    assert [call.namespace for call in explorer.calls[-2:]] == ["frontend", "data"]
+    assert len(result.activity) == 6
+    assert all(item["status"] == "succeeded" for item in result.activity)
+    assert len(provider.contexts) == 1
+    assert provider.contexts[0]["investigation_round"] == 2
+    assert len(provider.contexts[0]["observations"]) == 6
+
+
 def test_collection_auto_investigates_repeated_certificate_log_signals() -> None:
     pod_name = "maas-default-gateway-5cc7b765cf-b6qtq"
 

@@ -201,6 +201,8 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
     assert "never author PromQL" in planner_instructions
     assert "findings array contains deterministic evidence summaries" in planner_instructions
     assert "verified and insecure observations" in planner_instructions
+    assert "NetworkPolicies in both endpoint namespaces" in planner_instructions
+    assert "ingress and egress isolation are additive" in planner_instructions
     assert "investigation_priority and trigger_reasons" in planner_instructions
     correction_messages = completions.requests[1]["messages"]
     assert "scope_summary: string_too_short" in correction_messages[-1]["content"]

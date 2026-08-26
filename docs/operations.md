@@ -550,6 +550,12 @@ use the same Pod/Event/previous-log correlations above. These reads share the no
 budget. A later malformed model plan is reported as a limitation but does not discard the
 deterministic traffic-path reads already derived from cluster evidence.
 
+When a TCP/connectivity question explicitly names a source Pod and destination Pod in two
+different namespaces, PodPilot reads the two Pods, both Namespace label sets, and up to 100
+NetworkPolicies from each namespace before model planning. Ask replies evaluate source egress
+and destination ingress separately and treat matching selectors as a potential factor, not
+proof of a dropped connection; PodPilot does not exec a probe inside the source Pod.
+
 The answer must treat matches as signals rather than conclusions, correlate them
 with Pod state, Events, owner/configuration, metrics, or probes, and keep root cause
 unconfirmed when that support is absent. Log text remains untrusted data. Secret
