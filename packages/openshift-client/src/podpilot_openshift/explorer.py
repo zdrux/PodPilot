@@ -220,6 +220,54 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "conditions": status.get("conditions") or [],
             "loadBalancer": status.get("loadBalancer") or status.get("load_balancer") or {},
         }
+    elif kind == "EndpointSlice":
+        endpoints = raw.get("endpoints") or []
+        projected.update({
+            "addressType": raw.get("addressType") or raw.get("address_type"),
+            "ports": raw.get("ports") or [],
+            "endpoints": [{
+                "addresses": endpoint.get("addresses") or [],
+                "conditions": endpoint.get("conditions") or {},
+                "targetRef": endpoint.get("targetRef") or endpoint.get("target_ref"),
+                "nodeName": endpoint.get("nodeName") or endpoint.get("node_name"),
+            } for endpoint in endpoints[:100] if isinstance(endpoint, dict)],
+            "podTargets": [
+                endpoint.get("targetRef") or endpoint.get("target_ref")
+                for endpoint in endpoints[:100]
+                if isinstance(endpoint, dict)
+                and isinstance(endpoint.get("targetRef") or endpoint.get("target_ref"), dict)
+                and str((endpoint.get("targetRef") or endpoint.get("target_ref")).get("kind") or "")
+                == "Pod"
+            ],
+        })
+    elif kind == "Endpoints":
+        subsets = raw.get("subsets") or []
+        addresses = [
+            address
+            for subset in subsets[:50]
+            if isinstance(subset, dict)
+            for address in [
+                *(subset.get("addresses") or []),
+                *(subset.get("notReadyAddresses") or subset.get("not_ready_addresses") or []),
+            ]
+            if isinstance(address, dict)
+        ][:100]
+        projected.update({
+            "subsets": [{
+                "addresses": subset.get("addresses") or [],
+                "notReadyAddresses": (
+                    subset.get("notReadyAddresses") or subset.get("not_ready_addresses") or []
+                ),
+                "ports": subset.get("ports") or [],
+            } for subset in subsets[:50] if isinstance(subset, dict)],
+            "podTargets": [
+                address.get("targetRef") or address.get("target_ref")
+                for address in addresses
+                if isinstance(address.get("targetRef") or address.get("target_ref"), dict)
+                and str((address.get("targetRef") or address.get("target_ref")).get("kind") or "")
+                == "Pod"
+            ],
+        })
     elif kind == "ClusterOperator":
         projected["status"] = {
             "versions": status.get("versions") or [],

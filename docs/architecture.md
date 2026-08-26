@@ -195,8 +195,10 @@ connection-host override supports passthrough Route testing against a specific
 router address. Secrets, access-review resources, arbitrary subresources, commands,
 and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
-evidence IDs. If any planning round fails, collection stops and the answer phase
-still proceeds with the available evidence and an explicit limitation.
+evidence IDs. A planning-round failure is recorded as an explicit limitation.
+Evidence-derived automatic continuations already queued by normal code still complete within
+the shared budget; a failed model plan cannot cancel deterministic traffic traversal or log
+correlation.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.
@@ -227,6 +229,14 @@ inventions. Route protocol questions also have a deterministic cited interpretat
 forwards HTTP after router TLS termination, `reencrypt` establishes new backend TLS, and
 `passthrough` leaves TLS termination to the backend. This states configuration, not live
 backend reachability or the origin of an HTTP 500.
+
+For Route, HTTP 5xx, and connectivity investigations, normal code follows a bounded traffic
+graph from an observed Route to its exact Service, Service-selected Pods, EndpointSlices, and
+legacy Endpoints. Endpoint projections retain bounded Pod target references. PodPilot reads
+logs from up to three relevant backend containers even when the Pods are Running and Ready,
+because application failures need not affect Kubernetes health. This deterministic traversal
+uses the same twelve-read ceiling, deduplication, redaction, and RBAC boundary as model-planned
+reads; it is a safety net for basic Kubernetes relationships, not unrestricted crawling.
 
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque

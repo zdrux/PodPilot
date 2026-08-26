@@ -179,6 +179,132 @@ def test_unhealthy_pod_evidence_automatically_selects_bounded_exact_logs() -> No
     assert "restart count is 3" in followups[0].reason
 
 
+def test_route_traffic_evidence_deterministically_follows_service_and_backend_pods() -> None:
+    route = AdHocObservation(
+        id="cluster-route-1", tool="search_resources", summary="Found Route.",
+        source="kubernetes:route.openshift.io/v1:Route:maas/*",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Route",
+            "items": [{
+                "metadata": {"name": "maas", "namespace": "maas"},
+                "spec": {"to": {"kind": "Service", "name": "model-server"}},
+            }],
+        },
+    )
+
+    service_reads = automatic_read_followups(
+        ReadIntent(
+            tool="search_resources", resource="routes.route.openshift.io",
+            match_field="spec.host", match_value="maas.apps.example.test",
+        ),
+        (route,),
+        question="Why does https://maas.apps.example.test return Internal Server Error?",
+    )
+
+    assert len(service_reads) == 1
+    assert service_reads[0].code == "traffic_path_investigation"
+    assert service_reads[0].intent.tool == "get_resource"
+    assert service_reads[0].intent.namespace == "maas"
+    assert service_reads[0].intent.name == "model-server"
+
+    service = AdHocObservation(
+        id="cluster-service-1", tool="get_resource", summary="Read Service.",
+        source="kubernetes:v1:Service:maas/model-server",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Service", "metadata": {"name": "model-server", "namespace": "maas"},
+            "spec": {"selector": {"app": "model-server"}},
+        },
+    )
+    backend_reads = automatic_read_followups(
+        service_reads[0].intent, (service,),
+        question="Why does https://maas.apps.example.test return Internal Server Error?",
+    )
+
+    assert [item.intent.tool for item in backend_reads] == [
+        "list_resources", "list_resources", "get_resource",
+    ]
+    assert backend_reads[0].intent.kind == "Pod"
+    assert backend_reads[0].intent.label_selector == "app=model-server"
+    assert backend_reads[1].intent.kind == "EndpointSlice"
+    assert backend_reads[2].intent.kind == "Endpoints"
+
+
+def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets() -> None:
+    pods = AdHocObservation(
+        id="cluster-pods-healthy", tool="list_resources", summary="Read backend Pods.",
+        source="kubernetes:v1:Pod:maas/*", collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Pod", "scope": "maas",
+            "logCandidates": [{
+                "namespace": "maas", "pod": "model-server-abc", "containers": ["server"],
+                "phase": "Running", "ready": True, "restartCount": 0,
+            }],
+        },
+    )
+
+    log_reads = automatic_read_followups(
+        ReadIntent(
+            tool="list_resources", resource="pods", api_version="v1", kind="Pod",
+            namespace="maas", label_selector="app=model-server",
+        ),
+        (pods,),
+        question="The Route returns HTTP 500; inspect its backend.",
+    )
+
+    assert len(log_reads) == 1
+    assert log_reads[0].code == "pod_log_investigation"
+    assert log_reads[0].intent.name == "model-server-abc"
+    assert "backend traffic path" in log_reads[0].reason
+
+    endpoint_slice = AdHocObservation(
+        id="cluster-slice-1", tool="list_resources", summary="Read EndpointSlice.",
+        source="kubernetes:discovery.k8s.io/v1:EndpointSlice:maas/*",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "EndpointSlice",
+            "items": [{
+                "metadata": {"namespace": "maas"},
+                "podTargets": [{"kind": "Pod", "name": "model-server-abc"}],
+            }],
+        },
+    )
+    pod_reads = automatic_read_followups(
+        ReadIntent(tool="list_resources", resource="endpointslices"),
+        (endpoint_slice,),
+        question="The Route returns HTTP 500; inspect its backend.",
+    )
+
+    assert len(pod_reads) == 1
+    assert pod_reads[0].intent.kind == "Pod"
+    assert pod_reads[0].intent.name == "model-server-abc"
+
+    legacy_endpoints = AdHocObservation(
+        id="cluster-endpoints-1", tool="get_resource", summary="Read Endpoints.",
+        source="kubernetes:v1:Endpoints:maas/model-server",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Endpoints", "metadata": {"namespace": "maas"},
+            "subsets": [{
+                "addresses": [{
+                    "ip": "10.0.0.8",
+                    "targetRef": {"kind": "Pod", "name": "model-server-abc"},
+                }],
+            }],
+        },
+    )
+    legacy_pod_reads = automatic_read_followups(
+        ReadIntent(
+            tool="get_resource", resource="endpoints", api_version="v1", kind="Endpoints",
+            namespace="maas", name="model-server",
+        ),
+        (legacy_endpoints,),
+        question="The Route returns HTTP 500; inspect its backend.",
+    )
+    assert legacy_pod_reads[0].intent.name == "model-server-abc"
+
+
 def test_log_priority_is_scoped_to_the_affected_container() -> None:
     evidence = [{
         "id": "cluster-pods-2", "tool": "list_resources",

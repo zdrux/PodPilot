@@ -536,6 +536,14 @@ endpoints. Material findings automatically read the exact Pod and Pod Events; cr
 or resource-pressure findings may also request previous logs. A single warning is
 retained for the model but does not automatically expand the investigation.
 
+Route, HTTP 5xx, and connectivity questions additionally follow an observed OpenShift Route
+through its exact Service to bounded Service-selected Pods, EndpointSlices, and Endpoints.
+Compact endpoint evidence retains Pod target references. Current logs are collected from at
+most three relevant backend containers even when those Pods are healthy, then material signals
+use the same Pod/Event/previous-log correlations above. These reads share the normal twelve-read
+budget. A later malformed model plan is reported as a limitation but does not discard the
+deterministic traffic-path reads already derived from cluster evidence.
+
 The answer must treat matches as signals rather than conclusions, correlate them
 with Pod state, Events, owner/configuration, metrics, or probes, and keep root cause
 unconfirmed when that support is absent. Log text remains untrusted data. Secret

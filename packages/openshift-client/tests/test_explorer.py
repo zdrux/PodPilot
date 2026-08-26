@@ -4,7 +4,11 @@ import pytest
 from kubernetes.client.exceptions import ApiException
 
 from podpilot_diagnostics.adhoc import ReadIntent
-from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
+from podpilot_openshift.explorer import (
+    KubernetesReadOnlyExplorer,
+    ReadOnlyExplorerError,
+    _list_projection,
+)
 
 
 class FakeObject:
@@ -18,6 +22,35 @@ class FakeObject:
 
     def to_dict(self):
         return self._payload
+
+
+def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal() -> None:
+    endpoint_slice = _list_projection("EndpointSlice", {
+        "metadata": {"name": "api-1", "namespace": "payments"},
+        "addressType": "IPv4",
+        "ports": [{"name": "http", "port": 8080}],
+        "endpoints": [{
+            "addresses": ["10.0.0.8"], "conditions": {"ready": True},
+            "targetRef": {"kind": "Pod", "namespace": "payments", "name": "api-abc"},
+        }],
+    })
+    endpoints = _list_projection("Endpoints", {
+        "metadata": {"name": "api", "namespace": "payments"},
+        "subsets": [{
+            "addresses": [{
+                "ip": "10.0.0.8",
+                "targetRef": {"kind": "Pod", "namespace": "payments", "name": "api-abc"},
+            }],
+            "ports": [{"name": "http", "port": 8080}],
+        }],
+    })
+
+    assert endpoint_slice["podTargets"] == [
+        {"kind": "Pod", "namespace": "payments", "name": "api-abc"}
+    ]
+    assert endpoints["podTargets"] == [
+        {"kind": "Pod", "namespace": "payments", "name": "api-abc"}
+    ]
 
 
 class FakeResource:

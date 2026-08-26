@@ -626,3 +626,23 @@ Consequences: Useful exact operational terminology is searchable without an
 embedding service or new database. Revisions remain auditable and stale or
 out-of-scope entries fail closed. Semantic reranking and answer-time augmentation
 remain optional later layers; neither may expand collection or remediation policy.
+
+## 2026-08-25 - Traffic-path traversal is deterministic and bounded
+
+Context: Route investigations depended on the model producing a valid multi-round
+Route-to-Service-to-Pod plan. A malformed later ReadPlan stopped collection before Pods
+existed, so generalized log analysis could not run and the final answer fell back to shallow
+Route configuration. Healthy backend Pods were also excluded from automatic logs even though
+an application can return HTTP 500 while remaining Ready.
+
+Decision: For Route, HTTP 5xx, and connectivity questions, derive an automatic read graph from
+observed Kubernetes relationships: Route to exact Service, Service selector to bounded Pods,
+and Service to EndpointSlices and Endpoints with compact Pod targets. Inspect current logs from
+at most three relevant backend containers regardless of health, then apply the existing general
+signal correlations. Keep every continuation inside the shared read budget and allow it to
+complete even when a subsequent model planning call is malformed.
+
+Consequences: Basic traffic-path evidence no longer depends on model schema reliability, while
+the model still prioritizes optional investigation branches. The traversal remains read-only,
+evidence-derived, deduplicated, redacted, RBAC-limited, and capped; it does not become a generic
+cluster crawler or claim that log correlation proves causality.

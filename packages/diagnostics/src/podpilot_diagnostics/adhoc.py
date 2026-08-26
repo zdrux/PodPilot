@@ -751,7 +751,8 @@ class AutomaticReadFollowup:
     """A deterministic, evidence-derived continuation within the existing read budget."""
 
     code: Literal[
-        "tls_trust_retry", "pod_log_investigation", "log_signal_investigation"
+        "tls_trust_retry", "traffic_path_investigation", "pod_log_investigation",
+        "log_signal_investigation",
     ]
     reason: str
     intent: ReadIntent
@@ -938,8 +939,169 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
 def automatic_read_followups(
     intent: ReadIntent,
     observations: tuple[AdHocObservation, ...],
+    *,
+    question: str = "",
 ) -> tuple[AutomaticReadFollowup, ...]:
     """Plan narrow retries and evidence expansion from normalized observations."""
+
+    traffic_question = bool(re.search(
+        r"(?i)(?:https?://|\broute\b|\btraffic\b|\b(?:http|tls|ssl)\b|"
+        r"\b(?:status|error)\s*5\d\d\b|\binternal server error\b|"
+        r"\b(?:connect(?:ion|ivity)?|reachable|backend|endpoint)\b)",
+        question,
+    ))
+
+    def observed_objects(kind: str) -> list[tuple[dict[str, object], str]]:
+        matched: list[tuple[dict[str, object], str]] = []
+        for observation in observations:
+            data = observation.data
+            if str(data.get("kind") or "") == kind:
+                matched.append((data, observation.id))
+            items = data.get("items")
+            if isinstance(items, list):
+                matched.extend(
+                    (item, observation.id)
+                    for item in items
+                    if isinstance(item, dict)
+                    and str(item.get("kind") or data.get("kind") or "") == kind
+                )
+        return matched
+
+    if traffic_question and intent.tool in {
+        "get_resource", "list_resources", "search_resources",
+    }:
+        traffic_followups: list[AutomaticReadFollowup] = []
+        for route, evidence_id in observed_objects("Route")[:2]:
+            metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
+            spec = route.get("spec") if isinstance(route.get("spec"), dict) else {}
+            target = spec.get("to") if isinstance(spec.get("to"), dict) else {}
+            namespace = str(metadata.get("namespace") or "")
+            service = str(target.get("name") or "")
+            if namespace and service and str(target.get("kind") or "Service") == "Service":
+                traffic_followups.append(AutomaticReadFollowup(
+                    code="traffic_path_investigation",
+                    reason=(
+                        f"Read the exact backend Service {namespace}/{service} referenced by the "
+                        "observed OpenShift Route."
+                    ),
+                    intent=ReadIntent(
+                        tool="get_resource", resource="services", api_version="v1",
+                        kind="Service", namespace=namespace, name=service,
+                    ),
+                    evidence_ids=(evidence_id,),
+                ))
+        if traffic_followups:
+            return tuple(traffic_followups)
+
+        for service, evidence_id in observed_objects("Service")[:2]:
+            metadata = service.get("metadata") if isinstance(service.get("metadata"), dict) else {}
+            spec = service.get("spec") if isinstance(service.get("spec"), dict) else {}
+            namespace = str(metadata.get("namespace") or "")
+            name = str(metadata.get("name") or "")
+            selector = spec.get("selector") if isinstance(spec.get("selector"), dict) else {}
+            if not namespace or not name:
+                continue
+            if selector:
+                label_selector = ",".join(
+                    f"{key}={value}" for key, value in sorted(selector.items())
+                    if key and value is not None
+                )
+                if label_selector and len(label_selector) <= 512:
+                    traffic_followups.append(AutomaticReadFollowup(
+                        code="traffic_path_investigation",
+                        reason=(
+                            f"List the bounded Pods selected by backend Service {namespace}/{name}."
+                        ),
+                        intent=ReadIntent(
+                            tool="list_resources", resource="pods", api_version="v1",
+                            kind="Pod", namespace=namespace, label_selector=label_selector,
+                            limit=20,
+                        ),
+                        evidence_ids=(evidence_id,),
+                    ))
+            traffic_followups.extend((
+                AutomaticReadFollowup(
+                    code="traffic_path_investigation",
+                    reason=f"Inspect EndpointSlices for backend Service {namespace}/{name}.",
+                    intent=ReadIntent(
+                        tool="list_resources", resource="endpointslices",
+                        api_version="discovery.k8s.io/v1", kind="EndpointSlice",
+                        namespace=namespace,
+                        label_selector=f"kubernetes.io/service-name={name}", limit=20,
+                    ),
+                    evidence_ids=(evidence_id,),
+                ),
+                AutomaticReadFollowup(
+                    code="traffic_path_investigation",
+                    reason=f"Inspect the legacy Endpoints object for backend Service {namespace}/{name}.",
+                    intent=ReadIntent(
+                        tool="get_resource", resource="endpoints", api_version="v1",
+                        kind="Endpoints", namespace=namespace, name=name,
+                    ),
+                    evidence_ids=(evidence_id,),
+                ),
+            ))
+        if traffic_followups:
+            return tuple(traffic_followups[:6])
+
+        endpoint_pods: list[AutomaticReadFollowup] = []
+
+        def endpoint_targets(endpoint_object: dict[str, object]) -> list[dict[str, object]]:
+            targets = endpoint_object.get("podTargets")
+            discovered = [item for item in targets if isinstance(item, dict)] if isinstance(
+                targets, list
+            ) else []
+            endpoints = endpoint_object.get("endpoints")
+            if isinstance(endpoints, list):
+                discovered.extend(
+                    target
+                    for endpoint in endpoints
+                    if isinstance(endpoint, dict)
+                    for target in [endpoint.get("targetRef") or endpoint.get("target_ref")]
+                    if isinstance(target, dict)
+                )
+            subsets = endpoint_object.get("subsets")
+            if isinstance(subsets, list):
+                discovered.extend(
+                    target
+                    for subset in subsets
+                    if isinstance(subset, dict)
+                    for address in [
+                        *(subset.get("addresses") or []),
+                        *(subset.get("notReadyAddresses") or subset.get("not_ready_addresses") or []),
+                    ]
+                    if isinstance(address, dict)
+                    for target in [address.get("targetRef") or address.get("target_ref")]
+                    if isinstance(target, dict)
+                )
+            return discovered
+
+        for kind in ("EndpointSlice", "Endpoints"):
+            for endpoint_object, evidence_id in observed_objects(kind):
+                metadata = (
+                    endpoint_object.get("metadata")
+                    if isinstance(endpoint_object.get("metadata"), dict) else {}
+                )
+                default_namespace = str(metadata.get("namespace") or "")
+                for target in endpoint_targets(endpoint_object):
+                    if not isinstance(target, dict) or str(target.get("kind") or "Pod") != "Pod":
+                        continue
+                    namespace = str(target.get("namespace") or default_namespace)
+                    name = str(target.get("name") or "")
+                    if namespace and name:
+                        endpoint_pods.append(AutomaticReadFollowup(
+                            code="traffic_path_investigation",
+                            reason=(
+                                f"Read backend Pod {namespace}/{name} referenced by {kind} evidence."
+                            ),
+                            intent=ReadIntent(
+                                tool="get_resource", resource="pods", api_version="v1",
+                                kind="Pod", namespace=namespace, name=name,
+                            ),
+                            evidence_ids=(evidence_id,),
+                        ))
+        if endpoint_pods:
+            return tuple(endpoint_pods[:3])
 
     if intent.tool == "http_probe" and intent.tls_verify:
         trust_failures = [
@@ -970,6 +1132,10 @@ def automatic_read_followups(
             (
                 candidate for candidate in candidates
                 if candidate.investigation_priority != "normal"
+                or (
+                    traffic_question
+                    and candidate.phase != "Succeeded"
+                )
             ),
             key=lambda candidate: (
                 0 if candidate.investigation_priority == "high" else 1,
@@ -985,7 +1151,11 @@ def automatic_read_followups(
                 reason=(
                     f"Inspect {candidate.namespace}/{candidate.pod} container "
                     f"{candidate.container or 'default'} because "
-                    + "; ".join(candidate.trigger_reasons)
+                    + (
+                        "; ".join(candidate.trigger_reasons)
+                        if candidate.trigger_reasons
+                        else "it serves the backend traffic path under investigation"
+                    )
                     + "."
                 ),
                 intent=ReadIntent(

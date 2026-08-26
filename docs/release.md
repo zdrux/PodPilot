@@ -134,6 +134,10 @@ Tests must not treat a 403 from one same-plural API as authorization to try anot
 Route investigation gates must prove that projected backend Service references ground exact
 follow-up reads and that edge/reencrypt/passthrough answers cite the matched Route while
 distinguishing configured TLS behavior from live backend reachability.
+Traffic-path gates must prove that Route/HTTP-5xx investigations deterministically traverse
+Route to Service, Service-selected Pods, EndpointSlices, and Endpoints within the shared read
+budget. They must retain bounded endpoint Pod targets, inspect relevant healthy backend logs,
+and still reach those logs when a later model ReadPlan fails schema validation.
 HTTP probe gates must verify that `tls_verify=false` remains HTTPS-only, keeps Host and
 SNI unchanged, records `verified: false`, and produces a visible server-identity limitation.
 Metric trend gates must verify authenticated `/query_range` requests, matrix validation,
@@ -169,7 +173,8 @@ Automatic-follow-up gates must verify that a trust-only TLS failure schedules at
 most one identical `tls_verify=false` retry without changing URL, method, connection
 override, Host, or SNI; both results and the insecure-identity warning must survive.
 Log-investigation gates must prioritize exact unready/restarting/non-running
-Pod/container candidates; classify representative crash, resource, TLS, DNS,
+Pod/container candidates while also allowing bounded healthy backend candidates for an active
+traffic-path investigation; classify representative crash, resource, TLS, DNS,
 network, authorization, storage, dependency, error, and warning lines from any
 container; normalize repeated signatures; and retain only bounded samples, paths,
 endpoints, and timestamps. Material findings may perform only exact Pod, Pod-Event,

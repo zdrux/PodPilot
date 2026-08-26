@@ -135,6 +135,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Route backend Service references are grounded from projected `spec.to.name` data, allowing
   exact Route-to-Service follow-up reads. Edge, reencrypt, passthrough, and unsecured Route
   behavior has a deterministic cited answer when model follow-up planning is incomplete.
+- Route, HTTP-5xx, and connectivity investigations follow a deterministic bounded traffic graph
+  through the exact Service, selected Pods, EndpointSlices, and Endpoints. Relevant healthy
+  backend containers receive bounded log inspection, so a malformed later ReadPlan cannot
+  prevent basic workload evidence collection.
 - HTTPS troubleshooting probes keep verification enabled by default but may explicitly
   select `tls_verify=false` for private, self-signed, or component-managed certificates.
   SNI is preserved and both evidence and limitations state that server identity was not verified.

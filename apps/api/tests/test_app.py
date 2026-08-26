@@ -1308,13 +1308,35 @@ class HeadingOnlyRouteProvider(RouteBackendProvider):
         )
 
 
+class FailingTrafficPlanProvider(RouteBackendProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        raise ModelProviderError(
+            "Provider response does not match ReadPlan. Provider returned content that failed "
+            "schema validation (intents.0: value_error)."
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        log = next(item for item in context["observations"] if item["tool"] == "pod_logs")
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer=(
+                "The backend Pod log reports an upstream application error while handling the "
+                "Route request. The traffic path and application logs were both inspected."
+            ),
+            cited_evidence_ids=[log["id"]],
+            limitations=[],
+        )
+
+
 class RouteBackendExplorer:
     def __init__(self) -> None:
         self.calls = []
 
     def execute(self, intent):
         self.calls.append(intent)
-        if intent.tool == "search_resources":
+        if intent.tool == "search_resources" and intent.kind == "Route":
             return ReadResult((AdHocObservation(
                 id="cluster-route-1",
                 tool="search_resources",
@@ -1336,16 +1358,96 @@ class RouteBackendExplorer:
                     }],
                 },
             ),))
-        assert intent.tool == "get_resource"
+        if intent.tool == "get_resource" and intent.kind == "Service":
+            return ReadResult((AdHocObservation(
+                id="cluster-service-1",
+                tool="get_resource",
+                summary="Read the Route backend Service.",
+                source="kubernetes:v1:Service:maas/model-server",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Service",
+                    "metadata": {"name": "model-server", "namespace": "maas"},
+                    "spec": {
+                        "selector": {"app": "model-server"},
+                        "ports": [{"name": "http", "port": 8080, "targetPort": 8080}],
+                    },
+                },
+            ),))
+        if intent.tool == "list_resources" and intent.kind == "Pod":
+            return ReadResult((AdHocObservation(
+                id="cluster-backend-pods",
+                tool="list_resources",
+                summary="Read one backend Pod selected by the Service.",
+                source="kubernetes:v1:Pod:maas/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Pod", "scope": "maas",
+                    "logCandidates": [{
+                        "namespace": "maas", "pod": "model-server-abc",
+                        "containers": ["server"], "phase": "Running",
+                        "ready": True, "restartCount": 0,
+                    }],
+                },
+            ),))
+        if intent.tool == "list_resources" and intent.kind == "EndpointSlice":
+            return ReadResult((AdHocObservation(
+                id="cluster-backend-slices", tool="list_resources",
+                summary="Read one EndpointSlice for the backend Service.",
+                source="kubernetes:discovery.k8s.io/v1:EndpointSlice:maas/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "EndpointSlice", "items": []},
+            ),))
+        if intent.tool == "get_resource" and intent.kind == "Endpoints":
+            return ReadResult((AdHocObservation(
+                id="cluster-backend-endpoints", tool="get_resource",
+                summary="Read the legacy Endpoints for the backend Service.",
+                source="kubernetes:v1:Endpoints:maas/model-server",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Endpoints",
+                    "metadata": {"name": "model-server", "namespace": "maas"},
+                    "podTargets": [],
+                },
+            ),))
+        if intent.tool == "get_resource" and intent.kind == "Pod":
+            return ReadResult((AdHocObservation(
+                id="cluster-backend-pod", tool="get_resource",
+                summary="Read the exact backend Pod.",
+                source="kubernetes:v1:Pod:maas/model-server-abc",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Pod",
+                    "metadata": {"name": "model-server-abc", "namespace": "maas"},
+                    "spec": {"containers": [{"name": "server"}]},
+                    "status": {
+                        "phase": "Running",
+                        "containerStatuses": [{
+                            "name": "server", "ready": True, "restartCount": 0,
+                        }],
+                    },
+                },
+            ),))
+        if intent.tool == "search_resources" and intent.kind == "Event":
+            return ReadResult((AdHocObservation(
+                id="cluster-backend-events", tool="search_resources",
+                summary="No Events matched the backend Pod.",
+                source="kubernetes:v1:Event:maas/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Event", "scope": "maas", "items": [],
+                    "matchField": "involvedObject.name", "matchValue": "model-server-abc",
+                },
+            ),), ("No Event resources matched the bounded query.",))
+        assert intent.tool == "pod_logs"
         return ReadResult((AdHocObservation(
-            id="cluster-service-1",
-            tool="get_resource",
-            summary="Read the Route backend Service.",
-            source="kubernetes:v1:Service:maas/model-server",
+            id="cluster-backend-logs", tool="pod_logs",
+            summary="Collected bounded logs from the backend application container.",
+            source="kubernetes:v1:Pod/log:maas/model-server-abc?current",
             collected_at=datetime.now(timezone.utc),
             data={
-                "metadata": {"name": "model-server", "namespace": "maas"},
-                "spec": {"ports": [{"name": "http", "port": 8080, "targetPort": 8080}]},
+                "container": "server", "previous": False,
+                "tail": "ERROR upstream model request returned HTTP 500",
             },
         ),))
 
@@ -2039,8 +2141,59 @@ def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
     assert "forwards unencrypted HTTP" in rendered.text
     assert "maas/model-server" in rendered.text
     assert "model planner did not select a safe evidence read" not in rendered.text
-    assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
+    assert [call.tool for call in explorer.calls] == [
+        "search_resources", "get_resource", "list_resources", "list_resources",
+        "get_resource", "pod_logs", "get_resource", "search_resources",
+    ]
     assert explorer.calls[1].name == "model-server"
+    assert explorer.calls[2].kind == "Pod"
+    assert explorer.calls[5].name == "model-server-abc"
+
+
+def test_route_traffic_path_reaches_backend_logs_when_later_plan_is_invalid(
+    tmp_path: Path,
+) -> None:
+    provider = FailingTrafficPlanProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "This Route reports an Internal Server Error over HTTPS; inspect the backend. "
+                    "https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "backend Pod log reports an upstream application error" in rendered.text
+    assert "ReadPlan round 2 failed" in rendered.text
+    assert any(call.tool == "pod_logs" for call in explorer.calls)
+    assert provider.adhoc_answer_calls[0]["findings"][0]["kind"] == "log_signal"
 
 
 def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(

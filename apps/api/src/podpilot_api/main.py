@@ -1300,6 +1300,7 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set()
     reads_used = 0
     automatic_tls_retries = 0
+    automatic_traffic_followups = 0
     automatic_log_followups = 0
     scope_summary = "Bounded read-only cluster investigation."
     deterministic_plan = plan_known_read(
@@ -1565,7 +1566,9 @@ async def _collect_bounded_cluster_reads(
                 if automatic_code == "tls_trust_retry":
                     message = "Retrying the bounded HTTPS probe without certificate verification."
                 elif automatic_code == "pod_log_investigation":
-                    message = "Inspecting bounded logs for an unhealthy or restarting container."
+                    message = "Inspecting bounded logs for a relevant backend container."
+                elif automatic_code == "traffic_path_investigation":
+                    message = "Following the observed Route traffic path to its backend workloads."
                 elif automatic_code == "log_signal_investigation":
                     message = "Correlating a notable bounded log signal with exact Pod evidence."
                 await progress("collecting", message)
@@ -1598,10 +1601,15 @@ async def _collect_bounded_cluster_reads(
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
-                for followup in automatic_read_followups(intent, result.observations):
+                for followup in automatic_read_followups(
+                    intent, result.observations, question=question
+                ):
                     if (
                         followup.code == "tls_trust_retry"
                         and automatic_tls_retries >= 2
+                    ) or (
+                        followup.code == "traffic_path_investigation"
+                        and automatic_traffic_followups >= 8
                     ) or (
                         followup.code in {"pod_log_investigation", "log_signal_investigation"}
                         and automatic_log_followups >= 6
@@ -1613,6 +1621,8 @@ async def _collect_bounded_cluster_reads(
                         continue
                     if followup.code == "tls_trust_retry":
                         automatic_tls_retries += 1
+                    elif followup.code == "traffic_path_investigation":
+                        automatic_traffic_followups += 1
                     else:
                         automatic_log_followups += 1
                     seen_intents.add(signature)
