@@ -27,7 +27,8 @@
     <div class="panel-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       {% if evidence_by_id %}
-      <button class="evidence-toggle" type="button" data-evidence-open>
+      <button class="evidence-toggle" type="button" data-evidence-open
+        aria-haspopup="dialog" aria-controls="evidence-dialog" aria-expanded="false">
         <span>Collected evidence</span><strong>{{ evidence_by_id | length }}</strong>
       </button>
       {% else %}
@@ -45,6 +46,15 @@
           {% if message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
           <span>{{ message.created_at.strftime('%H:%M UTC') }}</span>
         </div>
+        {% if message.role == 'assistant' and message.answer_mode == 'insufficient_evidence' %}
+        <div class="answer-confidence answer-confidence-limited" role="note">
+          <strong>Not confirmed</strong><span>This reply contains a hypothesis or an incomplete conclusion. Review the evidence and limitations below.</span>
+        </div>
+        {% elif message.role == 'assistant' and message.answer_mode == 'evidence_based' %}
+        <div class="answer-confidence answer-confidence-grounded" role="note">
+          <strong>Evidence-backed</strong><span>Cluster-specific claims should map to the cited observations below.</span>
+        </div>
+        {% endif %}
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
         {% if message.activity and message.activity.reads %}
         <details class="tool-activity">
@@ -57,7 +67,20 @@
         </details>
         {% endif %}
         {% if message.citations %}
-        <div class="chat-citations"><span>Evidence</span>{% for id in message.citations %}<a href="#evidence-{{ id }}">{{ id[:18] }}</a>{% endfor %}</div>
+        <section class="answer-evidence" aria-label="Evidence used in this answer">
+          <h4>Evidence used in this answer</h4>
+          <div class="answer-evidence-links">
+          {% for id in message.citations %}
+            {% set cited = evidence_by_id.get(id) %}
+            <a href="#evidence-{{ id }}"{% if cited %} aria-label="Open evidence {{ id }}: {{ cited.summary }}"{% endif %}>
+              <span>{{ cited.tool if cited else 'evidence' }}</span>
+              <strong>{{ cited.summary if cited else id }}</strong>
+              {% if cited and cited.facts %}<small>{{ cited.facts[0].label }}: {{ cited.facts[0].value }}</small>{% endif %}
+              <code>{{ id }}</code>
+            </a>
+          {% endfor %}
+          </div>
+        </section>
         {% endif %}
         {% if message.activity and message.activity.limitations %}
         <ul class="answer-limitations">{% for item in message.activity.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
@@ -106,13 +129,37 @@
 </div>
 
 {% if evidence_by_id %}
-<dialog class="evidence-dialog" data-evidence-dialog aria-labelledby="evidence-dialog-title">
+<dialog id="evidence-dialog" class="evidence-dialog" data-evidence-dialog
+  aria-labelledby="evidence-dialog-title" aria-describedby="evidence-dialog-description">
   <div class="evidence-dialog-header">
     <div><p class="eyebrow">Provenance</p><h2 id="evidence-dialog-title">Collected evidence</h2></div>
     <button type="button" data-evidence-close aria-label="Close collected evidence">×</button>
   </div>
-  <p class="evidence-dialog-intro">Cluster observations used in this conversation. Select an evidence citation in a reply to jump to its source.</p>
-  <div class="evidence-list">{% for id, item in evidence_by_id.items() %}<article id="evidence-{{ id }}" tabindex="-1"><span class="evidence-id">{{ item.tool }}</span><h3>{{ item.summary }}</h3><p>{{ item.source }}</p><small>{{ item.collected_at }}</small></article>{% endfor %}</div>
+  <p class="evidence-dialog-intro" id="evidence-dialog-description">Open an evidence card to inspect the exact redacted OpenShift fields, probe diagnostics, metric samples, or bounded log excerpt. Evidence links beneath replies open and focus the cited card.</p>
+  <div class="evidence-list">
+  {% for id, item in evidence_by_id.items() %}
+    <article id="evidence-{{ id }}" tabindex="-1" class="evidence-card">
+      <div class="evidence-card-heading">
+        <span class="evidence-id">{{ item.tool }}</span>
+        <code>{{ id }}</code>
+      </div>
+      <h3>{{ item.summary }}</h3>
+      <p class="evidence-source">{{ item.source }}</p>
+      {% if item.facts %}
+      <dl class="evidence-facts">
+        {% for fact in item.facts %}<div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}
+      </dl>
+      {% endif %}
+      <small>Collected {{ item.collected_at }}</small>
+      <details class="evidence-technical">
+        <summary>View technical details</summary>
+        {% if item.excerpt %}<h4>Bounded log excerpt</h4><pre><code>{{ item.excerpt }}</code></pre>{% endif %}
+        <h4>Redacted collected payload</h4>
+        <pre><code>{{ item.data_json }}</code></pre>
+      </details>
+    </article>
+  {% endfor %}
+  </div>
 </dialog>
 {% endif %}
 

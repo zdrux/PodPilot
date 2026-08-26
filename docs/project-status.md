@@ -170,7 +170,13 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Ad-hoc Pod-log reads report authorization, missing-target, and invalid-stream
   failures separately. A missing retained previous container stream falls back to
   bounded current logs and preserves that distinction as a limitation. Evidence
-  citations scroll, focus, and highlight their matching provenance card.
+  citations now show the tool, summary, first technical fact, and stable evidence
+  ID; they open, focus, highlight, and expand the matching provenance card. Drawer
+  cards expose exact OpenShift coordinates, material object fields, probe SNI/TLS
+  diagnostics, metric bounds, container identity, bounded excerpts, and the full
+  persisted redacted payload. A server-side guard rejects provider claims that a
+  TLS-stage certificate failure or sidecar-only logs prove an application backend
+  serves plain HTTP.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

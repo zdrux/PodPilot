@@ -159,6 +159,12 @@ Ad-hoc log gates must distinguish a real 403 from an absent previous log stream,
 decode byte responses, and verify that an absent previous stream falls back to a
 bounded current stream with an explicit limitation. UI tests must verify that a
 citation activates, scrolls to, focuses, and visibly highlights its evidence card.
+The focused card must open its technical details while closing other expanded
+cards, display the full evidence ID and relevant typed facts, and render the
+persisted redacted payload and bounded log excerpt as escaped text. Answer tests
+must reject plain-HTTP/no-TLS conclusions grounded only in a TLS-stage certificate
+verification failure or sidecar logs, and preserve citations to the observations
+used by the corrected explanation.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

@@ -280,7 +280,21 @@ Private Ask sessions are rendered as a nested list beneath the primary Ask
 PodPilot navigation item and expose owner-authorized deletion controls. Collected
 evidence no longer consumes a permanent content column: a count in the chat header
 opens a modal provenance drawer, and answer citations open that drawer focused on
-the matching evidence card.
+the matching evidence card. Reply citations include the evidence tool, summary,
+first material fact, and stable evidence ID. Drawer cards expose typed operator
+facts (including exact object coordinates, selected Route/Service/Pod fields,
+probe SNI and connection diagnostics, metric bounds, and log container identity),
+plus an expandable redacted payload or bounded log excerpt. These views are built
+server-side from persisted redacted observations; they do not expose provider
+reasoning or unredacted Kubernetes responses.
+
+Final-answer validation also rejects a specific unsafe TLS inference: a certificate
+verification failure during the TLS stage proves that a peer presented TLS and a
+certificate, so it cannot support a conclusion that the backend serves only plain
+HTTP. Sidecar logs likewise cannot establish the application container's listener
+protocol. When a provider makes that contradictory claim, deterministic code
+replaces it with observed facts, the supported conclusion, and the remaining direct
+probe or application evidence needed.
 
 ## Investigation Flow
 

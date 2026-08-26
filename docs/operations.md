@@ -476,6 +476,14 @@ history budget requires a new investigation rather than silently truncating the
 durable transcript. A provider outage stores a visible unavailable response while
 leaving deterministic evidence and checks usable.
 
+For evidence-based Ask replies, the inline **Evidence used in this answer** cards
+identify the exact supporting observations. Selecting one opens and focuses its
+card in **Collected evidence**. The drawer shows normalized OpenShift coordinates
+and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
+the exact Pod/container and bounded log excerpt as applicable. **View technical
+details** displays the complete persisted redacted payload used by the answer.
+This is evidence provenance, not model chain-of-thought.
+
 Straightforward inventory questions bypass model planning: StorageClass discovery
 and explicit list/show questions compile against the live, safe API discovery
 catalog to one deterministic bounded read. This works for common Kubernetes and
@@ -499,6 +507,13 @@ with `PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS` and
 `PODPILOT_ADHOC_HTTP_PROBE_MAX_BYTES`. The mounted OpenShift service CA is added to
 system trust. Installing additional private issuers remains preferred when authenticated
 identity matters; bypass is intended for bounded troubleshooting reachability tests.
+Treat a certificate verification error reported at the TLS stage as evidence that
+the peer spoke TLS and presented a certificate. It establishes neither trusted
+identity nor application health, but it must not be interpreted as proof that the
+backend is plain HTTP. Istio/Envoy sidecar logs alone also do not establish the
+application container's listener protocol; collect direct endpoint, container
+configuration, readiness-probe scheme, or application-log evidence before making
+that claim.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is

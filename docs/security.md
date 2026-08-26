@@ -262,6 +262,12 @@ validates TLS, and records the logical Host/SNI name separately from an optional
 TCP connection override. Structured output distinguishes evidence-based,
 general-guidance, and insufficient-evidence answers. The API—not the model—validates
 citation IDs against persisted observations and withholds uncited factual claims.
+A deterministic contradiction guard additionally prevents a TLS-stage certificate
+failure or sidecar-only log evidence from being presented as proof that an
+application backend serves plain HTTP. The evidence drawer renders only the same
+persisted redacted observation payloads and normalized facts already inside this
+boundary. Jinja autoescaping remains enabled, raw cluster HTML is never trusted,
+and bounded log excerpts retain the collector's existing size and redaction limits.
 A `run_queued_checks`
 proposal cannot call the executor; it renders a separate button backed by the
 existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit

@@ -251,6 +251,7 @@ def _validated_adhoc_answer(
     *,
     known_evidence_ids: set[str],
     collection_limitations: list[str] | None = None,
+    observations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     citations: list[str] = []
     for evidence_id in answer.cited_evidence_ids:
@@ -272,14 +273,121 @@ def _validated_adhoc_answer(
             "PodPilot could not provide a verified cluster-specific answer because the model did "
             "not cite collected evidence."
         )
+    mode, content, citations, claim_limitations = _guard_unsupported_tls_claim(
+        mode=mode,
+        content=content,
+        citations=citations,
+        observations=observations or [],
+    )
     if rbac_limitation and rbac_limitation not in content:
         content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
     return {
         "answer_mode": mode,
         "content": content,
         "citations": citations,
-        "limitations": [redact_text(item)[:500] for item in answer.limitations[:6]],
+        "limitations": [
+            redact_text(item)[:500]
+            for item in [*claim_limitations, *answer.limitations][:6]
+        ],
     }
+
+
+_NO_TLS_CLAIM = re.compile(
+    r"\b(?:not\s+(?:terminating|serving|speaking|using)\s+(?:https|tls)|"
+    r"(?:serving|using|speaking)\s+(?:only\s+)?(?:plain[- ]?)?http(?:\s+only)?|"
+    r"only\s+(?:plain[- ]?)?http\s+traffic)\b",
+    re.IGNORECASE,
+)
+
+
+def _guard_unsupported_tls_claim(
+    *,
+    mode: str,
+    content: str,
+    citations: list[str],
+    observations: list[dict[str, object]],
+) -> tuple[str, str, list[str], list[str]]:
+    """Replace a no-TLS claim contradicted by certificate-validation evidence."""
+
+    if not _NO_TLS_CLAIM.search(content):
+        return mode, content, citations, []
+    certificate_failure: dict[str, object] | None = None
+    sidecar_logs: list[dict[str, object]] = []
+    route_observation: dict[str, object] | None = None
+    route_termination = ""
+    for observation in observations:
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            continue
+        if (
+            observation.get("tool") == "http_probe"
+            and data.get("stage") == "tls"
+            and any(marker in str(data.get("error") or "").lower() for marker in (
+                "certificate verify failed", "self-signed certificate", "unknown ca",
+            ))
+        ):
+            certificate_failure = observation
+        if (
+            observation.get("tool") == "pod_logs"
+            and str(data.get("container") or "").lower() in {"istio-proxy", "envoy"}
+        ):
+            sidecar_logs.append(observation)
+        if data.get("kind") == "Route" and isinstance(data.get("items"), list):
+            for item in data["items"]:
+                if not isinstance(item, dict):
+                    continue
+                spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
+                tls = spec.get("tls") if isinstance(spec.get("tls"), dict) else {}
+                termination = str(tls.get("termination") or "").lower()
+                if termination:
+                    route_observation = observation
+                    route_termination = termination
+                    break
+    if certificate_failure is None:
+        return mode, content, citations, []
+
+    probe_data = certificate_failure["data"]
+    logical_host = str(probe_data.get("logicalHost") or "the selected endpoint")
+    connect_host = str(probe_data.get("connectHost") or logical_host)
+    port = probe_data.get("port")
+    target = f"`{logical_host}` via `{connect_host}:{port}`" if port else f"`{logical_host}`"
+    evidence_ids = [str(certificate_failure.get("id"))]
+    observed_lines = [
+        f"- The HTTPS probe to {target} reached TLS certificate validation and failed because "
+        "the certificate chain was not trusted. The connected endpoint therefore presented TLS; "
+        "this result does **not** show a plain-HTTP listener."
+    ]
+    if route_observation is not None:
+        evidence_ids.append(str(route_observation.get("id")))
+        observed_lines.append(
+            f"- The matched OpenShift Route is configured with TLS termination "
+            f"`{route_termination}`."
+        )
+    if sidecar_logs:
+        evidence_ids.extend(str(item.get("id")) for item in sidecar_logs)
+        containers = sorted({
+            str(item["data"].get("container"))
+            for item in sidecar_logs
+            if isinstance(item.get("data"), dict)
+        })
+        observed_lines.append(
+            f"- The bounded Pod logs came from sidecar container(s) "
+            f"{', '.join(f'`{item}`' for item in containers)}. Sidecar logs do not establish "
+            "the application container's listener protocol."
+        )
+    corrected = (
+        "## Observed evidence\n\n"
+        + "\n".join(observed_lines)
+        + "\n\n## Conclusion\n\n"
+        "The claim that the gateway application is serving only plain HTTP is not supported by "
+        "the collected evidence. Its listener protocol remains unverified. PodPilot needs a direct, "
+        "bounded probe of the selected workload endpoint or application-container configuration/logs "
+        "before attributing the Route failure to an HTTP-versus-HTTPS mismatch."
+    )
+    merged_citations = list(dict.fromkeys([*evidence_ids, *citations]))
+    return "evidence_based", corrected[:4000], merged_citations, [
+        "PodPilot rejected a model conclusion that contradicted the TLS certificate-validation evidence."
+    ]
 
 
 _INTERNAL_EVIDENCE_PATH = re.compile(
@@ -487,6 +595,113 @@ def _deterministic_route_tls_answer(
             "citations": [str(observation["id"])],
         }
     return None
+
+
+def _evidence_value(value: object, *, limit: int = 1200) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        rendered = json.dumps(value, sort_keys=True, default=str)
+    elif isinstance(value, bool):
+        rendered = "true" if value else "false"
+    elif value is None:
+        rendered = "not reported"
+    else:
+        rendered = str(value)
+    return rendered[:limit]
+
+
+def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
+    """Build redacted, operator-facing facts from one persisted evidence observation."""
+
+    view = dict(item)
+    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    facts: list[dict[str, str]] = []
+
+    def add(label: str, value: object) -> None:
+        if value in (None, "", [], {}):
+            return
+        facts.append({"label": label, "value": _evidence_value(value)})
+
+    tool = str(item.get("tool") or "")
+    if tool == "http_probe":
+        add("Outcome", data.get("outcome"))
+        add("Failure stage", data.get("stage"))
+        add("Logical host / SNI", data.get("logicalHost"))
+        add("Connected to", (
+            f"{data.get('connectHost')}:{data.get('port')}"
+            if data.get("connectHost") and data.get("port") else data.get("connectHost")
+        ))
+        add("Resolved addresses", data.get("resolvedAddresses"))
+        add("TLS verification requested", data.get("tlsVerificationRequested"))
+        tls = data.get("tls") if isinstance(data.get("tls"), dict) else {}
+        add("TLS version", tls.get("version"))
+        add("TLS cipher", tls.get("cipher"))
+        add("HTTP status", data.get("statusLine") or data.get("statusCode"))
+        add("Probe error", data.get("error"))
+        add("Elapsed", f"{data.get('elapsedMs')} ms" if data.get("elapsedMs") is not None else None)
+    elif tool == "pod_logs":
+        add("Container", data.get("container") or "default container")
+        add("Previous container", data.get("previous"))
+        view["excerpt"] = str(data.get("tail") or "")
+    elif tool == "query_metrics":
+        add("Metric", data.get("metric"))
+        add("Scope", data.get("scope"))
+        add("Target", (
+            f"{data.get('namespace')}/{data.get('name')}"
+            if data.get("namespace") and data.get("name")
+            else data.get("namespace") or data.get("name")
+        ))
+        add("Period", f"{data.get('rangeSeconds')} seconds" if data.get("rangeSeconds") else None)
+        add("Resolution", f"{data.get('stepSeconds')} seconds" if data.get("stepSeconds") else None)
+        add("Unit", data.get("unit"))
+        add("Statistics", data.get("statistics"))
+        add("Complete", data.get("complete"))
+    else:
+        add("API version", data.get("apiVersion"))
+        add("Kind", data.get("kind"))
+        add("Scope", data.get("scope"))
+        add("Objects returned", data.get("count"))
+        add("Objects scanned", data.get("scannedCount"))
+        if data.get("matchField"):
+            add("Search predicate", f"{data.get('matchField')} {data.get('matchOperator')} {data.get('matchValue')}")
+        add("Search complete", data.get("searchComplete"))
+        add("Object list complete", data.get("objectListComplete"))
+        objects = data.get("items") if isinstance(data.get("items"), list) else []
+        projected = objects[0] if len(objects) == 1 and isinstance(objects[0], dict) else data
+        metadata = projected.get("metadata") if isinstance(projected.get("metadata"), dict) else {}
+        api_version = projected.get("apiVersion") or data.get("apiVersion")
+        kind = projected.get("kind") or data.get("kind")
+        namespace = metadata.get("namespace") or data.get("scope")
+        name = metadata.get("name")
+        add("Object", (
+            f"{api_version} {kind} {namespace}/{name}"
+            if kind and name else None
+        ))
+        spec = projected.get("spec") if isinstance(projected.get("spec"), dict) else {}
+        if kind == "Route":
+            tls = spec.get("tls") if isinstance(spec.get("tls"), dict) else {}
+            destination = spec.get("to") if isinstance(spec.get("to"), dict) else {}
+            port = spec.get("port") if isinstance(spec.get("port"), dict) else {}
+            add("Route host", spec.get("host"))
+            add("TLS termination", tls.get("termination") or "none (unsecured)")
+            add("Backend Service", destination.get("name"))
+            add("Route target port", port.get("targetPort"))
+        elif kind == "Service":
+            add("Service type", spec.get("type"))
+            add("Cluster IP", spec.get("clusterIP"))
+            add("Selector", spec.get("selector"))
+            add("Ports", spec.get("ports"))
+        elif kind == "Pod":
+            status = projected.get("status") if isinstance(projected.get("status"), dict) else {}
+            add("Phase", status.get("phase"))
+            add("Pod IP", status.get("podIP"))
+            add("Containers", [
+                container.get("name")
+                for container in spec.get("containers", [])
+                if isinstance(container, dict) and container.get("name")
+            ])
+    view["facts"] = facts
+    view["data_json"] = json.dumps(data, indent=2, sort_keys=True, default=str)
+    return view
 
 
 def _compact_adhoc_context(
@@ -1443,6 +1658,7 @@ def create_app(
                     answer,
                     known_evidence_ids={str(item.get("id")) for item in evidence},
                     collection_limitations=limitations,
+                    observations=evidence,
                 )
                 inventory_answer = _deterministic_inventory_answer(
                     question=message_text,
@@ -1870,6 +2086,11 @@ def create_app(
             ))
             rows.reverse()
             evidence = json.loads(conversation.evidence_json)
+            evidence_by_id = {
+                str(item["id"]): _adhoc_evidence_view(item)
+                for item in evidence
+                if isinstance(item, dict) and item.get("id")
+            }
             recent = list(db_session.scalars(
                 select(AdHocConversation).where(AdHocConversation.created_by == user.username)
                 .order_by(AdHocConversation.updated_at.desc()).limit(20)
@@ -1890,7 +2111,7 @@ def create_app(
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": conversation, "messages": messages,
-                "evidence_by_id": {item["id"]: item for item in evidence},
+                "evidence_by_id": evidence_by_id,
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,

@@ -447,13 +447,33 @@
     });
   }
   const evidenceDialog = document.querySelector("[data-evidence-dialog]");
+  const evidenceToggle = document.querySelector("[data-evidence-open]");
   const openEvidence = () => {
     if (!evidenceDialog) return false;
     if (!evidenceDialog.open) evidenceDialog.showModal();
+    evidenceToggle?.setAttribute("aria-expanded", "true");
     return true;
   };
-  document.querySelector("[data-evidence-open]")?.addEventListener("click", openEvidence);
+  const focusEvidence = (target, {smooth = true} = {}) => {
+    if (!target || !openEvidence()) return;
+    document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
+    target.classList.add("evidence-focus");
+    const technicalDetails = target.querySelector(".evidence-technical");
+    document.querySelectorAll(".evidence-technical[open]").forEach((item) => {
+      if (item !== technicalDetails) item.open = false;
+    });
+    if (technicalDetails) technicalDetails.open = true;
+    requestAnimationFrame(() => {
+      target.scrollIntoView({behavior: smooth ? "smooth" : "auto", block: "start"});
+      target.focus({preventScroll: true});
+    });
+  };
+  evidenceToggle?.addEventListener("click", openEvidence);
   document.querySelector("[data-evidence-close]")?.addEventListener("click", () => evidenceDialog?.close());
+  evidenceDialog?.addEventListener("close", () => {
+    evidenceToggle?.setAttribute("aria-expanded", "false");
+    evidenceToggle?.focus();
+  });
   evidenceDialog?.addEventListener("click", (event) => {
     if (event.target === evidenceDialog) evidenceDialog.close();
   });
@@ -462,16 +482,23 @@
       const target = document.getElementById(link.hash.slice(1));
       if (!target) return;
       event.preventDefault();
-      openEvidence();
-      document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
-      target.classList.add("evidence-focus");
-      requestAnimationFrame(() => {
-        target.scrollIntoView({behavior: "smooth", block: "center"});
-        target.focus({preventScroll: true});
-      });
+      focusEvidence(target);
       window.history.replaceState(null, "", link.hash);
     });
   });
+  document.querySelectorAll('.answer-evidence a[href^="#evidence-"]').forEach((link) => {
+    link.addEventListener("click", (event) => {
+      const target = document.getElementById(link.hash.slice(1));
+      if (!target) return;
+      event.preventDefault();
+      focusEvidence(target);
+      window.history.replaceState(null, "", link.hash);
+    });
+  });
+  if (window.location.hash.startsWith("#evidence-")) {
+    const target = document.getElementById(window.location.hash.slice(1));
+    if (target) focusEvidence(target, {smooth: false});
+  }
   document.querySelectorAll(".delete-chat-form").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
+    _adhoc_evidence_view,
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
     _deterministic_inventory_answer,
@@ -203,6 +204,88 @@ def test_adhoc_answer_structures_inline_labels_and_removes_inline_citations() ->
     assert f"[{evidence_id}]" not in content
     assert "\n\n### Root cause\n\n" in content
     assert "\n\n### Remediation\n\n" in content
+
+
+def test_tls_claim_contradicted_by_certificate_failure_is_replaced_with_observed_facts() -> None:
+    answer = AdHocAnswer(
+        answer_mode="insufficient_evidence",
+        answer=(
+            "The gateway pod is not terminating TLS and is likely serving only plain HTTP."
+        ),
+        cited_evidence_ids=["cluster-sidecar-1"],
+        limitations=[],
+    )
+    observations = [
+        {
+            "id": "cluster-route-1",
+            "tool": "search_resources",
+            "data": {"kind": "Route", "items": [{
+                "spec": {"tls": {"termination": "passthrough"}},
+            }]},
+        },
+        {
+            "id": "network-probe-1",
+            "tool": "http_probe",
+            "data": {
+                "outcome": "failed",
+                "stage": "tls",
+                "logicalHost": "maas.apps.example.test",
+                "connectHost": "10.0.0.12",
+                "port": 443,
+                "error": "certificate verify failed: self-signed certificate in certificate chain",
+            },
+        },
+        {
+            "id": "cluster-sidecar-1",
+            "tool": "pod_logs",
+            "data": {"container": "istio-proxy", "tail": "upstream reset"},
+        },
+    ]
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={item["id"] for item in observations},
+        observations=observations,
+    )
+
+    assert validated["answer_mode"] == "evidence_based"
+    assert "presented TLS" in validated["content"]
+    assert "does **not** show a plain-HTTP listener" in validated["content"]
+    assert "sidecar container(s) `istio-proxy`" in validated["content"]
+    assert "serving only plain HTTP is not supported" in validated["content"]
+    assert validated["citations"] == [
+        "network-probe-1", "cluster-route-1", "cluster-sidecar-1",
+    ]
+    assert "rejected a model conclusion" in validated["limitations"][0]
+
+
+def test_operator_evidence_view_surfaces_probe_diagnostics_and_redacted_payload() -> None:
+    view = _adhoc_evidence_view({
+        "id": "network-probe-1",
+        "tool": "http_probe",
+        "summary": "HTTP probe failed during TLS.",
+        "source": "https://maas.apps.example.test via 10.0.0.12:443",
+        "collected_at": "2026-08-26T00:00:00+00:00",
+        "data": {
+            "outcome": "failed",
+            "stage": "tls",
+            "logicalHost": "maas.apps.example.test",
+            "connectHost": "10.0.0.12",
+            "port": 443,
+            "resolvedAddresses": ["10.0.0.12"],
+            "tlsVerificationRequested": True,
+            "error": "certificate verify failed",
+            "elapsedMs": 41.2,
+        },
+    })
+
+    facts = {item["label"]: item["value"] for item in view["facts"]}
+    assert facts["Failure stage"] == "tls"
+    assert facts["Logical host / SNI"] == "maas.apps.example.test"
+    assert facts["Connected to"] == "10.0.0.12:443"
+    assert facts["TLS verification requested"] == "true"
+    assert facts["Probe error"] == "certificate verify failed"
+    assert '"resolvedAddresses": [' in view["data_json"]
 
 
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
@@ -2233,7 +2316,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "exceeded its progress deadline" in script
     assert "data-progress-current" in template
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
+    assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script
+    assert "technicalDetails.open = true" in script
+    assert 'aria-expanded", "true"' in script
     assert 'tabindex="-1"' in template
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
@@ -2244,6 +2330,83 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "nav-session-list" in base_template
     assert "nav-session-delete" in base_template
     assert "evidenceDialog.showModal()" in script
+
+
+def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
+    tmp_path: Path,
+) -> None:
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
+    )
+    conversation_id = "00000000-0000-0000-0000-0000000000e1"
+    evidence_id = "cluster-route-technical-1"
+    evidence = [{
+        "id": evidence_id,
+        "tool": "search_resources",
+        "summary": "Found the Route selected by host.",
+        "source": "kubernetes:route.openshift.io/v1:Route:openshift-ingress/*",
+        "collected_at": "2026-08-26T00:51:27+00:00",
+        "data": {
+            "apiVersion": "route.openshift.io/v1",
+            "kind": "Route",
+            "scope": "cluster",
+            "count": 1,
+            "scannedCount": 1507,
+            "matchField": "spec.host",
+            "matchOperator": "exact",
+            "matchValue": "maas.apps.example.test",
+            "searchComplete": True,
+            "items": [{
+                "apiVersion": "route.openshift.io/v1",
+                "kind": "Route",
+                "metadata": {"name": "maas", "namespace": "openshift-ingress"},
+                "spec": {
+                    "host": "maas.apps.example.test",
+                    "to": {"kind": "Service", "name": "maas-default-gateway"},
+                    "port": {"targetPort": "https"},
+                    "tls": {"termination": "passthrough"},
+                },
+            }],
+        },
+    }]
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id,
+            created_by="ivy",
+            title="Route TLS evidence",
+            status="active",
+            evidence_json=json.dumps(evidence),
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-0000000000e2",
+            conversation_id=conversation_id,
+            role="assistant",
+            actor=None,
+            content="The Route uses TLS passthrough.",
+            answer_mode="evidence_based",
+            citations_json=json.dumps([evidence_id]),
+            tool_activity_json="{}",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        rendered = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+
+    assert rendered.status_code == 200
+    assert "Evidence used in this answer" in rendered.text
+    assert f'href="#evidence-{evidence_id}"' in rendered.text
+    assert f">{evidence_id}</code>" in rendered.text
+    assert "TLS termination" in rendered.text
+    assert "passthrough" in rendered.text
+    assert "Route target port" in rendered.text
+    assert "View technical details" in rendered.text
+    assert "Redacted collected payload" in rendered.text
+    assert "Evidence links beneath replies open and focus the cited card" in rendered.text
+    assert 'aria-controls="evidence-dialog"' in rendered.text
 
 
 def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Path) -> None:

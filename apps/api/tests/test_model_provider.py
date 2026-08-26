@@ -231,6 +231,9 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     request = completions.requests[0]
     assert request["max_tokens"] == 1400
     assert "Do not tell the operator to run kubectl" in request["messages"][0]["content"]
+    assert "certificate-verification failure during TLS" in request["messages"][0]["content"]
+    assert "Observed evidence" in request["messages"][0]["content"]
+    assert "Still unverified" in request["messages"][0]["content"]
 
 
 def test_incident_chat_prompt_keeps_read_work_inside_podpilot() -> None:
