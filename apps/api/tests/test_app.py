@@ -61,6 +61,7 @@ from podpilot_diagnostics.checks import CheckObservation, DiagnosticCheckResult
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadPlan, ReadResult
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
+from podpilot_openshift.credentials import CredentialStoreError
 from podpilot_openshift.explorer import ReadOnlyExplorerError
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
@@ -2105,6 +2106,45 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
         assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"
     engine.dispose()
+
+
+def test_cluster_save_reports_and_logs_credential_store_failure(
+    tmp_path: Path, caplog,
+) -> None:
+    class FailingCredentialStore(MemoryCredentialStore):
+        def set(self, value: str, key: str | None = None) -> None:
+            raise CredentialStoreError(
+                "The credential Secret ai-ops/podpilot-cluster-credentials does not exist. "
+                "Create the pre-provisioned Secret and try again."
+            )
+
+    app, _settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        cluster_credential_store=FailingCredentialStore(),
+    )
+    caplog.set_level("WARNING", logger="uvicorn.error")
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        response = client.post(
+            "/api/v1/clusters",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "name": "missing-secret-cluster",
+                "api_url": "https://api.missing-secret.example:6443",
+                "token": "sha256~never-log-this-token",
+                "tags_json": "{}",
+                "tls_verify": "true",
+            },
+        )
+
+    assert response.status_code == 503
+    assert "does not exist" in response.json()["detail"]
+    assert "Cluster credential save failed" in caplog.text
+    assert "never-log-this-token" not in caplog.text
 
 
 def test_ask_conversation_pins_and_reads_multiple_clusters(tmp_path: Path) -> None:

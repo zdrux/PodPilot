@@ -50,7 +50,11 @@ class KubernetesSecretCredentialStore:
         try:
             secret = self._api.read_namespaced_secret(self.secret_name, self.namespace)
         except ApiException as exc:
-            raise CredentialStoreError("The credential Secret could not be read.") from exc
+            raise CredentialStoreError(self._api_error("read", exc)) from exc
+        except Exception as exc:
+            raise CredentialStoreError(
+                "PodPilot could not reach the Kubernetes API to read the credential Secret."
+            ) from exc
         encoded = (secret.data or {}).get(key or self.key)
         if not encoded:
             return None
@@ -68,7 +72,11 @@ class KubernetesSecretCredentialStore:
                 {"data": {key or self.key: encoded}},
             )
         except ApiException as exc:
-            raise CredentialStoreError("The credential Secret could not be updated.") from exc
+            raise CredentialStoreError(self._api_error("update", exc)) from exc
+        except Exception as exc:
+            raise CredentialStoreError(
+                "PodPilot could not reach the Kubernetes API to update the credential Secret."
+            ) from exc
 
     def delete(self, key: str | None = None) -> None:
         try:
@@ -76,4 +84,23 @@ class KubernetesSecretCredentialStore:
                 self.secret_name, self.namespace, {"data": {key or self.key: None}}
             )
         except ApiException as exc:
-            raise CredentialStoreError("The credential could not be removed.") from exc
+            raise CredentialStoreError(self._api_error("update", exc)) from exc
+        except Exception as exc:
+            raise CredentialStoreError(
+                "PodPilot could not reach the Kubernetes API to update the credential Secret."
+            ) from exc
+
+    def _api_error(self, operation: str, exc: ApiException) -> str:
+        identity = f"{self.namespace}/{self.secret_name}"
+        if exc.status == 404:
+            return (
+                f"The credential Secret {identity} does not exist. "
+                "Create the pre-provisioned Secret and try again."
+            )
+        if exc.status == 403:
+            return (
+                f"PodPilot's service account is not allowed to {operation} the credential "
+                f"Secret {identity}. Check the resourceName-scoped Role and RoleBinding."
+            )
+        past_tense = "read" if operation == "read" else "updated"
+        return f"The credential Secret {identity} could not be {past_tense}."

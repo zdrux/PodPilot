@@ -358,6 +358,21 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    identities but are deliberately excluded from the workload kustomization so a later
    manifest apply cannot erase existing tokens.
 
+   If saving a managed cluster fails, verify the out-of-band Secret and its narrowly
+   scoped runtime permission before checking the remote cluster. Saving does not contact
+   the remote API; it first persists the submitted token in this Secret:
+
+   ```powershell
+   oc get secret podpilot-cluster-credentials -n ai-ops
+   oc auth can-i patch secret/podpilot-cluster-credentials -n ai-ops --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc logs deployment/podpilot -n ai-ops -c api --since=10m
+   ```
+
+   The first two commands must succeed. PodPilot returns a safe, specific message for a
+   missing Secret or denied RBAC and logs the failed credential operation without the
+   submitted token. A browser message stating that PodPilot returned no response instead
+   points to the Route/OAuth proxy or a lost API pod connection.
+
 5. Validate and deploy the complete SNO overlay. Optionally retain the separate
    PoC cluster-admin binding for the `ai-observer` development/break-glass identity;
    the application does not run as that identity:

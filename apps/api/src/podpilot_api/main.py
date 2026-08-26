@@ -3371,6 +3371,13 @@ def create_app(
                 try:
                     await run_in_threadpool(cluster_credentials.set, token, credential_key)
                 except CredentialStoreError as exc:
+                    LOGGER.warning(
+                        "Cluster credential save failed for cluster=%r actor=%r: %s",
+                        name,
+                        user.username,
+                        exc,
+                        exc_info=True,
+                    )
                     raise HTTPException(status_code=503, detail=str(exc)) from exc
             db_session.add(AuditEvent(
                 actor=user.username,

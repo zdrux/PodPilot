@@ -62,14 +62,28 @@
   const settingsForm = document.querySelector("#model-settings-form");
   const probeButton = document.querySelector("#probe-model");
   const sendSettingsRequest = async (url, body) => {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
-      credentials: "same-origin",
-      body,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "The model settings request failed.");
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
+        credentials: "same-origin",
+        body,
+      });
+    } catch (_error) {
+      throw new Error(
+        "PodPilot did not return a response. Check the Route/OAuth proxy and the API pod logs, then try again.",
+      );
+    }
+    const responseText = await response.text();
+    let payload = {};
+    try { payload = responseText ? JSON.parse(responseText) : {}; } catch (_error) { /* proxy text */ }
+    if (!response.ok) {
+      const proxyDetail = responseText && !responseText.trimStart().startsWith("<")
+        ? responseText.trim().slice(0, 500)
+        : "";
+      throw new Error(payload.detail || proxyDetail || `PodPilot request failed (HTTP ${response.status}).`);
+    }
     return payload;
   };
   if (settingsForm?.dataset.saveUrl) {
