@@ -193,6 +193,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   samples, paths, and endpoints; material signals automatically trigger exact Pod,
   Pod-Event, and applicable previous-log reads inside the existing budget. The model
   receives findings plus completed checks and must distinguish correlation from root cause.
+  Missing certificate/key assets are correlated across neighboring traceback lines, so a
+  PEM path separated from its `FileNotFoundError` remains a required cited log finding.
 - Ask replies now keep confidence as a short hover/focus pill beside the timestamp
   and collapse cited observations into one rounded on-demand vertical timeline; the redundant
   inspected-target disclosure is no longer rendered. Ask session,

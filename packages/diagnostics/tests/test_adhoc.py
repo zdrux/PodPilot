@@ -85,6 +85,34 @@ def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups
     assert followups[1].intent.match_value == "maas-default-gateway-5cc7b765cf-b6qtq"
 
 
+def test_missing_pem_traceback_is_correlated_across_neighboring_log_lines() -> None:
+    observation = AdHocObservation(
+        id="cluster-gateway-log", tool="pod_logs", summary="Collected gateway logs.",
+        source="kubernetes:v1:Pod/log:maas/gateway-abc?current",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "container": "gateway",
+            "tail": (
+                "ssl_context.load_cert_chain(\n"
+                "    certfile='/etc/certs/server.pem',\n"
+                "FileNotFoundError: [Errno 2] No such file or directory\n"
+            ),
+        },
+    )
+
+    findings = derive_adhoc_findings([observation.to_dict()])
+    followups = automatic_read_followups(
+        ReadIntent(tool="pod_logs", candidate_id="podlog-gateway"), (observation,)
+    )
+
+    assert len(findings) == 1
+    assert findings[0]["category"] == "tls_or_certificate"
+    assert findings[0]["occurrences_in_excerpt"] == 1
+    assert findings[0]["paths"] == ["/etc/certs/server.pem"]
+    assert "FileNotFoundError" in findings[0]["error_samples"][0]
+    assert [item.intent.tool for item in followups] == ["get_resource", "search_resources"]
+
+
 def test_log_signal_finding_records_completed_pod_and_event_followups() -> None:
     base = {
         "id": "cluster-proxy-log-1", "tool": "pod_logs",

@@ -541,6 +541,9 @@ counts, timestamps when present, up to three bounded samples, and extracted path
 endpoints. Material findings automatically read the exact Pod and Pod Events; crash
 or resource-pressure findings may also request previous logs. A single warning is
 retained for the model but does not automatically expand the investigation.
+Missing TLS certificate/key assets are correlated across a bounded neighboring-line
+window so split Python or application tracebacks that name a `.pem`, `.crt`, or `.key`
+file before a `FileNotFoundError` remain visible in the deterministic answer section.
 
 Route, HTTP 5xx, and connectivity questions additionally follow an observed OpenShift Route
 through its exact Service to bounded Service-selected Pods, EndpointSlices, and Endpoints.

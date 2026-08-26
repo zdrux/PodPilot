@@ -1445,6 +1445,20 @@ class HeadingOnlyRouteProvider(RouteBackendProvider):
         )
 
 
+class RouteOnlyAnswerProvider(RouteBackendProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer=(
+                "The Route uses TLS passthrough, so the router forwards the client TLS stream "
+                "to the backend without terminating it."
+            ),
+            cited_evidence_ids=["cluster-route-1"],
+            limitations=[],
+        )
+
+
 class FailingTrafficPlanProvider(RouteBackendProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
@@ -1471,9 +1485,11 @@ class RouteBackendExplorer:
     def __init__(
         self,
         log_tail: str = "ERROR upstream model request returned HTTP 500",
+        route_termination: str = "edge",
     ) -> None:
         self.calls = []
         self.log_tail = log_tail
+        self.route_termination = route_termination
 
     def execute(self, intent):
         self.calls.append(intent)
@@ -1493,8 +1509,10 @@ class RouteBackendExplorer:
                         "spec": {
                             "host": "maas.apps.example.test",
                             "to": {"kind": "Service", "name": "model-server"},
-                            "port": {"targetPort": "http"},
-                            "tls": {"termination": "edge"},
+                            "port": {"targetPort": (
+                                "https" if self.route_termination == "passthrough" else "http"
+                            )},
+                            "tls": {"termination": self.route_termination},
                         },
                     }],
                 },
@@ -2343,9 +2361,9 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
 ) -> None:
     provider = HeadingOnlyRouteProvider()
     explorer = RouteBackendExplorer(log_tail=(
-        "failed to generate secret for file-root: open /etc/certs/server.pem: "
-        "no such file or directory\nfailed to generate secret for file-root: open "
-        "/etc/certs/ca-cert.pem: no such file or directory"
+        "ssl_context.load_cert_chain(\n"
+        "    certfile='/etc/certs/server.pem',\n"
+        "FileNotFoundError: [Errno 2] No such file or directory"
     ))
     app, settings = make_app(
         tmp_path,
@@ -2388,10 +2406,67 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
     assert "Backend log findings" in rendered.text
     assert "tls or certificate" in rendered.text
     assert "/etc/certs/server.pem" in rendered.text
-    assert "no such file or directory" in rendered.text
+    assert "no such file or directory" in rendered.text.lower()
     assert "cluster-backend-logs" in rendered.text
     assert "Observed objects — what the cluster is actually doing" not in rendered.text
     assert "used a deterministic evidence summary" in rendered.text
+
+
+def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
+    tmp_path: Path,
+) -> None:
+    provider = RouteOnlyAnswerProvider()
+    explorer = RouteBackendExplorer(
+        route_termination="passthrough",
+        log_tail=(
+            "ssl_context.load_cert_chain(\n"
+            "    certfile='/etc/certs/server.pem',\n"
+            "FileNotFoundError: [Errno 2] No such file or directory"
+        ),
+    )
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
+                    "https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert len(provider.adhoc_answer_calls) == 2
+    assert "Configured termination" in rendered.text
+    assert "passthrough" in rendered.text
+    assert "Backend log findings" in rendered.text
+    assert "tls or certificate" in rendered.text
+    assert "/etc/certs/server.pem" in rendered.text
+    assert "no such file or directory" in rendered.text.lower()
+    assert "cluster-backend-logs" in rendered.text
 
 
 def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(

@@ -100,6 +100,9 @@ _LOG_SIGNAL_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         re.compile(r"(?i)\b(?:warn|warning|degraded|retrying|backoff)\b"),
     ),
 )
+_TLS_LOG_SIGNAL_RULE = next(
+    rule for rule in _LOG_SIGNAL_RULES if rule[0] == "tls_or_certificate"
+)
 _LOG_TIMESTAMP = re.compile(
     r"\b(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|"
     r"\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b"
@@ -111,6 +114,14 @@ _LOG_ENDPOINT = re.compile(
 _TLS_TRUST_ERROR_MARKERS = (
     "certificate verify failed", "self-signed certificate", "unknown ca",
     "unable to get local issuer certificate", "certificate signed by unknown authority",
+)
+_TLS_FILE_MARKER = re.compile(
+    r"(?i)(?:\b(?:tls|ssl|x509|certificate|certs?|private\s+key)\b|"
+    r"\.(?:pem|crt|cer|key)\b)",
+)
+_FILE_ACCESS_ERROR_MARKER = re.compile(
+    r"(?i)\b(?:file\s*not\s*found|filenotfounderror|no\s+such\s+file|does\s+not\s+exist|"
+    r"missing|enoent|cannot\s+open|can't\s+open|failed\s+to\s+open|permission\s+denied)\b",
 )
 
 
@@ -882,16 +893,26 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
         container = str(data.get("container") or "default")[:253]
         evidence_id = str(observation.get("id") or "unknown")
         grouped: dict[str, dict[str, object]] = {}
-        for raw_line in tail.splitlines():
-            line = raw_line.strip()[:500]
+        lines = [raw_line.strip()[:500] for raw_line in tail.splitlines()]
+        for index, line in enumerate(lines):
             if not line:
                 continue
-            matched_rule = next(
-                (rule for rule in _LOG_SIGNAL_RULES if rule[2].search(line)), None
+            context = " ".join(
+                item for item in lines[max(0, index - 2):index + 3] if item
+            )[:1500]
+            correlated_tls_file_error = (
+                _FILE_ACCESS_ERROR_MARKER.search(line) is not None
+                and _TLS_FILE_MARKER.search(context) is not None
+            )
+            matched_rule = (
+                _TLS_LOG_SIGNAL_RULE
+                if correlated_tls_file_error else
+                next((rule for rule in _LOG_SIGNAL_RULES if rule[2].search(line)), None)
             )
             if matched_rule is None:
                 continue
             category, severity, _pattern = matched_rule
+            signal_text = context if correlated_tls_file_error else line
             group = grouped.setdefault(category, {
                 "severity": severity, "occurrences": 0, "samples": [],
                 "signatures": [], "timestamps": [], "paths": [], "endpoints": [],
@@ -900,16 +921,17 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
             signature = _log_signature(line)
             if signature not in group["signatures"] and len(group["signatures"]) < 8:
                 group["signatures"].append(signature)
-            if line not in group["samples"] and len(group["samples"]) < 3:
-                group["samples"].append(line)
-            for timestamp in _LOG_TIMESTAMP.findall(line):
+            sample = re.sub(r"\s+", " ", signal_text).strip()[:500]
+            if sample not in group["samples"] and len(group["samples"]) < 3:
+                group["samples"].append(sample)
+            for timestamp in _LOG_TIMESTAMP.findall(signal_text):
                 if timestamp not in group["timestamps"] and len(group["timestamps"]) < 4:
                     group["timestamps"].append(timestamp)
-            for path in _LOG_PATH.findall(line):
+            for path in _LOG_PATH.findall(signal_text):
                 bounded = path.rstrip(".,:;)")[:300]
                 if bounded not in group["paths"] and len(group["paths"]) < 8:
                     group["paths"].append(bounded)
-            for endpoint in _LOG_ENDPOINT.findall(line):
+            for endpoint in _LOG_ENDPOINT.findall(signal_text):
                 bounded = endpoint.rstrip(".,:;)")[:300]
                 if re.match(r"^\d{4}-\d{2}-\d{2}T", bounded):
                     continue
