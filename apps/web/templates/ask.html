@@ -35,7 +35,7 @@
           {% if message.role == 'assistant' and message.answer_mode == 'insufficient_evidence' %}
           <span class="answer-status answer-status-limited" tabindex="0" data-tooltip="This reply contains a hypothesis or incomplete conclusion. Review its evidence and limitations." aria-label="Not confirmed: this reply contains a hypothesis or incomplete conclusion.">Not confirmed</span>
           {% elif message.role == 'assistant' and message.answer_mode == 'evidence_based' %}
-          <span class="answer-status answer-status-grounded" tabindex="0" data-tooltip="Cluster-specific claims are backed by the cited observations." aria-label="Evidence-backed: cluster-specific claims are backed by cited observations.">Evidence-backed</span>
+          <span class="answer-status answer-status-grounded" tabindex="0" data-tooltip="Cluster-specific claims are backed by the cited observations{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, but the overall conclusion remains unresolved{% endif %}." aria-label="Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, unresolved conclusion{% endif %}.">Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %} · unresolved{% endif %}</span>
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
         </div>
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
@@ -148,42 +148,43 @@
       {% if user.role.value >= 20 %}
       <form class="chat-form adhoc-chat-form" method="post"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
-        <div class="cluster-composer-row">
-          <label>Send requests to</label>
-          <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if conversation or active_run %}data-locked="true"{% endif %}>
-            <summary>
-              <span class="cluster-picker-selection" data-cluster-picker-label aria-label="Selected clusters">
-                <span class="cluster-picker-placeholder">Select clusters</span>
-              </span>
-              <small data-cluster-picker-count></small>
-            </summary>
-            <div class="cluster-picker-menu">
-              <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
-              <div class="cluster-options">
-              {% for cluster in clusters %}
-                <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
-                  <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox
-                    {% if cluster.id in selected_cluster_ids %}checked{% endif %}
-                    {% if conversation or not cluster.is_enabled %}disabled{% endif %}>
-                  <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}runtime cluster{% else %}{{ cluster.api_url }}{% endif %}</small></span>
-                  {% if not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
-                </label>
-              {% endfor %}
+        <div class="composer-meta-row">
+          <div class="question-cluster-row">
+            <label for="adhoc-message">Question or symptom</label>
+            <span class="cluster-inline-label">Send requests to</span>
+            <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if conversation or active_run %}data-locked="true"{% endif %}>
+              <summary>
+                <span class="cluster-picker-selection" data-cluster-picker-label aria-label="Selected clusters">
+                  <span class="cluster-picker-placeholder">Select clusters</span>
+                </span>
+                <small data-cluster-picker-count></small>
+              </summary>
+              <div class="cluster-picker-menu">
+                <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
+                <div class="cluster-options">
+                {% for cluster in clusters %}
+                  <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
+                    <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox
+                      {% if cluster.id in selected_cluster_ids %}checked{% endif %}
+                      {% if conversation or not cluster.is_enabled %}disabled{% endif %}>
+                    <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}runtime cluster{% else %}{{ cluster.api_url }}{% endif %}</small></span>
+                    {% if not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
+                  </label>
+                {% endfor %}
+                </div>
               </div>
-            </div>
-          </details>
-          <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
-          {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
-        </div>
-        <label for="adhoc-message">Question or symptom</label>
-        <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
-        <div class="composer-actions">
+            </details>
+            <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
+            {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
+          </div>
           <label class="raw-response-switch">
             <input type="checkbox" role="switch" name="include_raw_response" {% if active_run and active_run.include_raw_response %}checked{% endif %} {% if active_run %}disabled{% endif %}>
             <span aria-hidden="true"></span>
-            <span><strong>Show raw model response</strong><small>For this question only</small></span>
+            <strong>Show raw model response</strong>
           </label>
-          <small>Each question: up to {{ chat_read_budget }} read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small>
+        </div>
+        <div class="composer-input-wrap">
+          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
           <button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
         </div>
       </form>

@@ -47,9 +47,12 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
-- Standalone Ask now supports ten planning rounds within 25 weighted investigation units,
-  reserves five units for evidence-derived follow-ups, can search live API discovery and issue
-  bounded watches against any RBAC-readable non-sensitive resource, and shows a transient
+- Standalone Ask now supports a model-directed loop of ten planning rounds within 25 weighted
+  investigation units, with no default server-follow-up reserve. The model dynamically selects
+  evidence-grounded object, owner, log, Event, metric, probe, and configuration traversal while
+  the broker retains all sensitivity, verb, budget, redaction, and RBAC enforcement. It can
+  search live API discovery and issue bounded watches against any RBAC-readable non-sensitive
+  resource, and shows a transient
   six-item live investigation journal with hypotheses, next checks, and findings.
 - Alertmanager queue with expected Watchdog separation and durable
   investigations.
@@ -213,15 +216,19 @@ records remain, but execution now awaits a separate approval-gated action servic
   connection override. Unready, restarting, and non-running containers become
   prioritized exact log candidates. Bounded logs from any container are classified
   into general operational findings with occurrence/signature counts, timestamps,
-  samples, paths, and endpoints; material signals automatically trigger exact Pod,
-  Pod-Event, and applicable previous-log reads inside the existing budget. The model
-  receives findings plus completed checks and must distinguish correlation from root cause.
+  samples, paths, and endpoints. The model receives findings, optional correlation candidates,
+  and completed checks, then dynamically selects any exact Pod, owner, Pod-Event, metric,
+  configuration, or applicable previous-log reads inside the existing budget. It must
+  distinguish correlation from root cause.
   Missing certificate/key assets are correlated across neighboring traceback lines, so a
   PEM path separated from its `FileNotFoundError` remains a required cited log finding.
 - Ask replies now keep confidence as a short hover/focus pill beside the timestamp
   and collapse cited observations into one rounded on-demand vertical timeline; the redundant
   inspected-target disclosure is no longer rendered. Ask session,
   reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
+- The Ask composer now keeps the question label, cluster picker, and raw-response toggle on one
+  row and places the Investigate button inside the text box; the former per-question budget and
+  keyboard-hint row is no longer rendered.
 - Final-answer evidence is compacted into a provider-only bounded view that prioritizes
   current reads and caps Pod logs, objects, findings, and total bytes without changing
   persisted provenance. Citation-bearing heading-only or extremely brief answers receive

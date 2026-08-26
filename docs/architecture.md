@@ -201,12 +201,12 @@ only as a compatibility path for older model output.
 The planner classifies natural-language intent as inventory, health, diagnosis,
 logs, comparison, or explanation. Normal code derives the collection decision
 from typed intents or clarification content instead of rejecting a useful plan
-because a redundant discriminator disagreed. If an operational answer
-has no valid evidence—or a matching safe catalog target exists but the model
-declines to read it—the API supplies structured feedback and retries planning
-once. A second refusal falls back to the read compiled from live discovery. This
-fallback is generic across served resources; it does not grant a model a client
-or require a static list of OpenShift object types.
+because a redundant discriminator disagreed. The model owns troubleshooting direction:
+each round forms or revises an evidence-backed hypothesis and proposes the next typed reads
+that can reduce uncertainty. The catalog, deterministic findings, ownership, selectors,
+endpoints, and mount relationships are candidates rather than a server-prescribed path.
+Invalid or empty plans receive one structured repair attempt; the API does not silently
+replace a diagnostic direction with a generic catalog traversal.
 ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
 evidence sources. HTTP probes may target any model-selected URL, but remain typed:
 HEAD or bounded GET only, no redirects, request bodies, credentials, or custom headers.
@@ -218,9 +218,9 @@ router address. Secrets, access-review resources, arbitrary subresources, comman
 and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
-Evidence-derived automatic continuations already queued by normal code still complete within
-the shared budget; a failed model plan cannot cancel deterministic traffic traversal or log
-correlation.
+The only automatic continuation is a mechanical trust-only retry of the same HTTPS probe.
+Object traversal, log selection, Events, metrics, and configuration reads require a
+schema-valid model plan and return through the same broker on the next round.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.
@@ -237,10 +237,9 @@ cannot omit the requested resource list.
 separate scan ceiling (2,000 by default, 5,000 maximum), compares a model-selected,
 validated dot-separated object field path, and returns only bounded compact matches.
 Paths may traverse nested objects and lists, allowing searches such as `spec.type` and
-`status.conditions.type`; malformed path expressions are rejected. Route questions
-containing a URL compile directly to an exact `spec.host` search, allowing a later round
-to GET the discovered namespace/name.
-The deterministic search uses the qualified `routes.route.openshift.io` resource. More
+`status.conditions.type`; malformed path expressions are rejected. For a Route URL, the model
+can select an exact `spec.host` search and use the resulting namespace/name in later rounds.
+The planner guidance prefers the qualified `routes.route.openshift.io` resource. More
 generally, discovery resolves an unqualified plural with supplied `apiVersion` and `Kind`
 only when both agree with one advertised resource; mismatches fail closed. Preflight performs
 this resolution before the read budget advances. Same-plural APIs such as OpenShift and
@@ -252,42 +251,39 @@ forwards HTTP after router TLS termination, `reencrypt` establishes new backend 
 `passthrough` leaves TLS termination to the backend. This states configuration, not live
 backend reachability or the origin of an HTTP 500.
 
-For Route, HTTP 5xx, and connectivity investigations, normal code follows a bounded traffic
-graph from an observed Route to its exact Service, Service-selected Pods, EndpointSlices, and
-legacy Endpoints. Endpoint projections retain bounded Pod target references. PodPilot reads
-logs from up to three relevant backend containers even when the Pods are Running and Ready,
-because application failures need not affect Kubernetes health. This deterministic traversal
-uses the same 25-unit investigation ceiling, deduplication, redaction, and RBAC boundary as model-planned
-reads; it is a safety net for basic Kubernetes relationships, not unrestricted crawling.
+For Route, HTTP 5xx, and connectivity investigations, projected evidence exposes Route targets,
+Service selectors, EndpointSlice/Endpoints target references, Pod log candidates, and owner
+references. The model decides which relationships matter to its current hypothesis and proposes
+each traversal explicitly. Normal code grounds names from those exact references, but never
+interprets arbitrary cluster strings as callable targets.
 
 The planner can also query the live discovery catalog during a turn. This is not a curated
 resource allowlist: any discovered resource advertising `get`, `list`, or `watch` may be
 selected, subject to the explicit sensitive-resource/subresource denylist and the selected
 ServiceAccount's RBAC. A bounded watch costs three investigation units, lasts at most 15
 seconds, and retains at most 50 compact events. Pod logs, HTTP probes, and metric queries cost
-two units; discovery and ordinary resource reads cost one. Five units are reserved for
-server-derived follow-ups so an initially useful clue can still trigger correlation work.
+two units; discovery and ordinary resource reads cost one. The default follow-up reserve is zero,
+so all 25 units are available to the model-directed loop; deployments may reserve units for the
+mechanical TLS trust retry if required.
 
-An explicit TCP/connectivity question that names one Pod in each of two namespaces receives a
-separate deterministic policy check before model planning. Normal code reads both exact Pods,
-both Namespace objects, and a bounded list of NetworkPolicies in each namespace. Compact policy
-evidence retains `podSelector`, `policyTypes`, ingress and egress peers, and ports so the answer
-can compare destination ingress isolation with source egress isolation using observed Pod and
-Namespace labels. This configuration evidence identifies a plausible policy factor; it does not
-prove packet drops because PodPilot does not exec a source-originated probe inside the workload.
+For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
+NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
+retains `podSelector`, `policyTypes`, ingress and egress peers, and ports. Configuration evidence
+may identify a plausible factor but cannot prove packet drops because PodPilot does not exec a
+source-originated probe inside the workload.
 
 Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque
 server-derived ID. A model may call `pods/log` only by selecting one of those IDs;
 normal code binds it back to the observed namespace, Pod, and container. Literal
-placeholders fail the evidence contract before planning completes. Named GET
-targets must appear verbatim in the operator question or in collected evidence,
-otherwise the planner must discover them with a bounded LIST first. Fabricated or
-ambiguous targets consume no cluster-read budget and receive one structured repair
-attempt. If the model repeats an invalid log selection, server code may collect
-current logs from at most three question-relevant observed candidates; previous
-logs are selected only for an explicit restart/crash/terminated question and an
-observed positive restart count.
+placeholders fail the evidence contract before planning completes. Named GET targets must
+appear verbatim in the operator question or in collected evidence. Explicit
+`metadata.ownerReferences`, Route backends, endpoint target references, Pod candidates, and
+volume-backed object references are grounded targets in the containing object's namespace;
+otherwise the planner must discover them with a bounded LIST first. Fabricated or ambiguous
+targets consume no cluster-read budget and receive one structured repair attempt. Pod logs
+still require the model to select an opaque observed candidate ID; normal code never invents
+a replacement diagnostic path.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and

@@ -291,6 +291,43 @@ def test_get_configmap_preserves_configuration_and_redacts_sensitive_keys():
     assert resource.calls == [{"name": "api", "namespace": "payments"}]
 
 
+def test_get_pod_exposes_mount_wiring_without_secret_contents():
+    pod = FakeObject(name="gateway", namespace="maas", payload={
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": "gateway", "namespace": "maas"},
+        "spec": {
+            "containers": [{
+                "name": "istio-proxy",
+                "volume_mounts": [{
+                    "name": "gateway-certs", "mount_path": "/etc/certs", "read_only": True,
+                }],
+            }],
+            "volumes": [{
+                "name": "gateway-certs",
+                "secret": {"secret_name": "gateway-client-tls", "optional": False},
+            }],
+        },
+    })
+    target, _, _ = explorer(FakeResource([pod]))
+
+    result = target.execute(ReadIntent(
+        tool="get_resource", api_version="v1", kind="Pod",
+        namespace="maas", name="gateway",
+    ))
+
+    assert result.observations[0].data["spec"]["volumes"][0]["secret"] == "[REDACTED]"
+    assert result.observations[0].data["podpilotMounts"] == [{
+        "containerType": "container",
+        "container": "istio-proxy",
+        "mountPath": "/etc/certs",
+        "volume": "gateway-certs",
+        "readOnly": True,
+        "sourceType": "Secret",
+        "sourceName": "gateway-client-tls",
+    }]
+
+
 def test_list_supports_grouped_api_versions_and_enforces_limit():
     target, resource, _ = explorer(FakeResource([FakeObject(name="a"), FakeObject(name="b")]))
     result = target.execute(ReadIntent(

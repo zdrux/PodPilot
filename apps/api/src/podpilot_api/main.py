@@ -64,7 +64,6 @@ from podpilot_diagnostics.adhoc import (
     automatic_read_followups,
     derive_adhoc_findings,
     normalize_read_intent,
-    plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
@@ -361,7 +360,8 @@ def _validated_adhoc_answer(
         bounded = str(evidence_id)[:128]
         if bounded in known_evidence_ids and bounded not in citations:
             citations.append(bounded)
-    mode = answer.answer_mode
+    original_mode = answer.answer_mode
+    mode = original_mode
     content = _clean_adhoc_markdown(
         redact_text(answer.answer),
         known_evidence_ids=known_evidence_ids,
@@ -376,6 +376,10 @@ def _validated_adhoc_answer(
             "PodPilot could not provide a verified cluster-specific answer because the model did "
             "not cite collected evidence."
         )
+    if original_mode == "insufficient_evidence" and citations:
+        # Grounding and certainty are separate axes. A cited interpretation is
+        # evidence-based even when its overall conclusion remains unresolved.
+        mode = "evidence_based"
     mode, content, citations, claim_limitations = _guard_unsupported_tls_claim(
         mode=mode,
         content=content,
@@ -386,6 +390,10 @@ def _validated_adhoc_answer(
         content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
     return {
         "answer_mode": mode,
+        "conclusion_status": (
+            answer.conclusion_status
+            or ("unresolved" if original_mode == "insufficient_evidence" else "confirmed")
+        ),
         "content": content,
         "citations": citations,
         "limitations": [
@@ -601,6 +609,7 @@ _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
 
 def _adhoc_answer_quality_issue(
     *, content: str, answer_mode: str | None = None, has_evidence: bool = False,
+    has_citations: bool = False,
 ) -> str | None:
     """Retry only structurally empty answers; trust checks happen during validation."""
 
@@ -619,7 +628,11 @@ def _adhoc_answer_quality_issue(
     body = re.sub(r"\s+", " ", body).strip()
     if not body_lines or not body:
         return "heading_only_response"
-    if answer_mode == "insufficient_evidence" and has_evidence:
+    # An evidence-backed answer may remain unresolved. Do not discard a useful,
+    # cited interpretation merely because the provider honestly reports that the
+    # available observations do not prove a root cause. Retry only an uncited
+    # insufficient-evidence response when relevant evidence was available.
+    if answer_mode == "insufficient_evidence" and has_evidence and not has_citations:
         return "insufficient_interpretation_with_available_evidence"
     return None
 
@@ -2097,6 +2110,66 @@ def _bind_plan_log_intents(
     rejected: list[ReadIntent] = []
     observed_names: set[str] = set()
     observed_scopes: dict[str, set[str]] = {}
+
+    def add_target(name: object, namespace: object = None) -> None:
+        if not name:
+            return
+        bounded_name = str(name).lower()
+        observed_names.add(bounded_name)
+        if namespace:
+            observed_scopes.setdefault(bounded_name, set()).add(str(namespace))
+
+    def add_object_targets(value: object, inherited_namespace: object = None) -> None:
+        """Collect explicit Kubernetes references without trusting arbitrary strings as targets."""
+
+        if not isinstance(value, dict):
+            return
+        metadata = value.get("metadata")
+        namespace = inherited_namespace
+        if isinstance(metadata, dict):
+            namespace = metadata.get("namespace") or metadata.get("namespace_") or namespace
+            add_target(metadata.get("name"), namespace)
+            owners = metadata.get("ownerReferences") or metadata.get("owner_references")
+            if isinstance(owners, list):
+                for owner in owners:
+                    if isinstance(owner, dict):
+                        add_target(owner.get("name"), namespace)
+
+        mounts = value.get("podpilotMounts")
+        if isinstance(mounts, list):
+            for mount in mounts:
+                if isinstance(mount, dict):
+                    add_target(mount.get("sourceName"), namespace)
+
+        spec = value.get("spec")
+        if not isinstance(spec, dict):
+            return
+        volumes = spec.get("volumes")
+        if isinstance(volumes, list):
+            for volume in volumes:
+                if not isinstance(volume, dict):
+                    continue
+                for source_key in (
+                    "configMap", "config_map", "persistentVolumeClaim",
+                    "persistent_volume_claim", "secret",
+                ):
+                    source = volume.get(source_key)
+                    if not isinstance(source, dict):
+                        continue
+                    add_target(
+                        source.get("name")
+                        or source.get("secretName")
+                        or source.get("secret_name")
+                        or source.get("claimName")
+                        or source.get("claim_name"),
+                        namespace,
+                    )
+        template = spec.get("template")
+        if isinstance(template, dict):
+            add_object_targets(template, namespace)
+
+    for candidate in candidates:
+        add_target(candidate.pod, candidate.namespace)
     for observation in evidence:
         data = observation.get("data")
         if not isinstance(data, dict):
@@ -2112,15 +2185,11 @@ def _bind_plan_log_intents(
                 observed_scopes.setdefault(str(ref["name"]).lower(), set()).add(
                     str(ref["namespace"])
                 )
-        metadata = data.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("name"):
-            observed_names.add(str(metadata["name"]).lower())
+        add_object_targets(data)
         items = data.get("items")
         if isinstance(items, list):
             for item in items:
-                item_metadata = item.get("metadata") if isinstance(item, dict) else None
-                if isinstance(item_metadata, dict) and item_metadata.get("name"):
-                    observed_names.add(str(item_metadata["name"]).lower())
+                add_object_targets(item)
                 item_kind = (
                     str(item.get("kind") or data.get("kind") or "")
                     if isinstance(item, dict) else ""
@@ -2129,14 +2198,18 @@ def _bind_plan_log_intents(
                 if item_kind == "Route" and isinstance(item_spec, dict):
                     destination = item_spec.get("to")
                     if isinstance(destination, dict) and destination.get("name"):
-                        observed_names.add(str(destination["name"]).lower())
+                        add_target(destination["name"], (
+                            item.get("metadata", {}).get("namespace")
+                            if isinstance(item.get("metadata"), dict) else None
+                        ))
                     alternate_backends = item_spec.get("alternateBackends")
                     if isinstance(alternate_backends, list):
-                        observed_names.update(
-                            str(backend["name"]).lower()
-                            for backend in alternate_backends
-                            if isinstance(backend, dict) and backend.get("name")
-                        )
+                        for backend in alternate_backends:
+                            if isinstance(backend, dict):
+                                add_target(backend.get("name"), (
+                                    item.get("metadata", {}).get("namespace")
+                                    if isinstance(item.get("metadata"), dict) else None
+                                ))
     for intent in plan.intents:
         normalized = normalize_read_intent(intent)
         resolved, error = _bind_pod_log_intent(normalized, candidates)
@@ -2256,16 +2329,16 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set()
     units_used = 0
     automatic_tls_retries = 0
-    automatic_traffic_followups = 0
-    automatic_log_followups = 0
-    automatic_configuration_followups = 0
     scope_summary = "Bounded read-only cluster investigation."
-    deterministic_plan = plan_known_read(
+    known_plan = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
         alert_name=alert_name,
         alert_labels=alert_labels,
     )
+    # Keep deterministic compilation only for terminal, unambiguous inventory or
+    # metric requests. Troubleshooting and object traversal remain model-directed.
+    deterministic_plan = known_plan if known_plan is not None and known_plan[1] else None
     catalog_entries: list[dict[str, object]] = []
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
     if callable(catalog_reader):
@@ -2282,30 +2355,12 @@ async def _collect_bounded_cluster_reads(
                 workflow_id,
                 str(exc),
             )
-    catalog_fallback = None
-    if catalog_entries:
-        catalog_fallback = plan_catalog_read(
-            question,
-            catalog_entries,
-            inventory_limit=settings.adhoc_inventory_max_objects,
-        )
     def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
         known_evidence_ids = {str(item.get("id")) for item in evidence}
-        if plan_needs_evidence_repair(
+        return plan_needs_evidence_repair(
             plan,
             known_evidence_ids=known_evidence_ids,
             has_completed_reads=bool(activity),
-        ):
-            return True
-        has_valid_support = bool(
-            known_evidence_ids.intersection(plan.supporting_evidence_ids)
-        )
-        return (
-            round_number == 1
-            and catalog_fallback is not None
-            and not activity
-            and plan.decision != "collect"
-            and not has_valid_support
         )
 
     def planner_context(
@@ -2479,14 +2534,6 @@ async def _collect_bounded_cluster_reads(
                     workflow_id,
                     len(plan.intents),
                 )
-            elif needs_fallback and round_number == 1 and catalog_fallback is not None:
-                plan, terminal_plan = catalog_fallback
-                LOGGER.info(
-                    "podpilot.adhoc.catalog_fallback actor=%s workflow_id=%s goal=%s",
-                    actor,
-                    workflow_id,
-                    plan.goal_type,
-                )
             elif needs_fallback and planner_error is not None:
                 LOGGER.warning(
                     "podpilot.adhoc.plan_failed actor=%s workflow_id=%s round=%s error=%s",
@@ -2606,32 +2653,16 @@ async def _collect_bounded_cluster_reads(
                 for followup in automatic_read_followups(
                     intent, result.observations, question=question, goal_type=plan.goal_type
                 ):
-                    if (
-                        followup.code == "tls_trust_retry"
-                        and automatic_tls_retries >= 2
-                    ) or (
-                        followup.code == "traffic_path_investigation"
-                        and automatic_traffic_followups >= 8
-                    ) or (
-                        followup.code == "configuration_detail"
-                        and automatic_configuration_followups >= 6
-                    ) or (
-                        followup.code in {"pod_log_investigation", "log_signal_investigation"}
-                        and automatic_log_followups >= 6
-                    ):
+                    # Mechanical trust-only retry is not a diagnostic direction.
+                    # All object traversal, logs, events, and configuration reads
+                    # must be explicitly selected by the model on the next round.
+                    if followup.code != "tls_trust_retry" or automatic_tls_retries >= 2:
                         continue
                     followup_intent = normalize_read_intent(followup.intent)
                     signature = _read_intent_signature(followup_intent)
                     if signature in seen_intents:
                         continue
-                    if followup.code == "tls_trust_retry":
-                        automatic_tls_retries += 1
-                    elif followup.code == "traffic_path_investigation":
-                        automatic_traffic_followups += 1
-                    elif followup.code == "configuration_detail":
-                        automatic_configuration_followups += 1
-                    else:
-                        automatic_log_followups += 1
+                    automatic_tls_retries += 1
                     seen_intents.add(signature)
                     intent_queue.append((
                         followup_intent,
@@ -3346,6 +3377,7 @@ def create_app(
                     content=str(validated["content"]),
                     answer_mode=str(validated["answer_mode"]),
                     has_evidence=bool(evidence),
+                    has_citations=bool(validated["citations"]),
                 )
                 if answer_quality_issue:
                     LOGGER.warning(
@@ -3410,6 +3442,7 @@ def create_app(
                             content=str(retry_validated["content"]),
                             answer_mode=str(retry_validated["answer_mode"]),
                             has_evidence=bool(evidence),
+                            has_citations=bool(retry_validated["citations"]),
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -3558,6 +3591,7 @@ def create_app(
                         "reads": activity,
                         "limitations": validated["limitations"],
                         "recommended_next_checks": validated.get("recommended_next_checks", []),
+                        "conclusion_status": validated.get("conclusion_status", "confirmed"),
                     }, sort_keys=True
                 ),
                 provider_status=provider_status,

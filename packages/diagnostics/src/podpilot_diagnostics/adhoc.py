@@ -955,6 +955,7 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
         for category, group in grouped.items():
             completed_checks: list[str] = []
             related_evidence_ids = [evidence_id]
+            mount_correlations: list[dict[str, object]] = []
             for candidate in evidence:
                 candidate_data = candidate.get("data")
                 if not isinstance(candidate_data, dict):
@@ -967,6 +968,33 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
                     and candidate_source == f"kubernetes:v1:Pod:{namespace}/{pod}"
                 ):
                     completed_checks.append("exact_pod_specification")
+                    mounts = candidate_data.get("podpilotMounts")
+                    if isinstance(mounts, list):
+                        completed_checks.append("pod_mount_configuration")
+                        for path in group["paths"]:
+                            matches = [
+                                mount for mount in mounts
+                                if isinstance(mount, dict)
+                                and str(mount.get("mountPath") or "")
+                                and (
+                                    str(path) == str(mount.get("mountPath"))
+                                    or str(path).startswith(
+                                        str(mount.get("mountPath")).rstrip("/") + "/"
+                                    )
+                                )
+                            ]
+                            if matches:
+                                mount_correlations.extend({
+                                    "path": path,
+                                    "mounted": True,
+                                    "container": mount.get("container"),
+                                    "mountPath": mount.get("mountPath"),
+                                    "volume": mount.get("volume"),
+                                    "sourceType": mount.get("sourceType"),
+                                    "sourceName": mount.get("sourceName"),
+                                } for mount in matches)
+                            else:
+                                mount_correlations.append({"path": path, "mounted": False})
                     if candidate_id:
                         related_evidence_ids.append(candidate_id)
                 if (
@@ -994,6 +1022,9 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
                         related_evidence_ids.append(candidate_id)
             occurrences = int(group["occurrences"])
             target = f" in Pod {namespace}/{pod}" if namespace and pod else ""
+            required_checks = {"exact_pod_specification", "pod_events"}
+            if group["paths"] and category in {"tls_or_certificate", "storage_or_mount"}:
+                required_checks.add("pod_mount_configuration")
             findings.append({
                 "id": "log-signal-" + sha256(
                     f"{evidence_id}\0{category}".encode()
@@ -1003,7 +1034,7 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
                 "severity": group["severity"],
                 "status": (
                     "investigated"
-                    if {"exact_pod_specification", "pod_events"}.issubset(completed_checks)
+                    if required_checks.issubset(completed_checks)
                     else "open"
                 ),
                 "summary": (
@@ -1026,6 +1057,7 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
                 "paths": group["paths"],
                 "endpoints": group["endpoints"],
                 "error_samples": group["samples"],
+                "mount_correlations": mount_correlations,
                 "evidence_ids": list(dict.fromkeys(related_evidence_ids)),
                 "completed_checks": list(dict.fromkeys(completed_checks)),
                 "recommended_followups": _recommended_log_followups(category),

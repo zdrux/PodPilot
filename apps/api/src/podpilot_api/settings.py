@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
     adhoc_max_rounds: int = Field(default=10, ge=1, le=12)
     adhoc_max_reads_per_turn: int = Field(default=25, ge=1, le=50)
-    adhoc_followup_reserve_units: int = Field(default=5, ge=0, le=15)
+    adhoc_followup_reserve_units: int = Field(default=0, ge=0, le=15)
     adhoc_max_clusters_per_conversation: int = Field(default=10, ge=1, le=20)
     adhoc_http_probe_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     adhoc_http_probe_max_bytes: int = Field(default=16_384, ge=1024, le=65_536)

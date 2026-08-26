@@ -275,13 +275,26 @@ def test_collection_automatically_retries_tls_trust_failure_without_verification
     assert any("server identity was not verified" in item for item in result.limitations)
 
 
-def test_collection_deterministically_checks_cross_namespace_network_policies() -> None:
+def test_collection_lets_model_plan_cross_namespace_network_policy_evidence() -> None:
     class Provider:
         def __init__(self) -> None:
             self.contexts = []
 
         def plan_ad_hoc(self, _profile, _api_key, context):
             self.contexts.append(context)
+            if not context["completed_reads"]:
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Inspect both endpoint Pods, namespaces, and policy sets.",
+                    intents=[
+                        ReadIntent(tool="get_resource", resource="pods", api_version="v1", kind="Pod", namespace="frontend", name="client-7d9"),
+                        ReadIntent(tool="get_resource", resource="pods", api_version="v1", kind="Pod", namespace="data", name="database-0"),
+                        ReadIntent(tool="get_resource", resource="namespaces", api_version="v1", kind="Namespace", name="frontend"),
+                        ReadIntent(tool="get_resource", resource="namespaces", api_version="v1", kind="Namespace", name="data"),
+                        ReadIntent(tool="list_resources", resource="networkpolicies", api_version="networking.k8s.io/v1", kind="NetworkPolicy", namespace="frontend", limit=100),
+                        ReadIntent(tool="list_resources", resource="networkpolicies", api_version="networking.k8s.io/v1", kind="NetworkPolicy", namespace="data", limit=100),
+                    ],
+                )
             return ReadPlan(
                 goal_type="diagnose", decision="answer_from_evidence",
                 scope_summary="The endpoint labels and policies are available.",
@@ -343,12 +356,12 @@ def test_collection_deterministically_checks_cross_namespace_network_policies() 
     assert [call.namespace for call in explorer.calls[-2:]] == ["frontend", "data"]
     assert len(result.activity) == 6
     assert all(item["status"] == "succeeded" for item in result.activity)
-    assert len(provider.contexts) == 1
-    assert provider.contexts[0]["investigation_round"] == 2
-    assert len(provider.contexts[0]["observations"]) == 6
+    assert len(provider.contexts) == 2
+    assert provider.contexts[1]["investigation_round"] == 2
+    assert len(provider.contexts[1]["observations"]) == 6
 
 
-def test_collection_auto_investigates_repeated_certificate_log_signals() -> None:
+def test_collection_lets_model_investigate_repeated_certificate_log_signals() -> None:
     pod_name = "maas-default-gateway-5cc7b765cf-b6qtq"
 
     class Provider:
@@ -364,13 +377,23 @@ def test_collection_auto_investigates_repeated_certificate_log_signals() -> None
                     scope_summary="Read the exact gateway proxy logs.",
                     intents=[ReadIntent(tool="pod_logs", candidate_id=candidate["id"])],
                 )
+            if context["investigation_round"] == 2:
+                assert context["findings"][0]["status"] == "open"
+                return ReadPlan(
+                    goal_type="diagnose", decision="collect",
+                    scope_summary="Inspect the Pod mounts and its Events.",
+                    intents=[
+                        ReadIntent(tool="get_resource", resource="pods", api_version="v1", kind="Pod", namespace="openshift-ingress", name=pod_name),
+                        ReadIntent(tool="search_resources", resource="events", api_version="v1", kind="Event", namespace="openshift-ingress", match_field="involvedObject.name", match_value=pod_name),
+                    ],
+                )
             assert context["findings"][0]["status"] == "investigated"
             assert context["findings"][0]["completed_checks"] == [
-                "exact_pod_specification", "pod_events",
+                "exact_pod_specification", "pod_mount_configuration", "pod_events",
             ]
             return ReadPlan(
                 goal_type="diagnose", decision="answer_from_evidence",
-                    scope_summary="The log finding received its bounded follow-up reads.",
+                scope_summary="The log finding received its model-selected follow-up reads.",
                 supporting_evidence_ids=context["findings"][0]["evidence_ids"],
             )
 
@@ -411,6 +434,11 @@ def test_collection_auto_investigates_repeated_certificate_log_signals() -> None
                             }],
                             "volumes": [{"name": "gateway-certs", "secret": {"secret_name": "gateway-certs"}}],
                         },
+                        "podpilotMounts": [{
+                            "containerType": "container", "container": "istio-proxy",
+                            "mountPath": "/etc/certs", "volume": "gateway-certs",
+                            "sourceType": "Secret", "sourceName": "gateway-certs",
+                        }],
                     },
                 ),))
             assert intent.tool == "search_resources"
@@ -466,10 +494,8 @@ def test_collection_auto_investigates_repeated_certificate_log_signals() -> None
     assert explorer.calls[1].namespace == "openshift-ingress"
     assert explorer.calls[1].name == pod_name
     assert explorer.calls[2].match_field == "involvedObject.name"
-    assert [entry.get("automatic_followup") for entry in result.activity] == [
-        None, "log_signal_investigation", "log_signal_investigation",
-    ]
-    final_finding = provider.contexts[1]["findings"][0]
+    assert [entry.get("automatic_followup") for entry in result.activity] == [None, None, None]
+    final_finding = provider.contexts[2]["findings"][0]
     assert final_finding["kind"] == "log_signal"
     assert final_finding["category"] == "tls_or_certificate"
     assert final_finding["paths"] == [
@@ -478,6 +504,7 @@ def test_collection_auto_investigates_repeated_certificate_log_signals() -> None
     assert final_finding["evidence_ids"] == [
         "cluster-proxy-log", "cluster-gateway-pod", "cluster-gateway-events",
     ]
+    assert final_finding["mount_correlations"][0]["sourceName"] == "gateway-certs"
 
 
 def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths() -> None:
@@ -525,6 +552,34 @@ def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
     assert validated["content"] == answer.answer
 
 
+def test_cited_unresolved_answer_remains_grounded_without_being_rejected() -> None:
+    answer = AdHocAnswer(
+        answer_mode="insufficient_evidence",
+        conclusion_status="unresolved",
+        answer=(
+            "The proxy logs show missing certificate files, but the intended TLS termination "
+            "point is not established by the collected configuration."
+        ),
+        cited_evidence_ids=["cluster-proxy-log"],
+        limitations=["No relevant Gateway object was observed."],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={"cluster-proxy-log"},
+    )
+
+    assert validated["answer_mode"] == "evidence_based"
+    assert validated["conclusion_status"] == "unresolved"
+    assert validated["citations"] == ["cluster-proxy-log"]
+    assert _adhoc_answer_quality_issue(
+        content=str(validated["content"]),
+        answer_mode=str(validated["answer_mode"]),
+        has_evidence=True,
+        has_citations=True,
+    ) is None
+
+
 def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -> None:
     assert _adhoc_answer_quality_issue(
         content="### Observed objects — what the cluster is actually doing",
@@ -537,6 +592,15 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
         answer_mode="insufficient_evidence",
         has_evidence=True,
     ) == "insufficient_interpretation_with_available_evidence"
+    assert _adhoc_answer_quality_issue(
+        content=(
+            "The Pod logs show missing certificate files, but the intended TLS termination "
+            "point remains unresolved."
+        ),
+        answer_mode="insufficient_evidence",
+        has_evidence=True,
+        has_citations=True,
+    ) is None
 
 
 def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence() -> None:
@@ -585,6 +649,106 @@ def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence()
     assert _adhoc_answer_quality_issue(
         content="The following cluster operators are available: ingress and monitoring.",
     ) is None
+
+
+def test_model_can_traverse_evidence_grounded_owner_references() -> None:
+    pod_name = "gateway-7d9f"
+
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if context["investigation_round"] == 1:
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Follow the Pod owner to its ReplicaSet.",
+                    intents=[ReadIntent(
+                        tool="get_resource", resource="replicasets", api_version="apps/v1",
+                        kind="ReplicaSet", name="gateway-7d9f6b", namespace="maas",
+                    )],
+                )
+            if context["investigation_round"] == 2:
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Follow the ReplicaSet owner to its Deployment.",
+                    intents=[ReadIntent(
+                        tool="get_resource", resource="deployments", api_version="apps/v1",
+                        kind="Deployment", name="gateway", namespace="maas",
+                    )],
+                )
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                scope_summary="The workload controller configuration is available.",
+                supporting_evidence_ids=["cluster-rs", "cluster-deployment"],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.kind == "ReplicaSet":
+                return ReadResult((AdHocObservation(
+                    id="cluster-rs", tool="get_resource", summary="Read the owning ReplicaSet.",
+                    source="kubernetes:apps/v1:ReplicaSet:maas/gateway-7d9f6b",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "kind": "ReplicaSet",
+                        "metadata": {
+                            "name": "gateway-7d9f6b", "namespace": "maas",
+                            "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "gateway"}],
+                        },
+                    },
+                ),))
+            return ReadResult((AdHocObservation(
+                id="cluster-deployment", tool="get_resource",
+                summary="Read the owning Deployment.",
+                source="kubernetes:apps/v1:Deployment:maas/gateway",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Deployment", "metadata": {"name": "gateway", "namespace": "maas"}},
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="owner-traversal",
+        question=f"Why is Pod {pod_name} in namespace maas missing its certificates?",
+        conversation=[],
+        existing_evidence=[{
+            "id": "cluster-pod", "tool": "get_resource",
+            "summary": "Read the gateway Pod.",
+            "source": f"kubernetes:v1:Pod:maas/{pod_name}",
+            "collected_at": datetime.now(timezone.utc),
+            "data": {
+                "kind": "Pod",
+                "metadata": {
+                    "name": pod_name, "namespace": "maas",
+                    "ownerReferences": [{
+                        "apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "gateway-7d9f6b",
+                    }],
+                },
+            },
+        }],
+    ))
+
+    assert [call.kind for call in explorer.calls] == ["ReplicaSet", "Deployment"]
+    assert [item["id"] for item in result.evidence[-2:]] == ["cluster-rs", "cluster-deployment"]
+    assert len(provider.contexts) == 3
 
 
 def test_inventory_only_configuration_answer_gets_advisory_without_rejection() -> None:
@@ -1739,6 +1903,24 @@ class ExactCandidateFallbackExplorer:
 
 
 class IncidentJobProvider(FakeModelProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if not context["completed_reads"]:
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Inspect the exact alert-scoped Job.",
+                intents=[ReadIntent(
+                    tool="search_resources", resource="jobs", api_version="batch/v1",
+                    kind="Job", namespace="operators", match_field="metadata.name",
+                    match_value="status-check-abc", limit=1,
+                )],
+            )
+        return ReadPlan(
+            goal_type="diagnose", decision="answer_from_evidence",
+            scope_summary="The alert-scoped Job evidence is available.",
+            supporting_evidence_ids=["cluster-job-1"],
+        )
+
     def chat(self, profile, api_key: str, context: dict[str, object]) -> InvestigationChatAnswer:
         self.chat_calls.append(context)
         observations = context["analysis"]["observations"]
@@ -1801,7 +1983,18 @@ class StorageClassExplorer:
 class RouteBackendProvider(FakeModelProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
-        if not any(item.get("tool") == "get_resource" for item in context["completed_reads"]):
+        completed = context["completed_reads"]
+        if not completed:
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Find the Route named by the operator URL.",
+                intents=[ReadIntent(
+                    tool="search_resources", resource="routes.route.openshift.io",
+                    api_version="route.openshift.io/v1", kind="Route",
+                    match_field="spec.host", match_value="maas.apps.example.test", limit=5,
+                )],
+            )
+        if not any(item.get("target", "").startswith("services ") for item in completed):
             return ReadPlan(
                 goal_type="diagnose",
                 scope_summary="Inspect the Service referenced by the matched Route.",
@@ -1809,6 +2002,33 @@ class RouteBackendProvider(FakeModelProvider):
                     tool="get_resource", resource="services", api_version="v1", kind="Service",
                     namespace="maas", name="model-server",
                 )],
+            )
+        if not any(item.get("target", "").startswith("pods ") for item in completed):
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Discover Pods selected by the backend Service.",
+                intents=[ReadIntent(
+                    tool="list_resources", resource="pods", api_version="v1", kind="Pod",
+                    namespace="maas", label_selector="app=model-server", limit=20,
+                )],
+            )
+        if not any(item.get("tool") == "pod_logs" for item in completed):
+            candidate = context["tool_policy"]["pod_log_candidates"][0]
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Inspect the selected backend Pod and its application logs.",
+                intents=[
+                    ReadIntent(tool="pod_logs", candidate_id=candidate["id"]),
+                    ReadIntent(
+                        tool="get_resource", resource="pods", api_version="v1", kind="Pod",
+                        namespace="maas", name="model-server-abc",
+                    ),
+                    ReadIntent(
+                        tool="search_resources", resource="events", api_version="v1", kind="Event",
+                        namespace="maas", match_field="involvedObject.name",
+                        match_value="model-server-abc", limit=20,
+                    ),
+                ],
             )
         return ReadPlan(
             goal_type="diagnose",
@@ -1880,15 +2100,11 @@ class FailingTrafficPlanProvider(RouteBackendProvider):
 
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
-        log = next(item for item in context["observations"] if item["tool"] == "pod_logs")
         return AdHocAnswer(
-            answer_mode="evidence_based",
-            answer=(
-                "The backend Pod log reports an upstream application error while handling the "
-                "Route request. The traffic path and application logs were both inspected."
-            ),
-            cited_evidence_ids=[log["id"]],
-            limitations=[],
+            answer_mode="insufficient_evidence",
+            answer="The planner could not produce a safe typed read plan for this investigation.",
+            cited_evidence_ids=[],
+            limitations=["No cluster reads were attempted after the invalid plan."],
         )
 
 
@@ -2503,7 +2719,7 @@ def test_ask_raw_response_toggle_persists_and_displays_both_answer_attempts(
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         assert "Show raw model response" in page.text
-        assert "For this question only" in page.text
+        assert "For this question only" not in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
         created = client.post(
@@ -3096,15 +3312,15 @@ def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
     assert "maas/model-server" in rendered.text
     assert "model planner did not select a safe evidence read" not in rendered.text
     assert [call.tool for call in explorer.calls] == [
-        "search_resources", "get_resource", "list_resources", "list_resources",
-        "get_resource", "pod_logs", "get_resource", "search_resources",
+        "search_resources", "get_resource", "list_resources", "pod_logs",
+        "get_resource", "search_resources",
     ]
     assert explorer.calls[1].name == "model-server"
     assert explorer.calls[2].kind == "Pod"
-    assert explorer.calls[5].name == "model-server-abc"
+    assert explorer.calls[3].name == "model-server-abc"
 
 
-def test_route_traffic_path_reaches_backend_logs_when_later_plan_is_invalid(
+def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(
     tmp_path: Path,
 ) -> None:
     provider = FailingTrafficPlanProvider()
@@ -3144,10 +3360,10 @@ def test_route_traffic_path_reaches_backend_logs_when_later_plan_is_invalid(
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
     assert rendered.status_code == 200
-    assert "backend Pod log reports an upstream application error" in rendered.text
-    assert "ReadPlan round 2 failed" in rendered.text
-    assert any(call.tool == "pod_logs" for call in explorer.calls)
-    assert provider.adhoc_answer_calls[0]["findings"][0]["kind"] == "log_signal"
+    assert "planner could not produce a safe typed read plan" in rendered.text
+    assert "ReadPlan round 1 failed" in rendered.text
+    assert explorer.calls == []
+    assert provider.adhoc_answer_calls[0]["findings"] == []
 
 
 def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
@@ -3378,7 +3594,7 @@ def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(
     assert provider.adhoc_plan_calls[2]["completed_reads"][0]["status"] == "succeeded"
 
 
-def test_ask_uses_discovery_fallback_when_model_refuses_safe_catalog_read(
+def test_ask_does_not_override_model_direction_with_catalog_fallback(
     tmp_path: Path,
 ) -> None:
     provider = RefusingCatalogProvider()
@@ -3411,15 +3627,14 @@ def test_ask_uses_discovery_fallback_when_model_refuses_safe_catalog_read(
             follow_redirects=False,
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "All observed ClusterOperators are Available" in rendered.text
-        assert "cluster-operators-1" in rendered.text
+        assert "could not provide a verified cluster-specific answer" in rendered.text
+        assert "cluster-operators-1" not in rendered.text
 
-    assert len(provider.adhoc_plan_calls) == 2
-    assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
-        "actionable_goal_requires_evidence"
+    assert len(provider.adhoc_plan_calls) == 1
+    assert provider.adhoc_plan_calls[0]["tool_policy"]["resource_catalog"][0]["kind"] == (
+        "ClusterOperator"
     )
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].resource == "clusteroperators"
+    assert explorer.calls == []
 
 
 def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
@@ -4107,7 +4322,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     )
     script = (ROOT / "apps" / "web" / "static" / "app.js").read_text()
     assert "Conversation budget reached" not in template
-    assert "Enter to send" in template and "Shift+Enter for a new line" in template
+    assert "Enter to send" not in template and "Shift+Enter for a new line" not in template
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
     assert "appendOptimisticTurn" in script
@@ -4117,6 +4332,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "rawResponseToggle.disabled = false" in script
     assert "data-cluster-picker" in template
     assert "cluster-picker-selection" in template
+    assert "composer-meta-row" in template
+    assert "composer-input-wrap" in template
+    assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script
     assert 'pickerLabel.replaceChildren()' in script
     assert 'textarea.value = ""' in script
@@ -4536,7 +4754,8 @@ def test_incident_chat_collects_and_persists_alert_scoped_job_evidence(tmp_path:
     assert explorer.calls[0].api_version == "batch/v1"
     assert explorer.calls[0].kind == "Job"
     assert explorer.calls[0].namespace == "operators"
-    assert explorer.calls[0].name == "status-check-abc"
+    assert explorer.calls[0].match_field == "metadata.name"
+    assert explorer.calls[0].match_value == "status-check-abc"
     assert provider.chat_calls[0]["policy"]["bounded_cluster_reads_enabled"] is True
     assert provider.chat_calls[0]["read_activity"][0]["status"] == "succeeded"
 

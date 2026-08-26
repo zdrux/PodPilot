@@ -615,8 +615,10 @@ requires the configured model.
 
 The default ad-hoc budget is ten planning rounds and 25 weighted investigation units,
 configured with `PODPILOT_ADHOC_MAX_ROUNDS` and
-`PODPILOT_ADHOC_MAX_READS_PER_TURN`. Five units are reserved for deterministic follow-ups
-through `PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS`. Discovery and ordinary resource reads cost
+`PODPILOT_ADHOC_MAX_READS_PER_TURN`. The default
+`PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS=0` makes the full budget available to the dynamic
+model-directed loop; a deployment may reserve units for the mechanical TLS trust retry.
+Discovery and ordinary resource reads cost
 one unit; Pod logs, HTTP probes, and metric queries cost two; bounded watches cost three.
 The planner may search live API discovery for any resource advertising `get`, `list`, or
 `watch`, but the broker still rejects sensitive resources and subresources and RBAC remains
@@ -654,24 +656,21 @@ DNS, network, authorization, storage/mount, dependency/upstream, general error, 
 warning patterns. Repeated messages are normalized into signature counts rather than
 duplicated evidence. Findings include exact Pod/container coordinates, occurrence
 counts, timestamps when present, up to three bounded samples, and extracted paths or
-endpoints. Material findings automatically read the exact Pod and Pod Events; crash
-or resource-pressure findings may also request previous logs. A single warning is
-retained for the model but does not automatically expand the investigation.
+endpoints. Material findings expose exact coordinates and potential correlations to the
+planner, which decides whether Pod, Event, previous-log, owner, metric, or configuration reads
+are relevant. Findings do not automatically expand the investigation.
 Missing TLS certificate/key assets are correlated across a bounded neighboring-line
 window so split Python or application tracebacks that name a `.pem`, `.crt`, or `.key`
 file before a `FileNotFoundError` remain visible in the deterministic answer section.
 
-Route, HTTP 5xx, and connectivity questions additionally follow an observed OpenShift Route
-through its exact Service to bounded Service-selected Pods, EndpointSlices, and Endpoints.
-Compact endpoint evidence retains Pod target references. Current logs are collected from at
-most three relevant backend containers even when those Pods are healthy, then material signals
-use the same Pod/Event/previous-log correlations above. These reads share the normal 25-unit
-budget. A later malformed model plan is reported as a limitation but does not discard the
-deterministic traffic-path reads already derived from cluster evidence.
+Route, HTTP 5xx, and connectivity questions expose observed Route backends, Service selectors,
+EndpointSlice/Endpoints targets, Pod candidates, and owner references to each planning round.
+The model chooses the relevant traversal and logs dynamically. Every proposed hop shares the
+normal 25-unit budget and is grounded and validated by the broker; a malformed plan is reported
+as a limitation and does not trigger a server-authored diagnostic path.
 
-When a TCP/connectivity question explicitly names a source Pod and destination Pod in two
-different namespaces, PodPilot reads the two Pods, both Namespace label sets, and up to 100
-NetworkPolicies from each namespace before model planning. Ask replies evaluate source egress
+For a TCP/connectivity question, the model may read the source and destination Pods, Namespace
+label sets, and bounded NetworkPolicies when policy evaluation is relevant. Ask replies evaluate source egress
 and destination ingress separately and treat matching selectors as a potential factor, not
 proof of a dropped connection; PodPilot does not exec a probe inside the source Pod.
 
@@ -684,8 +683,9 @@ Before requesting the final model answer, PodPilot compacts a provider-only evid
 view. Current-turn reads are prioritized, Pod-log tails are capped, large object/list
 values are reduced, at most 12 compact findings are included, and observation context
 is bounded to 96 KB. This does not truncate persisted evidence or the operator's
-provenance drawer. An evidence-backed response containing only headings is rejected and
-retried once; concise readable answers are accepted. A second incomplete response uses
+provenance drawer. Grounding and certainty are separate: a cited interpretation can remain
+`unresolved` without being discarded. An uncited refusal or response containing only headings
+is retried once; concise readable answers are accepted. A second incomplete response uses
 a deterministic cited answer; recognized Route/TLS and inventory questions retain
 their specialized renderers. Inventory-only citations produce a limitation rather than
 discarding readable prose. Normal code always appends a bounded **Backend log findings**
@@ -752,8 +752,8 @@ Field searches use a separate scan ceiling so a small result can be found beyond
 ordinary inventory window. `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS` defaults to 2000 and
 accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
 `podpilot-runtime`. Searches support exact/contains matching on validated dot-separated
-object field paths, including paths through nested objects and lists. A Route URL in the
-question is compiled to an exact hostname search automatically. Search evidence reports
+object field paths, including paths through nested objects and lists. For a Route URL, the
+model can select an exact hostname search. Search evidence reports
 both match count and scanned count, plus whether a ceiling stopped the scan.
 OpenShift ingress and browser Route lookups are qualified as
 `routes.route.openshift.io`. `routes.serving.knative.dev` is reserved for questions that

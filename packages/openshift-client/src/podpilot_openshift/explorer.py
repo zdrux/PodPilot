@@ -186,6 +186,66 @@ def _pod_log_candidate_projection(raw: dict[str, Any], namespace: str | None) ->
     })
 
 
+def _pod_mount_projection(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose volume wiring without exposing Secret or ConfigMap contents."""
+
+    spec = raw.get("spec") or {}
+    volumes = spec.get("volumes") or []
+    sources: dict[str, dict[str, Any]] = {}
+    source_fields = (
+        ("secret", "Secret", ("secretName", "secret_name")),
+        ("configMap", "ConfigMap", ("name",)),
+        ("config_map", "ConfigMap", ("name",)),
+        ("persistentVolumeClaim", "PersistentVolumeClaim", ("claimName", "claim_name")),
+        ("persistent_volume_claim", "PersistentVolumeClaim", ("claimName", "claim_name")),
+        ("projected", "Projected", ()),
+        ("csi", "CSI", ("driver",)),
+        ("emptyDir", "EmptyDir", ()),
+        ("empty_dir", "EmptyDir", ()),
+    )
+    for volume in volumes if isinstance(volumes, list) else []:
+        if not isinstance(volume, dict) or not volume.get("name"):
+            continue
+        source_type = "Other"
+        source_name = None
+        for field, label, name_fields in source_fields:
+            source = volume.get(field)
+            if not isinstance(source, dict):
+                continue
+            source_type = label
+            source_name = next((source.get(key) for key in name_fields if source.get(key)), None)
+            break
+        sources[str(volume["name"])] = {
+            "sourceType": source_type,
+            "sourceName": str(source_name)[:253] if source_name else None,
+        }
+
+    result: list[dict[str, Any]] = []
+    for container_type, configured in (
+        ("container", spec.get("containers") or []),
+        ("initContainer", spec.get("initContainers") or spec.get("init_containers") or []),
+    ):
+        for container in configured if isinstance(configured, list) else []:
+            if not isinstance(container, dict):
+                continue
+            mounts = container.get("volumeMounts") or container.get("volume_mounts") or []
+            for mount in mounts if isinstance(mounts, list) else []:
+                if not isinstance(mount, dict):
+                    continue
+                volume_name = str(mount.get("name") or "")[:253]
+                source = sources.get(volume_name, {})
+                result.append({
+                    "containerType": container_type,
+                    "container": str(container.get("name") or "")[:253],
+                    "mountPath": str(mount.get("mountPath") or mount.get("mount_path") or "")[:1024],
+                    "volume": volume_name,
+                    "readOnly": bool(mount.get("readOnly") or mount.get("read_only")),
+                    "sourceType": source.get("sourceType"),
+                    "sourceName": source.get("sourceName"),
+                })
+    return result[:100]
+
+
 def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_projection(raw)
     spec = raw.get("spec") or {}
@@ -841,6 +901,8 @@ class KubernetesReadOnlyExplorer:
         for obj in items:
             raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
             payload = _sanitize(raw)
+            if kind == "Pod" and isinstance(payload, dict):
+                payload["podpilotMounts"] = _pod_mount_projection(raw)
             encoded = json.dumps(payload, sort_keys=True, default=str)
             truncated = len(encoded.encode("utf-8")) > self._max_payload_bytes
             if truncated:

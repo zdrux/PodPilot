@@ -226,10 +226,10 @@ collection failures.
 Bounded Pod logs are untrusted evidence. Deterministic log-signal classification
 matches fixed operational patterns only; it never executes, evaluates, or follows
 instructions found in log text. Samples, paths, endpoints, and timestamps are
-bounded and pass through the existing redaction boundary. Automatic expansion is
-limited to exact server-observed Pod/container coordinates, Pod Events, and an
-applicable previous log stream, shares the per-turn weighted investigation budget, and cannot request
-Secrets, exec, proxy, mutation, or broader RBAC. Pattern matches are signals and do
+bounded and pass through the existing redaction boundary. Findings are supplied to the
+planner as optional evidence-derived candidates; they do not automatically cause Pod, Event,
+log, or configuration reads. Any continuation must be returned as a typed plan and independently
+pass grounding, budget, sensitivity, verb, and RBAC checks. Pattern matches are signals and do
 not establish causality without corroborating evidence.
 
 Model-planned `watch` is time- and event-bounded and uses only Kubernetes watch semantics;
@@ -331,10 +331,10 @@ as a potential issue rather than authoritative evidence or root cause.
 Trust-only TLS failures may trigger one identical probe with verification disabled;
 the retry remains unauthenticated, carries no credentials, preserves Host/SNI, is
 bounded by the normal read budget, and records the identity-verification limitation.
-Proxy certificate-error findings may trigger exact Pod and Event reads derived from
-the log observation's server-owned source coordinate. Log text never supplies a
-callable target, Secret reads remain denied, and the resulting finding is evidence
-for interpretation rather than an instruction or automatic root-cause claim.
+Proxy certificate-error findings may inform a model-selected exact Pod, owner, Event, or
+configuration read when its target is grounded in server-observed coordinates or explicit
+object references. Log text alone never supplies a callable target, Secret reads remain denied,
+and the resulting finding is evidence rather than an instruction or root-cause claim.
 A `run_queued_checks`
 proposal cannot call the executor; it renders a separate button backed by the
 existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit

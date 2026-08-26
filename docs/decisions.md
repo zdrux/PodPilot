@@ -757,3 +757,31 @@ load can now overlap and must be capacity-tested. This is not horizontal scaling
 replicas, robust crash leases, or sustained write concurrency still require PostgreSQL and an
 atomic cross-process claim design. This supersedes the one-worker limit in the 2026-08-25 durable
 Ask-job decision while preserving its persistence, ownership, and recovery rules.
+
+## 2026-08-26 - Troubleshooting traversal is model-directed inside a fixed broker boundary
+
+Context: Server-authored Route, traffic, log, Event, and configuration continuations made common
+incidents reliable, but they also steered diagnosis toward a preconceived graph and could consume
+the budget before the model pursued a competing hypothesis. Final recommendations were display
+strings rather than evidence actions, and a useful cited unresolved answer was rejected whenever
+any evidence existed.
+
+Decision: Keep the ten-round, 25-unit safety envelope and every existing broker enforcement rule,
+but make troubleshooting and object traversal model-directed. Only terminal unambiguous inventory
+and metric requests retain deterministic compilation. Findings, selectors, endpoint targets,
+owner references, and mount relationships are supplied as optional candidates; the model must
+return a typed intent for every diagnostic hop. Normal code grounds explicit owner, Route,
+endpoint, Pod-candidate, and volume-backed references, while arbitrary text remains non-callable.
+The only automatic continuation is an identical trust-only HTTPS retry. Set the default reserved
+follow-up units to zero. Treat answer grounding separately from certainty: a cited interpretation
+is evidence-based and may carry an unresolved conclusion, while uncited refusals and structurally
+empty answers still receive one correction attempt.
+
+Consequences: The model can change direction as evidence arrives and use the full default budget
+without gaining credentials, arbitrary tools, Secret access, mutation, or authority over the
+broker. Invalid plans stop or retry visibly instead of silently invoking a different diagnostic
+graph. Provider quality matters more because normal code no longer masks a refused or malformed
+troubleshooting plan with server-selected traversal. This supersedes the server-derived
+correlation reserve and deterministic diagnostic continuations in the adaptive-traversal,
+traffic-path, cross-namespace-policy, and log-correlation decisions; their evidence normalization
+and safety constraints remain in force.

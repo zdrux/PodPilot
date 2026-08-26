@@ -128,7 +128,15 @@ def test_log_signal_finding_records_completed_pod_and_event_followups() -> None:
         base,
         {
             "id": "cluster-pod-1", "tool": "get_resource",
-            "source": "kubernetes:v1:Pod:mesh/gateway-1", "data": {"kind": "Pod"},
+            "source": "kubernetes:v1:Pod:mesh/gateway-1",
+            "data": {
+                "kind": "Pod",
+                "podpilotMounts": [{
+                    "container": "istio-proxy", "mountPath": "/etc/certs",
+                    "volume": "gateway-certs", "sourceType": "Secret",
+                    "sourceName": "gateway-client-tls",
+                }],
+            },
         },
         {
             "id": "cluster-events-1", "tool": "search_resources",
@@ -143,7 +151,10 @@ def test_log_signal_finding_records_completed_pod_and_event_followups() -> None:
     finding = derive_adhoc_findings(evidence)[0]
 
     assert finding["status"] == "investigated"
-    assert finding["completed_checks"] == ["exact_pod_specification", "pod_events"]
+    assert finding["completed_checks"] == [
+        "exact_pod_specification", "pod_mount_configuration", "pod_events",
+    ]
+    assert finding["mount_correlations"][0]["sourceName"] == "gateway-client-tls"
     assert finding["evidence_ids"] == [
         "cluster-proxy-log-1", "cluster-pod-1", "cluster-events-1",
     ]

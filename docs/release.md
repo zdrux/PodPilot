@@ -176,15 +176,14 @@ used by the corrected explanation.
 Automatic-follow-up gates must verify that a trust-only TLS failure schedules at
 most one identical `tls_verify=false` retry without changing URL, method, connection
 override, Host, or SNI; both results and the insecure-identity warning must survive.
-Log-investigation gates must prioritize exact unready/restarting/non-running
-Pod/container candidates while also allowing bounded healthy backend candidates for an active
-traffic-path investigation; classify representative crash, resource, TLS, DNS,
+Log-investigation gates must expose exact unready/restarting/non-running and bounded healthy
+Pod/container candidates for model selection; classify representative crash, resource, TLS, DNS,
 network, authorization, storage, dependency, error, and warning lines from any
 container; normalize repeated signatures; and retain only bounded samples, paths,
-endpoints, and timestamps. Material findings may perform only exact Pod, Pod-Event,
-and applicable previous-log reads within the shared capped budget. A lone warning
-must not expand automatically, and all log correlation must remain separate from
-proven causality. Durable progress activity must label deterministic follow-ups.
+endpoints, and timestamps. Material findings must not execute reads automatically; model-selected
+Pod, owner, Event, metric, configuration, and previous-log intents must pass the same grounding
+and capped broker. All log correlation must remain separate from proven causality. Durable
+progress activity must distinguish model-selected reads from the mechanical TLS trust retry.
 Compact-chat visual gates must verify that confidence appears as a keyboard-focusable
 pill beside the reply time, its explanation appears on hover/focus, the single rounded evidence
 timeline replaces the redundant inspected-target disclosure, remains closed by default, and
