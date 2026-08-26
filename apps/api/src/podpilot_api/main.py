@@ -2388,6 +2388,23 @@ async def _collect_bounded_cluster_reads(
             has_completed_reads=bool(activity),
         )
 
+    def plan_needs_sufficiency_review(plan: ReadPlan) -> bool:
+        """Challenge one early diagnostic stop without prescribing its next read."""
+
+        known_evidence_ids = {str(item.get("id")) for item in evidence}
+        has_valid_support = bool(
+            known_evidence_ids.intersection(plan.supporting_evidence_ids)
+        )
+        has_successful_read = any(
+            item.get("status") == "succeeded" for item in activity
+        )
+        return (
+            plan.goal_type in {"diagnose", "logs", "explain"}
+            and plan.decision == "answer_from_evidence"
+            and has_valid_support
+            and has_successful_read
+        )
+
     def planner_context(
         *, round_number: int, remaining_reads: int, feedback: dict[str, object] | None = None
     ) -> dict[str, object]:
@@ -2499,9 +2516,27 @@ async def _collect_bounded_cluster_reads(
                     evidence=evidence,
                 )
                 rejected_log_intents.extend(rejected)
-                if not plan_requires_repair(plan, round_number=round_number) and not target_errors:
+                evidence_repair_needed = plan_requires_repair(
+                    plan, round_number=round_number
+                )
+                sufficiency_review_needed = (
+                    planning_attempt == 1
+                    and not evidence_repair_needed
+                    and not target_errors
+                    and plan_needs_sufficiency_review(plan)
+                )
+                if (
+                    not evidence_repair_needed
+                    and not sufficiency_review_needed
+                    and not target_errors
+                ):
                     plan = bound_plan
                     break
+                repair_reason = (
+                    "ungrounded_target" if target_errors else
+                    "unsupported_answer" if evidence_repair_needed else
+                    "evidence_sufficiency_review"
+                )
                 LOGGER.warning(
                     "podpilot.adhoc.plan_repair actor=%s workflow_id=%s round=%s attempt=%s "
                     "goal=%s decision=%s reason=%s",
@@ -2511,7 +2546,7 @@ async def _collect_bounded_cluster_reads(
                     planning_attempt,
                     plan.goal_type,
                     plan.decision,
-                    "ungrounded_target" if target_errors else "unsupported_answer",
+                    repair_reason,
                 )
                 feedback = ({
                     "code": "model_target_not_grounded",
@@ -2529,6 +2564,19 @@ async def _collect_bounded_cluster_reads(
                         "resource catalog contains a safe matching target. Return decision=collect "
                         "with safe read intents from the catalog. Only request clarification if no "
                         "catalog target can answer the question."
+                    ),
+                } if evidence_repair_needed else {
+                    "code": "review_evidence_sufficiency",
+                    "message": (
+                        "Before ending this diagnostic investigation, review the supplied "
+                        "observations, findings, explicit object relationships, and remaining "
+                        "typed read budget. If one allowed read can materially verify an "
+                        "uninspected next hop, distinguish a live hypothesis, or resolve a "
+                        "limitation you would otherwise recommend as a next check, return "
+                        "decision=collect with that typed intent now. Do not merely defer an "
+                        "available read to the final answer. If no available read would "
+                        "materially improve the answer, repeat decision=answer_from_evidence "
+                        "with exact supporting_evidence_ids."
                     ),
                 })
             needs_fallback = plan is None or plan_requires_repair(

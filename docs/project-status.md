@@ -127,7 +127,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   operational no-read answers receive one structured repair attempt. If both
   initial plans stop before evidence collection, one exact operator-supplied
   coordinate may seed a single broker-validated discovery read; the model chooses
-  all later troubleshooting traversal. Generic catalog fallback remains disabled.
+  all later troubleshooting traversal. The first later evidence-supported stop
+  for diagnostic/log/explanation goals receives one model sufficiency review so
+  material available reads are attempted instead of merely listed as next checks.
+  Generic catalog fallback remains disabled, and recommendation text is never executable.
 - Cluster-wide inventory LISTs no longer require the operator to invent a
   namespace. OpenShift API 403 responses identify the investigator ServiceAccount,
   verb, resource, and scope in the answer. List evidence retains all collected

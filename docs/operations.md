@@ -719,6 +719,15 @@ record `podpilot.adhoc.plan_repair` and
 A later `403` is an RBAC limitation, not a planner failure, and the UI names the
 denied ServiceAccount, resource, verb, and scope.
 
+After evidence exists, the first model decision to stop a diagnostic, log, or
+explanation investigation receives one sufficiency review. If an allowed typed
+read can materially verify an uninspected next hop or resolve a limitation that
+would otherwise be deferred to **Suggested next checks**, the model should request
+that read immediately. Repeating the evidence-backed stop is allowed when another
+read would not materially improve the answer. Logs record this review as
+`podpilot.adhoc.plan_repair reason=evidence_sufficiency_review`; the displayed
+recommendation text itself is never executed.
+
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name
 collisions are represented as `resource.group` (for example,

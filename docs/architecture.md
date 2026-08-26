@@ -272,6 +272,13 @@ recovery anchor. A Route URL, for example, can seed one exact `spec.host` search
 activate a generic catalog fallback or a deterministic troubleshooting graph: the resulting
 observation is returned to the planner, which selects every later diagnostic hop.
 
+For diagnostic, log, and explanation goals, the first evidence-supported request to stop is
+subject to one model sufficiency review. The review receives the same observations, findings,
+explicit relationships, available typed tools, and remaining budget. It asks the model to collect
+one material read now when that read would otherwise appear as an unperformed final recommendation;
+otherwise the model may confirm its stop with exact supporting IDs. Recommendation prose is never
+executed, and normal broker validation remains unchanged.
+
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
 retains `podSelector`, `policyTypes`, ingress and egress peers, and ports. Configuration evidence

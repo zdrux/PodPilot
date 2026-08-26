@@ -781,12 +781,19 @@ grounding separately from certainty: a cited interpretation is evidence-based an
 unresolved conclusion, while uncited refusals and structurally empty answers still receive one
 correction attempt.
 
+Before accepting the first evidence-supported stop for a diagnostic, log, or explanation goal,
+ask the model once to review whether a remaining allowed typed read would materially resolve an
+uninspected next hop, distinguish a hypothesis, or avoid deferring its own proposed check. The
+model chooses the intent or confirms the stop; normal code never converts recommendation prose
+directly into a tool call.
+
 Consequences: The model can change direction as evidence arrives and use the full default budget
 without gaining credentials, arbitrary tools, Secret access, mutation, or authority over the
 broker. Malformed plans still stop or retry visibly instead of silently invoking a diagnostic
 graph; repeated no-read plans can no longer turn an exact operator-supplied target into an empty
 investigation. Provider quality remains visible because the recovery is logged and limited to one
-grounded read. This supersedes the server-derived
+grounded read. A premature model stop gets one extra inference, while final recommendations no
+longer substitute silently for material reads the model can still request. This supersedes the server-derived
 correlation reserve and deterministic diagnostic continuations in the adaptive-traversal,
 traffic-path, cross-namespace-policy, and log-correlation decisions; their evidence normalization
 and safety constraints remain in force.

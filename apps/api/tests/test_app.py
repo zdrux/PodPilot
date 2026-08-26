@@ -356,7 +356,10 @@ def test_collection_lets_model_plan_cross_namespace_network_policy_evidence() ->
     assert [call.namespace for call in explorer.calls[-2:]] == ["frontend", "data"]
     assert len(result.activity) == 6
     assert all(item["status"] == "succeeded" for item in result.activity)
-    assert len(provider.contexts) == 2
+    assert len(provider.contexts) == 3
+    assert provider.contexts[-1]["planner_feedback"]["code"] == (
+        "review_evidence_sufficiency"
+    )
     assert provider.contexts[1]["investigation_round"] == 2
     assert len(provider.contexts[1]["observations"]) == 6
 
@@ -748,7 +751,10 @@ def test_model_can_traverse_evidence_grounded_owner_references() -> None:
 
     assert [call.kind for call in explorer.calls] == ["ReplicaSet", "Deployment"]
     assert [item["id"] for item in result.evidence[-2:]] == ["cluster-rs", "cluster-deployment"]
-    assert len(provider.contexts) == 3
+    assert len(provider.contexts) == 4
+    assert provider.contexts[-1]["planner_feedback"]["code"] == (
+        "review_evidence_sufficiency"
+    )
 
 
 def test_inventory_only_configuration_answer_gets_advisory_without_rejection() -> None:
@@ -1520,7 +1526,7 @@ def test_free_form_model_planned_list_uses_configured_broker_ceiling() -> None:
         existing_evidence=[],
     ))
 
-    assert provider.calls == 2
+    assert provider.calls == 3
     assert len(explorer.calls) == 1
     assert explorer.calls[0].resource == "kafkatopics"
     assert explorer.calls[0].namespace == "kafka-observability"
@@ -2115,6 +2121,20 @@ class NoReadThenHeadingOnlyRouteProvider(HeadingOnlyRouteProvider):
                 goal_type="diagnose",
                 decision="answer_from_evidence",
                 scope_summary="Answer without collecting Route evidence.",
+            )
+        return super().plan_ad_hoc(profile, api_key, context)
+
+
+class EarlyStoppingRouteProvider(RouteBackendProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        completed = context["completed_reads"]
+        if completed and not context.get("planner_feedback"):
+            self.adhoc_plan_calls.append(context)
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                scope_summary="Stop after the currently collected evidence.",
+                supporting_evidence_ids=["cluster-route-1"],
             )
         return super().plan_ad_hoc(profile, api_key, context)
 
@@ -3379,6 +3399,63 @@ def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
     assert explorer.calls[1].name == "model-server"
     assert explorer.calls[2].kind == "Pod"
     assert explorer.calls[3].name == "model-server-abc"
+
+
+def test_diagnostic_stop_is_reviewed_before_deferring_available_typed_reads(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = EarlyStoppingRouteProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "This Route reports an Internal Server Error over HTTPS; validate the backend. "
+                    "https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [call.tool for call in explorer.calls] == [
+        "search_resources", "get_resource", "list_resources", "pod_logs",
+        "get_resource", "search_resources",
+    ]
+    review_calls = [
+        context for context in provider.adhoc_plan_calls
+        if context.get("planner_feedback", {}).get("code") == "review_evidence_sufficiency"
+    ]
+    assert review_calls
+    assert any(
+        item["tool"] == "search_resources"
+        for item in review_calls[0]["completed_reads"]
+    )
+    assert "reason=evidence_sufficiency_review" in caplog.text
 
 
 def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(

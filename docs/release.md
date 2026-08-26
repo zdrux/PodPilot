@@ -254,6 +254,10 @@ that recovery is limited to one read compiled from an exact coordinate in the
 operator request, still passes through the normal read broker and RBAC boundary,
 returns subsequent traversal to the model, and does not activate for malformed
 plans or generic catalog matches.
+Dynamic-traversal gates must also prove that the first evidence-supported stop for
+a diagnostic goal receives one bounded sufficiency review, that the model can turn
+that feedback into broker-validated typed reads, and that repeating the stop is
+accepted without executing recommendation prose.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal
