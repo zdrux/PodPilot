@@ -180,6 +180,12 @@ Compact-chat visual gates must verify that confidence appears as a keyboard-focu
 pill beside the reply time, its explanation appears on hover/focus, evidence timelines
 are closed by default and preserve citation navigation when expanded, and reply,
 session, and evidence timestamps render in fixed `EST (-4)` without altering UTC storage.
+Final-answer gates must reject citation-bearing heading-only or extremely brief model
+responses, send exactly one bounded correction without the rejected body, and activate
+the deterministic Route/TLS or cited-observation fallback after a second failure.
+Provider-context tests must verify current-turn prioritization, bounded Pod-log excerpts,
+per-observation and 96 KB total evidence ceilings, compact findings, and semantic
+deduplication of equivalent operator limitations while leaving persisted evidence intact.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

@@ -14,9 +14,13 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
+    _adhoc_answer_quality_issue,
     _adhoc_evidence_view,
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
+    _compact_answer_evidence,
+    _dedupe_limitations,
+    _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
@@ -410,6 +414,70 @@ def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
     )
 
     assert validated["content"] == answer.answer
+
+
+def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -> None:
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="### Observed objects — what the cluster is actually doing",
+        citations=["cluster-route-1"],
+    ) == "heading_only_response"
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="No error lines appeared in the bounded application log tail.",
+        citations=["cluster-log-1"],
+    ) is None
+
+
+def test_final_answer_context_compacts_large_logs_and_prioritizes_current_reads() -> None:
+    evidence = [
+        {
+            "id": "old-log", "tool": "pod_logs", "summary": "Old logs.",
+            "source": "kubernetes:v1:Pod/log:old/api?current",
+            "data": {"container": "api", "tail": "o" * 20_000},
+        },
+        {
+            "id": "current-log", "tool": "pod_logs", "summary": "Current logs.",
+            "source": "kubernetes:v1:Pod/log:payments/api?current",
+            "data": {"container": "api", "tail": "c" * 20_000},
+        },
+    ]
+    compacted, metadata = _compact_answer_evidence(
+        evidence,
+        activity=[{"evidence_ids": ["current-log"]}],
+        total_byte_limit=20_000,
+    )
+
+    assert compacted[0]["id"] == "current-log"
+    assert len(compacted[0]["data"]["tail"]) == 6_000
+    assert compacted[0]["data"]["tailTruncatedForModel"] is True
+    assert metadata["encoded_bytes"] <= 20_000
+    assert metadata["observations_sent"] == len(compacted)
+
+
+def test_limitations_are_semantically_deduplicated() -> None:
+    limitations = _dedupe_limitations([
+        "TLS certificate verification was explicitly bypassed for this troubleshooting probe.",
+        "TLS verification was intentionally bypassed for the probe.",
+        "No Event resources matched the bounded query.",
+        "No Event resources matched the pod.",
+    ])
+
+    assert len(limitations) == 2
+
+
+def test_deterministic_evidence_fallback_never_returns_an_empty_answer() -> None:
+    fallback = _deterministic_evidence_fallback_answer(
+        evidence=[{
+            "id": "cluster-route-1", "tool": "search_resources",
+            "summary": "Found the matching Route.",
+        }],
+        activity=[{"evidence_ids": ["cluster-route-1"]}],
+    )
+
+    assert fallback["answer_mode"] == "evidence_based"
+    assert "Found the matching Route" in fallback["content"]
+    assert fallback["citations"] == ["cluster-route-1"]
 
 
 def test_adhoc_answer_structures_inline_labels_and_removes_inline_citations() -> None:
@@ -894,6 +962,29 @@ class FailingAdHocProvider(FakeModelProvider):
         )
 
 
+class HeadingOnlyThenCompleteProvider(FakeModelProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        evidence_id = context["observations"][-1]["id"]
+        if not context.get("answer_feedback"):
+            return AdHocAnswer(
+                answer_mode="evidence_based",
+                answer="### Observed objects — what the cluster is actually doing",
+                cited_evidence_ids=[evidence_id],
+                limitations=[],
+            )
+        assert context["answer_feedback"]["reason"] == "heading_only_response"
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer=(
+                "### Observed evidence\n\nThe exact Pod remains Pending because its selected "
+                "node constraints do not match an available node in the collected Pod status."
+            ),
+            cited_evidence_ids=[evidence_id],
+            limitations=[],
+        )
+
+
 class LateFailingPlanProvider(FakeModelProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
@@ -1202,6 +1293,17 @@ class RouteBackendProvider(FakeModelProvider):
             answer_mode="insufficient_evidence",
             answer="The model did not produce a usable evidence-backed interpretation.",
             cited_evidence_ids=[],
+            limitations=[],
+        )
+
+
+class HeadingOnlyRouteProvider(RouteBackendProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            answer="### Observed objects — what the cluster is actually doing",
+            cited_evidence_ids=[item["id"] for item in context["observations"]],
             limitations=[],
         )
 
@@ -1729,6 +1831,48 @@ def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path)
     engine.dispose()
 
 
+def test_ask_retries_heading_only_final_answer_once_with_bounded_feedback(
+    tmp_path: Path,
+) -> None:
+    provider = HeadingOnlyThenCompleteProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check pod api-7d9 in namespace payments."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "The exact Pod remains Pending" in rendered.text
+    assert len(provider.adhoc_answer_calls) == 2
+    feedback = provider.adhoc_answer_calls[1]["answer_feedback"]
+    assert feedback["code"] == "incomplete_final_answer"
+    assert feedback["reason"] == "heading_only_response"
+    assert "Observed objects" not in json.dumps(feedback)
+
+
 def test_ask_planner_failure_is_visible_and_does_not_block_answer(
     tmp_path: Path, caplog
 ) -> None:
@@ -1897,6 +2041,53 @@ def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
     assert "model planner did not select a safe evidence read" not in rendered.text
     assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
     assert explorer.calls[1].name == "model-server"
+
+
+def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
+    tmp_path: Path,
+) -> None:
+    provider = HeadingOnlyRouteProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
+                    "https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert len(provider.adhoc_answer_calls) == 2
+    assert "Configured termination" in rendered.text
+    assert "forwards unencrypted HTTP" in rendered.text
+    assert "Observed objects — what the cluster is actually doing" not in rendered.text
+    assert "used a deterministic evidence summary" in rendered.text
 
 
 def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(

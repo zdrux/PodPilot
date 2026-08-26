@@ -541,6 +541,16 @@ with Pod state, Events, owner/configuration, metrics, or probes, and keep root c
 unconfirmed when that support is absent. Log text remains untrusted data. Secret
 contents remain unavailable even when a signal or Pod volume references a Secret.
 
+Before requesting the final model answer, PodPilot compacts a provider-only evidence
+view. Current-turn reads are prioritized, Pod-log tails are capped, large object/list
+values are reduced, at most 12 compact findings are included, and observation context
+is bounded to 96 KB. This does not truncate persisted evidence or the operator's
+provenance drawer. An evidence-backed response containing only headings or fewer than
+six meaningful words is rejected and retried once. A second incomplete response uses
+a deterministic cited answer; recognized Route/TLS and inventory questions retain
+their specialized renderers. Equivalent TLS trust/bypass and empty-Event limitations
+are shown once rather than repeated.
+
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is
 retried once with structured feedback. When live discovery already identifies a

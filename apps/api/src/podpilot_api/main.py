@@ -510,6 +510,217 @@ def _clean_adhoc_markdown(
     return cleaned
 
 
+_MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
+
+
+def _adhoc_answer_quality_issue(
+    *, answer_mode: str, content: str, citations: list[str]
+) -> str | None:
+    """Reject schema-valid final answers that contain no useful operator explanation."""
+
+    if answer_mode == "evidence_based" and not citations:
+        return "missing_evidence_citations"
+    body_lines = [
+        line.strip()
+        for line in content.splitlines()
+        if line.strip()
+        and not _MARKDOWN_HEADING.match(line)
+        and not re.fullmatch(r"[-*_]{3,}", line.strip())
+        and not line.strip().startswith("```")
+    ]
+    body = _MARKDOWN_DECORATION.sub(" ", " ".join(body_lines))
+    body = re.sub(r"\s+", " ", body).strip()
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'./:-]*", body)
+    if not body_lines or not body:
+        return "heading_only_response"
+    if len(body) < 35 or len(words) < 6:
+        return "response_too_brief"
+    return None
+
+
+def _compact_provider_value(
+    value: object, *, string_limit: int = 2_000, list_limit: int = 24, depth: int = 0
+) -> object:
+    """Bound provider-facing evidence while preserving the persisted redacted observation."""
+
+    if depth >= 6:
+        return _evidence_value(value, limit=min(string_limit, 500))
+    if isinstance(value, str):
+        return value if len(value) <= string_limit else value[:string_limit] + "…"
+    if isinstance(value, dict):
+        return {
+            str(key)[:128]: _compact_provider_value(
+                item, string_limit=string_limit, list_limit=list_limit, depth=depth + 1
+            )
+            for key, item in list(value.items())[:64]
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _compact_provider_value(
+                item, string_limit=string_limit, list_limit=list_limit, depth=depth + 1
+            )
+            for item in list(value)[:list_limit]
+        ]
+    return value
+
+
+def _compact_answer_evidence(
+    evidence: list[dict[str, object]],
+    *,
+    activity: list[dict[str, object]],
+    total_byte_limit: int = 96_000,
+    per_observation_byte_limit: int = 14_000,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Prioritize current-turn evidence and enforce a total final-answer context budget."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    prioritized = [item for item in evidence if str(item.get("id")) in current_ids]
+    prioritized.extend(
+        reversed([item for item in evidence if str(item.get("id")) not in current_ids])
+    )
+    compacted: list[dict[str, object]] = []
+    used_bytes = 0
+    for item in prioritized:
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        compact_data = _compact_provider_value(data)
+        if item.get("tool") == "pod_logs" and isinstance(compact_data, dict):
+            tail = str(data.get("tail") or "")
+            compact_data["tail"] = tail[-6_000:]
+            if len(tail) > 6_000:
+                compact_data["tailTruncatedForModel"] = True
+        candidate = {
+            "id": item.get("id"),
+            "tool": item.get("tool"),
+            "summary": item.get("summary"),
+            "source": item.get("source"),
+            "collected_at": item.get("collected_at"),
+            "data": compact_data,
+        }
+        encoded = json.dumps(candidate, sort_keys=True, default=str).encode("utf-8")
+        if len(encoded) > per_observation_byte_limit:
+            candidate["data"] = _compact_provider_value(
+                data, string_limit=700, list_limit=10
+            )
+            if item.get("tool") == "pod_logs" and isinstance(candidate["data"], dict):
+                tail = str(data.get("tail") or "")
+                candidate["data"]["tail"] = tail[-3_000:]
+                candidate["data"]["tailTruncatedForModel"] = len(tail) > 3_000
+            encoded = json.dumps(candidate, sort_keys=True, default=str).encode("utf-8")
+        if compacted and used_bytes + len(encoded) > total_byte_limit:
+            continue
+        compacted.append(candidate)
+        used_bytes += len(encoded)
+    metadata = {
+        "observations_available": len(evidence),
+        "observations_sent": len(compacted),
+        "observations_omitted": len(evidence) - len(compacted),
+        "current_turn_observations": len(current_ids),
+        "encoded_bytes": used_bytes,
+        "per_observation_byte_limit": per_observation_byte_limit,
+        "total_byte_limit": total_byte_limit,
+    }
+    return compacted, metadata
+
+
+def _compact_answer_findings(
+    findings: list[dict[str, object]], *, total_byte_limit: int = 28_000
+) -> list[dict[str, object]]:
+    compacted: list[dict[str, object]] = []
+    used_bytes = 0
+    for finding in findings[:12]:
+        candidate = _compact_provider_value(
+            finding, string_limit=700, list_limit=8
+        )
+        encoded = json.dumps(candidate, sort_keys=True, default=str).encode("utf-8")
+        if compacted and used_bytes + len(encoded) > total_byte_limit:
+            break
+        assert isinstance(candidate, dict)
+        compacted.append(candidate)
+        used_bytes += len(encoded)
+    return compacted
+
+
+def _limitation_signature(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    if "tls" in normalized and any(
+        marker in normalized for marker in ("bypass", "disabled", "without verification")
+    ):
+        return "tls_verification_bypassed"
+    if "certificate" in normalized and any(
+        marker in normalized for marker in ("verify", "trust", "self signed")
+    ):
+        return "certificate_trust_failure"
+    if "event" in normalized and any(
+        marker in normalized for marker in ("no event", "none matched", "not found")
+    ):
+        return "no_matching_events"
+    return normalized[:240]
+
+
+def _dedupe_limitations(values: list[str], *, limit: int = 8) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        bounded = redact_text(str(value))[:500]
+        signature = _limitation_signature(bounded)
+        if not bounded or signature in seen:
+            continue
+        seen.add(signature)
+        result.append(bounded)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _deterministic_evidence_fallback_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]]
+) -> dict[str, object]:
+    current_ids = [
+        str(evidence_id)
+        for entry in activity
+        for evidence_id in (entry.get("evidence_ids") or [])
+    ]
+    by_id = {str(item.get("id")): item for item in evidence if item.get("id")}
+    selected_ids = list(dict.fromkeys(
+        [item for item in current_ids if item in by_id]
+        or [str(item.get("id")) for item in evidence[-6:] if item.get("id")]
+    ))[:8]
+    if not selected_ids:
+        return {
+            "answer_mode": "insufficient_evidence",
+            "content": (
+                "PodPilot could not produce a complete technical answer and no successful "
+                "cluster observations were available for a deterministic summary."
+            ),
+            "citations": [],
+        }
+    lines = []
+    for evidence_id in selected_ids:
+        item = by_id[evidence_id]
+        lines.append(
+            f"- **{str(item.get('tool') or 'read').replace('_', ' ')}:** "
+            f"{str(item.get('summary') or evidence_id)[:500]}"
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": (
+            "## Investigation result\n\n"
+            "The model provider did not return a complete technical explanation, so PodPilot "
+            "preserved the verified observations below instead of displaying an empty response.\n\n"
+            "## Observed evidence\n\n" + "\n".join(lines) + "\n\n"
+            "## Still unverified\n\n"
+            "These observations require a complete evidence-backed interpretation before a root cause "
+            "can be confirmed."
+        ),
+        "citations": selected_ids,
+    }
+
+
 def _deterministic_inventory_answer(
     *,
     question: str,
@@ -1809,20 +2020,28 @@ def create_app(
                         f"Preparing an evidence-backed answer from {len(evidence)} observation"
                         f"{'s' if len(evidence) != 1 else ''}.",
                     )
+                answer_observations, answer_context_metadata = _compact_answer_evidence(
+                    evidence, activity=activity
+                )
+                answer_findings = _compact_answer_findings(
+                    derive_adhoc_findings(evidence)
+                )
+                answer_context: dict[str, object] = {
+                    "cluster": app_settings.cluster_name,
+                    "question": message_text,
+                    "conversation": history,
+                    "earlier_context_summary": context_summary,
+                    "scope_summary": collected.scope_summary,
+                    "observations": answer_observations,
+                    "evidence_context": answer_context_metadata,
+                    "findings": answer_findings,
+                    "collection_limitations": _dedupe_limitations(limitations, limit=10),
+                }
                 answer = await run_in_threadpool(
                     provider.answer_ad_hoc,
                     profile_snapshot,
                     api_key,
-                    {
-                        "cluster": app_settings.cluster_name,
-                        "question": message_text,
-                        "conversation": history,
-                        "earlier_context_summary": context_summary,
-                        "scope_summary": collected.scope_summary,
-                        "observations": evidence,
-                        "findings": derive_adhoc_findings(evidence),
-                        "collection_limitations": limitations[:10],
-                    },
+                    answer_context,
                 )
                 validated = _validated_adhoc_answer(
                     answer,
@@ -1830,6 +2049,58 @@ def create_app(
                     collection_limitations=limitations,
                     observations=evidence,
                 )
+                answer_quality_issue = _adhoc_answer_quality_issue(
+                    answer_mode=str(validated["answer_mode"]),
+                    content=str(validated["content"]),
+                    citations=[str(item) for item in validated["citations"]],
+                )
+                if answer_quality_issue:
+                    if progress:
+                        await progress(
+                            "answering",
+                            "The first answer was incomplete; requesting one bounded correction.",
+                        )
+                    retry_context = dict(answer_context)
+                    retry_context["answer_feedback"] = {
+                        "code": "incomplete_final_answer",
+                        "reason": answer_quality_issue,
+                        "message": (
+                            "Return a complete operator-facing technical answer with substantive prose "
+                            "under each useful heading. Cite supplied evidence IDs. Do not return headings only."
+                        ),
+                    }
+                    try:
+                        retry_answer = await run_in_threadpool(
+                            provider.answer_ad_hoc,
+                            profile_snapshot,
+                            api_key,
+                            retry_context,
+                        )
+                        retry_validated = _validated_adhoc_answer(
+                            retry_answer,
+                            known_evidence_ids={str(item.get("id")) for item in evidence},
+                            collection_limitations=limitations,
+                            observations=evidence,
+                        )
+                        retry_issue = _adhoc_answer_quality_issue(
+                            answer_mode=str(retry_validated["answer_mode"]),
+                            content=str(retry_validated["content"]),
+                            citations=[str(item) for item in retry_validated["citations"]],
+                        )
+                        validated = retry_validated
+                        answer_quality_issue = retry_issue
+                    except ModelProviderError as exc:
+                        LOGGER.warning(
+                            "podpilot.adhoc.answer_retry_failed actor=%s conversation_id=%s "
+                            "error=%s",
+                            username,
+                            conversation_id,
+                            exc,
+                        )
+                        limitations.append(
+                            "The model provider could not correct its incomplete final answer; "
+                            "PodPilot used deterministic evidence instead."
+                        )
                 inventory_answer = _deterministic_inventory_answer(
                     question=message_text,
                     evidence=evidence,
@@ -1843,17 +2114,27 @@ def create_app(
                 route_fallback_needed = (
                     validated.get("answer_mode") != "evidence_based"
                     or not validated.get("citations")
+                    or answer_quality_issue is not None
                 )
                 deterministic_answer = (
                     route_tls_answer if route_fallback_needed else None
-                ) or inventory_answer
+                ) or inventory_answer or (
+                    _deterministic_evidence_fallback_answer(
+                        evidence=evidence, activity=activity
+                    ) if answer_quality_issue is not None else None
+                )
                 if deterministic_answer is not None:
                     validated.update(deterministic_answer)
-                    validated["limitations"] = list(dict.fromkeys(limitations))[:8]
+                    if answer_quality_issue is not None:
+                        limitations.append(
+                            "The model returned an incomplete final answer after one correction attempt; "
+                            "PodPilot used a deterministic evidence summary."
+                        )
+                    validated["limitations"] = _dedupe_limitations(limitations)
                 else:
-                    validated["limitations"] = list(dict.fromkeys(
+                    validated["limitations"] = _dedupe_limitations(
                         [*limitations, *list(validated["limitations"])]
-                    ))[:8]
+                    )
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",

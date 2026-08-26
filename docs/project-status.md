@@ -188,6 +188,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Ask replies now keep confidence as a short hover/focus pill beside the timestamp
   and collapse cited observations into an on-demand vertical timeline. Ask session,
   reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
+- Final-answer evidence is compacted into a provider-only bounded view that prioritizes
+  current reads and caps Pod logs, objects, findings, and total bytes without changing
+  persisted provenance. Citation-bearing heading-only or extremely brief answers receive
+  one bounded correction; a second failure uses deterministic Route/TLS, inventory, or
+  cited-observation output. Equivalent displayed limitations are semantically deduplicated.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

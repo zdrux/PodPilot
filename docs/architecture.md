@@ -317,6 +317,15 @@ per-turn budget, are capped and deduplicated, and cannot read Secrets or expand 
 Findings are evidence summaries, not executable instructions, and neither pattern
 matches nor log correlation alone establish causality.
 
+The final-answer boundary is separately compacted from durable evidence. Current-turn
+observations are ordered first; each observation, Pod-log excerpt, structured finding,
+and the total provider observation payload have byte or count ceilings. The database
+and evidence drawer retain the complete redacted bounded observations. A schema-valid
+answer must also pass semantic substance checks: citations plus headings alone are not
+enough. One bounded correction attempt receives only an error code and instruction.
+Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
+cited-observation fallback rendering.
+
 ## Investigation Flow
 
 1. An operator selects an alert or describes a symptom.

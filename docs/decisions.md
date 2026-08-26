@@ -3,6 +3,28 @@
 Last reviewed: 2026-08-26
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-26 - Final answers require substance and bounded provider context
+
+Context: A schema-valid `evidence_based` response could contain citations but only
+a Markdown heading. Broader automatic log investigation also increased final-answer
+context because persisted observations can contain large bounded log excerpts and
+structured findings repeat their most material samples.
+
+Decision: The API compacts provider-facing final-answer evidence independently of
+persisted evidence. Current-turn observations are prioritized; log tails, strings,
+lists, individual observations, findings, and the total encoded observation set have
+explicit ceilings. Evidence-backed replies must contain a non-heading body with a
+minimum amount of explanatory text. An incomplete response receives one correction
+request containing only a bounded reason/message, never the rejected response body.
+If correction remains incomplete, recognized Route/TLS or inventory answers use the
+existing deterministic renderer; other questions receive a cited deterministic
+observation summary. Semantically equivalent limitations are collapsed before display.
+
+Consequences: Operators do not receive empty heading-only answers, small providers
+receive a materially smaller final context, and complete persisted evidence remains
+available through provenance. The fallback discloses that causal interpretation is
+still unverified rather than inventing one.
+
 ## 2026-08-26 - Deterministic TLS retry and general bounded log-signal investigation
 
 Context: Model planning permitted insecure troubleshooting probes and iterative

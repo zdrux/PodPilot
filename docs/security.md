@@ -199,6 +199,12 @@ applicable previous log stream, shares the per-turn read budget, and cannot requ
 Secrets, exec, proxy, mutation, or broader RBAC. Pattern matches are signals and do
 not establish causality without corroborating evidence.
 
+Final-answer context uses a compact copy of already-redacted evidence; compaction never
+modifies the durable observation or expands model exposure. The correction path reuses
+the same compact context and adds only a fixed validation code and bounded instruction;
+it never includes the rejected model response or additional evidence. Deterministic fallback content is built solely
+from persisted summaries and stable evidence IDs and cannot initiate new reads or actions.
+
 ## PoC Storage Exception
 
 The SNO overlay uses a static node-local PV at `/var/mnt/podpilot`. It is acceptable

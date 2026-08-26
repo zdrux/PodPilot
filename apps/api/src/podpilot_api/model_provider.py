@@ -506,6 +506,9 @@ class OpenAIResponsesProvider:
                     "or bracket citation markers in the answer text; citations belong only in "
                     "cited_evidence_ids. Distinguish an incomplete object list from compacted object "
                     "details using objectListComplete and detailsTruncated. "
+                    "If answer_feedback is present, the prior answer was rejected as incomplete. Follow its "
+                    "bounded correction message and return substantive prose or bullets beneath useful headings; "
+                    "never respond with headings alone. "
                     "Use insufficient_evidence when the reads cannot establish the answer. If the new "
                     "question changes to an unrelated operational target, answer it safely but include "
                     "a limitation recommending a new conversation so evidence scopes remain clear."
@@ -778,7 +781,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "Use concise Markdown lists or tables for inventory and put resource names in backticks. "
                 "Do not print JSON paths, observations[...] expressions, or bracket citation markers in "
                 "answer text; use only cited_evidence_ids for citations. Distinguish objectListComplete "
-                "from detailsTruncated when describing completeness."
+                "from detailsTruncated when describing completeness. If answer_feedback is present, "
+                "the prior answer was rejected as incomplete; follow its bounded correction message and "
+                "return substantive prose or bullets beneath useful headings, never headings alone."
             ),
             payload=context,
             limit=(min(profile.max_output_tokens, 1400) if context.get("capability_probe") else None),
