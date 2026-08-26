@@ -37,7 +37,7 @@ class EnvironmentCredentialStore:
 
 
 class KubernetesSecretCredentialStore:
-    """Store one token in one pre-created, resourceName-restricted Secret."""
+    """Store opaque tokens as keys in one pre-created, resourceName-restricted Secret."""
 
     def __init__(self, namespace: str, secret_name: str, key: str = "api_key") -> None:
         config.load_incluster_config()
@@ -50,14 +50,14 @@ class KubernetesSecretCredentialStore:
         try:
             secret = self._api.read_namespaced_secret(self.secret_name, self.namespace)
         except ApiException as exc:
-            raise CredentialStoreError("The model credential Secret could not be read.") from exc
+            raise CredentialStoreError("The credential Secret could not be read.") from exc
         encoded = (secret.data or {}).get(key or self.key)
         if not encoded:
             return None
         try:
             return base64.b64decode(encoded, validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
-            raise CredentialStoreError("The model credential Secret contains invalid data.") from exc
+            raise CredentialStoreError("The credential Secret contains invalid data.") from exc
 
     def set(self, value: str, key: str | None = None) -> None:
         encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
@@ -68,7 +68,7 @@ class KubernetesSecretCredentialStore:
                 {"data": {key or self.key: encoded}},
             )
         except ApiException as exc:
-            raise CredentialStoreError("The model credential Secret could not be updated.") from exc
+            raise CredentialStoreError("The credential Secret could not be updated.") from exc
 
     def delete(self, key: str | None = None) -> None:
         try:
@@ -76,4 +76,4 @@ class KubernetesSecretCredentialStore:
                 self.secret_name, self.namespace, {"data": {key or self.key: None}}
             )
         except ApiException as exc:
-            raise CredentialStoreError("The model credential could not be removed.") from exc
+            raise CredentialStoreError("The credential could not be removed.") from exc

@@ -1,23 +1,19 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.11.0 is implemented and deployed on the disposable SNO lab. Milestone
-10 remains the investigation baseline; 0.11 adds the multi-provider model registry.
-That release is committed at `717737a`. A portable remote-cluster PoC deployment
-path is prepared and locally validated but has not yet been exercised on a second
-cluster. Start a new session by reading this file and `AGENTS.md`, then verify
-`git status --short` before making changes.
-
-The post-0.11 working tree adds the first curated-memory slice at schema head
-`0011_cluster_memory`; it is locally tested but not deployed to the SNO lab.
-Approvers can version and govern knowledge, and Investigators can preview scoped
-FTS5 retrieval. Memory is intentionally not yet supplied to model prompts.
+PodPilot 0.11.0 remains deployed on the disposable SNO lab. The 0.12.0 working tree
+is implemented and locally tested at schema head `0012_multi_cluster_ask`, but has
+not been deployed. It adds Ask-only multi-cluster routing, secret-backed cluster
+management, immutable one-to-ten-cluster conversation selections, cluster-attributed
+evidence, and curated-memory prompt integration governed by explicit cluster targets,
+required tags, or global scope. Start a new session by reading this file and
+`AGENTS.md`, then verify `git status --short` before making changes.
 
 The product is an OpenShift-first investigation and Day-2 operations companion.
 It presents active Alertmanager signals, builds bounded evidence-backed
@@ -27,12 +23,26 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
+- Ask PodPilot cluster registry with Approver/Breakglass management, exact key/value
+  tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
+  credential Secret, default-on TLS verification, and an explicit visible/audited
+  per-cluster insecure exception. The runtime cluster is registered automatically.
+- New Ask conversations select one to ten clusters through a searchable picker. The
+  immutable selection is retained in history; changing it starts another conversation.
+  One shared twelve-read budget fans out across selected clusters, partial failures remain
+  scoped limitations, and all evidence/citations identify their source cluster. Alert,
+  investigation, dashboard, remote metrics, and remediation routing are unchanged.
+- Curated memory now supports global entries, explicit cluster sets, and all-required
+  tag matches with explicit-or-tag OR semantics. Eligible nonrestricted chunks are supplied
+  to standalone Ask planning and answers as cluster-labeled guidance, never live evidence,
+  tool authority, or current-state citations.
+
 - Curated cluster-memory foundation with immutable versions, heading-aware chunks,
   SQLite FTS5/BM25 search, reviewed/enabled/expiry eligibility, cluster and
   namespace scope, restricted-entry authorization, Approver management controls,
   Investigator retrieval preview, redaction, and content-free audit metadata.
-  This post-0.11 slice is locally implemented and awaits deployment; model prompt
-  integration and knowledge citations remain separate work.
+  The 0.12 targeting and Ask augmentation rules above supersede the original
+  single-cluster preview-only boundary.
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
@@ -240,10 +250,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Last Verified State
 
-- Application version: `0.11.0`.
+- Deployed application version: `0.11.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 191 tests passing with 84% aggregate branch coverage.
+- Local automated suite: 247 tests passing with 84% aggregate branch coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

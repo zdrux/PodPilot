@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +15,26 @@ _HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$")
 _TERMS = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{1,63}")
 
 
+def knowledge_applies_to(
+    *, target_cluster_ids_json: str, target_tags_json: str,
+    cluster_id: str, cluster_tags: dict[str, str] | None = None,
+) -> bool:
+    try:
+        target_ids = [str(item) for item in json.loads(target_cluster_ids_json or "[]")]
+        target_tags = {
+            str(key): str(value)
+            for key, value in json.loads(target_tags_json or "{}").items()
+        }
+    except (TypeError, ValueError, AttributeError):
+        return False
+    normalized = {str(key): str(value) for key, value in (cluster_tags or {}).items()}
+    return (
+        (not target_ids and not target_tags)
+        or cluster_id in target_ids
+        or (bool(target_tags) and all(normalized.get(key) == value for key, value in target_tags.items()))
+    )
+
+
 @dataclass(frozen=True)
 class KnowledgeSearchResult:
     chunk_id: str
@@ -26,6 +47,8 @@ class KnowledgeSearchResult:
     source: str
     source_type: str
     cluster_id: str
+    target_cluster_ids: tuple[str, ...]
+    target_tags: dict[str, str]
     namespace: str | None
     owner: str
     sensitivity: str
@@ -130,6 +153,7 @@ def search_knowledge(
     *,
     query: str,
     cluster_id: str,
+    cluster_tags: dict[str, str] | None = None,
     namespace: str | None = None,
     include_restricted: bool = False,
     limit: int = 8,
@@ -147,7 +171,8 @@ def search_knowledge(
     rows = db_session.execute(text(f"""
         SELECT c.id AS chunk_id, d.id AS document_id, d.logical_id, d.version,
                d.title, c.heading, c.content, d.source, d.source_type,
-               d.cluster_id, d.namespace, d.owner, d.sensitivity,
+               d.cluster_id, d.target_cluster_ids_json, d.target_tags_json,
+               d.namespace, d.owner, d.sensitivity,
                bm25(knowledge_chunks_fts, 0.0, 5.0, 2.0, 1.0) AS rank
         FROM knowledge_chunks_fts
         JOIN knowledge_chunks c ON c.id = knowledge_chunks_fts.chunk_id
@@ -157,16 +182,43 @@ def search_knowledge(
           AND d.is_enabled = 1
           AND d.verification_state = 'reviewed'
           AND (d.expires_at IS NULL OR d.expires_at > :now)
-          AND (d.cluster_id = :cluster_id OR d.cluster_id = '*')
           {namespace_clause}
           {sensitivity_clause}
         ORDER BY rank ASC, d.title ASC, c.position ASC
-        LIMIT :limit
+        LIMIT :candidate_limit
     """), {
         "query": match_query,
         "now": current,
         "cluster_id": cluster_id,
         "namespace": namespace,
-        "limit": max(1, min(limit, 20)),
+        "candidate_limit": max(20, min(limit, 20) * 10),
     }).mappings()
-    return [KnowledgeSearchResult(**dict(row)) for row in rows]
+    normalized_tags = {str(key): str(value) for key, value in (cluster_tags or {}).items()}
+    results: list[KnowledgeSearchResult] = []
+    for row in rows:
+        payload = dict(row)
+        try:
+            target_ids = tuple(str(item) for item in json.loads(
+                payload.pop("target_cluster_ids_json") or "[]"
+            ))
+            target_tags = {
+                str(key): str(value)
+                for key, value in json.loads(payload.pop("target_tags_json") or "{}").items()
+            }
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not knowledge_applies_to(
+            target_cluster_ids_json=json.dumps(target_ids),
+            target_tags_json=json.dumps(target_tags),
+            cluster_id=cluster_id,
+            cluster_tags=normalized_tags,
+        ):
+            continue
+        results.append(KnowledgeSearchResult(
+            **payload,
+            target_cluster_ids=target_ids,
+            target_tags=target_tags,
+        ))
+        if len(results) >= max(1, min(limit, 20)):
+            break
+    return results

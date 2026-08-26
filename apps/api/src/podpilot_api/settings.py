@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
     adhoc_max_rounds: int = Field(default=5, ge=1, le=5)
     adhoc_max_reads_per_turn: int = Field(default=12, ge=1, le=12)
+    adhoc_max_clusters_per_conversation: int = Field(default=10, ge=1, le=20)
     adhoc_http_probe_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     adhoc_http_probe_max_bytes: int = Field(default=16_384, ge=1024, le=65_536)
     adhoc_inventory_max_objects: int = Field(default=500, ge=50, le=1000)
@@ -65,6 +66,9 @@ class Settings(BaseSettings):
     model_secret_namespace: str = "ai-ops"
     model_secret_name: str = "podpilot-model-credentials"
     model_secret_key: str = "api_key"
+    cluster_credential_store: Literal["environment", "kubernetes"] = "environment"
+    cluster_secret_namespace: str = "ai-ops"
+    cluster_secret_name: str = "podpilot-cluster-credentials"
     poc_mode: bool = False
 
     @field_validator(

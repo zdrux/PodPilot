@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-26
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -25,6 +25,7 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 - installer ISOs or generated installer working directories
 - TLS private keys and raw Kubernetes Secret exports
 - model provider API keys
+- remote-cluster bearer tokens
 
 Use projected service-account tokens in-cluster and short-lived credentials for
 local development. Rotate any credential exposed in source control or chat.
@@ -65,6 +66,25 @@ evidence but preserves an audit record containing the conversation ID and actor,
 not message content. A per-user rate limit applies across all of that user's
 conversations.
 
+Standalone Ask conversations also pin an immutable cluster-ID selection. The browser
+cannot change routing on a continuation request. Normal code loads only those registered
+entries, refuses disabled or missing targets, reads each opaque bearer token immediately
+before use, and attributes retained evidence to the source cluster. Remote tokens are
+stored only in `ai-ops/podpilot-cluster-credentials`; SQLite and API responses contain
+only opaque keys. RBAC restricts the runtime to `get`, `patch`, and `update` that exact
+Secret and does not allow Secret creation or enumeration. Cluster create, update, token
+rotation, connection test, and disable operations require Approver-or-higher, CSRF, and
+content-free audit metadata. Disabling removes the Secret key but preserves historical
+conversation and evidence attribution.
+
+Remote Kubernetes API TLS verification defaults on. An Approver may explicitly disable
+certificate and hostname verification for one registered cluster. This is a
+credential-bearing exception: a network attacker can impersonate the API server, steal
+the bearer token, and alter evidence. The management page warns before use, the registry
+stores the exception, connection tests audit it, and every affected Ask run adds an
+operator-visible limitation. The exception never applies implicitly, does not change
+model-provider or ordinary application TLS policy, and should not be used in production.
+
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,
 regardless of that user's higher PodPilot role. Progress records contain bounded
@@ -84,6 +104,9 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
 - Model endpoint metadata, TLS mode, and optional public CA certificates are stored
   in SQLite. API tokens are not: each profile references an opaque key in the one
   resourceName-restricted credential Secret.
+- Remote cluster origins, tags, and TLS mode are stored in SQLite. Their bearer tokens
+  are not: each cluster references an opaque key in the separate fixed
+  `ai-ops/podpilot-cluster-credentials` Secret.
 - The OAuth-protected GUI sends a new token once to FastAPI. The runtime uses its
   projected ServiceAccount identity to patch only that Secret key, never returns
   the value, and rereads it before inference. Kubernetes Secret `data` is base64
@@ -110,12 +133,14 @@ sensitivity, review time, optional expiry, and checksum. Audit events retain IDs
 and metadata but not document content.
 
 Only current, enabled, reviewed, unexpired versions are retrievable. Normal code
-applies cluster and namespace filters before ranking; restricted entries require
+applies global, explicit-cluster, required-tag, and namespace filters before ranking;
+restricted entries require
 the Approver role. Search text is converted to a bounded quoted FTS expression,
 so operators and cluster-derived text cannot supply SQLite FTS instructions.
-Retrieved memory remains untrusted guidance rather than live evidence. The first
-slice exposes retrieval preview only and does not include memory in model prompts,
-read planning, or remediation.
+Retrieved memory remains untrusted guidance rather than live evidence. Ask planning
+and answering receive eligible internal chunks annotated with their applicable cluster;
+memory cannot define a tool, authorize a read, support a live-state citation, or enter
+investigation/remediation workflows in this release.
 
 ## OpenShift Authentication And Application Roles
 

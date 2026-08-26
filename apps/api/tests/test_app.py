@@ -43,6 +43,7 @@ from podpilot_api.models import (
     AuditEvent,
     Base,
     ChatMessage,
+    Cluster,
     DiagnosticCheck,
     Investigation,
     KnowledgeDocument,
@@ -1942,6 +1943,8 @@ def make_app(
     remediation_executor: FakeRemediationExecutor | None = None,
     diagnostic_executor: FakeDiagnosticExecutor | None = None,
     read_explorer: FakeReadExplorer | None = None,
+    cluster_credential_store: MemoryCredentialStore | None = None,
+    remote_read_explorer_factory=None,
     settings_overrides: dict[str, object] | None = None,
 ):
     test_settings = {"adhoc_job_worker_enabled": False}
@@ -1970,6 +1973,8 @@ def make_app(
             remediation_executor or FakeRemediationExecutor(),
             diagnostic_executor or FakeDiagnosticExecutor(),
             read_explorer or FakeReadExplorer(),
+            cluster_credential_store,
+            remote_read_explorer_factory,
         ),
         settings,
     )
@@ -1988,7 +1993,7 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert "podpilot-csrf" in response.text
         assert "Watchdog is firing continuously" in response.text
         assert "bounded, read-only cluster investigation" in response.text
-        assert "PodPilot 0.11.0" in response.text
+        assert "PodPilot 0.12.0" in response.text
         assert "Milestone 2 analysis" not in response.text
         assert "synthetic-secret" not in response.text
         assert "No actionable alerts" in response.text
@@ -2050,6 +2055,140 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert "adhoc.message" in actions and "adhoc.answer" in actions
     engine.dispose()
 
+
+def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path: Path) -> None:
+    cluster_credentials = MemoryCredentialStore()
+
+    class DiscoverableExplorer(FakeReadExplorer):
+        def resource_catalog(self, *, query="", limit=120):
+            return [{"resource": "pods", "kind": "Pod", "api_version": "v1"}]
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        cluster_credential_store=cluster_credentials,
+        remote_read_explorer_factory=lambda cluster, token: DiscoverableExplorer(),
+    )
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert page.status_code == 200 and csrf is not None
+        denied = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
+        assert denied.status_code == 403
+        saved = client.post(
+            "/api/v1/clusters",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "name": "azure-prod-1",
+                "api_url": "https://api.azure-prod-1.example:6443",
+                "token": "sha256~top-secret-cluster-token",
+                "tags_json": '{"environment":"prod","platform":"azure"}',
+                "tls_verify": "false",
+            },
+        )
+        assert saved.status_code == 200
+        assert "top-secret" not in saved.text
+        cluster_id = saved.json()["cluster_id"]
+        tested = client.post(
+            f"/api/v1/clusters/{cluster_id}/test",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert tested.json()["status"] == "ready"
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        cluster = db_session.get(Cluster, cluster_id)
+        assert cluster is not None
+        assert json.loads(cluster.tags_json) == {"environment": "prod", "platform": "azure"}
+        assert cluster.tls_verify is False
+        assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
+        assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"
+    engine.dispose()
+
+
+def test_ask_conversation_pins_and_reads_multiple_clusters(tmp_path: Path) -> None:
+    cluster_credentials = MemoryCredentialStore()
+    provider = FakeModelProvider()
+
+    class PerClusterExplorer(FakeReadExplorer):
+        def __init__(self, cluster_name: str):
+            super().__init__()
+            self.cluster_name = cluster_name
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id=f"cluster-{self.cluster_name}",
+                tool=intent.tool,
+                summary=f"Read Pod from {self.cluster_name}.",
+                source=f"kubernetes:{self.cluster_name}:v1:Pod:payments/api-7d9",
+                collected_at=datetime.now(timezone.utc),
+                data={"status": {"phase": "Running"}},
+            ),))
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        cluster_credential_store=cluster_credentials,
+        model_provider=provider,
+        remote_read_explorer_factory=lambda cluster, token: PerClusterExplorer(cluster.name),
+    )
+    first_id = "10000000-0000-0000-0000-000000000001"
+    second_id = "10000000-0000-0000-0000-000000000002"
+    engine = build_engine(settings)
+    with TestClient(app):
+        pass
+    with Session(engine) as db_session:
+        now = datetime.now(timezone.utc)
+        for cluster_id, name, platform in (
+            (first_id, "azure-one", "azure"),
+            (second_id, "metal-one", "baremetal"),
+        ):
+            key = f"cluster_{cluster_id.replace('-', '')}"
+            cluster_credentials.set(f"token-{name}", key)
+            db_session.add(Cluster(
+                id=cluster_id, name=name, api_url=f"https://api.{name}.example:6443",
+                credential_key=key, tags_json=json.dumps({"platform": platform}),
+                tls_verify=True, is_enabled=True, is_system=False, status="ready",
+                created_by="ada", updated_by="ada", created_at=now, updated_at=now,
+            ))
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Compare pod api-7d9 in namespace payments.",
+                "cluster_ids": json.dumps([first_id, second_id]),
+            },
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "azure-one" in rendered.text and "metal-one" in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        conversation = db_session.scalar(select(AdHocConversation))
+        assert json.loads(conversation.cluster_ids_json) == [first_id, second_id]
+        evidence = json.loads(conversation.evidence_json)
+        assert {item["cluster_name"] for item in evidence} == {"azure-one", "metal-one"}
+    engine.dispose()
+    assert {item["name"] for item in provider.adhoc_answer_calls[0]["clusters"]} == {
+        "azure-one", "metal-one"
+    }
 
 def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
     provider = RbacAwareAdHocProvider()
@@ -3181,7 +3320,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
     assert "appendOptimisticTurn" in script
-    assert "new URLSearchParams({message: question})" in script
+    assert "new URLSearchParams(new FormData(adhocForm))" in script
+    assert 'requestBody.set("message", question)' in script
+    assert "data-cluster-picker" in template
     assert 'textarea.value = ""' in script
     assert "new EventSource" in script
     assert "thinking-spinner" in template
@@ -4571,7 +4712,7 @@ def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> No
     with TestClient(app) as client:
         page = client.get("/memory", headers={"x-forwarded-user": "ada"})
         assert page.status_code == 200
-        assert "memory is not yet sent to the model" in page.text
+        assert "retrieved for Ask PodPilot" in page.text
         csrf_match = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf_match is not None
         approver_headers = {
@@ -4713,6 +4854,64 @@ def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> No
         assert len(events) == 5
         assert all("mirror.corp.example" not in event.details_json for event in events)
     engine.dispose()
+
+
+def test_cluster_memory_targets_global_explicit_and_tag_matched_clusters(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+    )
+    azure_id = "20000000-0000-0000-0000-000000000001"
+    metal_id = "20000000-0000-0000-0000-000000000002"
+    with TestClient(app) as client:
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            for cluster_id, name, platform in (
+                (azure_id, "azure-prod", "azure"),
+                (metal_id, "metal-prod", "baremetal"),
+            ):
+                db_session.add(Cluster(
+                    id=cluster_id, name=name, api_url=f"https://api.{name}.example:6443",
+                    credential_key=f"cluster_{cluster_id.replace('-', '')}",
+                    tags_json=json.dumps({"platform": platform, "environment": "prod"}),
+                    tls_verify=True, is_enabled=True, is_system=False, status="ready",
+                    created_by="ada", updated_by="ada", created_at=now, updated_at=now,
+                ))
+            db_session.commit()
+        engine.dispose()
+        page = client.get("/memory", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text).group(1)
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf}
+
+        def save(title: str, targets: list[str], tags: dict[str, str]):
+            response = client.post("/api/v1/knowledge", headers=headers, data={
+                "title": title,
+                "content": f"sharedneedle guidance for {title}",
+                "source": "Platform handbook",
+                "source_type": "runbook",
+                "owner": "platform",
+                "verification_state": "reviewed",
+                "sensitivity": "internal",
+                "target_cluster_ids_json": json.dumps(targets),
+                "target_tags_json": json.dumps(tags),
+            })
+            assert response.status_code == 200
+
+        save("Global guidance", [], {})
+        save("Azure guidance", [], {"platform": "azure"})
+        save("Metal explicit guidance", [metal_id], {})
+        azure = client.get(
+            f"/api/v1/knowledge/search?q=sharedneedle&cluster_id={azure_id}",
+            headers={"x-forwarded-user": "ada"},
+        ).json()["results"]
+        metal = client.get(
+            f"/api/v1/knowledge/search?q=sharedneedle&cluster_id={metal_id}",
+            headers={"x-forwarded-user": "ada"},
+        ).json()["results"]
+        assert {item["title"] for item in azure} == {"Global guidance", "Azure guidance"}
+        assert {item["title"] for item in metal} == {"Global guidance", "Metal explicit guidance"}
 
 
 def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path) -> None:

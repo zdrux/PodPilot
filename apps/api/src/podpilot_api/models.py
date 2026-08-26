@@ -72,6 +72,30 @@ class ModelProfile(Base):
     )
 
 
+class Cluster(Base):
+    __tablename__ = "clusters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(253), nullable=False, unique=True, index=True)
+    api_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    credential_key: Mapped[str | None] = mapped_column(String(253), nullable=True, unique=True)
+    tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    tls_verify: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_tested")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(253), nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(253), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
     __table_args__ = (UniqueConstraint("logical_id", "version", name="uq_knowledge_logical_version"),)
@@ -88,6 +112,8 @@ class KnowledgeDocument(Base):
     source: Mapped[str] = mapped_column(String(512), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     cluster_id: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    target_cluster_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    target_tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     namespace: Mapped[str | None] = mapped_column(String(253), nullable=True, index=True)
     resource_kind: Mapped[str | None] = mapped_column(String(128), nullable=True)
     resource_name: Mapped[str | None] = mapped_column(String(253), nullable=True)
@@ -196,6 +222,7 @@ class AdHocConversation(Base):
     created_by: Mapped[str] = mapped_column(String(253), nullable=False)
     title: Mapped[str] = mapped_column(String(253), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    cluster_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     context_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     summarized_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

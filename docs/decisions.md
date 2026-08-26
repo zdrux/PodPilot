@@ -652,3 +652,39 @@ Consequences: Basic traffic-path evidence no longer depends on model schema reli
 the model still prioritizes optional investigation branches. The traversal remains read-only,
 evidence-derived, deduplicated, redacted, RBAC-limited, and capped; it does not become a generic
 cluster crawler or claim that log correlation proves causality.
+
+## 2026-08-26 - Ask conversations pin a bounded multi-cluster selection
+
+Context: Operators need one Ask surface for remote OpenShift clusters and comparisons, while
+historical answers must remain attributable and cluster changes must not silently reuse prior
+context. Remote bearer tokens cannot enter SQLite or browser responses.
+
+Decision: Register the runtime cluster plus Approver-managed remote API origins and exact tags.
+Store remote tokens as opaque keys in a dedicated resourceName-restricted Secret. Pin an ordered
+one-to-ten-cluster selection when a conversation is created; changing selection creates another
+conversation. Fan out within one shared twelve-read ceiling and attribute evidence, activity,
+limitations, and citations to the source cluster. Keep alerts, investigations, dashboard health,
+remote metrics, and remediation on the runtime cluster. TLS verification defaults on, but an
+Approver may explicitly disable certificate and hostname verification for one registered remote
+API; persist, display, and audit that credential-interception exception.
+
+Consequences: Comparisons are possible without mixing identities or deleting history, and partial
+cluster failures do not erase successful evidence. The insecure TLS option is a deliberate
+credential-bearing risk and is unsuitable for production. Multi-cluster remediation and remote
+monitoring require separate designs.
+
+## 2026-08-26 - Curated memory eligibility precedes Ask augmentation
+
+Context: The lexical-memory foundation is ready to inform Ask, but environment-specific guidance
+must never leak to unrelated clusters or be mistaken for observed state.
+
+Decision: A knowledge version may target explicit clusters, require an all-matching key/value tag
+set, or leave both empty for global scope. Explicit and tag eligibility use OR semantics. Normal
+code filters current, enabled, reviewed, unexpired, namespace-compatible, nonrestricted chunks
+before planning or answering. Prompts label each chunk as untrusted guidance and name its
+applicable cluster. Memory cannot define tools, authorize reads, or support current-state citations.
+
+Consequences: Azure, bare-metal, and other environment knowledge can coexist with portable
+guidance in one index. Restricted entries remain previewable only by Approvers and never enter Ask
+workers. This supersedes the 2026-08-25 preview-only restriction while retaining deterministic
+retrieval and provenance boundaries.

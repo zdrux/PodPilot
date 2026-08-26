@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-26
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -73,15 +73,36 @@ Schema-validated interpretation is displayed separately from deterministic facts
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
-The first cluster-memory slice stores curated Markdown or text as immutable
+The Ask-only cluster registry stores API origins, tags, lifecycle state, TLS policy,
+and opaque credential keys in SQLite. Remote bearer tokens live under those keys in
+the resourceName-restricted `ai-ops/podpilot-cluster-credentials` Secret. The runtime
+cluster is registered automatically and continues to use its projected service-account
+identity. An Approver can create, update, test, and disable remote entries; disabling
+removes the usable token but retains metadata and historical attribution.
+
+Every standalone Ask conversation stores an immutable ordered selection of one to ten
+cluster IDs. Changing selection starts another conversation and preserves the old session.
+The worker fans a question out across the selected enabled clusters within one shared
+twelve-read ceiling, builds a separate Kubernetes client and discovery catalog for each,
+and attributes every observation, read record, citation, limitation, and comparison to its
+source cluster. A failed or disabled target becomes a cluster-specific limitation instead
+of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
+health, alert investigations, metrics on remote clusters, or remediation in this release.
+
+Cluster memory stores curated Markdown or text as immutable
 versions in SQLite and indexes heading-aware bounded chunks with FTS5. Approvers
 create, revise, enable, and disable entries; Investigators can preview retrieval.
 Normal code filters candidates by current version, enabled and reviewed state,
-expiry, cluster, optional namespace, and sensitivity before BM25 ranking. Search
+expiry, optional namespace, sensitivity, and target eligibility before BM25 ranking.
+An entry is eligible when it is global (no targets), explicitly selects the cluster,
+or all of its required key/value tags match the cluster. Explicit and tag matches use
+OR semantics. Search
 input is tokenized into a bounded quoted expression rather than accepted as raw
-FTS syntax. Restricted entries are visible only to Approvers. This slice does not
-send retrieved memory to model planning or answer prompts; that integration
-requires a separate knowledge-citation contract and evaluation gate.
+FTS syntax. Restricted entries are visible only to Approvers and are never supplied
+to Ask workers. Eligible internal entries are supplied to planning and answer prompts
+with their applicable cluster identity and an explicit guidance-only trust label; they
+cannot define tools, authorize reads, replace live evidence, or serve as citations for
+current cluster state.
 
 Milestone 5 adds a policy-owned typed action catalog. A crash-loop investigation
 can generate at most two server-built proposals: delete the exact failed,

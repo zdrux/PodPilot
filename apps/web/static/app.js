@@ -131,6 +131,17 @@
 
   const knowledgeForm = document.querySelector("#knowledge-form");
   if (knowledgeForm?.dataset.saveUrl) {
+    const knowledgeClusterIds = knowledgeForm.querySelector("[data-knowledge-cluster-ids]");
+    const knowledgeClusterBoxes = Array.from(knowledgeForm.querySelectorAll("[data-knowledge-cluster]"));
+    const syncKnowledgeClusters = () => {
+      if (knowledgeClusterIds) {
+        knowledgeClusterIds.value = JSON.stringify(
+          knowledgeClusterBoxes.filter((item) => item.checked).map((item) => item.value),
+        );
+      }
+    };
+    knowledgeClusterBoxes.forEach((item) => item.addEventListener("change", syncKnowledgeClusters));
+    syncKnowledgeClusters();
     knowledgeForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const submit = knowledgeForm.querySelector('button[type="submit"]');
@@ -168,6 +179,55 @@
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         button.disabled = false;
+      }
+    });
+  });
+
+  const clusterSettingsForm = document.querySelector("#cluster-settings-form");
+  if (clusterSettingsForm?.dataset.saveUrl) {
+    const verifyCheckbox = clusterSettingsForm.querySelector('[name="tls_verify_checkbox"]');
+    const verifyValue = clusterSettingsForm.querySelector('[name="tls_verify"]');
+    verifyCheckbox?.addEventListener("change", () => {
+      if (verifyValue) verifyValue.value = verifyCheckbox.checked ? "true" : "false";
+    });
+    clusterSettingsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = clusterSettingsForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
+      try {
+        const payload = await sendSettingsRequest(
+          clusterSettingsForm.dataset.saveUrl,
+          new URLSearchParams(new FormData(clusterSettingsForm)),
+        );
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: "success", message: "Cluster connection saved. Test it before using it for Ask PodPilot.",
+        }));
+        window.location.assign(`/settings/clusters?edit=${encodeURIComponent(payload.cluster_id)}`);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Save cluster"; }
+      }
+    });
+  }
+  document.querySelectorAll(".cluster-action").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!button.dataset.actionUrl) return;
+      if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
+      button.disabled = true;
+      const prior = button.textContent;
+      button.textContent = button.dataset.actionKind === "test" ? "Testing…" : "Disabling…";
+      try {
+        const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
+        const passed = payload.status === "ready";
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: passed ? "success" : payload.status === "disabled" ? "success" : "error",
+          message: payload.detail || (payload.status === "disabled" ? "Cluster disabled and token removed." : "Cluster connection tested."),
+        }));
+        window.location.reload();
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = prior;
       }
     });
   });
@@ -279,6 +339,31 @@
     });
   }
   const adhocForm = document.querySelector(".adhoc-chat-form");
+  const clusterPicker = document.querySelector("[data-cluster-picker]");
+  if (clusterPicker) {
+    const checkboxes = Array.from(clusterPicker.querySelectorAll("[data-cluster-checkbox]"));
+    const hidden = document.querySelector("[data-cluster-ids]");
+    const pickerLabel = clusterPicker.querySelector("[data-cluster-picker-label]");
+    const pickerCount = clusterPicker.querySelector("[data-cluster-picker-count]");
+    const maxSelected = Number.parseInt(clusterPicker.dataset.maxSelected || "10", 10);
+    const updatePicker = (changed) => {
+      const selected = checkboxes.filter((item) => item.checked);
+      if (selected.length > maxSelected && changed) changed.checked = false;
+      const bounded = checkboxes.filter((item) => item.checked);
+      if (hidden) hidden.value = JSON.stringify(bounded.map((item) => item.value));
+      const names = bounded.map((item) => item.closest("label")?.querySelector("strong")?.textContent || "cluster");
+      if (pickerLabel) pickerLabel.textContent = names.length <= 2 ? names.join(", ") || "Select clusters" : `${names[0]}, ${names[1]} +${names.length - 2}`;
+      if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
+    };
+    checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => updatePicker(checkbox)));
+    clusterPicker.querySelector("[data-cluster-search]")?.addEventListener("input", (event) => {
+      const query = event.target.value.trim().toLowerCase();
+      clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
+        option.hidden = Boolean(query) && !option.dataset.search.toLowerCase().includes(query);
+      });
+    });
+    updatePicker();
+  }
   const appendOptimisticTurn = (question) => {
     const panel = document.querySelector(".ask-panel");
     if (!panel) return null;
@@ -414,7 +499,8 @@
       const textarea = adhocForm.querySelector("textarea");
       const question = textarea?.value.trim() || "";
       if (!question) return;
-      const requestBody = new URLSearchParams({message: question});
+      const requestBody = new URLSearchParams(new FormData(adhocForm));
+      requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
       if (textarea) textarea.value = "";
       if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }

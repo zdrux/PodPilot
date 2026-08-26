@@ -74,7 +74,7 @@ oc apply -f deploy/openshift/overlays/remote-poc/image-stream.yaml
 Use the integrated registry's external Route for the workstation push:
 
 ```bash
-export PODPILOT_VERSION=0.11.0
+export PODPILOT_VERSION=0.12.0
 export REGISTRY_HOST="$(oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}')"
 export PUSH_IMAGE="${REGISTRY_HOST}/ai-ops/podpilot:${PODPILOT_VERSION}"
 oc whoami -t | podman login -u "$(oc whoami)" --password-stdin "${REGISTRY_HOST}"
@@ -95,12 +95,12 @@ Edit `deploy/openshift/overlays/remote-poc/kustomization.yaml`:
 images:
   - name: podpilot
     newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot
-    newTag: 0.11.0
+    newTag: 0.12.0
 ```
 
 The push uses the external Route, while Pods use the stable internal Service
 hostname above. A Kubernetes Deployment still needs an OCI image pull spec;
-Kustomize renders that pull spec from the `ai-ops/podpilot:0.11.0` ImageStreamTag.
+Kustomize renders that pull spec from the `ai-ops/podpilot:0.12.0` ImageStreamTag.
 Use a new versioned tag for each promotion instead of overwriting an existing tag.
 
 Edit `deploy/openshift/overlays/remote-poc/runtime-config-patch.yaml` and replace
@@ -178,12 +178,14 @@ test "$(oc get secret podpilot-oauth-cookie -n ai-ops \
   -o jsonpath='{.data.session_secret}' | base64 -d | wc -c)" -eq 32
 ```
 
-Create the empty, fixed-name model credential Secret. Approvers add model tokens
-later through the GUI, and PodPilot patches per-profile keys dynamically:
+Create the empty, fixed-name model and cluster credential Secrets. Approvers add
+tokens later through the GUI, and PodPilot patches opaque keys dynamically:
 
 ```bash
 oc get secret podpilot-model-credentials -n ai-ops >/dev/null 2>&1 || \
   oc create -f deploy/openshift/workload/model-credentials.yaml
+oc get secret podpilot-cluster-credentials -n ai-ops >/dev/null 2>&1 || \
+  oc create -f deploy/openshift/workload/cluster-credentials.yaml
 ```
 
 ## 6. Verify existing LDAP-synchronized elevated-role groups
@@ -232,11 +234,11 @@ The overlay applies, in dependency-safe form:
 - `auth/group-rbac/ui-access-rbac.yaml`, admitting `system:authenticated` to the
   exact PodPilot Service;
 - `workload/runtime-config.yaml` and `workload/persistentvolumeclaim.yaml`;
-- `workload/model-credentials-rbac.yaml`;
+- `workload/model-credentials-rbac.yaml` and `workload/cluster-credentials-rbac.yaml`;
 - `workload/deployment.yaml`, `service.yaml`, `route.yaml`, and
   `network-policy.yaml`.
 
-The OAuth cookie and model credential Secret values remain out-of-band.
+The OAuth cookie, model credential, and cluster credential Secret values remain out-of-band.
 
 ## 8. Verify access before inviting users
 
@@ -248,6 +250,7 @@ oc auth can-i get configmaps --all-namespaces --as="$SA"
 oc auth can-i get groups.user.openshift.io --as="$SA"
 oc auth can-i get secrets --all-namespaces --as="$SA"
 oc auth can-i get secret/podpilot-model-credentials -n ai-ops --as="$SA"
+oc auth can-i get secret/podpilot-cluster-credentials -n ai-ops --as="$SA"
 oc auth can-i get secret/example-unrelated-secret -n ai-ops --as="$SA"
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 oc auth can-i get alertmanagers.monitoring.coreos.com/main --subresource=api \
@@ -259,10 +262,10 @@ oc -n ai-ops logs deployment/podpilot -c migrate
 oc -n ai-ops logs deployment/podpilot -c api --since=10m
 ```
 
-Expected results are `yes` for Pods, Pod logs, ConfigMaps, Groups, the exact model
-credential Secret, and the named Alertmanager API. Expect `no` for cluster-wide
+Expected results are `yes` for Pods, Pod logs, ConfigMaps, Groups, the exact model and
+cluster credential Secrets, and the named Alertmanager API. Expect `no` for cluster-wide
 Secrets, the unrelated Secret, and Deployment patch. PodPilot has `get`/`patch`
-only on its exact model-credential Secret in `ai-ops`.
+only on its exact model- and cluster-credential Secrets in `ai-ops`.
 The PVC must be `Bound`, the Deployment `1/1 Available`, and the migration log
 must end at the repository's current Alembic head.
 

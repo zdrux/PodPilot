@@ -10,6 +10,6 @@ images:
   # Change newTag when promoting a different PodPilot image.
   - name: podpilot
     newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot
-    newTag: 0.11.0
+    newTag: 0.12.0
 patches:
   - path: runtime-config-patch.yaml

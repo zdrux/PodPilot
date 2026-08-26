@@ -23,7 +23,12 @@ from starlette.concurrency import run_in_threadpool
 
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.database import build_engine, database_is_ready
-from podpilot_api.knowledge import ensure_knowledge_fts, index_document, search_knowledge
+from podpilot_api.knowledge import (
+    ensure_knowledge_fts,
+    index_document,
+    knowledge_applies_to,
+    search_knowledge,
+)
 from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
     AdHocAnswer,
@@ -40,6 +45,7 @@ from podpilot_api.models import (
     AdHocRun,
     AuditEvent,
     ChatMessage,
+    Cluster,
     DiagnosticCheck,
     Investigation,
     KnowledgeDocument,
@@ -100,6 +106,9 @@ from podpilot_openshift.workloads import (
 
 CSRF_COOKIE = "podpilot_csrf"
 LOGGER = logging.getLogger("uvicorn.error")
+SYSTEM_CLUSTER_ID = "00000000-0000-0000-0000-000000000001"
+_TAG_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+_TAG_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,126}$")
 
 
 def _json_default(value: object) -> str:
@@ -153,6 +162,63 @@ def _make_credential_store(settings: Settings) -> CredentialStore:
             settings.model_secret_key,
         )
     return EnvironmentCredentialStore()
+
+
+def _make_cluster_credential_store(settings: Settings) -> CredentialStore:
+    if settings.cluster_credential_store == "kubernetes":
+        return KubernetesSecretCredentialStore(
+            settings.cluster_secret_namespace,
+            settings.cluster_secret_name,
+            "unused",
+        )
+    return EnvironmentCredentialStore("PODPILOT_CLUSTER_TOKEN")
+
+
+def _validated_cluster_api_url(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    if (
+        parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+        or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Cluster API URL must be an HTTPS origin without credentials, path, query, or fragment.",
+        )
+    return urlunsplit(("https", parsed.netloc, "", "", "")).rstrip("/")
+
+
+def _parse_tags(value: str, *, field_name: str = "Tags") -> dict[str, str]:
+    try:
+        payload = json.loads(value or "{}")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a JSON object.") from exc
+    if not isinstance(payload, dict) or len(payload) > 30:
+        raise HTTPException(status_code=422, detail=f"{field_name} must contain at most 30 key/value pairs.")
+    tags: dict[str, str] = {}
+    for raw_key, raw_value in payload.items():
+        if not isinstance(raw_value, str):
+            raise HTTPException(status_code=422, detail=f"{field_name} values must be strings.")
+        key, tag_value = str(raw_key).strip(), str(raw_value).strip()
+        if not _TAG_KEY.fullmatch(key) or not _TAG_VALUE.fullmatch(tag_value):
+            raise HTTPException(status_code=422, detail=f"{field_name} contains an invalid key or value.")
+        tags[key] = tag_value
+    return dict(sorted(tags.items()))
+
+
+def _cluster_summary(cluster: Cluster) -> dict[str, object]:
+    return {
+        "id": cluster.id,
+        "name": cluster.name,
+        "api_url": cluster.api_url,
+        "tags": json.loads(cluster.tags_json or "{}"),
+        "tls_verify": cluster.tls_verify,
+        "is_enabled": cluster.is_enabled,
+        "is_system": cluster.is_system,
+        "status": cluster.status,
+        "last_error": cluster.last_error,
+        "last_tested_at": cluster.last_tested_at,
+        "has_token": bool(cluster.credential_key),
+    }
 
 
 def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
@@ -600,6 +666,8 @@ def _compact_answer_evidence(
                 compact_data["tailTruncatedForModel"] = True
         candidate = {
             "id": item.get("id"),
+            "cluster_id": item.get("cluster_id"),
+            "cluster_name": item.get("cluster_name"),
             "tool": item.get("tool"),
             "summary": item.get("summary"),
             "source": item.get("source"),
@@ -737,6 +805,7 @@ def _deterministic_inventory_answer(
     if not (
         re.search(r"\b(?:list|inventory)\b", question, re.IGNORECASE)
         or re.search(r"\bshow\s+me\b", question, re.IGNORECASE)
+        or re.search(r"\bwhich\b.+\bclusters?\b", question, re.IGNORECASE)
     ):
         return None
     current_ids = {
@@ -745,15 +814,37 @@ def _deterministic_inventory_answer(
         if entry.get("status") == "succeeded" and entry.get("tool") == "list_resources"
         for evidence_id in (entry.get("evidence_ids") or [])
     }
-    observation = next((
+    observations = [
         item for item in reversed(evidence)
         if str(item.get("id")) in current_ids
         and item.get("tool") == "list_resources"
         and isinstance(item.get("data"), dict)
         and isinstance(item["data"].get("names"), list)
-    ), None)
-    if observation is None:
+    ]
+    if not observations:
         return None
+    if len({str(item.get("cluster_id") or "") for item in observations}) > 1:
+        rows: list[str] = []
+        citations: list[str] = []
+        for observation in reversed(observations):
+            data = observation["data"]
+            cluster_name = str(observation.get("cluster_name") or observation.get("cluster_id") or "cluster")
+            names = [str(name)[:253] for name in data.get("names", [])]
+            citations.append(str(observation["id"]))
+            if names:
+                rows.extend(f"| `{cluster_name}` | `{name}` |" for name in names)
+            else:
+                rows.append(f"| `{cluster_name}` | _No matching resources_ |")
+        return {
+            "answer_mode": "evidence_based",
+            "content": (
+                "## Multi-cluster inventory\n\n"
+                "| Cluster | Matching resource |\n|---|---|\n" + "\n".join(rows) +
+                "\n\nEach row comes from an independently bounded read against the named cluster."
+            ),
+            "citations": citations,
+        }
+    observation = observations[0]
     data = observation["data"]
     names = [str(name)[:253] for name in data.get("names", [])]
     kind = str(data.get("kind") or "Resource")
@@ -1464,6 +1555,7 @@ async def _collect_bounded_cluster_reads(
     conversation: list[dict[str, str]],
     existing_evidence: list[dict[str, object]],
     earlier_context_summary: str = "",
+    knowledge: list[dict[str, object]] | None = None,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
     progress: ProgressReporter | None = None,
@@ -1540,6 +1632,7 @@ async def _collect_bounded_cluster_reads(
                 if alert_name else None
             ),
             "observations": evidence[-settings.adhoc_max_evidence :],
+            "curated_knowledge": knowledge or [],
             "findings": derive_adhoc_findings(evidence),
             "completed_reads": activity,
             "investigation_round": round_number,
@@ -2024,6 +2117,8 @@ def create_app(
     remediation_executor: RemediationExecutor | None = None,
     diagnostic_executor: DiagnosticCheckExecutor | None = None,
     read_explorer: ReadOnlyExplorer | None = None,
+    cluster_credential_store: CredentialStore | None = None,
+    remote_read_explorer_factory: Callable[[Cluster, str], ReadOnlyExplorer] | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
@@ -2037,6 +2132,7 @@ def create_app(
     alerts = alert_source or _make_alert_source(app_settings)
     workloads = workload_source or _make_workload_source(app_settings)
     credentials = credential_store or _make_credential_store(app_settings)
+    cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
     executor = remediation_executor or KubernetesRemediationExecutor()
     check_executor = diagnostic_executor or KubernetesDiagnosticCheckExecutor(
@@ -2073,11 +2169,70 @@ def create_app(
     templates.env.filters["safe_markdown"] = render_safe_markdown
     templates.env.filters["est_time"] = _format_est_time
 
+    def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:
+        if remote_read_explorer_factory is not None:
+            return remote_read_explorer_factory(cluster, token)
+        return KubernetesReadOnlyExplorer.for_remote_cluster(
+            api_url=cluster.api_url,
+            token=token,
+            tls_verify=cluster.tls_verify,
+            log_tail_lines=app_settings.workload_log_tail_lines,
+            max_log_bytes=app_settings.workload_max_log_bytes,
+            max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
+            http_probe=BoundedHttpProbe(
+                timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
+                max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
+            ),
+        )
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
         application.state.engine = build_engine(app_settings)
         ensure_knowledge_fts(application.state.engine)
+        with Session(application.state.engine) as db_session:
+            system_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
+            if system_cluster is None:
+                now = datetime.now(timezone.utc)
+                db_session.add(Cluster(
+                    id=SYSTEM_CLUSTER_ID,
+                    name=app_settings.cluster_name,
+                    api_url="in-cluster://service-account",
+                    credential_key=None,
+                    tags_json=json.dumps({
+                        "connection": "in-cluster",
+                        "environment": app_settings.environment,
+                    }, sort_keys=True),
+                    tls_verify=True,
+                    is_enabled=True,
+                    is_system=True,
+                    status="ready",
+                    created_by="system:bootstrap",
+                    updated_by="system:bootstrap",
+                    created_at=now,
+                    updated_at=now,
+                ))
+            db_session.execute(
+                update(AdHocConversation)
+                .where(AdHocConversation.cluster_ids_json == "[]")
+                .values(cluster_ids_json=json.dumps([SYSTEM_CLUSTER_ID]))
+            )
+            for document in db_session.scalars(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.target_cluster_ids_json.contains(app_settings.cluster_name)
+                )
+            ):
+                try:
+                    legacy_targets = list(json.loads(document.target_cluster_ids_json or "[]"))
+                except (TypeError, ValueError):
+                    continue
+                migrated_targets = [
+                    SYSTEM_CLUSTER_ID if item == app_settings.cluster_name else item
+                    for item in legacy_targets
+                ]
+                if migrated_targets != legacy_targets:
+                    document.target_cluster_ids_json = json.dumps(migrated_targets, sort_keys=True)
+            db_session.commit()
         worker_task = None
         if app_settings.adhoc_job_worker_enabled:
             with Session(application.state.engine) as db_session:
@@ -2102,7 +2257,7 @@ def create_app(
 
     app = FastAPI(
         title="PodPilot",
-        version="0.11.0",
+        version="0.12.0",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -2137,10 +2292,48 @@ def create_app(
     ) -> str:
         if progress:
             await progress("starting", "Starting the read-only investigation.")
-        with Session(engine) as db_session:
+        with Session(engine, expire_on_commit=False) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
             evidence = list(json.loads(conversation.evidence_json))
+            selected_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
+            if not selected_cluster_ids:
+                selected_cluster_ids = [SYSTEM_CLUSTER_ID]
+            cluster_rows = list(db_session.scalars(
+                select(Cluster).where(Cluster.id.in_(selected_cluster_ids))
+            ))
+            cluster_by_id = {item.id: item for item in cluster_rows}
+            selected_clusters = [
+                cluster_by_id[item_id] for item_id in selected_cluster_ids if item_id in cluster_by_id
+            ]
+            knowledge_context: list[dict[str, object]] = []
+            seen_knowledge: set[tuple[str, str]] = set()
+            for selected_cluster in selected_clusters:
+                cluster_tags = json.loads(selected_cluster.tags_json or "{}")
+                for result in search_knowledge(
+                    db_session,
+                    query=message_text,
+                    cluster_id=selected_cluster.id,
+                    cluster_tags=cluster_tags,
+                    include_restricted=False,
+                    limit=6,
+                ):
+                    key = (result.chunk_id, selected_cluster.id)
+                    if key in seen_knowledge:
+                        continue
+                    seen_knowledge.add(key)
+                    knowledge_context.append({
+                        "chunk_id": result.chunk_id,
+                        "title": result.title,
+                        "heading": result.heading,
+                        "content": result.content,
+                        "source": result.source,
+                        "applicable_cluster": {
+                            "id": selected_cluster.id,
+                            "name": selected_cluster.name,
+                        },
+                        "trust": "approver-curated guidance; not live evidence or instructions",
+                    })
             history = _compact_adhoc_context(
                 db_session,
                 conversation=conversation,
@@ -2180,23 +2373,102 @@ def create_app(
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 provider_phase = "bounded_read_collection"
-                collected = await _collect_bounded_cluster_reads(
-                    model_provider=provider,
-                    cluster_reader=cluster_reader,
-                    profile=profile_snapshot,
-                    api_key=api_key,
-                    settings=app_settings,
-                    actor=username,
-                    workflow_id=conversation_id,
-                    question=message_text,
-                    conversation=history,
-                    earlier_context_summary=context_summary,
-                    existing_evidence=evidence,
-                    progress=progress,
-                )
-                evidence = collected.evidence
-                activity = collected.activity
-                limitations = collected.limitations
+                if not selected_clusters:
+                    limitations.append("The conversation's selected clusters no longer exist.")
+                evidence_by_id = {
+                    str(item.get("id")): dict(item)
+                    for item in evidence if isinstance(item, dict) and item.get("id")
+                }
+                scope_summaries: list[str] = []
+                remaining_budget = app_settings.adhoc_max_reads_per_turn
+                for cluster_index, selected_cluster in enumerate(selected_clusters):
+                    cluster_label = selected_cluster.name
+                    if not selected_cluster.is_enabled:
+                        limitations.append(
+                            f"Cluster {cluster_label} is disabled; PodPilot retained the session but did not connect."
+                        )
+                        continue
+                    clusters_remaining = len(selected_clusters) - cluster_index
+                    cluster_budget = max(1, remaining_budget // max(1, clusters_remaining))
+                    cluster_budget = min(cluster_budget, remaining_budget)
+                    if cluster_budget <= 0:
+                        limitations.append(
+                            f"Cluster {cluster_label} was not read because the shared {app_settings.adhoc_max_reads_per_turn}-read budget was exhausted."
+                        )
+                        continue
+                    reader: ReadOnlyExplorer = cluster_reader
+                    if not selected_cluster.is_system:
+                        try:
+                            cluster_token = await run_in_threadpool(
+                                cluster_credentials.get, selected_cluster.credential_key
+                            )
+                        except CredentialStoreError as exc:
+                            limitations.append(f"Cluster {cluster_label}: {exc}")
+                            continue
+                        if not cluster_token:
+                            limitations.append(
+                                f"Cluster {cluster_label} has no usable API token; an Approver must rotate it."
+                            )
+                            continue
+                        try:
+                            reader = remote_cluster_reader(selected_cluster, cluster_token)
+                        except Exception as exc:
+                            limitations.append(
+                                f"Cluster {cluster_label}: the Kubernetes API client could not be initialized ({type(exc).__name__})."
+                            )
+                            continue
+                        if not selected_cluster.tls_verify:
+                            limitations.append(
+                                f"Cluster {cluster_label} API TLS verification is disabled; the bearer token and evidence are vulnerable to interception."
+                            )
+                    if progress:
+                        await progress("selecting_cluster", f"Investigating cluster {cluster_label}.")
+                    prior_cluster_evidence = [
+                        dict(item) for item in evidence_by_id.values()
+                        if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == selected_cluster.id
+                    ]
+                    cluster_settings = app_settings.model_copy(update={
+                        "cluster_name": cluster_label,
+                        "adhoc_max_reads_per_turn": cluster_budget,
+                    })
+                    cluster_knowledge = [
+                        item for item in knowledge_context
+                        if item["applicable_cluster"]["id"] == selected_cluster.id
+                    ]
+                    collected = await _collect_bounded_cluster_reads(
+                        model_provider=provider,
+                        cluster_reader=reader,
+                        profile=profile_snapshot,
+                        api_key=api_key,
+                        settings=cluster_settings,
+                        actor=username,
+                        workflow_id=f"{conversation_id}:{selected_cluster.id}",
+                        question=message_text,
+                        conversation=history,
+                        earlier_context_summary=context_summary,
+                        existing_evidence=prior_cluster_evidence,
+                        knowledge=cluster_knowledge,
+                        progress=progress,
+                    )
+                    new_read_count = len(collected.activity)
+                    remaining_budget = max(0, remaining_budget - new_read_count)
+                    for item in collected.evidence:
+                        attributed = dict(item)
+                        attributed["cluster_id"] = selected_cluster.id
+                        attributed["cluster_name"] = cluster_label
+                        evidence_by_id[str(attributed.get("id"))] = attributed
+                    for item in collected.activity:
+                        attributed_activity = dict(item)
+                        attributed_activity["cluster_id"] = selected_cluster.id
+                        attributed_activity["cluster_name"] = cluster_label
+                        activity.append(attributed_activity)
+                    limitations.extend(
+                        collected.limitations if len(selected_clusters) == 1 else
+                        [f"Cluster {cluster_label}: {item}" for item in collected.limitations]
+                    )
+                    scope_summaries.append(f"{cluster_label}: {collected.scope_summary}")
+                evidence = list(evidence_by_id.values())[-app_settings.adhoc_max_evidence :]
+                collected_scope_summary = "; ".join(scope_summaries) or "No selected cluster was readable."
                 provider_phase = "final_answer"
                 if progress:
                     await progress(
@@ -2218,12 +2490,13 @@ def create_app(
                     if deterministic_log_section else []
                 )
                 answer_context: dict[str, object] = {
-                    "cluster": app_settings.cluster_name,
+                    "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": message_text,
                     "conversation": history,
                     "earlier_context_summary": context_summary,
-                    "scope_summary": collected.scope_summary,
+                    "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
+                    "curated_knowledge": knowledge_context[:20],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
@@ -2685,6 +2958,7 @@ def create_app(
             details_json=json.dumps({
                 "conversation_id": conversation.id,
                 "run_id": run_id,
+                "cluster_ids": json.loads(conversation.cluster_ids_json or "[]"),
             }, sort_keys=True),
         ))
         conversation.updated_at = now
@@ -2709,6 +2983,9 @@ def create_app(
                 .order_by(AdHocConversation.updated_at.desc()).limit(20)
             ))
             profile = _active_profile(db_session)
+            available_clusters = list(db_session.scalars(
+                select(Cluster).where(Cluster.is_enabled.is_(True)).order_by(Cluster.name)
+            ))
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
@@ -2717,6 +2994,9 @@ def create_app(
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "model_ready": bool(profile and profile.status == "ready"),
                 "active_run": None,
+                "clusters": [_cluster_summary(item) for item in available_clusters],
+                "selected_cluster_ids": [SYSTEM_CLUSTER_ID],
+                "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
             },
         )
         if csrf_is_new:
@@ -2756,6 +3036,12 @@ def create_app(
                     AdHocRun.status.in_(("queued", "running")),
                 ).order_by(AdHocRun.created_at.desc()).limit(1)
             )
+            conversation_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
+            available_clusters = list(db_session.scalars(
+                select(Cluster).where(
+                    (Cluster.is_enabled.is_(True)) | (Cluster.id.in_(conversation_cluster_ids))
+                ).order_by(Cluster.name)
+            ))
         messages = [{
             "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
             "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
@@ -2778,6 +3064,9 @@ def create_app(
                     "phase": active_run_row.phase,
                     "events": json.loads(active_run_row.progress_json),
                 } if active_run_row else None),
+                "clusters": [_cluster_summary(item) for item in available_clusters],
+                "selected_cluster_ids": conversation_cluster_ids,
+                "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
             },
         )
         if csrf_is_new:
@@ -2797,11 +3086,33 @@ def create_app(
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
             raise HTTPException(status_code=422, detail="Enter a bounded question for PodPilot.")
         message = redact_text(raw_message)[:app_settings.chat_max_chars]
+        try:
+            requested_cluster_ids = [
+                str(item) for item in json.loads(
+                    form.get("cluster_ids", json.dumps([SYSTEM_CLUSTER_ID]))
+                )
+            ]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Select one or more valid clusters.") from exc
+        requested_cluster_ids = list(dict.fromkeys(requested_cluster_ids))
+        if not requested_cluster_ids or len(requested_cluster_ids) > app_settings.adhoc_max_clusters_per_conversation:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Select between 1 and {app_settings.adhoc_max_clusters_per_conversation} clusters.",
+            )
         conversation_id = str(uuid4())
         with Session(request.app.state.engine) as db_session:
+            valid_cluster_count = db_session.scalar(
+                select(func.count()).select_from(Cluster).where(
+                    Cluster.id.in_(requested_cluster_ids), Cluster.is_enabled.is_(True)
+                )
+            ) or 0
+            if valid_cluster_count != len(requested_cluster_ids):
+                raise HTTPException(status_code=422, detail="One or more selected clusters are unavailable.")
             conversation = AdHocConversation(
                 id=conversation_id, created_by=user.username,
                 title=message.replace("\n", " ")[:100], status="active", evidence_json="[]",
+                cluster_ids_json=json.dumps(requested_cluster_ids),
             )
             db_session.add(conversation)
             run_id = _queue_adhoc_run(
@@ -2958,6 +3269,209 @@ def create_app(
             ))
             db_session.commit()
         return RedirectResponse("/ask", status_code=303)
+
+    @app.get("/settings/clusters", response_class=HTMLResponse)
+    async def cluster_settings(
+        request: Request, user: AuthContext = Depends(current_user)
+    ):
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        csrf_token, csrf_is_new = _csrf_token(request)
+        edit_id = request.query_params.get("edit", "").strip()
+        with Session(request.app.state.engine) as db_session:
+            rows = list(db_session.scalars(select(Cluster).order_by(Cluster.name)))
+        clusters_view = [_cluster_summary(item) for item in rows]
+        selected = next((item for item in clusters_view if item["id"] == edit_id), None)
+        response = templates.TemplateResponse(
+            request=request,
+            name="cluster_settings.html",
+            context={
+                "user": user,
+                "clusters": clusters_view,
+                "selected": selected,
+                "csrf_token": csrf_token,
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(
+                CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                httponly=True, samesite="strict", max_age=28_800,
+            )
+        return response
+
+    @app.post("/api/v1/clusters")
+    async def save_cluster(
+        request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        form = await _urlencoded(request)
+        cluster_id = form.get("cluster_id", "").strip()
+        name = redact_text(form.get("name", "").strip())[:253]
+        api_url = _validated_cluster_api_url(form.get("api_url", ""))
+        token = form.get("token", "").strip()
+        tags = _parse_tags(form.get("tags_json", "{}"), field_name="Cluster tags")
+        tls_verify = form.get("tls_verify", "true").strip().lower() == "true"
+        if not name:
+            raise HTTPException(status_code=422, detail="Cluster name is required.")
+        if token and not (8 <= len(token) <= 16_384):
+            raise HTTPException(status_code=422, detail="Cluster token length is invalid.")
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id) if cluster_id else None
+            if cluster_id and cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if cluster is not None and cluster.is_system:
+                raise HTTPException(status_code=409, detail="The runtime system cluster cannot be modified here.")
+            if cluster is not None and not cluster.is_enabled and not token:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A new bearer token is required when re-enabling a disabled cluster.",
+                )
+            duplicate = db_session.scalar(select(Cluster).where(Cluster.name == name))
+            if duplicate is not None and (cluster is None or duplicate.id != cluster.id):
+                raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
+            if cluster is None:
+                if not token:
+                    raise HTTPException(status_code=422, detail="A bearer token is required for a new cluster.")
+                cluster_id = str(uuid4())
+                credential_key = f"cluster_{cluster_id.replace('-', '')}"
+                cluster = Cluster(
+                    id=cluster_id,
+                    name=name,
+                    api_url=api_url,
+                    credential_key=credential_key,
+                    tags_json=json.dumps(tags, sort_keys=True),
+                    tls_verify=tls_verify,
+                    is_enabled=True,
+                    is_system=False,
+                    status="not_tested",
+                    created_by=user.username,
+                    updated_by=user.username,
+                    created_at=now,
+                    updated_at=now,
+                )
+                action = "cluster.create"
+                db_session.add(cluster)
+            else:
+                credential_key = cluster.credential_key
+                cluster.name = name
+                cluster.api_url = api_url
+                cluster.tags_json = json.dumps(tags, sort_keys=True)
+                cluster.tls_verify = tls_verify
+                cluster.is_enabled = True
+                cluster.status = "not_tested"
+                cluster.last_error = None
+                cluster.updated_by = user.username
+                cluster.updated_at = now
+                action = "cluster.update"
+            assert credential_key
+            if token:
+                try:
+                    await run_in_threadpool(cluster_credentials.set, token, credential_key)
+                except CredentialStoreError as exc:
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action=action,
+                outcome="saved",
+                details_json=json.dumps({
+                    "cluster_id": cluster.id,
+                    "name": name,
+                    "tag_keys": sorted(tags),
+                    "tls_verify": tls_verify,
+                    "token_rotated": bool(token),
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({"status": "saved", "cluster_id": cluster_id})
+
+    @app.post("/api/v1/clusters/{cluster_id}/test")
+    async def test_cluster_connection(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if not cluster.is_enabled:
+                raise HTTPException(status_code=409, detail="Enable and save the cluster before testing it.")
+            cluster_snapshot = _cluster_summary(cluster)
+            credential_key = cluster.credential_key
+            is_system = cluster.is_system
+        status_value = "ready"
+        error_detail = None
+        try:
+            reader: ReadOnlyExplorer = cluster_reader
+            if not is_system:
+                token = await run_in_threadpool(cluster_credentials.get, credential_key)
+                if not token:
+                    raise ReadOnlyExplorerError("The cluster token is unavailable.")
+                reader = remote_cluster_reader(cluster, token)
+            await run_in_threadpool(reader.resource_catalog, query="namespaces", limit=1)
+        except Exception as exc:
+            status_value = "unavailable"
+            error_detail = redact_text(str(exc))[:500] or type(exc).__name__
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            assert cluster is not None
+            cluster.status = status_value
+            cluster.last_error = error_detail
+            cluster.last_tested_at = now
+            cluster.updated_by = user.username
+            cluster.updated_at = now
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="cluster.test",
+                outcome=status_value,
+                details_json=json.dumps({
+                    "cluster_id": cluster_id,
+                    "tls_verify": cluster_snapshot["tls_verify"],
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({
+            "status": status_value,
+            "detail": error_detail or "Authenticated Kubernetes API discovery succeeded.",
+        })
+
+    @app.post("/api/v1/clusters/{cluster_id}/disable")
+    async def disable_cluster(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if cluster.is_system:
+                raise HTTPException(status_code=409, detail="The runtime system cluster cannot be disabled.")
+            credential_key = cluster.credential_key
+            if credential_key:
+                try:
+                    await run_in_threadpool(cluster_credentials.delete, credential_key)
+                except CredentialStoreError as exc:
+                    raise HTTPException(status_code=503, detail=str(exc)) from exc
+            cluster.is_enabled = False
+            cluster.status = "disabled"
+            cluster.last_error = None
+            cluster.updated_by = user.username
+            cluster.updated_at = datetime.now(timezone.utc)
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="cluster.disable",
+                outcome="disabled",
+                details_json=json.dumps({"cluster_id": cluster_id}, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({"status": "disabled", "cluster_id": cluster_id})
 
     @app.get("/settings/model", response_class=HTMLResponse)
     async def model_settings(
@@ -3274,7 +3788,13 @@ def create_app(
         query = request.query_params.get("q", "").strip()[:500]
         namespace = request.query_params.get("namespace", "").strip()[:253] or None
         edit_id = request.query_params.get("edit", "").strip()
+        preview_cluster_id = request.query_params.get("cluster_id", SYSTEM_CLUSTER_ID).strip()
         with Session(request.app.state.engine) as db_session:
+            clusters = list(db_session.scalars(select(Cluster).order_by(Cluster.name)))
+            preview_cluster = next((item for item in clusters if item.id == preview_cluster_id), None)
+            if preview_cluster is None:
+                preview_cluster = next((item for item in clusters if item.id == SYSTEM_CLUSTER_ID), None)
+            assert preview_cluster is not None
             document_query = select(KnowledgeDocument).where(KnowledgeDocument.is_current.is_(True))
             if user.role < Role.APPROVER:
                 document_query = document_query.where(
@@ -3283,7 +3803,6 @@ def create_app(
                     KnowledgeDocument.verification_state == "reviewed",
                     (KnowledgeDocument.expires_at.is_(None))
                     | (KnowledgeDocument.expires_at > datetime.now(timezone.utc)),
-                    KnowledgeDocument.cluster_id.in_((app_settings.cluster_name, "*")),
                 )
                 if namespace:
                     document_query = document_query.where(
@@ -3296,9 +3815,18 @@ def create_app(
                 document_query
                 .order_by(KnowledgeDocument.title, KnowledgeDocument.created_at.desc())
             ))
+            if user.role < Role.APPROVER:
+                preview_tags = json.loads(preview_cluster.tags_json or "{}")
+                documents = [item for item in documents if knowledge_applies_to(
+                    target_cluster_ids_json=item.target_cluster_ids_json,
+                    target_tags_json=item.target_tags_json,
+                    cluster_id=preview_cluster.id,
+                    cluster_tags=preview_tags,
+                )]
             selected = next((item for item in documents if item.id == edit_id), None)
             results = search_knowledge(
-                db_session, query=query, cluster_id=app_settings.cluster_name,
+                db_session, query=query, cluster_id=preview_cluster.id,
+                cluster_tags=json.loads(preview_cluster.tags_json or "{}"),
                 namespace=namespace, include_restricted=user.role >= Role.APPROVER,
             ) if query else []
         response = templates.TemplateResponse(
@@ -3307,7 +3835,12 @@ def create_app(
             context={
                 "user": user, "documents": documents, "selected": selected,
                 "results": results, "query": query, "namespace": namespace or "",
-                "cluster_id": app_settings.cluster_name, "csrf_token": csrf_token,
+                "cluster_id": preview_cluster.id, "cluster_name": preview_cluster.name,
+                "clusters": [_cluster_summary(item) for item in clusters],
+                "selected_target_ids": (
+                    json.loads(selected.target_cluster_ids_json or "[]") if selected else []
+                ),
+                "csrf_token": csrf_token,
             },
         )
         if csrf_is_new:
@@ -3320,6 +3853,7 @@ def create_app(
     @app.get("/api/v1/knowledge/search")
     async def knowledge_search(
         request: Request, q: str, namespace: str | None = None,
+        cluster_id: str = SYSTEM_CLUSTER_ID,
         user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
         if user.role < Role.INVESTIGATOR:
@@ -3329,12 +3863,16 @@ def create_app(
             raise HTTPException(status_code=422, detail="Search text must be between 1 and 500 characters.")
         bounded_namespace = namespace.strip()[:253] if namespace else None
         with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
             results = search_knowledge(
-                db_session, query=query, cluster_id=app_settings.cluster_name,
+                db_session, query=query, cluster_id=cluster.id,
+                cluster_tags=json.loads(cluster.tags_json or "{}"),
                 namespace=bounded_namespace, include_restricted=user.role >= Role.APPROVER,
             )
         return JSONResponse({
-            "query": query, "cluster_id": app_settings.cluster_name,
+            "query": query, "cluster_id": cluster.id,
             "namespace": bounded_namespace,
             "results": [result.__dict__ for result in results],
         })
@@ -3350,7 +3888,22 @@ def create_app(
         content = redact_text(form.get("content", "").strip())
         source = redact_text(form.get("source", "").strip())[:512]
         source_type = form.get("source_type", "cluster_fact").strip()
-        cluster_id = form.get("cluster_id", app_settings.cluster_name).strip()[:253]
+        try:
+            target_cluster_ids = list(dict.fromkeys(
+                str(item) for item in json.loads(form.get("target_cluster_ids_json", "[]"))
+            ))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Knowledge cluster targets are invalid.") from exc
+        target_tags = _parse_tags(
+            form.get("target_tags_json", "{}"), field_name="Knowledge target tags"
+        )
+        legacy_cluster_target = form.get("cluster_id", "").strip()
+        if "target_cluster_ids_json" not in form and legacy_cluster_target not in {"", "*"}:
+            target_cluster_ids = [
+                SYSTEM_CLUSTER_ID if legacy_cluster_target == app_settings.cluster_name
+                else legacy_cluster_target
+            ]
+        cluster_id = target_cluster_ids[0] if target_cluster_ids else "*"
         namespace = form.get("namespace", "").strip()[:253] or None
         resource_kind = form.get("resource_kind", "").strip()[:128] or None
         resource_name = form.get("resource_name", "").strip()[:253] or None
@@ -3358,8 +3911,8 @@ def create_app(
         verification_state = form.get("verification_state", "draft").strip()
         sensitivity = form.get("sensitivity", "internal").strip()
         expires_text = form.get("expires_at", "").strip()
-        if not title or not source or not owner or not cluster_id:
-            raise HTTPException(status_code=422, detail="Title, source, cluster, and owner are required.")
+        if not title or not source or not owner:
+            raise HTTPException(status_code=422, detail="Title, source, and owner are required.")
         if not content or len(content) > 100_000:
             raise HTTPException(status_code=422, detail="Content must be between 1 and 100,000 characters.")
         if source_type not in {"runbook", "cluster_fact", "incident_summary", "product_knowledge"}:
@@ -3379,6 +3932,12 @@ def create_app(
         if expires_at is not None and expires_at <= now:
             raise HTTPException(status_code=422, detail="Expiry must be in the future.")
         with Session(request.app.state.engine) as db_session:
+            if target_cluster_ids:
+                target_count = db_session.scalar(
+                    select(func.count()).select_from(Cluster).where(Cluster.id.in_(target_cluster_ids))
+                ) or 0
+                if target_count != len(target_cluster_ids):
+                    raise HTTPException(status_code=422, detail="One or more knowledge cluster targets do not exist.")
             previous = None
             if logical_id:
                 previous = db_session.scalar(select(KnowledgeDocument).where(
@@ -3396,6 +3955,8 @@ def create_app(
                 id=str(uuid4()), logical_id=logical_id, version=version,
                 created_at=now, created_by=user.username, title=title, content=content,
                 source=source, source_type=source_type, cluster_id=cluster_id,
+                target_cluster_ids_json=json.dumps(target_cluster_ids, sort_keys=True),
+                target_tags_json=json.dumps(target_tags, sort_keys=True),
                 namespace=namespace, resource_kind=resource_kind, resource_name=resource_name,
                 owner=owner, verification_state=verification_state, sensitivity=sensitivity,
                 review_at=now if verification_state == "reviewed" else None,
@@ -3412,7 +3973,8 @@ def create_app(
                 details_json=json.dumps({
                     "document_id": document.id, "logical_id": logical_id,
                     "version": version, "source_type": source_type,
-                    "cluster_id": cluster_id, "namespace": namespace,
+                    "target_cluster_ids": target_cluster_ids,
+                    "target_tag_keys": sorted(target_tags), "namespace": namespace,
                     "verification_state": verification_state, "sensitivity": sensitivity,
                 }, sort_keys=True),
             ))

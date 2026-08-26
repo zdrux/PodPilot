@@ -110,6 +110,8 @@ spec:
               value: proxy
             - name: PODPILOT_MODEL_CREDENTIAL_STORE
               value: kubernetes
+            - name: PODPILOT_CLUSTER_CREDENTIAL_STORE
+              value: kubernetes
             - name: PODPILOT_POC_MODE
               value: "true"
           securityContext: &restricted-context

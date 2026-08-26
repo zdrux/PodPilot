@@ -195,6 +195,11 @@ The current deployment uses these variables:
 - `PODPILOT_MODEL_SECRET_NAMESPACE`, default `ai-ops`
 - `PODPILOT_MODEL_SECRET_NAME`, default `podpilot-model-credentials`
 - `PODPILOT_MODEL_SECRET_KEY`, default `api_key`
+- `PODPILOT_CLUSTER_CREDENTIAL_STORE`, `environment` for local development or
+  `kubernetes` for managed cluster entries
+- `PODPILOT_CLUSTER_SECRET_NAMESPACE`, default `ai-ops`
+- `PODPILOT_CLUSTER_SECRET_NAME`, default `podpilot-cluster-credentials`
+- `PODPILOT_ADHOC_MAX_CLUSTERS_PER_CONVERSATION`, default `10`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
 Model profile metadata (API type, base URL, model names, TLS mode/custom CA,
@@ -206,20 +211,43 @@ FastAPI patches only that key through the Kubernetes API using the runtime
 ServiceAccount. The UI never reads the saved value back. Model calls reread the
 key, so token creation and rotation require no Deployment restart.
 
-### Curated cluster memory
+### Multi-cluster Ask and curated memory
 
-Investigators can open `/memory` and test scoped lexical retrieval. Approvers can
+Approvers and Breakglass users manage remote OpenShift entries at
+`/settings/clusters`. Each entry has an HTTPS API origin, opaque Secret key, exact
+key/value tags, enabled state, and per-cluster TLS verification setting. The runtime
+cluster is added automatically and uses its projected service-account identity. Remote
+tokens are never stored in SQLite or returned by the API. Disabling an entry removes its
+Secret value but keeps metadata for historical conversations.
+
+TLS verification defaults on. If an internal API cannot present a trusted certificate,
+an Approver may disable verification on that cluster entry. This also disables hostname
+verification for a credential-bearing request and permits interception of the bearer token
+and evidence. The UI, audit event, connection status, and affected Ask answers keep the
+exception visible. Prefer repairing trust and do not use the exception in production.
+
+An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
+is pinned when the first question is submitted; **Change** opens a new conversation while
+the prior session remains in history. All selected clusters share the twelve-read turn
+budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
+and remediation workflows continue to use only the runtime cluster.
+
+Investigators can open `/memory` and test scoped lexical retrieval for one cluster.
+Approvers can
 create cluster facts, runbooks, approved incident summaries, and product
 knowledge; revising an entry creates a new immutable version. Draft, disabled,
-expired, wrong-cluster, and wrong-namespace entries do not appear in results.
-Restricted entries are visible only to Approvers. Use `*` as the cluster scope
-only for guidance that is genuinely portable across clusters, and assign an
+expired, nonmatching, and wrong-namespace entries do not appear in results. An entry
+may select explicit clusters, require exact cluster tags, or leave both empty for global
+guidance. All required tags must match; explicit-cluster and tag matches use OR semantics.
+Restricted entries are visible only to Approvers and are not supplied to Ask. Assign an
 expiry to operational facts likely to drift.
 
 The `0011_cluster_memory` migration creates the relational metadata/chunk tables
 and the SQLite FTS5 virtual table. The application verifies that the FTS table is
-available at startup. This phase is a retrieval preview: search results are not
-yet supplied to chat or investigation model calls.
+available at startup. `0012_multi_cluster_ask` adds the cluster registry, immutable
+conversation selections, and knowledge target fields. Eligible internal chunks are supplied
+only to standalone Ask planning and answers as guidance; they are not live evidence and do
+not enter investigation or remediation prompts.
 
 Later integrations may add:
 
@@ -285,6 +313,8 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    ```powershell
    if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "OPENAI_API_KEY is not set" }
    oc -n ai-ops create secret generic podpilot-model-credentials --from-literal=api_key=$env:OPENAI_API_KEY --dry-run=client -o yaml | oc apply -f -
+   oc -n ai-ops get secret podpilot-cluster-credentials *> $null
+   if ($LASTEXITCODE -ne 0) { oc create -f deploy/openshift/workload/cluster-credentials.yaml }
    ```
 
    Open `/settings/model` as an Approver to add one or more endpoints. Choose
@@ -324,9 +354,9 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
    only for a disposable PoC endpoint. Rotate the provider key if it ever appears
    in terminal or application output.
 
-   `model-credentials.yaml` documents the fixed Secret identity but is deliberately
-   excluded from the workload kustomization so a later manifest apply cannot erase
-   an existing token.
+   `model-credentials.yaml` and `cluster-credentials.yaml` document the fixed Secret
+   identities but are deliberately excluded from the workload kustomization so a later
+   manifest apply cannot erase existing tokens.
 
 5. Validate and deploy the complete SNO overlay. Optionally retain the separate
    PoC cluster-admin binding for the `ai-observer` development/break-glass identity;

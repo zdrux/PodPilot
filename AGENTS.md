@@ -50,9 +50,12 @@ Read the nearest workspace `AGENTS.md` before changing files below that workspac
   testing endpoints that use
   private, self-signed, or component-managed certificates. Keep bypasses scoped to the
   individual probe, preserve HTTPS SNI, never make insecure mode the default, and record the
-  bypass prominently in evidence and operator-visible limitations. Do not use TLS bypass for
-  Kubernetes API authentication, model-provider traffic, credential-bearing requests, or
-  ordinary application transport.
+  bypass prominently in evidence and operator-visible limitations. Registered remote-cluster
+  entries are an explicit exception: an Approver may disable Kubernetes API certificate and
+  hostname verification for that one cluster after accepting the credential-interception risk.
+  Keep the setting off by default, display it in cluster management and every affected Ask
+  session, and audit saves and connection tests. Do not use TLS bypass for model-provider traffic
+  or ordinary application transport.
 - Redact secrets and sensitive workload data before model calls, logs, traces, fixtures, or eval captures.
 - Treat Hyper-V SNO as a lab, not a production or high-availability reference environment.
 

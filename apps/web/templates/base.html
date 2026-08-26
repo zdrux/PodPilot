@@ -73,6 +73,12 @@
         </span>
 
         <p class="nav-label section-gap">Manage</p>
+        {% if user is defined and user.role.value >= 30 %}
+        <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
+          <span class="nav-icon" aria-hidden="true">⌘</span>
+          Clusters
+        </a>
+        {% endif %}
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory

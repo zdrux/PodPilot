@@ -402,6 +402,30 @@ class KubernetesReadOnlyExplorer:
         self._http_probe = http_probe or BoundedHttpProbe()
         self._metric_reader = metric_reader
 
+    @classmethod
+    def for_remote_cluster(
+        cls,
+        *,
+        api_url: str,
+        token: str,
+        tls_verify: bool = True,
+        **kwargs: object,
+    ) -> "KubernetesReadOnlyExplorer":
+        configuration = client.Configuration()
+        configuration.host = api_url.rstrip("/")
+        configuration.api_key = {"authorization": token}
+        configuration.api_key_prefix = {"authorization": "Bearer"}
+        configuration.verify_ssl = tls_verify
+        configuration.assert_hostname = tls_verify
+        api_client = client.ApiClient(configuration)
+        dynamic = DynamicClient(api_client)
+        return cls(
+            dynamic_client=dynamic,
+            core_api=client.CoreV1Api(api_client),
+            resource_catalog=ResourceCatalog(dynamic.resources.search),
+            **kwargs,
+        )
+
     def _ensure_clients(self) -> None:
         if self._dynamic is not None and self._core is not None:
             return

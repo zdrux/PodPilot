@@ -8,3 +8,4 @@ resources:
   - route.yaml
   - network-policy.yaml
   - model-credentials-rbac.yaml
+  - cluster-credentials-rbac.yaml

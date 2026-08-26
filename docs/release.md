@@ -223,11 +223,19 @@ Compatibility gates cover a missing descriptive `ReadPlan` summary, reduced
 probe output budgets, canonical built-in Kind/apiVersion coordinates, unchanged
 custom-resource validation, and suppression of model-authored planning caveats
 from trusted collection-limit displays.
-Cluster-memory gates must cover a clean Alembic upgrade through
-`0011_cluster_memory`, FTS5 availability, immutable revision history, heading-aware
+Cluster-memory and multi-cluster Ask gates must cover a clean Alembic upgrade through
+`0012_multi_cluster_ask`, FTS5 availability, immutable revision history, heading-aware
 chunking, safe query-token handling, reviewed/current/enabled/expiry filters,
-cluster and namespace scope, restricted-entry authorization, content-free audit
-details, and the explicit absence of memory from model prompts in this phase.
+global/explicit-cluster/all-required-tag and namespace scope, restricted-entry
+authorization, content-free audit details, and guidance-only eligible memory in standalone
+Ask prompts. Tests must prove restricted or mismatched memory is absent from prompts.
+Cluster registry gates must cover Approver authorization, CSRF, HTTPS-origin validation,
+secret-backed token non-disclosure/rotation/removal, runtime-cluster immutability, soft
+disable, and audited connection tests. Multi-cluster conversations must pin one to ten IDs,
+retain prior sessions when selection changes, share the twelve-read ceiling, attribute every
+observation and limitation, and preserve partial results. TLS verification must default on;
+the explicit off setting must be visible, audited, cluster-specific, and documented as a
+credential-interception risk.
 Incident-chat gates must prove that alert-scoped reads use the shared broker,
 persist redacted observations before answering, validate citations against the
 expanded evidence set, audit targets without payloads, and retain the separate

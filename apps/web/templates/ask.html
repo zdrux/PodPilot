@@ -17,8 +17,8 @@
 <section class="notice" aria-label="Investigation boundary">
   <span class="notice-icon" aria-hidden="true">i</span>
   <div>
-    <strong>Investigation mode cannot change the cluster</strong>
-    <p>PodPilot can read resources, ConfigMaps, events, and bounded Pod logs. Secrets, exec, proxy access, and mutations are outside this workflow.</p>
+    <strong>Investigation mode cannot change the cluster selection</strong>
+    <p>Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only.</p>
   </div>
 </section>
 
@@ -96,7 +96,7 @@
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
             <li><a href="#evidence-{{ id }}"{% if cited %} aria-label="Open evidence {{ id }}: {{ cited.summary }}"{% endif %}>
-              <span class="evidence-tool">{{ cited.tool if cited else 'evidence' }}</span>
+              <span class="evidence-tool">{% if cited and cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ cited.tool if cited else 'evidence' }}</span>
               <span class="evidence-link-copy">
                 <strong>{{ cited.summary if cited else id }}</strong>
                 {% if cited and cited.facts %}<small>{{ cited.facts[0].label }}: {{ cited.facts[0].value }}</small>{% endif %}
@@ -141,6 +141,28 @@
     {% if user.role.value >= 20 %}
     <form class="chat-form adhoc-chat-form" method="post"
       data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
+      <div class="cluster-composer-row">
+        <label>Send requests to</label>
+        <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if conversation or active_run %}data-locked="true"{% endif %}>
+          <summary><span data-cluster-picker-label>Select clusters</span><small data-cluster-picker-count></small></summary>
+          <div class="cluster-picker-menu">
+            <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
+            <div class="cluster-options">
+            {% for cluster in clusters %}
+              <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
+                <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox
+                  {% if cluster.id in selected_cluster_ids %}checked{% endif %}
+                  {% if conversation or not cluster.is_enabled %}disabled{% endif %}>
+                <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}runtime cluster{% else %}{{ cluster.api_url }}{% endif %}</small></span>
+                {% if not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
+              </label>
+            {% endfor %}
+            </div>
+          </div>
+        </details>
+        <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
+        {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
+      </div>
       <label for="adhoc-message">Question or symptom</label>
       <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
       <div><small>Each question: up to {{ chat_read_budget }} read-only checks · {{ chat_max_chars }} characters · Enter to send · Shift+Enter for a new line</small><button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button></div>
@@ -169,6 +191,7 @@
         <code>{{ id }}</code>
       </div>
       <h3>{{ item.summary }}</h3>
+      {% if item.cluster_name %}<span class="evidence-cluster">{{ item.cluster_name }}</span>{% endif %}
       <p class="evidence-source">{{ item.source }}</p>
       {% if item.facts %}
       <dl class="evidence-facts">

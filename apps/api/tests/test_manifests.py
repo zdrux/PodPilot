@@ -50,6 +50,23 @@ def test_remote_pvc_requests_the_default_storage_class() -> None:
     assert pvc["spec"]["resources"]["requests"]["storage"] == "5Gi"
 
 
+def test_cluster_credentials_use_one_fixed_resource_named_secret() -> None:
+    workload = ROOT / "deploy" / "openshift" / "workload"
+    documents = list(yaml.safe_load_all((workload / "cluster-credentials-rbac.yaml").read_text()))
+    role = next(item for item in documents if item["kind"] == "Role")
+    assert role["rules"] == [{
+        "apiGroups": [""],
+        "resources": ["secrets"],
+        "resourceNames": ["podpilot-cluster-credentials"],
+        "verbs": ["get", "patch", "update"],
+    }]
+    deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
+    env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
+    assert next(
+        item for item in env if item["name"] == "PODPILOT_CLUSTER_CREDENTIAL_STORE"
+    )["value"] == "kubernetes"
+
+
 def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     workload = ROOT / "deploy" / "openshift" / "workload"
     runtime = yaml.safe_load((workload / "runtime-config.yaml").read_text())
@@ -99,7 +116,7 @@ def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> No
     assert kustomization["images"] == [{
         "name": "podpilot",
         "newName": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot",
-        "newTag": "0.11.0",
+        "newTag": "0.12.0",
     }]
     assert image_stream["kind"] == "ImageStream"
     assert image_stream["metadata"]["namespace"] == "ai-ops"
