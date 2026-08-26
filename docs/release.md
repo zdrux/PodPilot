@@ -246,9 +246,11 @@ operator click for registered checks. Deterministic planning gates cover
 StorageClass inventory, namespaced built-in lists, and exact failed-Job alert scope.
 Natural-language planner gates must cover implied operational intent, unsupported
 no-read answers, one structured repair attempt, valid supporting-evidence reuse,
-and discovery-backed fallback after repeated refusal. Tests must prove that the
-fallback uses only a live policy-filtered catalog entry and still passes through
-the normal read broker and RBAC boundary.
+and operator-grounded recovery after repeated initial refusal. Tests must prove
+that recovery is limited to one read compiled from an exact coordinate in the
+operator request, still passes through the normal read broker and RBAC boundary,
+returns subsequent traversal to the model, and does not activate for malformed
+plans or generic catalog matches.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal

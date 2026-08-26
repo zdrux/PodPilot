@@ -124,10 +124,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   truncated collection evidence rather than one observation per object.
 - Model planning now infers natural-language goals while the server derives collection
   decisions from typed intents. Unsupported
-  operational no-read answers receive one structured repair attempt; when live
-  discovery identifies a safe matching inventory or health target, a repeated
-  refusal falls back to the discovery-compiled read without expanding broker or
-  RBAC permissions.
+  operational no-read answers receive one structured repair attempt. If both
+  initial plans stop before evidence collection, one exact operator-supplied
+  coordinate may seed a single broker-validated discovery read; the model chooses
+  all later troubleshooting traversal. Generic catalog fallback remains disabled.
 - Cluster-wide inventory LISTs no longer require the operator to invent a
   namespace. OpenShift API 403 responses identify the investigator ServiceAccount,
   verb, resource, and scope in the answer. List evidence retains all collected

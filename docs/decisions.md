@@ -772,16 +772,21 @@ and metric requests retain deterministic compilation. Findings, selectors, endpo
 owner references, and mount relationships are supplied as optional candidates; the model must
 return a typed intent for every diagnostic hop. Normal code grounds explicit owner, Route,
 endpoint, Pod-candidate, and volume-backed references, while arbitrary text remains non-callable.
-The only automatic continuation is an identical trust-only HTTPS retry. Set the default reserved
-follow-up units to zero. Treat answer grounding separately from certainty: a cited interpretation
-is evidence-based and may carry an unresolved conclusion, while uncited refusals and structurally
-empty answers still receive one correction attempt.
+The only automatic continuation is an identical trust-only HTTPS retry. After two initial no-read
+plans, normal code may also recover with one safe read compiled from a single exact coordinate in
+the operator request, such as searching Route `spec.host` for a supplied URL; subsequent traversal
+returns to the model. This is an availability recovery anchor, not a generic catalog fallback or a
+server-authored diagnostic graph. Set the default reserved follow-up units to zero. Treat answer
+grounding separately from certainty: a cited interpretation is evidence-based and may carry an
+unresolved conclusion, while uncited refusals and structurally empty answers still receive one
+correction attempt.
 
 Consequences: The model can change direction as evidence arrives and use the full default budget
 without gaining credentials, arbitrary tools, Secret access, mutation, or authority over the
-broker. Invalid plans stop or retry visibly instead of silently invoking a different diagnostic
-graph. Provider quality matters more because normal code no longer masks a refused or malformed
-troubleshooting plan with server-selected traversal. This supersedes the server-derived
+broker. Malformed plans still stop or retry visibly instead of silently invoking a diagnostic
+graph; repeated no-read plans can no longer turn an exact operator-supplied target into an empty
+investigation. Provider quality remains visible because the recovery is logged and limited to one
+grounded read. This supersedes the server-derived
 correlation reserve and deterministic diagnostic continuations in the adaptive-traversal,
 traffic-path, cross-namespace-policy, and log-correlation decisions; their evidence normalization
 and safety constraints remain in force.

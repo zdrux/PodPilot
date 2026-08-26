@@ -266,6 +266,12 @@ two units; discovery and ordinary resource reads cost one. The default follow-up
 so all 25 units are available to the model-directed loop; deployments may reserve units for the
 mechanical TLS trust retry if required.
 
+If the first plan and its structured repair both stop before collecting any evidence, normal code
+may use one non-terminal read compiled from a single exact coordinate in the operator request as a
+recovery anchor. A Route URL, for example, can seed one exact `spec.host` search. This does not
+activate a generic catalog fallback or a deterministic troubleshooting graph: the resulting
+observation is returned to the planner, which selects every later diagnostic hop.
+
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
 retains `podSelector`, `policyTypes`, ingress and egress peers, and ports. Configuration evidence

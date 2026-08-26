@@ -357,10 +357,12 @@ that RBAC boundary when no evidence could be collected rather than replacing it
 with a generic request for a narrower question.
 Model intent classification does not authorize access. Planner decisions and
 supporting evidence IDs are schema-validated; unsupported operational answers
-are repaired once, and a generic fallback may compile only a matching read from
-the same policy-filtered live catalog. The broker still validates scope and verb,
-applies limits and redaction, and submits the request using the investigator
-ServiceAccount, so Kubernetes RBAC remains the maximum read boundary.
+are repaired once. If both initial plans stop before collecting evidence, a
+recovery may compile one read only from a single exact coordinate already present
+in the operator request; it cannot choose a generic catalog target or continue a
+server-authored traversal. The broker still validates scope and verb, applies
+limits and redaction, and submits the request using the investigator ServiceAccount,
+so Kubernetes RBAC remains the maximum read boundary.
 
 Milestone 9 treats Prometheus label values as untrusted selectors, not query text.
 The server owns both supported PromQL expressions and

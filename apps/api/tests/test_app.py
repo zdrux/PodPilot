@@ -2058,6 +2058,18 @@ class HeadingOnlyRouteProvider(RouteBackendProvider):
         )
 
 
+class NoReadThenHeadingOnlyRouteProvider(HeadingOnlyRouteProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        if not context["completed_reads"]:
+            self.adhoc_plan_calls.append(context)
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                scope_summary="Answer without collecting Route evidence.",
+            )
+        return super().plan_ad_hoc(profile, api_key, context)
+
+
 class RouteOnlyAnswerProvider(RouteBackendProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
@@ -3420,6 +3432,64 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
     assert "cluster-backend-logs" in rendered.text
     assert "Observed objects — what the cluster is actually doing" not in rendered.text
     assert "used a deterministic evidence summary" in rendered.text
+
+
+def test_repeated_no_read_plan_uses_operator_grounded_anchor_then_returns_to_model(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = NoReadThenHeadingOnlyRouteProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
+                    "https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "Configured termination" in rendered.text
+    assert "forwards unencrypted HTTP" in rendered.text
+    assert [call.tool for call in explorer.calls] == [
+        "search_resources", "get_resource", "list_resources", "pod_logs",
+        "get_resource", "search_resources",
+    ]
+    assert len(provider.adhoc_plan_calls) >= 3
+    assert provider.adhoc_plan_calls[0]["observations"] == []
+    assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
+        "actionable_goal_requires_evidence"
+    )
+    assert provider.adhoc_plan_calls[2]["completed_reads"][0]["tool"] == (
+        "search_resources"
+    )
+    assert "podpilot.adhoc.operator_anchor_recovery" in caplog.text
 
 
 def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(

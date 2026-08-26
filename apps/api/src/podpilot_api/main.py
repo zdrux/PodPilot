@@ -2339,6 +2339,17 @@ async def _collect_bounded_cluster_reads(
     # Keep deterministic compilation only for terminal, unambiguous inventory or
     # metric requests. Troubleshooting and object traversal remain model-directed.
     deterministic_plan = known_plan if known_plan is not None and known_plan[1] else None
+    # A single non-terminal read compiled from an exact operator coordinate (for
+    # example, searching Route.spec.host for a supplied URL) is retained only as
+    # a recovery anchor. It is never the initial troubleshooting plan and it does
+    # not prescribe any traversal after the first observation.
+    recovery_anchor_plan = (
+        known_plan[0]
+        if known_plan is not None
+        and not known_plan[1]
+        and len(known_plan[0].intents) == 1
+        else None
+    )
     catalog_entries: list[dict[str, object]] = []
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
     if callable(catalog_reader):
@@ -2533,6 +2544,30 @@ async def _collect_bounded_cluster_reads(
                     actor,
                     workflow_id,
                     len(plan.intents),
+                )
+            elif (
+                needs_fallback
+                and planner_error is None
+                and not target_errors
+                and not activity
+                and recovery_anchor_plan is not None
+            ):
+                plan = recovery_anchor_plan
+                limitations.append(
+                    "The model planner twice stopped before collecting evidence; PodPilot used one "
+                    "read grounded directly in the operator's request, then returned diagnostic "
+                    "direction to the model."
+                )
+                if progress:
+                    await progress(
+                        "planning",
+                        "Using the exact target in your question as the first discovery anchor.",
+                    )
+                LOGGER.warning(
+                    "podpilot.adhoc.operator_anchor_recovery actor=%s workflow_id=%s tool=%s",
+                    actor,
+                    workflow_id,
+                    plan.intents[0].tool,
                 )
             elif needs_fallback and planner_error is not None:
                 LOGGER.warning(
