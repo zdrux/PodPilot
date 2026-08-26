@@ -18,12 +18,18 @@ minimum amount of explanatory text. An incomplete response receives one correcti
 request containing only a bounded reason/message, never the rejected response body.
 If correction remains incomplete, recognized Route/TLS or inventory answers use the
 existing deterministic renderer; other questions receive a cited deterministic
-observation summary. Semantically equivalent limitations are collapsed before display.
+observation summary. Evidence-based replies must cite every current Pod-log observation that
+produced a structured finding. Regardless of model success or fallback, normal code appends a
+bounded operator-facing log-finding section with exact Pod/container, category, severity,
+occurrence count, paths/endpoints, sample, correlated checks, and evidence citations.
+Semantically equivalent limitations are collapsed before display.
 
 Consequences: Operators do not receive empty heading-only answers, small providers
 receive a materially smaller final context, and complete persisted evidence remains
 available through provenance. The fallback discloses that causal interpretation is
-still unverified rather than inventing one.
+still unverified rather than inventing one. Structured log signals cannot disappear when a
+Route/TLS fallback replaces weak model prose, but remain explicitly labeled as correlation
+rather than proven root cause.
 
 ## 2026-08-26 - Deterministic TLS retry and general bounded log-signal investigation
 

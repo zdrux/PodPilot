@@ -196,8 +196,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Final-answer evidence is compacted into a provider-only bounded view that prioritizes
   current reads and caps Pod logs, objects, findings, and total bytes without changing
   persisted provenance. Citation-bearing heading-only or extremely brief answers receive
-  one bounded correction; a second failure uses deterministic Route/TLS, inventory, or
-  cited-observation output. Equivalent displayed limitations are semantically deduplicated.
+  one bounded correction, as do evidence-based answers missing current Pod-log citations. A
+  second failure uses deterministic Route/TLS, inventory, or cited-observation output. Current
+  structured log findings are always composed into the reply with exact coordinates, bounded
+  technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
+  limitations are semantically deduplicated.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

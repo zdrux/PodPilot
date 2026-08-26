@@ -515,12 +515,17 @@ _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
 
 
 def _adhoc_answer_quality_issue(
-    *, answer_mode: str, content: str, citations: list[str]
+    *, answer_mode: str, content: str, citations: list[str],
+    required_log_citations: set[str] | None = None,
 ) -> str | None:
     """Reject schema-valid final answers that contain no useful operator explanation."""
 
     if answer_mode == "evidence_based" and not citations:
         return "missing_evidence_citations"
+    if answer_mode == "evidence_based" and (
+        (required_log_citations or set()) - set(citations)
+    ):
+        return "missing_material_log_citations"
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -908,6 +913,98 @@ def _deterministic_route_tls_answer(
             ])),
         }
     return None
+
+
+def _deterministic_log_findings_section(
+    *,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render current-turn structured log signals so model fallback cannot hide them."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in evidence
+        if item.get("id") and str(item.get("id")) in current_ids
+    }
+    selected: list[tuple[dict[str, object], list[str], list[str]]] = []
+    for finding in derive_adhoc_findings(list(evidence_by_id.values())):
+        finding_ids = [
+            str(item) for item in (finding.get("evidence_ids") or [])
+            if str(item) in current_ids and str(item) in evidence_by_id
+        ]
+        log_ids = [
+            item for item in finding_ids
+            if evidence_by_id[item].get("tool") == "pod_logs"
+        ]
+        if log_ids:
+            selected.append((finding, finding_ids, log_ids))
+    if not selected:
+        return None
+
+    def inline_code(value: object, *, limit: int = 500) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+        return f"`{text.replace('`', "'")}`"
+
+    lines = [
+        "## Backend log findings",
+        "",
+        "PodPilot detected these structured signals in the bounded backend log excerpts:",
+    ]
+    citations: list[str] = []
+    required_log_citations: list[str] = []
+    for finding, finding_ids, log_ids in selected[:5]:
+        namespace = str(finding.get("namespace") or "unknown-namespace")
+        pod = str(finding.get("pod") or "unknown-pod")
+        container = str(finding.get("container") or "default")
+        category = str(finding.get("category") or "operational signal").replace("_", " ")
+        severity = str(finding.get("severity") or "unknown")
+        occurrences = int(finding.get("occurrences_in_excerpt") or 0)
+        lines.extend((
+            "",
+            f"### `{namespace}/{pod}` · `{container}`",
+            "",
+            f"- **Signal:** {severity} · {category}",
+            f"- **Observed:** {occurrences} occurrence{'s' if occurrences != 1 else ''} "
+            "in the bounded log excerpt",
+        ))
+        paths = finding.get("paths")
+        if isinstance(paths, list) and paths:
+            lines.append("- **Referenced paths:** " + ", ".join(
+                inline_code(item, limit=240) for item in paths[:6]
+            ))
+        endpoints = finding.get("endpoints")
+        if isinstance(endpoints, list) and endpoints:
+            lines.append("- **Referenced endpoints:** " + ", ".join(
+                inline_code(item, limit=240) for item in endpoints[:6]
+            ))
+        samples = finding.get("error_samples")
+        if isinstance(samples, list) and samples:
+            lines.append("- **Log sample:** " + inline_code(samples[0]))
+        completed = finding.get("completed_checks")
+        if isinstance(completed, list) and completed:
+            lines.append(
+                "- **Correlated checks:** "
+                + ", ".join(str(item).replace("_", " ") for item in completed[:5])
+            )
+        citations.extend(finding_ids)
+        required_log_citations.extend(log_ids)
+    lines.extend((
+        "",
+        "These log matches are operational signals, not proof of root cause. Their relevance "
+        "depends on the Route, Service, Pod, Event, and probe evidence collected in this turn.",
+    ))
+    return {
+        "content": "\n".join(lines),
+        "citations": list(dict.fromkeys(citations)),
+        "required_log_citations": list(dict.fromkeys(required_log_citations)),
+    }
 
 
 def _evidence_value(value: object, *, limit: int = 1200) -> str:
@@ -2036,6 +2133,13 @@ def create_app(
                 answer_findings = _compact_answer_findings(
                     derive_adhoc_findings(evidence)
                 )
+                deterministic_log_section = _deterministic_log_findings_section(
+                    evidence=evidence, activity=activity
+                )
+                required_log_citations = set(
+                    deterministic_log_section.get("required_log_citations", [])
+                    if deterministic_log_section else []
+                )
                 answer_context: dict[str, object] = {
                     "cluster": app_settings.cluster_name,
                     "question": message_text,
@@ -2063,6 +2167,7 @@ def create_app(
                     answer_mode=str(validated["answer_mode"]),
                     content=str(validated["content"]),
                     citations=[str(item) for item in validated["citations"]],
+                    required_log_citations=required_log_citations,
                 )
                 if answer_quality_issue:
                     if progress:
@@ -2076,7 +2181,8 @@ def create_app(
                         "reason": answer_quality_issue,
                         "message": (
                             "Return a complete operator-facing technical answer with substantive prose "
-                            "under each useful heading. Cite supplied evidence IDs. Do not return headings only."
+                            "under each useful heading. Address every supplied structured log finding and "
+                            "cite each corresponding Pod-log evidence ID. Do not return headings only."
                         ),
                     }
                     try:
@@ -2096,6 +2202,7 @@ def create_app(
                             answer_mode=str(retry_validated["answer_mode"]),
                             content=str(retry_validated["content"]),
                             citations=[str(item) for item in retry_validated["citations"]],
+                            required_log_citations=required_log_citations,
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -2145,6 +2252,15 @@ def create_app(
                     validated["limitations"] = _dedupe_limitations(
                         [*limitations, *list(validated["limitations"])]
                     )
+                if deterministic_log_section is not None:
+                    content = str(validated["content"]).rstrip()
+                    log_content = str(deterministic_log_section["content"])
+                    if "## Backend log findings" not in content:
+                        validated["content"] = f"{content}\n\n{log_content}".strip()
+                    validated["citations"] = list(dict.fromkeys([
+                        *[str(item) for item in validated["citations"]],
+                        *[str(item) for item in deterministic_log_section["citations"]],
+                    ]))
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",

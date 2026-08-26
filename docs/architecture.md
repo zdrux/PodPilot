@@ -332,9 +332,13 @@ observations are ordered first; each observation, Pod-log excerpt, structured fi
 and the total provider observation payload have byte or count ceilings. The database
 and evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
-enough. One bounded correction attempt receives only an error code and instruction.
+enough, and every current Pod-log observation with a structured finding must be cited. One
+bounded correction attempt receives only an error code and instruction.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
-cited-observation fallback rendering.
+cited-observation fallback rendering. Normal code then composes a bounded **Backend log
+findings** section into either the accepted model answer or deterministic fallback, preserving
+exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
+supporting evidence citations.
 
 ## Investigation Flow
 

@@ -22,6 +22,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
+    _deterministic_log_findings_section,
     _deterministic_route_tls_answer,
     _format_est_time,
     _validated_adhoc_answer,
@@ -427,6 +428,42 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
         content="No error lines appeared in the bounded application log tail.",
         citations=["cluster-log-1"],
     ) is None
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="The Route configuration was inspected and uses TLS passthrough.",
+        citations=["cluster-route-1"],
+        required_log_citations={"cluster-log-1"},
+    ) == "missing_material_log_citations"
+
+
+def test_deterministic_log_findings_render_missing_certificate_details() -> None:
+    evidence = [{
+        "id": "cluster-log-1", "tool": "pod_logs",
+        "source": "kubernetes:v1:Pod/log:openshift-ingress/gateway-abc?current",
+        "data": {
+            "container": "istio-proxy", "previous": False,
+            "tail": (
+                "failed to generate secret for file-root: open /etc/certs/server.pem: "
+                "no such file or directory\nfailed to generate secret for file-root: open "
+                "/etc/certs/ca-cert.pem: no such file or directory"
+            ),
+        },
+    }]
+    activity = [{
+        "tool": "pod_logs", "status": "succeeded", "evidence_ids": ["cluster-log-1"],
+    }]
+
+    section = _deterministic_log_findings_section(evidence=evidence, activity=activity)
+
+    assert section is not None
+    assert "Backend log findings" in section["content"]
+    assert "`openshift-ingress/gateway-abc`" in section["content"]
+    assert "`istio-proxy`" in section["content"]
+    assert "tls or certificate" in section["content"]
+    assert "`/etc/certs/server.pem`" in section["content"]
+    assert "no such file or directory" in section["content"]
+    assert section["citations"] == ["cluster-log-1"]
+    assert section["required_log_citations"] == ["cluster-log-1"]
 
 
 def test_final_answer_context_compacts_large_logs_and_prioritizes_current_reads() -> None:
@@ -1331,8 +1368,12 @@ class FailingTrafficPlanProvider(RouteBackendProvider):
 
 
 class RouteBackendExplorer:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        log_tail: str = "ERROR upstream model request returned HTTP 500",
+    ) -> None:
         self.calls = []
+        self.log_tail = log_tail
 
     def execute(self, intent):
         self.calls.append(intent)
@@ -1447,7 +1488,7 @@ class RouteBackendExplorer:
             collected_at=datetime.now(timezone.utc),
             data={
                 "container": "server", "previous": False,
-                "tail": "ERROR upstream model request returned HTTP 500",
+                "tail": self.log_tail,
             },
         ),))
 
@@ -2201,7 +2242,11 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
     tmp_path: Path,
 ) -> None:
     provider = HeadingOnlyRouteProvider()
-    explorer = RouteBackendExplorer()
+    explorer = RouteBackendExplorer(log_tail=(
+        "failed to generate secret for file-root: open /etc/certs/server.pem: "
+        "no such file or directory\nfailed to generate secret for file-root: open "
+        "/etc/certs/ca-cert.pem: no such file or directory"
+    ))
     app, settings = make_app(
         tmp_path,
         assignments={"ivy": Role.INVESTIGATOR},
@@ -2240,6 +2285,11 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
     assert len(provider.adhoc_answer_calls) == 2
     assert "Configured termination" in rendered.text
     assert "forwards unencrypted HTTP" in rendered.text
+    assert "Backend log findings" in rendered.text
+    assert "tls or certificate" in rendered.text
+    assert "/etc/certs/server.pem" in rendered.text
+    assert "no such file or directory" in rendered.text
+    assert "cluster-backend-logs" in rendered.text
     assert "Observed objects — what the cluster is actually doing" not in rendered.text
     assert "used a deterministic evidence summary" in rendered.text
 

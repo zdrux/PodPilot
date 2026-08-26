@@ -187,8 +187,12 @@ timeline replaces the redundant inspected-target disclosure, remains closed by d
 preserves citation navigation when expanded. Reply,
 session, and evidence timestamps render in fixed `EST (-4)` without altering UTC storage.
 Final-answer gates must reject citation-bearing heading-only or extremely brief model
-responses, send exactly one bounded correction without the rejected body, and activate
+responses and evidence-based replies that omit current material Pod-log citations, send exactly
+one bounded correction without the rejected body, and activate
 the deterministic Route/TLS or cited-observation fallback after a second failure.
+Composition gates must prove that structured log findings remain visible with exact
+Pod/container, category, severity, counts, paths/endpoints, bounded samples, and citations when
+a Route/TLS fallback replaces the provider answer; correlation must not be labeled root cause.
 Provider-context tests must verify current-turn prioritization, bounded Pod-log excerpts,
 per-observation and 96 KB total evidence ceilings, compact findings, and semantic
 deduplication of equivalent operator limitations while leaving persisted evidence intact.
