@@ -199,6 +199,9 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
     assert "edge sends HTTP" in planner_instructions
     assert "spec.to.name is an observed backend Service name" in planner_instructions
     assert "never author PromQL" in planner_instructions
+    assert "findings array contains deterministic evidence summaries" in planner_instructions
+    assert "verified and insecure observations" in planner_instructions
+    assert "investigation_priority and trigger_reasons" in planner_instructions
     correction_messages = completions.requests[1]["messages"]
     assert "scope_summary: string_too_short" in correction_messages[-1]["content"]
     assert '"scope_summary": ""' not in correction_messages[-1]["content"]
@@ -234,6 +237,9 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     assert "certificate-verification failure during TLS" in request["messages"][0]["content"]
     assert "Observed evidence" in request["messages"][0]["content"]
     assert "Still unverified" in request["messages"][0]["content"]
+    assert "Address every supplied log-signal finding" in request["messages"][0]["content"]
+    assert "matched log text as a signal" in request["messages"][0]["content"]
+    assert "never promote correlation to root cause" in request["messages"][0]["content"]
 
 
 def test_incident_chat_prompt_keeps_read_work_inside_podpilot() -> None:

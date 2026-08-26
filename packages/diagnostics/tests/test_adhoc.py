@@ -1,15 +1,206 @@
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
 from podpilot_diagnostics.adhoc import (
+    AdHocObservation,
     ReadIntent,
     ReadPlan,
+    automatic_read_followups,
+    derive_adhoc_findings,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
+
+
+def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
+    intent = ReadIntent(
+        tool="http_probe", url="https://route.apps.example.test/v1/models",
+        connect_host="192.0.2.50", method="GET",
+    )
+    observation = AdHocObservation(
+        id="network-trust-1", tool="http_probe", summary="TLS trust failed.",
+        source="https://route.apps.example.test/v1/models via 192.0.2.50:443",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "outcome": "failed", "stage": "tls",
+            "error": "certificate verify failed: self-signed certificate in certificate chain",
+        },
+    )
+
+    followups = automatic_read_followups(intent, (observation,))
+
+    assert len(followups) == 1
+    assert followups[0].code == "tls_trust_retry"
+    assert followups[0].intent.url == intent.url
+    assert followups[0].intent.connect_host == intent.connect_host
+    assert followups[0].intent.method == "GET"
+    assert followups[0].intent.tls_verify is False
+    assert followups[0].evidence_ids == ("network-trust-1",)
+    assert automatic_read_followups(followups[0].intent, (observation,)) == ()
+
+
+def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups() -> None:
+    observation = AdHocObservation(
+        id="cluster-proxy-log-1", tool="pod_logs", summary="Collected proxy logs.",
+        source=(
+            "kubernetes:v1:Pod/log:openshift-ingress/"
+            "maas-default-gateway-5cc7b765cf-b6qtq?current"
+        ),
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "container": "gateway",
+            "tail": (
+                "failed to generate secret for file-root: open /etc/certs/server.pem: "
+                "no such file or directory\nfailed to generate secret for file-root: "
+                "open /etc/certs/ca-cert.pem: no such file or directory"
+            ),
+        },
+    )
+
+    findings = derive_adhoc_findings([observation.to_dict()])
+    followups = automatic_read_followups(
+        ReadIntent(tool="pod_logs", candidate_id="podlog-proxy"), (observation,)
+    )
+
+    assert findings[0]["status"] == "open"
+    assert findings[0]["namespace"] == "openshift-ingress"
+    assert findings[0]["pod"] == "maas-default-gateway-5cc7b765cf-b6qtq"
+    assert findings[0]["kind"] == "log_signal"
+    assert findings[0]["category"] == "tls_or_certificate"
+    assert findings[0]["container"] == "gateway"
+    assert findings[0]["occurrences_in_excerpt"] == 2
+    assert findings[0]["distinct_signatures"] == 2
+    assert findings[0]["paths"] == [
+        "/etc/certs/server.pem", "/etc/certs/ca-cert.pem",
+    ]
+    assert [item.intent.tool for item in followups] == ["get_resource", "search_resources"]
+    assert all(item.code == "log_signal_investigation" for item in followups)
+    assert followups[0].intent.name == "maas-default-gateway-5cc7b765cf-b6qtq"
+    assert followups[1].intent.match_field == "involvedObject.name"
+    assert followups[1].intent.match_value == "maas-default-gateway-5cc7b765cf-b6qtq"
+
+
+def test_log_signal_finding_records_completed_pod_and_event_followups() -> None:
+    base = {
+        "id": "cluster-proxy-log-1", "tool": "pod_logs",
+        "summary": "Collected proxy logs.",
+        "source": "kubernetes:v1:Pod/log:mesh/gateway-1?current",
+        "collected_at": datetime.now(timezone.utc),
+        "data": {
+            "container": "istio-proxy",
+            "tail": "failed to generate secret: open /etc/certs/server.pem: no such file or directory",
+        },
+    }
+    evidence = [
+        base,
+        {
+            "id": "cluster-pod-1", "tool": "get_resource",
+            "source": "kubernetes:v1:Pod:mesh/gateway-1", "data": {"kind": "Pod"},
+        },
+        {
+            "id": "cluster-events-1", "tool": "search_resources",
+            "source": "kubernetes:v1:Event:mesh/*",
+            "data": {
+                "kind": "Event", "scope": "mesh", "matchField": "involvedObject.name",
+                "matchValue": "gateway-1",
+            },
+        },
+    ]
+
+    finding = derive_adhoc_findings(evidence)[0]
+
+    assert finding["status"] == "investigated"
+    assert finding["completed_checks"] == ["exact_pod_specification", "pod_events"]
+    assert finding["evidence_ids"] == [
+        "cluster-proxy-log-1", "cluster-pod-1", "cluster-events-1",
+    ]
+
+
+def test_general_application_log_signals_are_classified_scored_and_deduplicated() -> None:
+    observation = AdHocObservation(
+        id="cluster-api-log-1", tool="pod_logs", summary="Collected API logs.",
+        source="kubernetes:v1:Pod/log:payments/api-7d9f?current",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "container": "api", "previous": False,
+            "tail": (
+                "2026-08-26T12:41:03Z ERROR request 192 failed: connection refused payments-db:5432\n"
+                "2026-08-26T12:41:04Z ERROR request 193 failed: connection refused payments-db:5432\n"
+                "2026-08-26T12:41:05Z WARNING retrying dependency request\n"
+                "normal health check completed"
+            ),
+        },
+    )
+
+    findings = derive_adhoc_findings([observation.to_dict()])
+
+    network = next(item for item in findings if item["category"] == "network_connectivity")
+    warning = next(item for item in findings if item["category"] == "warning")
+    assert network["severity"] == "error"
+    assert network["occurrences_in_excerpt"] == 2
+    assert network["distinct_signatures"] == 1
+    assert network["first_observed_timestamp"] == "2026-08-26T12:41:03Z"
+    assert network["last_observed_timestamp"] == "2026-08-26T12:41:04Z"
+    assert network["endpoints"] == ["payments-db:5432"]
+    assert len(network["error_samples"]) == 2
+    assert warning["occurrences_in_excerpt"] == 1
+
+
+def test_unhealthy_pod_evidence_automatically_selects_bounded_exact_logs() -> None:
+    observation = AdHocObservation(
+        id="cluster-pods-1", tool="list_resources", summary="Read Pods.",
+        source="kubernetes:v1:Pod:payments/*", collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Pod", "scope": "payments",
+            "logCandidates": [{
+                "namespace": "payments", "pod": "api-7d9f", "containers": ["api"],
+                "phase": "Running", "ready": False, "restartCount": 3,
+            }],
+        },
+    )
+
+    followups = automatic_read_followups(
+        ReadIntent(tool="list_resources", resource="pods", namespace="payments"),
+        (observation,),
+    )
+
+    assert len(followups) == 1
+    assert followups[0].code == "pod_log_investigation"
+    assert followups[0].intent.namespace == "payments"
+    assert followups[0].intent.name == "api-7d9f"
+    assert followups[0].intent.container == "api"
+    assert followups[0].intent.candidate_id.startswith("podlog-")
+    assert "not Ready" in followups[0].reason
+    assert "restart count is 3" in followups[0].reason
+
+
+def test_log_priority_is_scoped_to_the_affected_container() -> None:
+    evidence = [{
+        "id": "cluster-pods-2", "tool": "list_resources",
+        "data": {
+            "kind": "Pod", "scope": "payments",
+            "logCandidates": [{
+                "namespace": "payments", "pod": "api-7d9f",
+                "containers": ["api", "telemetry"], "phase": "Running",
+                "ready": False, "restartCount": 5,
+                "containerStatuses": [
+                    {"name": "api", "ready": False, "restartCount": 5},
+                    {"name": "telemetry", "ready": True, "restartCount": 0},
+                ],
+            }],
+        },
+    }]
+
+    candidates = pod_log_candidates_from_evidence(evidence)
+
+    assert [(item.container, item.investigation_priority) for item in candidates] == [
+        ("api", "high"), ("telemetry", "normal"),
+    ]
 
 
 def test_known_resource_coordinates_are_canonicalized() -> None:

@@ -1,7 +1,32 @@
 # PodPilot Decisions
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 Update when: a durable architecture or product-engineering decision is made or superseded.
+
+## 2026-08-26 - Deterministic TLS retry and general bounded log-signal investigation
+
+Context: Model planning permitted insecure troubleshooting probes and iterative
+reads, but it could stop after a private-CA trust failure or overlook material
+errors in application, init, or sidecar logs. A certificate-only Istio/Envoy rule
+was too incident-specific to provide durable operational coverage.
+
+Decision: Normal code repeats a trust-only verified HTTPS failure once with the
+same bounded probe and `tls_verify=false`. Pod observations mark unready,
+restarting, and non-running containers as prioritized exact log candidates; the
+broker can inspect up to three within the existing budget. Bounded logs from any
+container are classified into crash, resource, TLS, DNS, network, authorization,
+storage, dependency, application-error, and warning signals. Findings retain
+exact coordinates, occurrence/signature counts, timestamps, bounded samples,
+paths, and endpoints. Material findings trigger exact Pod and Pod-Event reads;
+crash/resource findings can also request previous logs. These continuations retain
+all original evidence, carry no credentials, and never read Secrets. Model prompts
+receive findings as untrusted summaries and must not infer causality without correlation.
+
+Consequences: Private-CA endpoints can be tested through HTTP without hiding the
+certificate warning, and broadly useful workload log signals receive immediate
+configuration and Event context. Automatic reads remain deterministic, auditable,
+deduplicated, capped, and inside `cluster-reader`; the feature does not add arbitrary
+shell, exec, Secret, or network access.
 
 ## 2026-08-25 - Typed metric trends use server-owned PromQL
 

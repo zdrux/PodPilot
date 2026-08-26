@@ -165,6 +165,21 @@ persisted redacted payload and bounded log excerpt as escaped text. Answer tests
 must reject plain-HTTP/no-TLS conclusions grounded only in a TLS-stage certificate
 verification failure or sidecar logs, and preserve citations to the observations
 used by the corrected explanation.
+Automatic-follow-up gates must verify that a trust-only TLS failure schedules at
+most one identical `tls_verify=false` retry without changing URL, method, connection
+override, Host, or SNI; both results and the insecure-identity warning must survive.
+Log-investigation gates must prioritize exact unready/restarting/non-running
+Pod/container candidates; classify representative crash, resource, TLS, DNS,
+network, authorization, storage, dependency, error, and warning lines from any
+container; normalize repeated signatures; and retain only bounded samples, paths,
+endpoints, and timestamps. Material findings may perform only exact Pod, Pod-Event,
+and applicable previous-log reads within the shared capped budget. A lone warning
+must not expand automatically, and all log correlation must remain separate from
+proven causality. The activity UI must label deterministic follow-ups.
+Compact-chat visual gates must verify that confidence appears as a keyboard-focusable
+pill beside the reply time, its explanation appears on hover/focus, evidence timelines
+are closed by default and preserve citation navigation when expanded, and reply,
+session, and evidence timestamps render in fixed `EST (-4)` without altering UTC storage.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

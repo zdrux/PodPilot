@@ -345,6 +345,36 @@ def test_resource_search_traverses_lists_in_field_paths() -> None:
     assert result.observations[0].data["names"] == ["public"]
 
 
+def test_event_search_preserves_operator_relevant_event_details() -> None:
+    event = FakeObject(name="gateway-failed-mount", namespace="openshift-ingress", payload={
+        "apiVersion": "v1", "kind": "Event",
+        "metadata": {"name": "gateway-failed-mount", "namespace": "openshift-ingress"},
+        "type": "Warning", "reason": "FailedMount", "count": 7,
+        "message": "MountVolume.SetUp failed for volume gateway-certs",
+        "lastTimestamp": "2026-08-26T01:28:00Z",
+        "involvedObject": {
+            "apiVersion": "v1", "kind": "Pod", "namespace": "openshift-ingress",
+            "name": "gateway-1", "uid": "pod-uid-1",
+        },
+        "source": {"component": "kubelet", "host": "worker-1"},
+    })
+    target, _, _ = explorer(FakeResource([event]))
+
+    result = target.execute(ReadIntent(
+        tool="search_resources", api_version="v1", kind="Event",
+        namespace="openshift-ingress", match_field="involvedObject.name",
+        match_value="gateway-1", limit=20,
+    ))
+
+    item = result.observations[0].data["items"][0]
+    assert item["type"] == "Warning"
+    assert item["reason"] == "FailedMount"
+    assert item["count"] == 7
+    assert item["message"] == "MountVolume.SetUp failed for volume gateway-certs"
+    assert item["involvedObject"]["name"] == "gateway-1"
+    assert item["source"] == {"component": "kubelet", "host": "worker-1"}
+
+
 def test_pod_list_exposes_compact_exact_log_candidates():
     pod = FakeObject(payload={
         "apiVersion": "v1",
@@ -375,6 +405,10 @@ def test_pod_list_exposes_compact_exact_log_candidates():
         "namespace": "openshift-kube-apiserver",
         "pod": "kube-apiserver-master-0",
         "containers": ["kube-apiserver"],
+        "containerStatuses": [{
+            "name": "kube-apiserver", "ready": True, "restartCount": 1,
+            "state": {"running": {}},
+        }],
         "phase": "Running",
         "ready": True,
         "restartCount": 1,

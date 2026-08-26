@@ -26,6 +26,92 @@ _VALID_API_VERSION = re.compile(
 _SEARCH_FIELD_PATH = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$"
 )
+_POD_LOG_SOURCE = re.compile(
+    r"^kubernetes:v1:Pod/log:(?P<namespace>[^/]+)/(?P<pod>[^?]+)"
+)
+_LOG_SIGNAL_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    (
+        "crash_or_exception", "critical",
+        re.compile(
+            r"(?i)\b(?:fatal|panic|unhandled exception|traceback|segmentation fault|"
+            r"core dumped|crashloopbackoff|back-off restarting)\b",
+        ),
+    ),
+    (
+        "resource_pressure", "critical",
+        re.compile(
+            r"(?i)\b(?:oomkilled|out of memory|cannot allocate memory|no space left|"
+            r"disk full|too many open files|resource exhausted)\b",
+        ),
+    ),
+    (
+        "tls_or_certificate", "error",
+        re.compile(
+            r"(?i)\b(?:tls|ssl|x509|certificate|certs?|cert(?:ificate)?|handshake|unknown authority|"
+            r"unknown ca|self-signed)\b[^\n]{0,180}\b(?:error|failed|failure|invalid|expired|"
+            r"missing|refused|unknown|no such file|unable|denied)\b|"
+            r"\b(?:error|failed|failure|invalid|expired|missing|refused|unknown|no such file|"
+            r"unable|denied)\b[^\n]{0,180}\b(?:tls|ssl|x509|certificate|certs?)\b",
+        ),
+    ),
+    (
+        "dns_resolution", "error",
+        re.compile(
+            r"(?i)\b(?:nxdomain|servfail|no such host|name or service not known|"
+            r"temporary failure in name resolution|dns lookup failed|could not resolve)\b",
+        ),
+    ),
+    (
+        "network_connectivity", "error",
+        re.compile(
+            r"(?i)\b(?:connection refused|connection reset|reset by peer|context deadline exceeded|"
+            r"i/o timeout|connect timeout|read timeout|no route to host|network is unreachable|"
+            r"broken pipe|upstream connect error|connection failure)\b",
+        ),
+    ),
+    (
+        "authentication_or_authorization", "error",
+        re.compile(
+            r"(?i)\b(?:unauthorized|forbidden|authentication failed|authorization failed|"
+            r"access denied|permission denied|invalid token|token expired|http\s+(?:401|403))\b",
+        ),
+    ),
+    (
+        "storage_or_mount", "error",
+        re.compile(
+            r"(?i)\b(?:failedmount|mount failed|failed to mount|unmount failed|i/o error|"
+            r"read-only file system|volume attach failed|filesystem error)\b",
+        ),
+    ),
+    (
+        "dependency_or_upstream", "error",
+        re.compile(
+            r"(?i)\b(?:upstream|backend|dependency|database|broker)\b[^\n]{0,160}"
+            r"\b(?:unavailable|failed|failure|error|timeout|refused|http\s+(?:502|503|504))\b|"
+            r"\bhttp\s+(?:502|503|504)\b",
+        ),
+    ),
+    (
+        "application_error", "error",
+        re.compile(r"(?i)\b(?:error|exception|failed|failure)\b"),
+    ),
+    (
+        "warning", "warning",
+        re.compile(r"(?i)\b(?:warn|warning|degraded|retrying|backoff)\b"),
+    ),
+)
+_LOG_TIMESTAMP = re.compile(
+    r"\b(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|"
+    r"\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b"
+)
+_LOG_PATH = re.compile(r"(?<![A-Za-z0-9])/[A-Za-z0-9_.\-/]+")
+_LOG_ENDPOINT = re.compile(
+    r"(?i)\b(?:https?://[^\s\"'<>]+|[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?:\d{2,5})\b"
+)
+_TLS_TRUST_ERROR_MARKERS = (
+    "certificate verify failed", "self-signed certificate", "unknown ca",
+    "unable to get local issuer certificate", "certificate signed by unknown authority",
+)
 
 
 def looks_like_deferred_target(value: str | None) -> bool:
@@ -189,6 +275,8 @@ class PodLogCandidate(BaseModel):
     phase: str | None = Field(default=None, max_length=64)
     ready: bool | None = None
     restart_count: int = Field(default=0, ge=0)
+    investigation_priority: Literal["normal", "elevated", "high"] = "normal"
+    trigger_reasons: list[str] = Field(default_factory=list, max_length=4)
 
 
 def _candidate_id(evidence_id: str, namespace: str, pod: str, container: str | None) -> str:
@@ -223,15 +311,32 @@ def pod_log_candidates_from_evidence(
             restarts = max(0, int(restart_count or 0))
         except (TypeError, ValueError):
             restarts = 0
+        trigger_reasons: list[str] = []
+        phase_text = str(phase)[:64] if phase else None
+        if phase_text and phase_text not in {"Running", "Succeeded"}:
+            trigger_reasons.append(f"Pod phase is {phase_text}")
+        if ready is False and phase_text != "Succeeded":
+            trigger_reasons.append("container is not Ready")
+        if restarts:
+            trigger_reasons.append(f"container restart count is {restarts}")
+        priority = (
+            "high" if (
+                (ready is False and phase_text != "Succeeded")
+                or (phase_text and phase_text not in {"Running", "Succeeded"})
+            )
+            else "elevated" if restarts else "normal"
+        )
         candidates.append(PodLogCandidate(
             id=_candidate_id(evidence_id, namespace_text, pod_text, container_text),
             evidence_id=evidence_id,
             namespace=namespace_text,
             pod=pod_text,
             container=container_text,
-            phase=str(phase)[:64] if phase else None,
+            phase=phase_text,
             ready=ready if isinstance(ready, bool) else None,
             restart_count=restarts,
+            investigation_priority=priority,
+            trigger_reasons=trigger_reasons,
         ))
 
     for observation in evidence:
@@ -249,15 +354,28 @@ def pod_log_candidates_from_evidence(
                 containers = item.get("containers") or [None]
                 if not isinstance(containers, list):
                     containers = [None]
+                raw_statuses = item.get("containerStatuses") or []
+                statuses_by_name = {
+                    str(status.get("name")): status
+                    for status in raw_statuses
+                    if isinstance(status, dict) and status.get("name")
+                }
                 for container in containers or [None]:
+                    container_status = statuses_by_name.get(str(container), {})
                     add(
                         evidence_id=evidence_id,
                         namespace=item.get("namespace") or data.get("scope"),
                         pod=item.get("pod") or item.get("name"),
                         container=container,
                         phase=item.get("phase"),
-                        ready=item.get("ready"),
-                        restart_count=item.get("restartCount"),
+                        ready=(
+                            container_status.get("ready")
+                            if container_status else item.get("ready")
+                        ),
+                        restart_count=(
+                            container_status.get("restartCount")
+                            if container_status else item.get("restartCount")
+                        ),
                     )
             continue
 
@@ -626,6 +744,307 @@ class AdHocObservation:
 class ReadResult:
     observations: tuple[AdHocObservation, ...]
     limitations: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AutomaticReadFollowup:
+    """A deterministic, evidence-derived continuation within the existing read budget."""
+
+    code: Literal[
+        "tls_trust_retry", "pod_log_investigation", "log_signal_investigation"
+    ]
+    reason: str
+    intent: ReadIntent
+    evidence_ids: tuple[str, ...]
+
+
+def _log_signature(line: str) -> str:
+    """Normalize volatile log values so repeated messages consume one finding sample."""
+
+    normalized = _LOG_TIMESTAMP.sub("<time>", line).lower()
+    normalized = re.sub(r"\b[0-9a-f]{8,}\b", "<id>", normalized)
+    normalized = re.sub(r"\b\d+\b", "<n>", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()[:500]
+
+
+def _recommended_log_followups(category: str) -> list[str]:
+    recommendations = [
+        "Read the exact Pod specification to inspect status, probes, ports, mounts, and owner references.",
+        "Search namespace Events for the exact Pod name.",
+    ]
+    if category in {"crash_or_exception", "resource_pressure"}:
+        recommendations.insert(0, "Read previous logs for the same container when a terminated instance exists.")
+    if category in {"network_connectivity", "dns_resolution", "dependency_or_upstream"}:
+        recommendations.append(
+            "Resolve any exact observed Service or endpoint and correlate it with a bounded connectivity probe."
+        )
+    elif category == "tls_or_certificate":
+        recommendations.append(
+            "Correlate the signal with a verified HTTPS probe and a trust-only retry when required."
+        )
+    elif category == "resource_pressure":
+        recommendations.append(
+            "Correlate termination state with bounded workload and node CPU or memory metrics."
+        )
+    elif category == "storage_or_mount":
+        recommendations.append(
+            "Inspect referenced volume and claim status without reading Secret contents."
+        )
+    recommendations.append("Treat log matches as signals; require corroborating evidence before claiming causality.")
+    return recommendations
+
+
+def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Classify bounded log signals for any container without executing log text."""
+
+    findings: list[dict[str, object]] = []
+    for observation in evidence:
+        if observation.get("tool") != "pod_logs":
+            continue
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            continue
+        tail = str(data.get("tail") or "")[:32_768]
+        if not tail:
+            continue
+        source = str(observation.get("source") or "")
+        coordinate = _POD_LOG_SOURCE.match(source)
+        namespace = coordinate.group("namespace") if coordinate else None
+        pod = coordinate.group("pod") if coordinate else None
+        container = str(data.get("container") or "default")[:253]
+        evidence_id = str(observation.get("id") or "unknown")
+        grouped: dict[str, dict[str, object]] = {}
+        for raw_line in tail.splitlines():
+            line = raw_line.strip()[:500]
+            if not line:
+                continue
+            matched_rule = next(
+                (rule for rule in _LOG_SIGNAL_RULES if rule[2].search(line)), None
+            )
+            if matched_rule is None:
+                continue
+            category, severity, _pattern = matched_rule
+            group = grouped.setdefault(category, {
+                "severity": severity, "occurrences": 0, "samples": [],
+                "signatures": [], "timestamps": [], "paths": [], "endpoints": [],
+            })
+            group["occurrences"] = int(group["occurrences"]) + 1
+            signature = _log_signature(line)
+            if signature not in group["signatures"] and len(group["signatures"]) < 8:
+                group["signatures"].append(signature)
+            if line not in group["samples"] and len(group["samples"]) < 3:
+                group["samples"].append(line)
+            for timestamp in _LOG_TIMESTAMP.findall(line):
+                if timestamp not in group["timestamps"] and len(group["timestamps"]) < 4:
+                    group["timestamps"].append(timestamp)
+            for path in _LOG_PATH.findall(line):
+                bounded = path.rstrip(".,:;)")[:300]
+                if bounded not in group["paths"] and len(group["paths"]) < 8:
+                    group["paths"].append(bounded)
+            for endpoint in _LOG_ENDPOINT.findall(line):
+                bounded = endpoint.rstrip(".,:;)")[:300]
+                if re.match(r"^\d{4}-\d{2}-\d{2}T", bounded):
+                    continue
+                if bounded not in group["endpoints"] and len(group["endpoints"]) < 8:
+                    group["endpoints"].append(bounded)
+
+        for category, group in grouped.items():
+            completed_checks: list[str] = []
+            related_evidence_ids = [evidence_id]
+            for candidate in evidence:
+                candidate_data = candidate.get("data")
+                if not isinstance(candidate_data, dict):
+                    continue
+                candidate_source = str(candidate.get("source") or "")
+                candidate_id = str(candidate.get("id") or "")
+                if (
+                    namespace and pod
+                    and candidate.get("tool") == "get_resource"
+                    and candidate_source == f"kubernetes:v1:Pod:{namespace}/{pod}"
+                ):
+                    completed_checks.append("exact_pod_specification")
+                    if candidate_id:
+                        related_evidence_ids.append(candidate_id)
+                if (
+                    namespace and pod
+                    and candidate.get("tool") == "search_resources"
+                    and candidate_data.get("kind") == "Event"
+                    and candidate_data.get("scope") == namespace
+                    and candidate_data.get("matchField") == "involvedObject.name"
+                    and candidate_data.get("matchValue") == pod
+                ):
+                    completed_checks.append("pod_events")
+                    if candidate_id:
+                        related_evidence_ids.append(candidate_id)
+                if (
+                    namespace and pod
+                    and candidate.get("tool") == "pod_logs"
+                    and candidate_source.startswith(
+                        f"kubernetes:v1:Pod/log:{namespace}/{pod}?"
+                    )
+                    and candidate_data.get("container") == container
+                    and candidate_data.get("previous") is True
+                ):
+                    completed_checks.append("previous_container_logs")
+                    if candidate_id:
+                        related_evidence_ids.append(candidate_id)
+            occurrences = int(group["occurrences"])
+            target = f" in Pod {namespace}/{pod}" if namespace and pod else ""
+            findings.append({
+                "id": "log-signal-" + sha256(
+                    f"{evidence_id}\0{category}".encode()
+                ).hexdigest()[:12],
+                "kind": "log_signal",
+                "category": category,
+                "severity": group["severity"],
+                "status": (
+                    "investigated"
+                    if {"exact_pod_specification", "pod_events"}.issubset(completed_checks)
+                    else "open"
+                ),
+                "summary": (
+                    f"Container {container}{target} emitted {occurrences} "
+                    f"{category.replace('_', ' ')} signal{'s' if occurrences != 1 else ''} "
+                    "in the bounded log excerpt."
+                ),
+                "namespace": namespace,
+                "pod": pod,
+                "container": container,
+                "previous_logs": bool(data.get("previous")),
+                "occurrences_in_excerpt": occurrences,
+                "distinct_signatures": len(group["signatures"]),
+                "first_observed_timestamp": (
+                    group["timestamps"][0] if group["timestamps"] else None
+                ),
+                "last_observed_timestamp": (
+                    group["timestamps"][-1] if group["timestamps"] else None
+                ),
+                "paths": group["paths"],
+                "endpoints": group["endpoints"],
+                "error_samples": group["samples"],
+                "evidence_ids": list(dict.fromkeys(related_evidence_ids)),
+                "completed_checks": list(dict.fromkeys(completed_checks)),
+                "recommended_followups": _recommended_log_followups(category),
+            })
+    severity_order = {"critical": 0, "error": 1, "warning": 2}
+    findings.sort(key=lambda item: (
+        severity_order.get(str(item["severity"]), 3),
+        -int(item["occurrences_in_excerpt"]),
+        str(item["id"]),
+    ))
+    return findings[:20]
+
+
+def automatic_read_followups(
+    intent: ReadIntent,
+    observations: tuple[AdHocObservation, ...],
+) -> tuple[AutomaticReadFollowup, ...]:
+    """Plan narrow retries and evidence expansion from normalized observations."""
+
+    if intent.tool == "http_probe" and intent.tls_verify:
+        trust_failures = [
+            observation for observation in observations
+            if observation.data.get("stage") == "tls"
+            and any(
+                marker in str(observation.data.get("error") or "").lower()
+                for marker in _TLS_TRUST_ERROR_MARKERS
+            )
+        ]
+        if trust_failures:
+            return (AutomaticReadFollowup(
+                code="tls_trust_retry",
+                reason=(
+                    "The verified HTTPS probe reached certificate validation but could not trust "
+                    "the presented chain; repeat the same bounded probe once without verification "
+                    "to separate trust failure from endpoint behavior."
+                ),
+                intent=intent.model_copy(update={"tls_verify": False}),
+                evidence_ids=tuple(item.id for item in trust_failures),
+            ),)
+
+    if intent.tool in {"get_resource", "list_resources", "search_resources"}:
+        candidates = pod_log_candidates_from_evidence(
+            [item.to_dict() for item in observations]
+        )
+        prioritized = sorted(
+            (
+                candidate for candidate in candidates
+                if candidate.investigation_priority != "normal"
+            ),
+            key=lambda candidate: (
+                0 if candidate.investigation_priority == "high" else 1,
+                -candidate.restart_count,
+                candidate.namespace,
+                candidate.pod,
+                candidate.container or "",
+            ),
+        )[:3]
+        if prioritized:
+            return tuple(AutomaticReadFollowup(
+                code="pod_log_investigation",
+                reason=(
+                    f"Inspect {candidate.namespace}/{candidate.pod} container "
+                    f"{candidate.container or 'default'} because "
+                    + "; ".join(candidate.trigger_reasons)
+                    + "."
+                ),
+                intent=ReadIntent(
+                    tool="pod_logs", namespace=candidate.namespace, name=candidate.pod,
+                    container=candidate.container, candidate_id=candidate.id,
+                ),
+                evidence_ids=(candidate.evidence_id,),
+            ) for candidate in prioritized)
+
+    if intent.tool != "pod_logs":
+        return ()
+    findings = derive_adhoc_findings([item.to_dict() for item in observations])
+    followups: list[AutomaticReadFollowup] = []
+    for finding in findings:
+        if (
+            finding.get("severity") == "warning"
+            and int(finding.get("occurrences_in_excerpt") or 0) < 2
+        ):
+            continue
+        namespace = finding.get("namespace")
+        pod = finding.get("pod")
+        evidence_ids = tuple(str(item) for item in finding["evidence_ids"])
+        if not namespace or not pod:
+            continue
+        reason = str(finding["summary"])
+        category = str(finding.get("category") or "")
+        if (
+            category in {"crash_or_exception", "resource_pressure"}
+            and intent.candidate_id
+            and not intent.previous
+        ):
+            followups.append(AutomaticReadFollowup(
+                code="log_signal_investigation",
+                reason=reason,
+                intent=intent.model_copy(update={"previous": True}),
+                evidence_ids=evidence_ids,
+            ))
+        followups.extend((
+            AutomaticReadFollowup(
+                code="log_signal_investigation",
+                reason=reason,
+                intent=ReadIntent(
+                    tool="get_resource", resource="pods", api_version="v1", kind="Pod",
+                    namespace=str(namespace), name=str(pod),
+                ),
+                evidence_ids=evidence_ids,
+            ),
+            AutomaticReadFollowup(
+                code="log_signal_investigation",
+                reason=reason,
+                intent=ReadIntent(
+                    tool="search_resources", resource="events", api_version="v1", kind="Event",
+                    namespace=str(namespace), match_field="involvedObject.name",
+                    match_value=str(pod), match_operator="exact", limit=20,
+                ),
+                evidence_ids=evidence_ids,
+            ),
+        ))
+    return tuple(followups)
 
 
 class ReadOnlyExplorer(Protocol):

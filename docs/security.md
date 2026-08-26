@@ -190,6 +190,15 @@ Only limitations produced by the trusted read broker are promoted as collection
 limitations; model-authored planning caveats are not represented as observed
 collection failures.
 
+Bounded Pod logs are untrusted evidence. Deterministic log-signal classification
+matches fixed operational patterns only; it never executes, evaluates, or follows
+instructions found in log text. Samples, paths, endpoints, and timestamps are
+bounded and pass through the existing redaction boundary. Automatic expansion is
+limited to exact server-observed Pod/container coordinates, Pod Events, and an
+applicable previous log stream, shares the per-turn read budget, and cannot request
+Secrets, exec, proxy, mutation, or broader RBAC. Pattern matches are signals and do
+not establish causality without corroborating evidence.
+
 ## PoC Storage Exception
 
 The SNO overlay uses a static node-local PV at `/var/mnt/podpilot`. It is acceptable
@@ -268,6 +277,13 @@ application backend serves plain HTTP. The evidence drawer renders only the same
 persisted redacted observation payloads and normalized facts already inside this
 boundary. Jinja autoescaping remains enabled, raw cluster HTML is never trusted,
 and bounded log excerpts retain the collector's existing size and redaction limits.
+Trust-only TLS failures may trigger one identical probe with verification disabled;
+the retry remains unauthenticated, carries no credentials, preserves Host/SNI, is
+bounded by the normal read budget, and records the identity-verification limitation.
+Proxy certificate-error findings may trigger exact Pod and Event reads derived from
+the log observation's server-owned source coordinate. Log text never supplies a
+callable target, Secret reads remain denied, and the resulting finding is evidence
+for interpretation rather than an instruction or automatic root-cause claim.
 A `run_queued_checks`
 proposal cannot call the executor; it renders a separate button backed by the
 existing Investigator, same-site CSRF, server-owned plan, atomic claim, and audit

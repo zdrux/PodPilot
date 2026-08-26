@@ -177,6 +177,17 @@ records remain, but execution now awaits a separate approval-gated action servic
   persisted redacted payload. A server-side guard rejects provider claims that a
   TLS-stage certificate failure or sidecar-only logs prove an application backend
   serves plain HTTP.
+- Trust-only HTTPS probe failures now receive one deterministic, evidence-visible
+  retry with verification disabled while preserving URL, Host, SNI, method, and
+  connection override. Unready, restarting, and non-running containers become
+  prioritized exact log candidates. Bounded logs from any container are classified
+  into general operational findings with occurrence/signature counts, timestamps,
+  samples, paths, and endpoints; material signals automatically trigger exact Pod,
+  Pod-Event, and applicable previous-log reads inside the existing budget. The model
+  receives findings plus completed checks and must distinguish correlation from root cause.
+- Ask replies now keep confidence as a short hover/focus pill beside the timestamp
+  and collapse cited observations into an on-demand vertical timeline. Ask session,
+  reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

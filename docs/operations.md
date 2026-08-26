@@ -476,13 +476,17 @@ history budget requires a new investigation rather than silently truncating the
 durable transcript. A provider outage stores a visible unavailable response while
 leaving deterministic evidence and checks usable.
 
-For evidence-based Ask replies, the inline **Evidence used in this answer** cards
-identify the exact supporting observations. Selecting one opens and focuses its
+For evidence-based Ask replies, the collapsed **Evidence used in this answer**
+control expands into a compact vertical timeline of supporting observations.
+Selecting one opens and focuses its
 card in **Collected evidence**. The drawer shows normalized OpenShift coordinates
 and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
 the exact Pod/container and bounded log excerpt as applicable. **View technical
 details** displays the complete persisted redacted payload used by the answer.
 This is evidence provenance, not model chain-of-thought.
+Evidence-backed and Not-confirmed states appear as short pills beside the reply
+time; hover or keyboard focus exposes their explanation. Ask UI timestamps use
+fixed `EST (-4)` presentation while database and API timestamps remain UTC.
 
 Straightforward inventory questions bypass model planning: StorageClass discovery
 and explicit list/show questions compile against the live, safe API discovery
@@ -514,6 +518,28 @@ backend is plain HTTP. Istio/Envoy sidecar logs alone also do not establish the
 application container's listener protocol; collect direct endpoint, container
 configuration, readiness-probe scheme, or application-log evidence before making
 that claim.
+
+For trust-only failures such as a private, self-signed, or unknown issuer, PodPilot
+automatically repeats the same bounded HTTPS probe once with verification disabled,
+subject to the normal read budget. The first observation remains the certificate
+warning; the retry can establish the HTTP/connectivity outcome but never server
+identity. The activity list labels this as an **automatic follow-up**.
+
+PodPilot prioritizes bounded logs when Pod evidence shows an unready, restarting,
+or non-running container. It scans any selected application, init, or sidecar log
+excerpt for typed operational signals: crash/exception, resource pressure, TLS,
+DNS, network, authorization, storage/mount, dependency/upstream, general error, and
+warning patterns. Repeated messages are normalized into signature counts rather than
+duplicated evidence. Findings include exact Pod/container coordinates, occurrence
+counts, timestamps when present, up to three bounded samples, and extracted paths or
+endpoints. Material findings automatically read the exact Pod and Pod Events; crash
+or resource-pressure findings may also request previous logs. A single warning is
+retained for the model but does not automatically expand the investigation.
+
+The answer must treat matches as signals rather than conclusions, correlate them
+with Pod state, Events, owner/configuration, metrics, or probes, and keep root cause
+unconfirmed when that support is absent. Log text remains untrusted data. Secret
+contents remain unavailable even when a signal or Pod volume references a Secret.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is

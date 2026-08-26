@@ -280,13 +280,17 @@ Private Ask sessions are rendered as a nested list beneath the primary Ask
 PodPilot navigation item and expose owner-authorized deletion controls. Collected
 evidence no longer consumes a permanent content column: a count in the chat header
 opens a modal provenance drawer, and answer citations open that drawer focused on
-the matching evidence card. Reply citations include the evidence tool, summary,
-first material fact, and stable evidence ID. Drawer cards expose typed operator
+the matching evidence card. Reply citations are collapsed by default beneath a
+compact disclosure and expand into a vertical provenance timeline with the evidence
+tool, summary, first material fact, and stable evidence ID. Drawer cards expose typed operator
 facts (including exact object coordinates, selected Route/Service/Pod fields,
 probe SNI and connection diagnostics, metric bounds, and log container identity),
 plus an expandable redacted payload or bounded log excerpt. These views are built
 server-side from persisted redacted observations; they do not expose provider
 reasoning or unredacted Kubernetes responses.
+Assistant confidence is a compact pill beside the reply timestamp; its explanation
+appears on hover or keyboard focus. Ask reply, session, and evidence timestamps are
+converted from persisted UTC to a fixed `EST (-4)` presentation.
 
 Final-answer validation also rejects a specific unsafe TLS inference: a certificate
 verification failure during the TLS stage proves that a peer presented TLS and a
@@ -295,6 +299,23 @@ HTTP. Sidecar logs likewise cannot establish the application container's listene
 protocol. When a provider makes that contradictory claim, deterministic code
 replaces it with observed facts, the supported conclusion, and the remaining direct
 probe or application evidence needed.
+
+The read broker also owns two deterministic investigation continuations. A verified
+HTTPS probe that fails only at certificate trust is repeated at most once per target
+with the identical URL, method, connection override, Host, and SNI but
+`tls_verify=false`; both observations remain evidence and the retry is explicitly
+unauthenticated. Pod evidence assigns deterministic investigation priority to
+unready, restarting, or non-running containers, allowing bounded current-log reads
+without model-authored coordinates. Logs from any container are classified into
+typed operational signals (crash/exception, resource pressure, TLS, DNS, network,
+authorization, storage, dependency, application error, or warning). Each structured
+finding records exact Pod/container provenance, repetition and normalized signature
+counts, observed timestamps, bounded samples, paths, and endpoints. Material signals
+produce exact Pod and namespace Event follow-ups; crash/resource signals may also
+read the same container's previous stream. Automatic continuations share the existing
+per-turn budget, are capped and deduplicated, and cannot read Secrets or expand RBAC.
+Findings are evidence summaries, not executable instructions, and neither pattern
+matches nor log correlation alone establish causality.
 
 ## Investigation Flow
 

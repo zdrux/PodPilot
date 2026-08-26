@@ -19,6 +19,7 @@ from podpilot_api.main import (
     _collect_bounded_cluster_reads,
     _deterministic_inventory_answer,
     _deterministic_route_tls_answer,
+    _format_est_time,
     _validated_adhoc_answer,
     create_app,
 )
@@ -58,6 +59,15 @@ from podpilot_openshift.explorer import ReadOnlyExplorerError
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_est_time_formatter_uses_the_requested_fixed_utc_minus_four_display() -> None:
+    assert _format_est_time(datetime(2026, 8, 26, 5, 41, tzinfo=timezone.utc)) == (
+        "01:41 EST (-4)"
+    )
+    assert _format_est_time("2026-08-26T05:41:22+00:00", "%Y-%m-%d %H:%M:%S") == (
+        "2026-08-26 01:41:22 EST (-4)"
+    )
 
 
 def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
@@ -138,6 +148,223 @@ def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
     assert result.activity[0]["status"] == "rejected_before_collection"
     assert result.activity[1]["status"] == "succeeded"
     assert len(explorer.calls) == 1
+
+
+def test_collection_automatically_retries_tls_trust_failure_without_verification() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if context["investigation_round"] == 1:
+                return ReadPlan(
+                    goal_type="diagnose", decision="collect",
+                    scope_summary="Probe the HTTPS endpoint.",
+                    intents=[ReadIntent(
+                        tool="http_probe", url="https://model.apps.example.test/v1/models",
+                        method="GET",
+                    )],
+                )
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                scope_summary="Both probe results are available.",
+                supporting_evidence_ids=[item["id"] for item in context["observations"]],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.tls_verify:
+                return ReadResult((AdHocObservation(
+                    id="network-trust-failed", tool="http_probe",
+                    summary="Verified HTTPS probe failed during TLS.",
+                    source="https://model.apps.example.test/v1/models",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "outcome": "failed", "stage": "tls",
+                        "logicalHost": "model.apps.example.test",
+                        "error": "certificate verify failed: self-signed certificate",
+                        "tlsVerificationRequested": True,
+                    },
+                ),), ("The HTTPS probe could not verify the private certificate chain.",))
+            return ReadResult((AdHocObservation(
+                id="network-insecure-500", tool="http_probe",
+                summary="Insecure HTTPS probe returned HTTP 500.",
+                source="https://model.apps.example.test/v1/models",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "outcome": "completed", "statusCode": 500,
+                    "logicalHost": "model.apps.example.test",
+                    "tlsVerificationRequested": False,
+                    "tls": {"verified": False, "verificationMode": "insecure"},
+                },
+            ),), ("TLS verification was bypassed; server identity was not verified.",))
+
+    provider = Provider()
+    explorer = Explorer()
+    settings = Settings(
+        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        role_breakglass_groups=[],
+    )
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token", settings=settings, actor="ivy",
+        workflow_id="workflow-tls-retry",
+        question="Investigate HTTPS connectivity to https://model.apps.example.test/v1/models",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [call.tls_verify for call in explorer.calls] == [True, False]
+    assert result.activity[1]["automatic_followup"] == "tls_trust_retry"
+    assert result.activity[1]["trigger_evidence_ids"] == ["network-trust-failed"]
+    assert [item["id"] for item in result.evidence] == [
+        "network-trust-failed", "network-insecure-500",
+    ]
+    assert provider.contexts[1]["observations"][-1]["data"]["statusCode"] == 500
+    assert any("server identity was not verified" in item for item in result.limitations)
+
+
+def test_collection_auto_investigates_repeated_certificate_log_signals() -> None:
+    pod_name = "maas-default-gateway-5cc7b765cf-b6qtq"
+
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if context["investigation_round"] == 1:
+                candidate = context["tool_policy"]["pod_log_candidates"][0]
+                return ReadPlan(
+                    goal_type="diagnose", decision="collect",
+                    scope_summary="Read the exact gateway proxy logs.",
+                    intents=[ReadIntent(tool="pod_logs", candidate_id=candidate["id"])],
+                )
+            assert context["findings"][0]["status"] == "investigated"
+            assert context["findings"][0]["completed_checks"] == [
+                "exact_pod_specification", "pod_events",
+            ]
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                    scope_summary="The log finding received its bounded follow-up reads.",
+                supporting_evidence_ids=context["findings"][0]["evidence_ids"],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.tool == "pod_logs":
+                return ReadResult((AdHocObservation(
+                    id="cluster-proxy-log", tool="pod_logs",
+                    summary=f"Collected current logs for {pod_name}.",
+                    source=f"kubernetes:v1:Pod/log:openshift-ingress/{pod_name}?current",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "container": "istio-proxy", "previous": False,
+                        "tail": (
+                            "failed to generate secret: open /etc/certs/server.pem: "
+                            "no such file or directory\nfailed to generate secret: "
+                            "open /etc/certs/ca-cert.pem: no such file or directory"
+                        ),
+                    },
+                ),))
+            if intent.tool == "get_resource":
+                return ReadResult((AdHocObservation(
+                    id="cluster-gateway-pod", tool="get_resource",
+                    summary=f"Read Pod openshift-ingress/{pod_name}.",
+                    source=f"kubernetes:v1:Pod:openshift-ingress/{pod_name}",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "api_version": "v1", "kind": "Pod",
+                        "metadata": {"namespace": "openshift-ingress", "name": pod_name},
+                        "spec": {
+                            "containers": [{
+                                "name": "istio-proxy",
+                                "volume_mounts": [{"name": "gateway-certs", "mount_path": "/etc/certs"}],
+                            }],
+                            "volumes": [{"name": "gateway-certs", "secret": {"secret_name": "gateway-certs"}}],
+                        },
+                    },
+                ),))
+            assert intent.tool == "search_resources"
+            return ReadResult((AdHocObservation(
+                id="cluster-gateway-events", tool="search_resources",
+                summary=f"Found Events for {pod_name}.",
+                source="kubernetes:v1:Event:openshift-ingress/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "v1", "kind": "Event", "scope": "openshift-ingress",
+                    "matchField": "involvedObject.name", "matchValue": pod_name,
+                    "count": 1, "items": [{"reason": "FailedMount", "message": "Mount failed"}],
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    settings = Settings(
+        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        role_breakglass_groups=[],
+    )
+    existing = [{
+        "id": "cluster-gateway-pods", "tool": "list_resources",
+        "summary": "Read gateway Pods.", "source": "kubernetes:v1:Pod:openshift-ingress/*",
+        "collected_at": datetime.now(timezone.utc),
+        "data": {
+            "kind": "Pod", "scope": "openshift-ingress",
+            "logCandidates": [{
+                "namespace": "openshift-ingress", "pod": pod_name,
+                "containers": ["istio-proxy"], "phase": "Running", "ready": True,
+                "restartCount": 0,
+            }],
+        },
+    }]
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token", settings=settings, actor="ivy",
+        workflow_id="workflow-proxy-followup",
+        question="Investigate errors in the discovered gateway proxy logs.",
+        conversation=[], existing_evidence=existing,
+    ))
+
+    assert [call.tool for call in explorer.calls] == [
+        "pod_logs", "get_resource", "search_resources",
+    ]
+    assert explorer.calls[1].namespace == "openshift-ingress"
+    assert explorer.calls[1].name == pod_name
+    assert explorer.calls[2].match_field == "involvedObject.name"
+    assert [entry.get("automatic_followup") for entry in result.activity] == [
+        None, "log_signal_investigation", "log_signal_investigation",
+    ]
+    final_finding = provider.contexts[1]["findings"][0]
+    assert final_finding["kind"] == "log_signal"
+    assert final_finding["category"] == "tls_or_certificate"
+    assert final_finding["paths"] == [
+        "/etc/certs/server.pem", "/etc/certs/ca-cert.pem",
+    ]
+    assert final_finding["evidence_ids"] == [
+        "cluster-proxy-log", "cluster-gateway-pod", "cluster-gateway-events",
+    ]
 
 
 def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths() -> None:
@@ -240,6 +467,16 @@ def test_tls_claim_contradicted_by_certificate_failure_is_replaced_with_observed
             "tool": "pod_logs",
             "data": {"container": "istio-proxy", "tail": "upstream reset"},
         },
+        {
+            "id": "network-probe-insecure-1",
+            "tool": "http_probe",
+            "data": {
+                "outcome": "completed", "statusCode": 500,
+                "logicalHost": "maas.apps.example.test",
+                "tlsVerificationRequested": False,
+                "tls": {"verified": False, "verificationMode": "insecure"},
+            },
+        },
     ]
 
     validated = _validated_adhoc_answer(
@@ -252,9 +489,11 @@ def test_tls_claim_contradicted_by_certificate_failure_is_replaced_with_observed
     assert "presented TLS" in validated["content"]
     assert "does **not** show a plain-HTTP listener" in validated["content"]
     assert "sidecar container(s) `istio-proxy`" in validated["content"]
+    assert "follow-up probe with certificate verification disabled returned HTTP `500`" in validated["content"]
     assert "serving only plain HTTP is not supported" in validated["content"]
     assert validated["citations"] == [
-        "network-probe-1", "cluster-route-1", "cluster-sidecar-1",
+        "network-probe-1", "network-probe-insecure-1", "cluster-route-1",
+        "cluster-sidecar-1",
     ]
     assert "rejected a model conclusion" in validated["limitations"][0]
 
@@ -412,6 +651,60 @@ def test_route_tls_behavior_has_evidence_backed_deterministic_answer(
     assert expected in answer["content"]
     assert "`maas/model-server`" in answer["content"]
     assert answer["citations"] == ["cluster-route-1"]
+
+
+def test_route_tls_fallback_includes_verified_failure_and_insecure_retry() -> None:
+    evidence = [
+        {
+            "id": "cluster-route-1", "tool": "search_resources",
+            "data": {
+                "kind": "Route", "scope": "maas", "items": [{
+                    "kind": "Route", "metadata": {"name": "maas", "namespace": "maas"},
+                    "spec": {
+                        "host": "maas.apps.example.test",
+                        "to": {"kind": "Service", "name": "model-server"},
+                        "tls": {"termination": "passthrough"},
+                    },
+                }],
+            },
+        },
+        {
+            "id": "network-verified", "tool": "http_probe",
+            "data": {
+                "outcome": "failed", "stage": "tls",
+                "logicalHost": "maas.apps.example.test",
+                "error": "certificate verify failed: self-signed certificate",
+                "tlsVerificationRequested": True,
+            },
+        },
+        {
+            "id": "network-insecure", "tool": "http_probe",
+            "data": {
+                "outcome": "completed", "statusCode": 500,
+                "logicalHost": "maas.apps.example.test",
+                "tlsVerificationRequested": False,
+                "tls": {"verified": False},
+            },
+        },
+    ]
+    activity = [
+        {"tool": "search_resources", "status": "succeeded", "evidence_ids": ["cluster-route-1"]},
+        {"tool": "http_probe", "status": "failed", "evidence_ids": ["network-verified"]},
+        {"tool": "http_probe", "status": "succeeded", "evidence_ids": ["network-insecure"]},
+    ]
+
+    answer = _deterministic_route_tls_answer(
+        question="Why does this Route return HTTP 500 over HTTPS?",
+        evidence=evidence, activity=activity,
+    )
+
+    assert answer is not None
+    assert "Live probe results" in answer["content"]
+    assert "could not trust the presented certificate chain" in answer["content"]
+    assert "retry without certificate verification returned HTTP `500`" in answer["content"]
+    assert answer["citations"] == [
+        "cluster-route-1", "network-verified", "network-insecure",
+    ]
 
 
 def test_direct_model_pod_log_target_requires_collected_candidate() -> None:
@@ -723,7 +1016,9 @@ class DiscoveryThenLogsExplorer:
 class InvalidLogTargetsThenFallbackProvider(FakeModelProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
-        if any(item["tool"] == "pod_logs" for item in context["observations"]):
+        if len([
+            item for item in context["observations"] if item["tool"] == "pod_logs"
+        ]) >= 3:
             log_ids = [
                 item["id"] for item in context["observations"] if item["tool"] == "pod_logs"
             ]
@@ -1878,7 +2173,12 @@ def test_ask_rejects_synthesized_log_targets_and_falls_back_to_exact_candidates(
             if context.get("planner_feedback", {}).get("code") == "model_target_not_grounded"
     ]
     assert len(repaired_contexts) == 1
-    assert len(repaired_contexts[0]["tool_policy"]["pod_log_candidates"]) == 4
+    fallback_candidates = repaired_contexts[0]["tool_policy"]["pod_log_candidates"]
+    assert len(fallback_candidates) == 4
+    assert [item["investigation_priority"] for item in fallback_candidates[:3]] == [
+        "normal", "elevated", "elevated",
+    ]
+    assert fallback_candidates[3]["investigation_priority"] == "normal"
 
 
 def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:
@@ -2326,6 +2626,14 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "message.content | safe_markdown" in template
     assert "ask-sidebar" not in template
     assert "data-evidence-dialog" in template and "data-evidence-open" in template
+    assert "automatic-followup" in template
+    assert "read.reason" in template
+    assert 'class="answer-status answer-status-limited"' in template
+    assert 'class="answer-status answer-status-grounded"' in template
+    assert 'data-tooltip="This reply contains' in template
+    assert '<details class="answer-evidence">' in template
+    assert 'class="answer-evidence-timeline"' in template
+    assert "answer-confidence" not in template
     assert "recent_conversations" in base_template
     assert "nav-session-list" in base_template
     assert "nav-session-delete" in base_template
@@ -2398,6 +2706,12 @@ def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
 
     assert rendered.status_code == 200
     assert "Evidence used in this answer" in rendered.text
+    assert '<details class="answer-evidence">' in rendered.text
+    assert '<ol class="answer-evidence-timeline">' in rendered.text
+    assert "1 source" in rendered.text
+    assert "Evidence-backed" in rendered.text
+    assert "Cluster-specific claims are backed by the cited observations" in rendered.text
+    assert "20:51:27 EST (-4)" in rendered.text
     assert f'href="#evidence-{evidence_id}"' in rendered.text
     assert f">{evidence_id}</code>" in rendered.text
     assert "TLS termination" in rendered.text

@@ -53,6 +53,8 @@ from podpilot_diagnostics.adhoc import (
     ReadIntent,
     ReadOnlyExplorer,
     ReadPlan,
+    automatic_read_followups,
+    derive_adhoc_findings,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
@@ -104,6 +106,25 @@ def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f"Cannot serialize {type(value).__name__}")
+
+
+def _format_est_time(value: object, pattern: str = "%H:%M") -> str:
+    """Render persisted UTC timestamps in the operator-requested fixed UTC-4 display."""
+
+    parsed: datetime
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    else:
+        return str(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    eastern = parsed.astimezone(timezone(timedelta(hours=-4)))
+    return f"{eastern.strftime(pattern)} EST (-4)"
 
 
 def _make_alert_source(settings: Settings) -> AlertSource:
@@ -312,6 +333,7 @@ def _guard_unsupported_tls_claim(
     if not _NO_TLS_CLAIM.search(content):
         return mode, content, citations, []
     certificate_failure: dict[str, object] | None = None
+    insecure_probes: list[dict[str, object]] = []
     sidecar_logs: list[dict[str, object]] = []
     route_observation: dict[str, object] | None = None
     route_termination = ""
@@ -327,6 +349,14 @@ def _guard_unsupported_tls_claim(
             ))
         ):
             certificate_failure = observation
+        if observation.get("tool") == "http_probe" and (
+            data.get("tlsVerificationRequested") is False
+            or (
+                isinstance(data.get("tls"), dict)
+                and data["tls"].get("verified") is False
+            )
+        ):
+            insecure_probes.append(observation)
         if (
             observation.get("tool") == "pod_logs"
             and str(data.get("container") or "").lower() in {"istio-proxy", "envoy"}
@@ -357,6 +387,27 @@ def _guard_unsupported_tls_claim(
         "the certificate chain was not trusted. The connected endpoint therefore presented TLS; "
         "this result does **not** show a plain-HTTP listener."
     ]
+    insecure_probe = next((
+        item for item in reversed(insecure_probes)
+        if isinstance(item.get("data"), dict)
+        and (
+            not probe_data.get("logicalHost")
+            or item["data"].get("logicalHost") == probe_data.get("logicalHost")
+        )
+    ), None)
+    if insecure_probe is not None:
+        insecure_data = insecure_probe["data"]
+        evidence_ids.append(str(insecure_probe.get("id")))
+        status = insecure_data.get("statusCode") or insecure_data.get("statusLine")
+        outcome = (
+            f"returned HTTP `{status}`" if status is not None
+            else f"reported outcome `{insecure_data.get('outcome') or 'unknown'}`"
+        )
+        observed_lines.append(
+            f"- The automatic follow-up probe with certificate verification disabled {outcome}. "
+            "This separates endpoint behavior from certificate trust, but it does not authenticate "
+            "the server identity."
+        )
     if route_observation is not None:
         evidence_ids.append(str(route_observation.get("id")))
         observed_lines.append(
@@ -540,6 +591,12 @@ def _deterministic_route_tls_answer(
         if entry.get("status") == "succeeded" and entry.get("tool") == "search_resources"
         for evidence_id in (entry.get("evidence_ids") or [])
     }
+    current_probe_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("tool") == "http_probe"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
     for observation in reversed(evidence):
         if str(observation.get("id")) not in current_ids:
             continue
@@ -582,6 +639,47 @@ def _deterministic_route_tls_answer(
         if behavior is None:
             continue
         configured = f"`{termination}`" if termination else "none (unsecured)"
+        route_host = str(spec.get("host") or "")
+        probe_observations = [
+            item for item in evidence
+            if str(item.get("id")) in current_probe_ids
+            and item.get("tool") == "http_probe"
+            and isinstance(item.get("data"), dict)
+            and (
+                not route_host or item["data"].get("logicalHost") == route_host
+            )
+        ]
+        probe_lines: list[str] = []
+        probe_citations: list[str] = []
+        for probe in probe_observations:
+            probe_data = probe["data"]
+            probe_id = str(probe.get("id"))
+            if (
+                probe_data.get("stage") == "tls"
+                and "certificate" in str(probe_data.get("error") or "").lower()
+            ):
+                probe_lines.append(
+                    "- The verified HTTPS probe reached TLS certificate validation but could not "
+                    "trust the presented certificate chain."
+                )
+                probe_citations.append(probe_id)
+            elif (
+                probe_data.get("tlsVerificationRequested") is False
+                or (
+                    isinstance(probe_data.get("tls"), dict)
+                    and probe_data["tls"].get("verified") is False
+                )
+            ):
+                status = probe_data.get("statusCode") or probe_data.get("statusLine")
+                result = (
+                    f"returned HTTP `{status}`" if status is not None
+                    else f"reported outcome `{probe_data.get('outcome') or 'unknown'}`"
+                )
+                probe_lines.append(
+                    f"- The automatic retry without certificate verification {result}. This "
+                    "tests endpoint behavior but does not authenticate server identity."
+                )
+                probe_citations.append(probe_id)
         content = (
             "## Route TLS behavior\n\n"
             f"**Configured termination:** {configured}\n\n"
@@ -589,10 +687,14 @@ def _deterministic_route_tls_answer(
             "This validates the Route configuration, not live backend reachability. An HTTP 500 can "
             "still originate from the router, backend application, or an upstream dependency."
         )
+        if probe_lines:
+            content += "\n\n## Live probe results\n\n" + "\n".join(probe_lines)
         return {
             "answer_mode": "evidence_based",
             "content": content,
-            "citations": [str(observation["id"])],
+            "citations": list(dict.fromkeys([
+                str(observation["id"]), *probe_citations,
+            ])),
         }
     return None
 
@@ -752,6 +854,15 @@ class _BoundedReadCollection:
 
 
 ProgressReporter = Callable[[str, str], Awaitable[None]]
+
+
+def _read_intent_signature(intent: ReadIntent) -> str:
+    """Deduplicate exact reads even when equivalent Pod candidates have different IDs."""
+
+    payload = intent.model_dump(exclude_none=True)
+    if intent.tool == "pod_logs":
+        payload.pop("candidate_id", None)
+    return json.dumps(payload, sort_keys=True)
 
 
 def _read_progress_message(intent) -> str:
@@ -977,6 +1088,8 @@ async def _collect_bounded_cluster_reads(
     limitations: list[str] = []
     seen_intents: set[str] = set()
     reads_used = 0
+    automatic_tls_retries = 0
+    automatic_log_followups = 0
     scope_summary = "Bounded read-only cluster investigation."
     deterministic_plan = plan_known_read(
         question,
@@ -1041,6 +1154,7 @@ async def _collect_bounded_cluster_reads(
                 if alert_name else None
             ),
             "observations": evidence[-settings.adhoc_max_evidence :],
+            "findings": derive_adhoc_findings(evidence),
             "completed_reads": activity,
             "investigation_round": round_number,
             "tool_policy": {
@@ -1219,15 +1333,31 @@ async def _collect_bounded_cluster_reads(
                 )
                 continue
             assert intent is not None
-            signature = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
+            signature = _read_intent_signature(intent)
             if signature not in seen_intents:
                 seen_intents.add(signature)
                 new_intents.append(intent)
         if not new_intents:
             break
-        for intent in new_intents:
+        intent_queue: list[tuple[ReadIntent, str | None, str | None, tuple[str, ...]]] = [
+            (intent, None, None, ()) for intent in new_intents
+        ]
+        queue_index = 0
+        while (
+            queue_index < len(intent_queue)
+            and reads_used < settings.adhoc_max_reads_per_turn
+        ):
+            intent, automatic_code, automatic_reason, trigger_evidence_ids = intent_queue[queue_index]
+            queue_index += 1
             if progress:
-                await progress("collecting", _read_progress_message(intent))
+                message = _read_progress_message(intent)
+                if automatic_code == "tls_trust_retry":
+                    message = "Retrying the bounded HTTPS probe without certificate verification."
+                elif automatic_code == "pod_log_investigation":
+                    message = "Inspecting bounded logs for an unhealthy or restarting container."
+                elif automatic_code == "log_signal_investigation":
+                    message = "Correlating a notable bounded log signal with exact Pod evidence."
+                await progress("collecting", message)
             entry: dict[str, object] = {
                 "round": round_number,
                 "tool": intent.tool,
@@ -1244,6 +1374,9 @@ async def _collect_bounded_cluster_reads(
                     + (" previous=true" if intent.tool == "pod_logs" and intent.previous else "")
                 ),
             }
+            if automatic_code:
+                entry["automatic_followup"] = automatic_code
+                entry["trigger_evidence_ids"] = list(trigger_evidence_ids)
             read_started = False
             try:
                 preflight = getattr(cluster_reader, "preflight", None)
@@ -1254,12 +1387,47 @@ async def _collect_bounded_cluster_reads(
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
+                for followup in automatic_read_followups(intent, result.observations):
+                    if (
+                        followup.code == "tls_trust_retry"
+                        and automatic_tls_retries >= 2
+                    ) or (
+                        followup.code in {"pod_log_investigation", "log_signal_investigation"}
+                        and automatic_log_followups >= 6
+                    ):
+                        continue
+                    followup_intent = normalize_read_intent(followup.intent)
+                    signature = _read_intent_signature(followup_intent)
+                    if signature in seen_intents:
+                        continue
+                    if followup.code == "tls_trust_retry":
+                        automatic_tls_retries += 1
+                    else:
+                        automatic_log_followups += 1
+                    seen_intents.add(signature)
+                    intent_queue.append((
+                        followup_intent,
+                        followup.code,
+                        followup.reason,
+                        followup.evidence_ids,
+                    ))
+                    LOGGER.info(
+                        "podpilot.adhoc.automatic_followup actor=%s workflow_id=%s code=%s "
+                        "tool=%s trigger_evidence_ids=%s",
+                        actor,
+                        workflow_id,
+                        followup.code,
+                        followup_intent.tool,
+                        ",".join(followup.evidence_ids),
+                    )
                 probe_failed = intent.tool == "http_probe" and any(
                     item.data.get("outcome") == "failed" for item in result.observations
                 )
                 entry["status"] = "failed" if probe_failed else "succeeded"
                 entry["observations"] = len(result.observations)
                 entry["evidence_ids"] = [item.id for item in result.observations]
+                if automatic_reason:
+                    entry["reason"] = automatic_reason
                 if progress:
                     await progress(
                         "collecting",
@@ -1508,6 +1676,7 @@ def create_app(
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
     templates.env.filters["safe_markdown"] = render_safe_markdown
+    templates.env.filters["est_time"] = _format_est_time
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -1651,6 +1820,7 @@ def create_app(
                         "earlier_context_summary": context_summary,
                         "scope_summary": collected.scope_summary,
                         "observations": evidence,
+                        "findings": derive_adhoc_findings(evidence),
                         "collection_limitations": limitations[:10],
                     },
                 )

@@ -210,25 +210,27 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .chat-markdown thead th:first-child { border-top-left-radius: 7px; }
 .chat-markdown thead th:last-child { border-top-right-radius: 7px; }
 .chat-markdown tbody tr:nth-child(even) td { background: rgba(255, 255, 255, .018); }
-.answer-confidence { display: flex; align-items: flex-start; gap: 9px; margin-top: 11px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; line-height: 1.45; }
-.answer-confidence strong { flex: 0 0 auto; }
-.answer-confidence span { color: var(--muted); }
-.answer-confidence-grounded { border-color: rgba(74, 222, 154, .22); background: rgba(74, 222, 154, .055); }
-.answer-confidence-grounded strong { color: var(--green); }
-.answer-confidence-limited { border-color: rgba(255, 157, 102, .28); background: rgba(255, 157, 102, .06); }
-.answer-confidence-limited strong { color: var(--orange); }
+.answer-status { position: relative; display: inline-flex; align-items: center; min-height: 20px; padding: 2px 8px; border: 1px solid; border-radius: 999px; font-size: 9px; font-weight: 800; line-height: 1; cursor: help; }
+.answer-status-grounded { border-color: rgba(74, 222, 154, .26); color: var(--green); background: rgba(74, 222, 154, .08); }
+.answer-status-limited { border-color: rgba(255, 157, 102, .3); color: var(--orange); background: rgba(255, 157, 102, .08); }
+.answer-status::after { position: absolute; z-index: 20; top: calc(100% + 7px); left: 0; width: max-content; max-width: min(330px, 70vw); padding: 7px 9px; border: 1px solid var(--border-bright); border-radius: 7px; color: var(--text); background: #111b29; box-shadow: 0 8px 22px rgba(0, 0, 0, .35); content: attr(data-tooltip); font-size: 10px; font-weight: 500; line-height: 1.4; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .14s ease, transform .14s ease; }
+.answer-status:hover::after, .answer-status:focus-visible::after { opacity: 1; transform: translateY(0); }
 .chat-citations { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .chat-citations span, .chat-guidance { color: var(--subtle); font-size: 8px; }
 .chat-citations a { padding: 4px 6px; border: 1px solid rgba(69, 212, 232, .2); border-radius: 6px; color: var(--cyan); background: var(--cyan-soft); font-size: 8px; text-decoration: none; }
-.answer-evidence { margin-top: 14px; }
-.answer-evidence h4 { margin: 0 0 8px; color: var(--muted); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
-.answer-evidence-links { display: grid; gap: 7px; }
-.answer-evidence-links a { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 9px; padding: 10px 11px; border: 1px solid rgba(69, 212, 232, .18); border-radius: 8px; color: inherit; background: rgba(69, 212, 232, .035); text-decoration: none; }
-.answer-evidence-links a:hover, .answer-evidence-links a:focus-visible { border-color: rgba(69, 212, 232, .52); background: rgba(69, 212, 232, .08); outline: none; }
-.answer-evidence-links span { grid-row: 1 / span 3; align-self: start; padding: 3px 6px; border-radius: 5px; color: var(--cyan); background: var(--cyan-soft); font-size: 10px; font-weight: 800; text-transform: uppercase; }
-.answer-evidence-links strong { color: var(--text); font-size: 12px; line-height: 1.35; }
-.answer-evidence-links small { color: var(--muted); font-size: 11px; line-height: 1.4; }
-.answer-evidence-links code { overflow: hidden; color: var(--subtle); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.answer-evidence { margin-top: 12px; border-top: 1px solid rgba(104, 128, 157, .18); }
+.answer-evidence > summary { padding: 9px 1px 6px; color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+.answer-evidence > summary::marker { color: var(--cyan); }
+.answer-evidence > summary small { float: right; margin-top: 1px; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.answer-evidence-timeline { margin: 3px 0 2px 7px; padding: 1px 0 1px 18px; border-left: 1px solid rgba(69, 212, 232, .22); }
+.answer-evidence-timeline li { padding: 6px 0; list-style: none; }
+.answer-evidence-timeline a { display: grid; grid-template-columns: minmax(94px, auto) minmax(0, 1fr); gap: 11px; align-items: start; padding: 3px 5px; border-radius: 6px; color: inherit; text-decoration: none; }
+.answer-evidence-timeline a:hover, .answer-evidence-timeline a:focus-visible { background: rgba(69, 212, 232, .055); outline: 1px solid rgba(69, 212, 232, .18); }
+.evidence-tool { justify-self: start; padding: 3px 6px; border-radius: 5px; color: var(--cyan); background: var(--cyan-soft); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.evidence-link-copy { display: grid; min-width: 0; gap: 2px; }
+.evidence-link-copy strong { color: var(--text); font-size: 11px; line-height: 1.35; }
+.evidence-link-copy small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.evidence-link-copy code { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .chat-guidance { display: block; margin-top: 9px; }
 .tool-intent { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid rgba(255, 157, 102, .28); border-radius: 9px; background: rgba(255, 157, 102, .06); }
 .tool-intent strong { font-size: 10px; }
@@ -265,6 +267,8 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .tool-activity li { padding: 4px 0; color: var(--muted); font-size: 8px; }
 .tool-activity .status-dot { display: inline-block; margin-right: 6px; }
 .tool-activity small { color: var(--subtle); }
+.automatic-followup { display: inline-block; margin-left: 7px; padding: 2px 5px; border-radius: 5px; color: var(--cyan); background: var(--cyan-soft); font-size: 8px; font-style: normal; font-weight: 800; text-transform: uppercase; }
+.read-reason { display: block; margin: 5px 0 0 18px; color: var(--subtle); font-size: 10px; line-height: 1.45; }
 .answer-limitations li { padding: 3px 0; color: var(--orange); font-size: 8px; line-height: 1.45; }
 .delete-chat-form { margin: 0; }
 .compact-button { min-height: 32px; padding: 0 11px; }

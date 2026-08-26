@@ -159,6 +159,7 @@ def _pod_log_candidate_projection(raw: dict[str, Any], namespace: str | None) ->
         "namespace": metadata.get("namespace") or metadata.get("namespace_") or namespace,
         "pod": metadata.get("name"),
         "containers": container_names,
+        "containerStatuses": statuses,
         "phase": status.get("phase"),
         "ready": bool(statuses) and all(item.get("ready") is True for item in statuses),
         "restartCount": max(
@@ -224,6 +225,25 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "versions": status.get("versions") or [],
             "conditions": status.get("conditions") or [],
         }
+    elif kind == "Event":
+        involved = raw.get("involvedObject") or raw.get("involved_object") or {}
+        source = raw.get("source") or {}
+        projected.update({
+            "type": raw.get("type"),
+            "reason": raw.get("reason"),
+            "message": raw.get("message"),
+            "count": raw.get("count") or raw.get("deprecated_count"),
+            "firstTimestamp": raw.get("firstTimestamp") or raw.get("first_timestamp"),
+            "lastTimestamp": raw.get("lastTimestamp") or raw.get("last_timestamp"),
+            "eventTime": raw.get("eventTime") or raw.get("event_time"),
+            "source": source,
+            "involvedObject": {
+                key: involved.get(key) or involved.get(_camel_to_snake(key))
+                for key in ("apiVersion", "kind", "namespace", "name", "uid")
+                if involved.get(key) is not None
+                or involved.get(_camel_to_snake(key)) is not None
+            },
+        })
     elif kind in {"PersistentVolume", "PersistentVolumeClaim"}:
         projected["spec"] = {
             key: spec.get(key) for key in (
