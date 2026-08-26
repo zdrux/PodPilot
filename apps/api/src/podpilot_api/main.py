@@ -580,36 +580,12 @@ _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
 
 
-def _adhoc_answer_quality_issue(
-    *, answer_mode: str, content: str, citations: list[str],
-    required_log_citations: set[str] | None = None,
-    question: str = "",
-    observations: list[dict[str, object]] | None = None,
-) -> str | None:
-    """Reject schema-valid final answers that contain no useful operator explanation."""
+def _adhoc_answer_quality_issue(*, content: str) -> str | None:
+    """Retry only structurally empty answers; trust checks happen during validation."""
 
-    if answer_mode == "evidence_based" and not citations:
-        return "missing_evidence_citations"
-    if answer_mode == "evidence_based" and (
-        (required_log_citations or set()) - set(citations)
-    ):
-        return "missing_material_log_citations"
-    if _question_requires_object_details(question) and citations:
-        cited_tools = {
-            str(item.get("tool") or "")
-            for item in (observations or [])
-            if str(item.get("id") or "") in citations
-        }
-        if (
-            cited_tools
-            and cited_tools <= {"list_resources", "search_resources"}
-            and not _inventory_citations_have_material_details(
-                citations=citations,
-                observations=observations or [],
-                question=question,
-            )
-        ):
-            return "non_inventory_answer_cites_inventory_only"
+    # Citation allowlisting and unsupported-claim guards are enforced by
+    # _validated_adhoc_answer. Log findings are appended deterministically, and
+    # inventory-only evidence is an advisory rather than grounds to discard prose.
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -620,12 +596,38 @@ def _adhoc_answer_quality_issue(
     ]
     body = _MARKDOWN_DECORATION.sub(" ", " ".join(body_lines))
     body = re.sub(r"\s+", " ", body).strip()
-    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'./:-]*", body)
     if not body_lines or not body:
         return "heading_only_response"
-    if len(body) < 35 or len(words) < 6:
-        return "response_too_brief"
     return None
+
+
+def _adhoc_answer_advisories(
+    *, citations: list[str], question: str,
+    observations: list[dict[str, object]],
+) -> list[str]:
+    """Describe weak evidence shape without vetoing a readable provider answer."""
+
+    if not (_question_requires_object_details(question) and citations):
+        return []
+    cited_tools = {
+        str(item.get("tool") or "")
+        for item in observations
+        if str(item.get("id") or "") in citations
+    }
+    if (
+        cited_tools
+        and cited_tools <= {"list_resources", "search_resources"}
+        and not _inventory_citations_have_material_details(
+            citations=citations,
+            observations=observations,
+            question=question,
+        )
+    ):
+        return [
+            "This answer relies on inventory-level evidence; exact-object spec/status "
+            "evidence would be needed for a detailed configuration or health conclusion."
+        ]
+    return []
 
 
 def _question_requires_object_details(question: str) -> bool:
@@ -887,6 +889,22 @@ def _deterministic_resource_detail_answer(
         and item.get("tool") == "get_resource"
         and isinstance(item.get("data"), dict)
     ][:6]
+    # Follow-up turns commonly reuse an exact object collected on an earlier turn.
+    # Keep the default fallback scoped to current reads, but make prior CLF evidence
+    # available for Kafka questions so a cached target is not displaced by a newly
+    # read object from another selected cluster.
+    if "kafka" in question.casefold():
+        by_id = {str(item.get("id") or ""): item for item in observations}
+        for item in reversed(evidence):
+            data = item.get("data")
+            if (
+                item.get("tool") == "get_resource"
+                and isinstance(data, dict)
+                and str(data.get("kind") or "").casefold() == "clusterlogforwarder"
+                and item.get("id")
+            ):
+                by_id.setdefault(str(item["id"]), item)
+        observations = list(by_id.values())[:10]
     if not observations:
         return None
 
@@ -954,9 +972,34 @@ def _deterministic_resource_detail_answer(
         and "kafka" in question.casefold()
     ]
     if kafka_observations:
+        question_tokens = set(re.findall(r"[a-z0-9]+", question.casefold()))
+        ignored_cluster_tokens = {
+            "cluster", "clusters", "dev", "development", "prod", "production",
+            "test", "testing", "stage", "staging", "the",
+        }
+        cluster_match_scores = [
+            (
+                len((set(re.findall(
+                    r"[a-z0-9]+",
+                    str(item.get("cluster_name") or "").casefold(),
+                )) - ignored_cluster_tokens) & question_tokens),
+                item,
+            )
+            for item in kafka_observations
+        ]
+        highest_cluster_match = max((score for score, _ in cluster_match_scores), default=0)
+        if highest_cluster_match:
+            kafka_observations = [
+                item for score, item in cluster_match_scores if score == highest_cluster_match
+            ]
+
         cluster_sections: list[str] = []
         configured_clusters: list[str] = []
         citations: list[str] = []
+        namespace_question = bool(re.search(
+            r"(?i)\b(?:which|what|list|show)\s+namespaces?\b|\bnamespaces?\s+(?:are|is)\b",
+            question,
+        ))
         for observation in kafka_observations:
             data = observation["data"]
             metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
@@ -1040,6 +1083,83 @@ def _deterministic_resource_detail_answer(
                     for item in conditions
                 ) + ".")
             citations.append(str(observation["id"]))
+        if namespace_question:
+            namespace_sections: list[str] = []
+            namespace_citations: list[str] = []
+            for observation in kafka_observations:
+                data = observation["data"]
+                metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+                spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+                cluster = str(
+                    observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+                )[:253]
+                outputs = matching_items(spec.get("outputs"), {"kafka"})
+                output_names = {str(item.get("name")) for item in outputs if item.get("name")}
+                pipelines = [
+                    item for item in (spec.get("pipelines") or []) if isinstance(item, dict)
+                    and output_names.intersection(string_list(
+                        item.get("outputRefs") or item.get("output_refs")
+                    ))
+                ]
+                input_names = {
+                    value for pipeline in pipelines
+                    for value in string_list(pipeline.get("inputRefs") or pipeline.get("input_refs"))
+                }
+                inputs = [
+                    item for item in (spec.get("inputs") or [])
+                    if isinstance(item, dict) and str(item.get("name") or "") in input_names
+                ]
+                namespaces: list[str] = []
+
+                def collect_include_namespaces(value: object) -> None:
+                    if isinstance(value, dict):
+                        for key, child in value.items():
+                            if str(key).casefold() == "includes" and isinstance(child, list):
+                                for rule in child:
+                                    if isinstance(rule, dict) and rule.get("namespace"):
+                                        namespaces.append(str(rule["namespace"]))
+                            else:
+                                collect_include_namespaces(child)
+                    elif isinstance(value, list):
+                        for child in value:
+                            collect_include_namespaces(child)
+
+                for item in inputs:
+                    collect_include_namespaces(item)
+                namespaces = list(dict.fromkeys(namespaces))
+                namespace_sections.extend([
+                    "",
+                    f"### {cluster} · `{str(metadata.get('namespace') or 'cluster')[:253]}/"
+                    f"{str(metadata.get('name') or 'unnamed')[:253]}`",
+                    "",
+                ])
+                if namespaces:
+                    namespace_sections.extend(f"- `{namespace}`" for namespace in namespaces[:100])
+                    if len(namespaces) > 100:
+                        namespace_sections.append(
+                            f"- …and {len(namespaces) - 100} additional configured namespace rules."
+                        )
+                else:
+                    namespace_sections.append(
+                        "- No explicit namespace include rules were found on the inputs linked to Kafka."
+                    )
+                namespace_citations.append(str(observation["id"]))
+            return {
+                "answer_mode": "evidence_based",
+                "content": "\n".join([
+                    "## Namespaces configured for Kafka forwarding",
+                    *namespace_sections,
+                    "",
+                    "## Verification boundary",
+                    "",
+                    (
+                        "These are the explicit namespace include rules on CLF inputs linked to a "
+                        "Kafka output. This configuration does not prove that every namespace is "
+                        "currently producing logs or that Kafka received them."
+                    ),
+                ]),
+                "citations": namespace_citations,
+            }
         all_configured = len(configured_clusters) == len(kafka_observations)
         summary = (
             "Yes. Every inspected cluster has a Kafka output referenced by at least one CLF pipeline."
@@ -2894,10 +3014,6 @@ def create_app(
                 deterministic_log_section = _deterministic_log_findings_section(
                     evidence=evidence, activity=activity
                 )
-                required_log_citations = set(
-                    deterministic_log_section.get("required_log_citations", [])
-                    if deterministic_log_section else []
-                )
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": message_text,
@@ -2923,12 +3039,7 @@ def create_app(
                     observations=evidence,
                 )
                 answer_quality_issue = _adhoc_answer_quality_issue(
-                    answer_mode=str(validated["answer_mode"]),
                     content=str(validated["content"]),
-                    citations=[str(item) for item in validated["citations"]],
-                    required_log_citations=required_log_citations,
-                    question=message_text,
-                    observations=evidence,
                 )
                 if answer_quality_issue:
                     LOGGER.warning(
@@ -2948,11 +3059,9 @@ def create_app(
                         "code": "incomplete_final_answer",
                         "reason": answer_quality_issue,
                         "message": (
-                            "Return a complete operator-facing technical answer with substantive prose "
-                            "under each useful heading. For configuration or behavior questions, cite exact "
-                            "object reads and explain their material spec/status fields rather than returning "
-                            "an inventory. Address every supplied structured log finding and "
-                            "cite each corresponding Pod-log evidence ID. Do not return headings only."
+                            "The prior response contained headings but no readable body. Return a direct "
+                            "operator-facing answer with substantive prose or bullets beneath any useful "
+                            "headings. Do not return headings alone."
                         ),
                     }
                     try:
@@ -2969,12 +3078,7 @@ def create_app(
                             observations=evidence,
                         )
                         retry_issue = _adhoc_answer_quality_issue(
-                            answer_mode=str(retry_validated["answer_mode"]),
                             content=str(retry_validated["content"]),
-                            citations=[str(item) for item in retry_validated["citations"]],
-                            required_log_citations=required_log_citations,
-                            question=message_text,
-                            observations=evidence,
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -3050,6 +3154,14 @@ def create_app(
                         *[str(item) for item in validated["citations"]],
                         *[str(item) for item in deterministic_log_section["citations"]],
                     ]))
+                validated["limitations"] = _dedupe_limitations([
+                    *[str(item) for item in validated.get("limitations", [])],
+                    *_adhoc_answer_advisories(
+                        citations=[str(item) for item in validated["citations"]],
+                        question=message_text,
+                        observations=evidence,
+                    ),
+                ])
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",

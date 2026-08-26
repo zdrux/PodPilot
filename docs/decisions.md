@@ -13,13 +13,14 @@ structured findings repeat their most material samples.
 Decision: The API compacts provider-facing final-answer evidence independently of
 persisted evidence. Current-turn observations are prioritized; log tails, strings,
 lists, individual observations, findings, and the total encoded observation set have
-explicit ceilings. Evidence-backed replies must contain a non-heading body with a
-minimum amount of explanatory text. An incomplete response receives one correction
+explicit ceilings. Evidence-backed replies must contain a non-heading body. An answer
+with headings but no readable body receives one correction
 request containing only a bounded reason/message, never the rejected response body.
 If correction remains incomplete, recognized Route/TLS or inventory answers use the
 existing deterministic renderer; other questions receive a cited deterministic
-observation summary. Evidence-based replies must cite every current Pod-log observation that
-produced a structured finding. Regardless of model success or fallback, normal code appends a
+observation summary. Concise answers are accepted, and inventory-only support is displayed
+as an evidence limitation rather than causing otherwise readable prose to be discarded.
+Regardless of model success or fallback, normal code appends a
 bounded operator-facing log-finding section with exact Pod/container, category, severity,
 occurrence count, paths/endpoints, sample, correlated checks, and evidence citations.
 Semantically equivalent limitations are collapsed before display.
@@ -27,7 +28,8 @@ Semantically equivalent limitations are collapsed before display.
 Consequences: Operators do not receive empty heading-only answers, small providers
 receive a materially smaller final context, and complete persisted evidence remains
 available through provenance. The fallback discloses that causal interpretation is
-still unverified rather than inventing one. Structured log signals cannot disappear when a
+still unverified rather than inventing one. Readable answers are not vetoed by arbitrary
+length, inventory-shape, or exhaustive-log-citation heuristics. Structured log signals cannot disappear when a
 Route/TLS fallback replaces weak model prose, but remain explicitly labeled as correlation
 rather than proven root cause.
 

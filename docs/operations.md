@@ -594,6 +594,10 @@ This is evidence provenance, not model chain-of-thought.
 Evidence-backed and Not-confirmed states appear as short pills beside the reply
 time; hover or keyboard focus exposes their explanation. Ask UI timestamps use
 fixed `EST (-4)` presentation while database and API timestamps remain UTC.
+When a model answer remains incomplete after its correction attempt, question-focused
+deterministic rendering may reuse exact-object evidence collected earlier in the same
+conversation. Kafka namespace follow-ups honor a cluster named in the question and list
+only explicit namespace include rules from CLF inputs linked to a Kafka output.
 
 StorageClass discovery remains a deterministic convenience. Other free-form information
 requests use model planning against the live, safe API discovery catalog, which works for

@@ -15,6 +15,7 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
     _adhoc_answer_quality_issue,
+    _adhoc_answer_advisories,
     _adhoc_evidence_view,
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
@@ -508,14 +509,10 @@ def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
 
 def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -> None:
     assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
         content="### Observed objects — what the cluster is actually doing",
-        citations=["cluster-route-1"],
     ) == "heading_only_response"
     assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
-        content="No error lines appeared in the bounded application log tail.",
-        citations=["cluster-log-1"],
+        content="No errors.",
     ) is None
 
 
@@ -551,39 +548,37 @@ def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence()
     assert rejected == []
     assert bound.intents[0].namespace == "openshift-logging"
     assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
         content="The Route configuration was inspected and uses TLS passthrough.",
-        citations=["cluster-route-1"],
-        required_log_citations={"cluster-log-1"},
-    ) == "missing_material_log_citations"
+    ) is None
     assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
         content="The configured forwarder objects were found in the selected clusters.",
+    ) is None
+    assert _adhoc_answer_quality_issue(
+        content="The exact forwarder routes application logs through the configured Kafka output.",
+    ) is None
+    assert _adhoc_answer_quality_issue(
+        content="The operator objects were found and report their current names.",
+    ) is None
+    assert _adhoc_answer_quality_issue(
+        content="The following cluster operators are available: ingress and monitoring.",
+    ) is None
+
+
+def test_inventory_only_configuration_answer_gets_advisory_without_rejection() -> None:
+    observations = [{
+        "id": "cluster-clf-list",
+        "tool": "list_resources",
+        "data": {"kind": "ClusterLogForwarder", "names": ["instance"]},
+    }]
+
+    assert _adhoc_answer_advisories(
         citations=["cluster-clf-list"],
         question="How are the log forwarders configured?",
-        observations=[{"id": "cluster-clf-list", "tool": "list_resources"}],
-    ) == "non_inventory_answer_cites_inventory_only"
-    assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
-        content="The exact forwarder routes application logs through the configured Kafka output.",
-        citations=["cluster-clf-detail"],
-        question="How are the log forwarders configured?",
-        observations=[{"id": "cluster-clf-detail", "tool": "get_resource"}],
-    ) is None
-    assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
-        content="The operator objects were found and report their current names.",
-        citations=["cluster-operator-list"],
-        question="Are the cluster operators healthy?",
-        observations=[{"id": "cluster-operator-list", "tool": "list_resources"}],
-    ) == "non_inventory_answer_cites_inventory_only"
-    assert _adhoc_answer_quality_issue(
-        answer_mode="evidence_based",
-        content="The following cluster operators are available: ingress and monitoring.",
-        citations=["cluster-operator-list"],
-        question="List the available cluster operators.",
-        observations=[{"id": "cluster-operator-list", "tool": "list_resources"}],
-    ) is None
+        observations=observations,
+    ) == [
+        "This answer relies on inventory-level evidence; exact-object spec/status "
+        "evidence would be needed for a detailed configuration or health conclusion."
+    ]
 
 
 def test_deterministic_log_findings_render_missing_certificate_details() -> None:
@@ -1106,6 +1101,62 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
     assert "ValidOutput-audit-kafka=`True`" in content
     assert "status.outputConditions" not in content
     assert rendered["citations"] == ["cluster-clf-detail"]
+
+
+def test_kafka_namespace_followup_reuses_prior_evidence_and_honors_named_cluster() -> None:
+    def clf_evidence(evidence_id: str, cluster_name: str, namespaces: list[str]) -> dict:
+        return {
+            "id": evidence_id,
+            "cluster_id": cluster_name.casefold().replace(" ", "-"),
+            "cluster_name": cluster_name,
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder",
+                "metadata": {"namespace": "openshift-logging", "name": "instance"},
+                "spec": {
+                    "inputs": [{
+                        "name": "apps", "type": "application",
+                        "application": {
+                            "includes": [{"namespace": item} for item in namespaces],
+                            "excludes": [{"namespace": "excluded-namespace"}],
+                        },
+                    }],
+                    "outputs": [{
+                        "name": "logs-kafka", "type": "kafka",
+                        "kafka": {"url": "tls://kafka.example.test:9093"},
+                    }],
+                    "pipelines": [{
+                        "name": "apps-to-kafka", "inputRefs": ["apps"],
+                        "outputRefs": ["logs-kafka"],
+                    }],
+                },
+            },
+        }
+
+    rendered = _deterministic_resource_detail_answer(
+        question="Which namespaces are sending their logs through Kafka on the Central cluster?",
+        evidence=[
+            clf_evidence("central-clf", "Simplii Central DEV", ["payments", "orders"]),
+            clf_evidence("east-clf", "Simplii East DEV", ["shipping"]),
+        ],
+        # The Central read was cached from the previous turn; only East was read now.
+        activity=[{
+            "tool": "get_resource", "status": "succeeded", "evidence_ids": ["east-clf"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "Namespaces configured for Kafka forwarding" in content
+    assert "Simplii Central DEV" in content
+    assert "`payments`" in content
+    assert "`orders`" in content
+    assert "excluded-namespace" not in content
+    assert "Simplii East DEV" not in content
+    assert "`shipping`" not in content
+    assert "does not prove" in content
+    assert rendered["citations"] == ["central-clf"]
 
 
 def test_inventory_fallback_enumerates_custom_resources_without_question_classification() -> None:
@@ -3052,8 +3103,10 @@ def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
     assert rendered.status_code == 200
-    assert len(provider.adhoc_answer_calls) == 2
-    assert "Configured termination" in rendered.text
+    # A readable answer is retained even when the model omits a structured log
+    # citation; the deterministic log section still exposes and cites that signal.
+    assert len(provider.adhoc_answer_calls) == 1
+    assert "router forwards the client TLS stream" in rendered.text
     assert "passthrough" in rendered.text
     assert "Backend log findings" in rendered.text
     assert "tls or certificate" in rendered.text
