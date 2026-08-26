@@ -335,7 +335,10 @@ model- or cluster-supplied markup. Ask answer normalization preserves Markdown
 paragraph boundaries, removes inline evidence-ID markers that the citation UI
 renders separately, and promotes recognized inline labels such as `Root cause:`
 and `Remediation:` into headings only when the provider returned otherwise
-unstructured prose. Ask PodPilot initializes its bounded chat viewport at the
+unstructured prose. If a chat-completions model leaves the structured citation
+array empty but includes an exact supplied observation ID in its answer text,
+normal code recovers only that allowlisted ID as a citation and removes the
+provider-facing marker from displayed prose. Ask PodPilot initializes its bounded chat viewport at the
 newest message after navigation while retaining normal manual scrolling afterward.
 Private Ask sessions are rendered as a nested list beneath the primary Ask
 PodPilot navigation item and expose owner-authorized deletion controls. Collected

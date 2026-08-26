@@ -234,7 +234,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   persisted provenance. Citation-bearing heading-only or extremely brief answers receive
   one bounded correction, as do evidence-based answers missing current Pod-log citations. A
   second failure uses deterministic Route/TLS, inventory, or cited-observation output. Current
-  structured log findings are always composed into the reply with exact coordinates, bounded
+  chat-completions answers that misplaced an exact allowlisted evidence ID in prose now recover
+  that citation and remove the internal marker; unknown IDs remain rejected. Current structured
+  log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque

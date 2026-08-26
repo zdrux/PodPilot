@@ -870,6 +870,55 @@ def test_adhoc_answer_structures_inline_labels_and_removes_inline_citations() ->
     assert "\n\n### Remediation\n\n" in content
 
 
+def test_adhoc_answer_recovers_exact_inline_evidence_id_from_empty_citation_array() -> None:
+    evidence_id = "cluster-5f4d6f47-42fb-49f5-a3af-60db6d987c7f"
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        conclusion_status="probable",
+        answer=(
+            "**Confirmed observations** — The Route uses TLS passthrough "
+            f"(cited_evidence_ids: {evidence_id}). The backend must accept TLS."
+        ),
+        cited_evidence_ids=[],
+        limitations=[],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={evidence_id, "cluster-unrelated"},
+    )
+
+    assert validated["answer_mode"] == "evidence_based"
+    assert validated["conclusion_status"] == "probable"
+    assert validated["citations"] == [evidence_id]
+    assert "cited_evidence_ids" not in str(validated["content"])
+    assert evidence_id not in str(validated["content"])
+    assert _adhoc_answer_quality_issue(
+        content=str(validated["content"]),
+        answer_mode=str(validated["answer_mode"]),
+        has_evidence=True,
+        has_citations=True,
+    ) is None
+
+
+def test_adhoc_answer_does_not_recover_unknown_inline_evidence_id() -> None:
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        answer="The Route is healthy (evidence ID: cluster-invented).",
+        cited_evidence_ids=[],
+        limitations=[],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={"cluster-real"},
+    )
+
+    assert validated["answer_mode"] == "insufficient_evidence"
+    assert validated["citations"] == []
+    assert "did not cite collected evidence" in str(validated["content"])
+
+
 def test_tls_claim_contradicted_by_certificate_failure_is_replaced_with_observed_facts() -> None:
     answer = AdHocAnswer(
         answer_mode="insufficient_evidence",

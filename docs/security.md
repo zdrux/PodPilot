@@ -316,6 +316,10 @@ validates TLS, and records the logical Host/SNI name separately from an optional
 TCP connection override. Structured output distinguishes evidence-based,
 general-guidance, and insufficient-evidence answers. The API—not the model—validates
 citation IDs against persisted observations and withholds uncited factual claims.
+A missing structured citation may be recovered only from an exact observation ID
+present in both the provider answer text and the allowlisted evidence supplied for
+that request. Partial or invented IDs remain uncited, and the internal marker is
+removed before display.
 A deterministic contradiction guard additionally prevents a TLS-stage certificate
 failure or sidecar-only log evidence from being presented as proof that an
 application backend serves plain HTTP. The evidence drawer renders only the same

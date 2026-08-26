@@ -360,6 +360,13 @@ def _validated_adhoc_answer(
         bounded = str(evidence_id)[:128]
         if bounded in known_evidence_ids and bounded not in citations:
             citations.append(bounded)
+    # Some strict-JSON chat-completions models put an otherwise valid citation in
+    # the prose while leaving the optional array empty. Normalize only exact IDs
+    # from the allowlisted observations supplied to this answer request. Unknown,
+    # partial, or invented IDs still cannot ground a response.
+    for evidence_id in sorted(known_evidence_ids, key=len, reverse=True):
+        if evidence_id in answer.answer and evidence_id not in citations:
+            citations.append(evidence_id)
     original_mode = answer.answer_mode
     mode = original_mode
     content = _clean_adhoc_markdown(
@@ -578,6 +585,13 @@ def _clean_adhoc_markdown(
             r"\s*\[(?:" + "|".join(re.escape(item) for item in evidence_ids) + r")\]"
         )
         cleaned = inline_citations.sub("", cleaned)
+        parenthetical_citations = re.compile(
+            r"\s*\((?:cited[_ ]evidence[_ ]ids?|evidence\s+ids?)\s*:\s*`?(?:"
+            + "|".join(re.escape(item) for item in evidence_ids)
+            + r")`?\s*\)",
+            re.IGNORECASE,
+        )
+        cleaned = parenthetical_citations.sub("", cleaned)
 
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
