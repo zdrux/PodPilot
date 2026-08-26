@@ -3,9 +3,8 @@
 {% block content %}
 <header class="topbar">
   <div>
-    <p class="eyebrow">Read-only cluster assistant</p>
     <h1>Ask PodPilot</h1>
-    <p class="subtitle">Describe a symptom. PodPilot will inspect bounded cluster evidence before answering. Conversations are private to your OpenShift user.</p>
+    <p class="subtitle"><span class="subtitle-context">Read-only cluster assistant</span><span aria-hidden="true"> · </span>Describe a symptom. PodPilot will inspect bounded cluster evidence before answering. Conversations are private to your OpenShift user.</p>
   </div>
   {% if conversation %}
   <div class="topbar-actions">
@@ -14,26 +13,26 @@
   {% endif %}
 </header>
 
-<section class="notice" aria-label="Investigation boundary">
-  <span class="notice-icon" aria-hidden="true">i</span>
-  <div>
-    <strong>Investigation mode cannot change the cluster selection</strong>
-    <p>Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only.</p>
-  </div>
-</section>
-
 <div class="ask-layout">
   <section class="panel ask-panel">
     <div class="panel-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
-      {% if evidence_by_id %}
-      <button class="evidence-toggle" type="button" data-evidence-open
-        aria-haspopup="dialog" aria-controls="evidence-dialog" aria-expanded="false">
-        <span>Collected evidence</span><strong>{{ evidence_by_id | length }}</strong>
-      </button>
-      {% else %}
-      <span class="tag">Evidence first</span>
-      {% endif %}
+      <div class="panel-header-actions">
+        <span class="boundary-pill" tabindex="0"
+          data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only."
+          aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only.">
+          <span class="boundary-pill-icon" aria-hidden="true">i</span>
+          <span>Cluster selection locked</span>
+        </span>
+        {% if evidence_by_id %}
+        <button class="evidence-toggle" type="button" data-evidence-open
+          aria-haspopup="dialog" aria-controls="evidence-dialog" aria-expanded="false">
+          <span>Collected evidence</span><strong>{{ evidence_by_id | length }}</strong>
+        </button>
+        {% else %}
+        <span class="tag">Evidence first</span>
+        {% endif %}
+      </div>
     </div>
 
     {% if messages %}

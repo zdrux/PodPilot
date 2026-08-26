@@ -244,6 +244,12 @@ the prior session remains in history. All selected clusters share the twelve-rea
 budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
+An Approver can rename the automatically registered runtime cluster from **Manage →
+Clusters**. This changes its PodPilot display name on the dashboard, in new Ask evidence,
+and in future runtime-cluster operations without changing the projected service-account
+identity or Kubernetes API connection. Historical evidence keeps the cluster name recorded
+when it was collected.
+
 Ask PodPilot accepts free-form operational questions; it does not gate cluster reads on a
 catalog of recognized phrases or sentiment. The model may propose only the registered read
 tools, normal code validates every target, sensitive resources remain denied, and the

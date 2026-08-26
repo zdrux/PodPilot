@@ -26,7 +26,8 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Ask PodPilot cluster registry with Approver/Breakglass management, exact key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited
-  per-cluster insecure exception. The runtime cluster is registered automatically.
+  per-cluster insecure exception. The runtime cluster is registered automatically and its
+  persisted display name can be changed without modifying its deployment-managed identity.
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
   One shared twelve-read budget fans out across selected clusters, partial failures remain

@@ -207,6 +207,7 @@
     clusterSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const submit = clusterSettingsForm.querySelector('button[type="submit"]');
+      const priorSubmitText = submit?.textContent || "Save cluster";
       if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
       try {
         const payload = await sendSettingsRequest(
@@ -214,12 +215,13 @@
           new URLSearchParams(new FormData(clusterSettingsForm)),
         );
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
-          tone: "success", message: "Cluster connection saved. Test it before using it for Ask PodPilot.",
+          tone: "success",
+          message: payload.detail || clusterSettingsForm.dataset.successMessage || "Cluster connection saved. Test it before using it for Ask PodPilot.",
         }));
         window.location.assign(`/settings/clusters?edit=${encodeURIComponent(payload.cluster_id)}`);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
-        if (submit) { submit.disabled = false; submit.textContent = "Save cluster"; }
+        if (submit) { submit.disabled = false; submit.textContent = priorSubmitText; }
       }
     });
   }

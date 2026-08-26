@@ -26,6 +26,7 @@ from podpilot_api.main import (
     _deterministic_route_tls_answer,
     _format_est_time,
     _validated_adhoc_answer,
+    SYSTEM_CLUSTER_ID,
     create_app,
 )
 from podpilot_api.model_provider import (
@@ -2162,6 +2163,9 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         assert page.status_code == 200
         assert "Investigation mode cannot change the cluster" in page.text
+        assert '<section class="notice"' not in page.text
+        assert "Read-only cluster assistant</span><span" in page.text
+        assert 'class="boundary-pill"' in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         created = client.post(
             "/api/v1/adhoc-conversations",
@@ -2173,6 +2177,7 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "selector does not match" in rendered.text
         assert "Evidence used in this answer" in rendered.text
+        assert rendered.text.index('class="boundary-pill"') < rendered.text.index("data-evidence-open")
         assert "Inspected 1 cluster target" not in rendered.text
         assert "cluster-pod-1" in rendered.text
 
@@ -2237,6 +2242,77 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert cluster.tls_verify is False
         assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
         assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"
+    engine.dispose()
+
+
+def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+    )
+    with TestClient(app) as client:
+        page = client.get(
+            f"/settings/clusters?edit={SYSTEM_CLUSTER_ID}",
+            headers={"x-forwarded-user": "ada"},
+        )
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert page.status_code == 200 and csrf is not None
+        assert 'data-save-url="/api/v1/clusters/' in page.text
+        assert 'name="name"' in page.text
+        assert "projected service-account connection remains managed by the deployment" in page.text
+
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        renamed = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/rename",
+            headers=headers,
+            data={"name": "toronto-sno-lab"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json() == {
+            "status": "saved",
+            "cluster_id": SYSTEM_CLUSTER_ID,
+            "name": "toronto-sno-lab",
+            "detail": "Runtime cluster renamed.",
+        }
+
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        ask = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert "test · toronto-sno-lab" in dashboard.text
+        assert "toronto-sno-lab" in ask.text
+
+        denied = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/rename",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"name": "not-authorized"},
+        )
+        assert denied.status_code == 403
+
+    restarted_app, _ = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+    )
+    with TestClient(restarted_app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
+        assert "test · toronto-sno-lab" in dashboard.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
+        assert cluster is not None
+        assert cluster.name == "toronto-sno-lab"
+        assert cluster.api_url == "in-cluster://service-account"
+        assert cluster.credential_key is None
+        event = db_session.scalar(
+            select(AuditEvent).where(AuditEvent.action == "cluster.rename")
+        )
+        assert event is not None
+        assert json.loads(event.details_json) == {
+            "cluster_id": SYSTEM_CLUSTER_ID,
+            "name": "toronto-sno-lab",
+            "previous_name": "test-cluster",
+        }
     engine.dispose()
 
 

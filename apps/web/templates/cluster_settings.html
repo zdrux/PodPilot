@@ -15,7 +15,13 @@
   <section class="panel settings-panel">
     <div class="panel-header"><div><p class="eyebrow">{% if selected %}Connection{% else %}New connection{% endif %}</p><h2>{% if selected %}{{ selected.name }}{% else %}Add cluster{% endif %}</h2></div>{% if selected %}<span class="tag">{{ selected.status }}</span>{% endif %}</div>
     {% if selected and selected.is_system %}
-      <div class="side-empty"><strong>Runtime cluster</strong><p>This connection uses PodPilot's projected service-account identity and is managed by the deployment.</p></div>
+      <form class="settings-form" id="cluster-settings-form"
+        data-save-url="/api/v1/clusters/{{ selected.id }}/rename"
+        data-success-message="Runtime cluster renamed.">
+        <label>Display name<input name="name" required maxlength="253" value="{{ selected.name }}" placeholder="prod-openshift-east"></label>
+        <p class="muted-copy">This name identifies the cluster where PodPilot is running across the dashboard, Ask PodPilot, and future evidence. The projected service-account connection remains managed by the deployment.</p>
+        <div class="form-actions"><button class="button primary" type="submit">Save name</button></div>
+      </form>
     {% else %}
     <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters">
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">

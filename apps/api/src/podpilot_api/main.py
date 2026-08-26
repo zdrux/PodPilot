@@ -3436,6 +3436,52 @@ def create_app(
             db_session.commit()
         return JSONResponse({"status": "saved", "cluster_id": cluster_id})
 
+    @app.post("/api/v1/clusters/{cluster_id}/rename")
+    async def rename_runtime_cluster(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role < Role.APPROVER:
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        form = await _urlencoded(request)
+        name = redact_text(form.get("name", "").strip())[:253]
+        if not name:
+            raise HTTPException(status_code=422, detail="Cluster name is required.")
+        now = datetime.now(timezone.utc)
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if not cluster.is_system:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Only the runtime system cluster can be renamed through this endpoint.",
+                )
+            duplicate = db_session.scalar(select(Cluster).where(Cluster.name == name))
+            if duplicate is not None and duplicate.id != cluster.id:
+                raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
+            previous_name = cluster.name
+            cluster.name = name
+            cluster.updated_by = user.username
+            cluster.updated_at = now
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="cluster.rename",
+                outcome="saved",
+                details_json=json.dumps({
+                    "cluster_id": cluster.id,
+                    "previous_name": previous_name,
+                    "name": name,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({
+            "status": "saved",
+            "cluster_id": cluster_id,
+            "name": name,
+            "detail": "Runtime cluster renamed.",
+        })
+
     @app.post("/api/v1/clusters/{cluster_id}/test")
     async def test_cluster_connection(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
@@ -4147,13 +4193,17 @@ def create_app(
                     RemediationAction.expires_at > datetime.now(timezone.utc),
                 )
             ) or 0
+            runtime_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
+            runtime_cluster_name = (
+                runtime_cluster.name if runtime_cluster is not None else app_settings.cluster_name
+            )
 
         response = templates.TemplateResponse(
             request=request,
             name="dashboard.html",
             context={
                 "user": user,
-                "cluster_name": app_settings.cluster_name,
+                "cluster_name": runtime_cluster_name,
                 "environment": app_settings.environment,
                 "poc_mode": app_settings.poc_mode,
                 "now": datetime.now(timezone.utc),
@@ -4257,6 +4307,10 @@ def create_app(
             profile = _active_profile(db_session)
             profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
             credential_key = profile.credential_key if profile_snapshot else None
+            runtime_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
+            runtime_cluster_name = (
+                runtime_cluster.name if runtime_cluster is not None else app_settings.cluster_name
+            )
         if profile_snapshot:
             try:
                 api_key = await run_in_threadpool(credentials.get, credential_key)
@@ -4281,7 +4335,7 @@ def create_app(
             propose_actions(
                 investigation_id=investigation_id,
                 alert_name=alert.name,
-                cluster=app_settings.cluster_name,
+                cluster=runtime_cluster_name,
                 workload=workload,
             )
             if workload
