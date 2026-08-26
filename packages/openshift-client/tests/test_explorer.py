@@ -63,6 +63,21 @@ class FakePagedResource:
         )
 
 
+class FakeLargePagedResource:
+    def __init__(self, total: int):
+        self.total = total
+        self.calls = []
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        start = int(str(kwargs.get("_continue") or "0"))
+        size = int(kwargs["limit"])
+        end = min(start + size, self.total)
+        items = [FakeObject(name=f"item-{index}") for index in range(start, end)]
+        token = str(end) if end < self.total else ""
+        return SimpleNamespace(items=items, metadata=SimpleNamespace(continue_=token))
+
+
 class FakeRouteSearchResource:
     def __init__(self):
         self.calls = []
@@ -234,6 +249,22 @@ def test_bounded_list_follows_continue_tokens_until_complete():
     ]
 
 
+def test_inventory_can_collect_six_hundred_objects_across_pages() -> None:
+    resource = FakeLargePagedResource(total=600)
+    target, _, _ = explorer(resource)
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", api_version="v1", kind="ConfigMap", limit=600,
+    ))
+
+    observation = result.observations[0]
+    assert observation.data["count"] == 600
+    assert len(observation.data["names"]) == 600
+    assert observation.data["objectListComplete"] is True
+    assert len(resource.calls) == 6
+    assert all(call["limit"] == 100 for call in resource.calls)
+
+
 def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
     resource = FakeRouteSearchResource()
     target, _, _ = explorer(resource)
@@ -256,6 +287,55 @@ def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
     assert observation.data["items"][0]["metadata"]["namespace"] == "tenant"
     assert observation.data["items"][0]["spec"]["tls"]["termination"] == "passthrough"
     assert observation.data["searchComplete"] is True
+
+
+def test_cluster_wide_service_search_matches_spec_type() -> None:
+    services = [
+        FakeObject(name="internal", namespace="payments", payload={
+            "apiVersion": "v1", "kind": "Service",
+            "metadata": {"name": "internal", "namespace": "payments"},
+            "spec": {"type": "ClusterIP", "ports": [{"port": 8080}]},
+            "status": {},
+        }),
+        FakeObject(name="public", namespace="operators", payload={
+            "apiVersion": "v1", "kind": "Service",
+            "metadata": {"name": "public", "namespace": "operators"},
+            "spec": {
+                "type": "NodePort",
+                "ports": [{"port": 443, "nodePort": 30443}],
+            },
+            "status": {},
+        }),
+    ]
+    target, resource, _ = explorer(FakeResource(services))
+
+    result = target.execute(ReadIntent(
+        tool="search_resources", api_version="v1", kind="Service",
+        match_field="spec.type", match_value="NodePort", limit=20,
+    ))
+
+    observation = result.observations[0]
+    assert observation.data["scope"] == "cluster"
+    assert observation.data["names"] == ["public"]
+    assert observation.data["items"][0]["spec"]["type"] == "NodePort"
+    assert resource.calls == [{"limit": 100}]
+
+
+def test_resource_search_traverses_lists_in_field_paths() -> None:
+    service = FakeObject(name="public", namespace="operators", payload={
+        "apiVersion": "v1", "kind": "Service",
+        "metadata": {"name": "public", "namespace": "operators"},
+        "spec": {"ports": [{"port": 443, "nodePort": 30443}]},
+        "status": {},
+    })
+    target, _, _ = explorer(FakeResource([service]))
+
+    result = target.execute(ReadIntent(
+        tool="search_resources", api_version="v1", kind="Service",
+        match_field="spec.ports.nodePort", match_value="30443", limit=20,
+    ))
+
+    assert result.observations[0].data["names"] == ["public"]
 
 
 def test_pod_list_exposes_compact_exact_log_candidates():

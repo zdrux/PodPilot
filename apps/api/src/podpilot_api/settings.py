@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     adhoc_max_reads_per_turn: int = Field(default=12, ge=1, le=12)
     adhoc_http_probe_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     adhoc_http_probe_max_bytes: int = Field(default=16_384, ge=1024, le=65_536)
-    adhoc_inventory_max_objects: int = Field(default=250, ge=50, le=500)
+    adhoc_inventory_max_objects: int = Field(default=500, ge=50, le=1000)
     adhoc_search_max_scan_objects: int = Field(default=2000, ge=250, le=5000)
     adhoc_metrics_max_range_seconds: int = Field(default=2_592_000, ge=3600, le=7_776_000)
     adhoc_metrics_max_points_per_series: int = Field(default=300, ge=50, le=1000)

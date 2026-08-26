@@ -532,8 +532,8 @@ candidates after the repair also fails. Rejected proposals do not count against
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`. A later `OpenShift RBAC denied ... pods/log`
 message means the exact request reached the ServiceAccount authorization boundary.
 
-The default inventory ceiling is 250 objects per LIST and may be set from 50 to
-500 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests, edit
+The default inventory ceiling is 500 objects per LIST and may be set from 50 to
+1,000 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests, edit
 `data.adhoc_inventory_max_objects` in `podpilot-runtime`; the Deployment maps it
 into both application and migration containers. Reapply the workload and restart
 the Deployment after changing the ConfigMap. Explicit list requests render a
@@ -544,10 +544,10 @@ rather than removing the bound.
 Field searches use a separate scan ceiling so a small result can be found beyond the
 ordinary inventory window. `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS` defaults to 2000 and
 accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
-`podpilot-runtime`. Searches support exact/contains matching on `metadata.name`,
-`metadata.namespace`, `spec.host`, and `spec.to.name`. A Route URL in the question is
-compiled to an exact hostname search automatically. Search evidence reports both match
-count and scanned count, plus whether a ceiling stopped the scan.
+`podpilot-runtime`. Searches support exact/contains matching on validated dot-separated
+object field paths, including paths through nested objects and lists. A Route URL in the
+question is compiled to an exact hostname search automatically. Search evidence reports
+both match count and scanned count, plus whether a ceiling stopped the scan.
 OpenShift ingress and browser Route lookups are qualified as
 `routes.route.openshift.io`. `routes.serving.knative.dev` is reserved for questions that
 explicitly concern Knative or Serving. If logs report an ambiguous plural, inspect the

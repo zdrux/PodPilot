@@ -56,7 +56,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
-    assert runtime["data"]["adhoc_inventory_max_objects"] == "250"
+    assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
     assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
     assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
     assert runtime["data"]["adhoc_metrics_max_points_per_series"] == "300"

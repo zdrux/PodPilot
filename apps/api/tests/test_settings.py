@@ -45,11 +45,13 @@ def test_all_elevated_role_groups_may_be_empty() -> None:
 
 
 def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
-    monkeypatch.setenv("PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS", "400")
+    monkeypatch.setenv("PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS", "1000")
 
     settings = Settings(_env_file=None)
 
-    assert settings.adhoc_inventory_max_objects == 400
+    assert settings.adhoc_inventory_max_objects == 1000
+    with pytest.raises(ValidationError):
+        Settings(adhoc_inventory_max_objects=1001)
 
 
 def test_resource_search_scan_ceiling_is_configurable(monkeypatch) -> None:

@@ -208,6 +208,16 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "tls": {"termination": (spec.get("tls") or {}).get("termination")},
         }
         projected["status"] = {"ingress": status.get("ingress") or []}
+    elif kind == "Service":
+        projected["spec"] = {
+            key: spec.get(key) for key in (
+                "type", "selector", "clusterIP", "externalName", "ports"
+            ) if key in spec
+        }
+        projected["status"] = {
+            "conditions": status.get("conditions") or [],
+            "loadBalancer": status.get("loadBalancer") or status.get("load_balancer") or {},
+        }
     elif kind == "ClusterOperator":
         projected["status"] = {
             "versions": status.get("versions") or [],
@@ -250,22 +260,44 @@ def _continue_token(response: object) -> str | None:
     return str(getattr(metadata, "continue_", None) or getattr(metadata, "continue", None) or "") or None
 
 
-def _search_value(raw: dict[str, Any], field: str) -> str:
-    value: object = raw
+def _search_values(raw: dict[str, Any], field: str) -> tuple[str, ...]:
+    """Resolve a validated object path, traversing lists at any level."""
+
+    values: list[object] = [raw]
     for segment in field.split("."):
-        if not isinstance(value, dict):
-            return ""
-        value = value.get(segment)
-    return "" if value is None else str(value)
+        next_values: list[object] = []
+        for value in values:
+            candidates = value if isinstance(value, list) else [value]
+            for candidate in candidates:
+                if isinstance(candidate, dict) and segment in candidate:
+                    next_values.append(candidate[segment])
+        values = next_values
+        if not values:
+            return ()
+    flattened: list[str] = []
+    for value in values:
+        candidates = value if isinstance(value, list) else [value]
+        flattened.extend(str(candidate) for candidate in candidates if candidate is not None)
+    return tuple(flattened)
 
 
 def _matches_search(raw: dict[str, Any], intent: ReadIntent) -> bool:
     assert intent.match_field and intent.match_value
-    observed = _search_value(raw, intent.match_field)
     expected = intent.match_value
-    if intent.match_field == "spec.host" or intent.match_operator == "contains":
-        observed, expected = observed.casefold(), expected.casefold()
-    return expected in observed if intent.match_operator == "contains" else observed == expected
+    case_insensitive = intent.match_field == "spec.host" or intent.match_operator == "contains"
+    if case_insensitive:
+        expected = expected.casefold()
+    for observed in _search_values(raw, intent.match_field):
+        if case_insensitive:
+            observed = observed.casefold()
+        matches = (
+            expected in observed
+            if intent.match_operator == "contains"
+            else observed == expected
+        )
+        if matches:
+            return True
+    return False
 
 
 class KubernetesReadOnlyExplorer:

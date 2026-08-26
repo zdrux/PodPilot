@@ -23,6 +23,9 @@ _METRIC_IDENTIFIER = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 _VALID_API_VERSION = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9.-]*(?:/[A-Za-z0-9][A-Za-z0-9.-]*)?$"
 )
+_SEARCH_FIELD_PATH = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$"
+)
 
 
 def looks_like_deferred_target(value: str | None) -> bool:
@@ -43,9 +46,7 @@ class ReadIntent(BaseModel):
     namespace: str | None = Field(default=None, max_length=253)
     name: str | None = Field(default=None, max_length=253)
     label_selector: str | None = Field(default=None, max_length=512)
-    match_field: Literal[
-        "metadata.name", "metadata.namespace", "spec.host", "spec.to.name"
-    ] | None = None
+    match_field: str | None = Field(default=None, max_length=512)
     match_value: str | None = Field(default=None, max_length=512)
     match_operator: Literal["exact", "contains"] = "exact"
     container: str | None = Field(default=None, max_length=253)
@@ -67,7 +68,7 @@ class ReadIntent(BaseModel):
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
-    limit: int = Field(default=20, ge=1, le=500)
+    limit: int = Field(default=20, ge=1, le=1000)
 
     @field_validator(
         "resource", "api_version", "kind", "namespace", "name", "container", "candidate_id"
@@ -76,6 +77,13 @@ class ReadIntent(BaseModel):
     def require_exact_target(cls, value: str | None) -> str | None:
         if looks_like_deferred_target(value):
             raise ValueError("must be an exact target, not a deferred placeholder")
+        return value
+
+    @field_validator("match_field")
+    @classmethod
+    def require_search_field_path(cls, value: str | None) -> str | None:
+        if value is not None and not _SEARCH_FIELD_PATH.fullmatch(value):
+            raise ValueError("must be a dot-separated Kubernetes object field path")
         return value
 
     @model_validator(mode="after")
@@ -413,7 +421,7 @@ _URL_QUERY = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 def plan_known_read(
     question: str,
     *,
-    inventory_limit: int = 250,
+    inventory_limit: int = 500,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
 ) -> tuple[ReadPlan, bool] | None:
@@ -506,7 +514,7 @@ def plan_catalog_read(
     question: str,
     resource_catalog: list[dict[str, object]],
     *,
-    inventory_limit: int = 250,
+    inventory_limit: int = 500,
 ) -> tuple[ReadPlan, bool] | None:
     """Compile a generic inventory/health fallback against the live safe catalog."""
 

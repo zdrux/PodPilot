@@ -1255,7 +1255,7 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
     assert len(explorer.calls) == 1
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"
-    assert explorer.calls[0].limit == 250
+    assert explorer.calls[0].limit == 500
 
 
 def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(

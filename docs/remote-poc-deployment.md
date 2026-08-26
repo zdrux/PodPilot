@@ -110,14 +110,14 @@ Group resource names for Investigator, Approver, and Breakglass. Multiple
 synchronized LDAP groups can map to one elevated role; use `[]` for an unused
 role. A group may appear in only one role array. Viewer has no group mapping:
 every identity authenticated by OpenShift receives that role automatically.
-The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"250"` for
+The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for
 returned LIST evidence and `adhoc_search_max_scan_objects` to `"2000"` for bounded
 projected-field searches that return only matches.
 Metric trends default to a 30-day range and 300 points per series through
 `adhoc_metrics_max_range_seconds: "2592000"` and
 `adhoc_metrics_max_points_per_series: "300"`.
 Optionally add that key to this overlay patch with a value from `"50"` through
-`"500"` when the target routinely has larger namespace inventories.
+`"1000"` when the target routinely has larger namespace inventories.
 
 Group names are case-sensitive. Later changes to the role-group arrays require an
 application rollout because ConfigMap-backed environment variables are read at

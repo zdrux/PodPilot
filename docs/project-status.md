@@ -119,8 +119,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   session closes. A configured but non-ready profile now produces a persisted,
   attributed setup message with its real provider status instead of raising a
   detached-instance error during chat creation.
-- Explicit inventory LISTs now default to 250 objects and accept a deployment
-  setting up to 500. Kubernetes pagination is no longer capped at the old five
+- Explicit inventory LISTs now default to 500 objects and accept a deployment
+  setting up to 1,000. Kubernetes pagination is no longer capped at the old five
   50-object pages. The API renders every collected name into a cited Markdown
   table for list requests and suppresses redundant model-authored completeness
   caveats; the model is not responsible for reproducing the actual inventory.

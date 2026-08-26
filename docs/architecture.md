@@ -202,16 +202,18 @@ Collected object names are retained separately from detailed projections.
 `objectListComplete` reports whether the Kubernetes object ceiling was reached,
 while `detailsTruncated` reports only status-detail compaction; the latter must
 not be presented as proof that more objects exist.
-The inventory object ceiling is deployment-configurable (250 by default, 500
+The inventory object ceiling is deployment-configurable (500 by default, 1,000
 maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
 cannot omit the requested resource list.
 
 `search_resources` is distinct from inventory. It follows continue tokens up to a
-separate scan ceiling (2,000 by default, 5,000 maximum), compares only approved projected
-fields (`metadata.name`, `metadata.namespace`, `spec.host`, and `spec.to.name`), and returns
-only bounded compact matches. Route questions containing a URL compile directly to an
-exact `spec.host` search, allowing a later round to GET the discovered namespace/name.
+separate scan ceiling (2,000 by default, 5,000 maximum), compares a model-selected,
+validated dot-separated object field path, and returns only bounded compact matches.
+Paths may traverse nested objects and lists, allowing searches such as `spec.type` and
+`status.conditions.type`; malformed path expressions are rejected. Route questions
+containing a URL compile directly to an exact `spec.host` search, allowing a later round
+to GET the discovered namespace/name.
 The deterministic search uses the qualified `routes.route.openshift.io` resource. More
 generally, discovery resolves an unqualified plural with supplied `apiVersion` and `Kind`
 only when both agree with one advertised resource; mismatches fail closed. Preflight performs

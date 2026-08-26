@@ -120,10 +120,10 @@ pagination, compact projections, payload truncation, and installed-CRD reads.
 Tests must distinguish object-ceiling truncation from detail compaction, retain
 all collected names, suppress provider-facing observation paths in prose, and
 surface HTTP 403 limitations with ServiceAccount, verb, resource, and scope.
-Inventory gates also verify the configurable 50–500 ceiling, the 250-object
+Inventory gates also verify the configurable 50–1,000 ceiling, the 500-object
 deployment default, pagination above 50, and server-rendered cited tables that do
 not depend on model formatting.
-Resource-search gates must find projected matches beyond the 250-object inventory
+Resource-search gates must find projected matches beyond the ordinary inventory
 window, enforce the independent 250–5000 scan ceiling, stop at the match-result ceiling,
 and distinguish a complete search from a scan-ceiling limitation. Route URL planning
 must use exact `spec.host` matching and preserve discovered namespace/name coordinates.

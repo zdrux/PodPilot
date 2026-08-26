@@ -98,7 +98,7 @@ def test_storageclass_inventory_is_deterministic_and_terminal() -> None:
         resource="storageclasses",
         api_version="storage.k8s.io/v1",
         kind="StorageClass",
-        limit=250,
+        limit=500,
     )
 
 
@@ -112,7 +112,7 @@ def test_namespace_pod_inventory_is_deterministic_and_terminal() -> None:
     assert plan.intents[0].kind == "Pod"
     assert plan.intents[0].resource == "pods"
     assert plan.intents[0].namespace == "ai-ops"
-    assert plan.intents[0].limit == 250
+    assert plan.intents[0].limit == 500
 
 
 def test_failed_job_alert_seeds_exact_job_read_then_allows_followup() -> None:
@@ -146,7 +146,7 @@ def test_live_catalog_compiles_common_cluster_scoped_inventory_without_model() -
     assert planned is not None
     plan, terminal = planned
     assert plan.intents == [ReadIntent(
-        tool="list_resources", resource="clusteroperators", limit=250,
+        tool="list_resources", resource="clusteroperators", limit=500,
     )]
     assert terminal is True
 
@@ -243,15 +243,20 @@ def test_https_probe_may_explicitly_disable_tls_verification() -> None:
         ReadIntent(tool="http_probe", url="http://mesh-control.example.test/", tls_verify=False)
 
 
-def test_resource_search_requires_a_supported_field_and_value() -> None:
+def test_resource_search_accepts_a_valid_field_path_and_requires_a_value() -> None:
     intent = ReadIntent(
-        tool="search_resources", resource="routes", match_field="spec.host",
-        match_value="maas.apps.example.test", limit=5,
+        tool="search_resources", resource="services", match_field="spec.type",
+        match_value="NodePort", limit=5,
     )
 
     assert intent.match_operator == "exact"
     with pytest.raises(ValidationError, match="requires match_field and match_value"):
         ReadIntent(tool="search_resources", resource="routes")
+    with pytest.raises(ValidationError, match="dot-separated Kubernetes object field path"):
+        ReadIntent(
+            tool="search_resources", resource="services", match_field="spec..type",
+            match_value="NodePort",
+        )
 
 
 def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:

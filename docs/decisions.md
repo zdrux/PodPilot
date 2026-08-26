@@ -37,7 +37,7 @@ common example. Private, self-signed, and component-managed certificates also ma
 verified network probe unsuitable for some reachability and passthrough-SNI tests.
 
 Decision: Add `search_resources`, which follows Kubernetes pagination while comparing
-only approved projected fields and returns at most the requested matches. The scan has
+a validated dot-separated object field path and returns at most the requested matches. The scan has
 a separate 2,000-object default and 5,000-object hard configuration maximum. Compile an
 operator-supplied Route URL deterministically into an exact `spec.host` search. Add an
 explicit `tls_verify=false` option to unauthenticated HTTPS probes. Verification remains
@@ -48,6 +48,8 @@ or other credential-bearing transport.
 Consequences: Route-host and backend-Service lookup no longer depends on which 250 objects
 fit ordinary inventory evidence. Insecure probes can demonstrate reachability and SNI
 behavior with internally issued certificates, but cannot establish server identity.
+The planner may select fields below metadata, spec, or status as needed; normal code rejects
+malformed paths and retains the existing resource deny policy and scan/result ceilings.
 When multiple API groups expose the same plural, supplied `apiVersion`/`Kind` coordinates
 disambiguate and must agree with discovery. OpenShift ingress/browser Route questions use
 `routes.route.openshift.io`; Knative Routes are selected only for explicit Knative/Serving
