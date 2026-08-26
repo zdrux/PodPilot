@@ -806,6 +806,9 @@ def _deterministic_inventory_answer(
         re.search(r"\b(?:list|inventory)\b", question, re.IGNORECASE)
         or re.search(r"\bshow\s+me\b", question, re.IGNORECASE)
         or re.search(r"\bwhich\b.+\bclusters?\b", question, re.IGNORECASE)
+        or re.search(r"\b(?:do|does)\s+.+\bhave\s+any\b", question, re.IGNORECASE)
+        or re.search(r"\bare\s+there\s+any\b", question, re.IGNORECASE)
+        or re.search(r"\bhow\s+many\b", question, re.IGNORECASE)
     ):
         return None
     current_ids = {
@@ -823,44 +826,82 @@ def _deterministic_inventory_answer(
     ]
     if not observations:
         return None
+
+    def inventory_rows(data: dict[str, object]) -> list[tuple[str, str, str]]:
+        names = [str(name)[:253] for name in data.get("names", [])]
+        refs = data.get("objects") if isinstance(data.get("objects"), list) else []
+        items = data.get("items") if isinstance(data.get("items"), list) else []
+        scope = str(data.get("scope") or "cluster")
+        rows: list[tuple[str, str, str]] = []
+        for index, name in enumerate(names):
+            ref = refs[index] if index < len(refs) and isinstance(refs[index], dict) else {}
+            item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            namespace = str(
+                ref.get("namespace")
+                or metadata.get("namespace")
+                or (scope if scope != "cluster" else "—")
+            )
+            status = item.get("status") if isinstance(item.get("status"), dict) else {}
+            conditions = (
+                status.get("conditions")
+                if isinstance(status.get("conditions"), list) else []
+            )
+            ready = "—"
+            for condition in conditions:
+                if (
+                    isinstance(condition, dict)
+                    and str(condition.get("type") or "").casefold() == "ready"
+                ):
+                    ready = str(condition.get("status") or "Unknown")[:32]
+                    break
+            rows.append((namespace[:253], name, ready))
+        return rows
+
     if len({str(item.get("cluster_id") or "") for item in observations}) > 1:
         rows: list[str] = []
         citations: list[str] = []
         for observation in reversed(observations):
             data = observation["data"]
             cluster_name = str(observation.get("cluster_name") or observation.get("cluster_id") or "cluster")
-            names = [str(name)[:253] for name in data.get("names", [])]
+            objects = inventory_rows(data)
             citations.append(str(observation["id"]))
-            if names:
-                rows.extend(f"| `{cluster_name}` | `{name}` |" for name in names)
+            if objects:
+                rows.extend(
+                    f"| `{cluster_name}` | `{namespace}` | `{name}` | {ready} |"
+                    for namespace, name, ready in objects
+                )
             else:
-                rows.append(f"| `{cluster_name}` | _No matching resources_ |")
+                rows.append(f"| `{cluster_name}` | — | _No matching resources_ | — |")
         return {
             "answer_mode": "evidence_based",
             "content": (
                 "## Multi-cluster inventory\n\n"
-                "| Cluster | Matching resource |\n|---|---|\n" + "\n".join(rows) +
+                "| Cluster | Namespace | Matching resource | Ready |\n"
+                "|---|---|---|---|\n" + "\n".join(rows) +
                 "\n\nEach row comes from an independently bounded read against the named cluster."
             ),
             "citations": citations,
         }
     observation = observations[0]
     data = observation["data"]
-    names = [str(name)[:253] for name in data.get("names", [])]
+    objects = inventory_rows(data)
     kind = str(data.get("kind") or "Resource")
     scope = str(data.get("scope") or "cluster")
     complete = bool(data.get("objectListComplete", not data.get("truncated")))
-    heading = kind if kind.endswith("s") else f"{kind}s"
     lines = [
-        f"## {heading}",
+        f"## {kind} inventory",
         "",
         f"**Scope:** `{scope}`  ",
-        f"**Collected:** {len(names)}",
+        f"**Collected:** {len(objects)}",
         "",
     ]
-    if names:
-        lines.extend(["| # | Name |", "|---:|---|"])
-        lines.extend(f"| {index} | `{name}` |" for index, name in enumerate(names, 1))
+    if objects:
+        lines.extend(["| # | Namespace | Name | Ready |", "|---:|---|---|---|"])
+        lines.extend(
+            f"| {index} | `{namespace}` | `{name}` | {ready} |"
+            for index, (namespace, name, ready) in enumerate(objects, 1)
+        )
     else:
         lines.append("No matching resources were returned.")
     lines.extend(["", (

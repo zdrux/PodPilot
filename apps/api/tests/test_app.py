@@ -953,10 +953,48 @@ def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None
     )
 
     assert rendered is not None
-    assert "| 1 | `collector-a` |" in str(rendered["content"])
-    assert "| 2 | `collector-b` |" in str(rendered["content"])
+    assert "| 1 | `openshift-logging` | `collector-a` | — |" in str(rendered["content"])
+    assert "| 2 | `openshift-logging` | `collector-b` | — |" in str(rendered["content"])
     assert "complete for this snapshot" in str(rendered["content"])
     assert rendered["citations"] == ["cluster-pods-1"]
+
+
+def test_existence_question_enumerates_custom_resources_with_namespace_and_readiness() -> None:
+    rendered = _deterministic_inventory_answer(
+        question="Do we have any Kafka clusters running here?",
+        evidence=[{
+            "id": "cluster-kafka-1",
+            "tool": "list_resources",
+            "data": {
+                "kind": "Kafka",
+                "scope": "cluster",
+                "names": ["payments-kafka", "observability-kafka"],
+                "items": [{
+                    "metadata": {"name": "payments-kafka", "namespace": "payments"},
+                    "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+                }, {
+                    "metadata": {
+                        "name": "observability-kafka", "namespace": "kafka-observability",
+                    },
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                }],
+                "objectListComplete": True,
+            },
+        }],
+        activity=[{
+            "tool": "list_resources",
+            "status": "succeeded",
+            "evidence_ids": ["cluster-kafka-1"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "## Kafka inventory" in content
+    assert "| `payments` | `payments-kafka` | False |" in content
+    assert "| `kafka-observability` | `observability-kafka` | True |" in content
+    assert "complete for this snapshot" in content
+    assert rendered["citations"] == ["cluster-kafka-1"]
 
 
 class FakeAlertSource:

@@ -635,10 +635,17 @@ class KubernetesReadOnlyExplorer:
             log_candidate_budget = max(512, min(32_768, self._max_payload_bytes // 3))
             bounded_items = items[: intent.limit]
             object_names: list[str] = []
+            object_refs: list[dict[str, str | None]] = []
             for obj in bounded_items:
                 raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
                 metadata = raw.get("metadata") or {}
-                object_names.append(str(metadata.get("name") or "unnamed")[:253])
+                object_name = str(metadata.get("name") or "unnamed")[:253]
+                object_namespace = metadata.get("namespace") or metadata.get("namespace_")
+                object_names.append(object_name)
+                object_refs.append({
+                    "name": object_name,
+                    "namespace": str(object_namespace)[:253] if object_namespace else None,
+                })
                 if kind == "Pod":
                     log_candidate = _pod_log_candidate_projection(raw, namespace)
                     candidate_bytes = len(json.dumps(
@@ -710,6 +717,7 @@ class KubernetesReadOnlyExplorer:
                         intent.match_operator if intent.tool == "search_resources" else None
                     ),
                     "names": object_names,
+                    "objects": object_refs,
                     "items": projections,
                     "logCandidates": log_candidates,
                     "logCandidatesTruncated": log_candidates_truncated,

@@ -373,6 +373,10 @@ def test_inventory_can_collect_six_hundred_objects_across_pages() -> None:
     observation = result.observations[0]
     assert observation.data["count"] == 600
     assert len(observation.data["names"]) == 600
+    assert len(observation.data["objects"]) == 600
+    assert observation.data["objects"][0] == {
+        "name": "item-0", "namespace": "payments",
+    }
     assert observation.data["objectListComplete"] is True
     assert len(resource.calls) == 6
     assert all(call["limit"] == 100 for call in resource.calls)

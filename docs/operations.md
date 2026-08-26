@@ -244,6 +244,13 @@ the prior session remains in history. All selected clusters share the twelve-rea
 budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
+Explicit list, inventory, count, and existence questions use a deterministic table from
+validated `list_resources` evidence even when the model returns an incomplete final answer.
+For namespaced resources, including operator-managed custom resources such as Strimzi
+`Kafka`, the table preserves cluster, namespace, resource name, observed `Ready` condition,
+and whether the bounded list was complete. A cluster-scoped read can therefore return more
+objects than an `oc get` issued after selecting one namespace.
+
 Investigators can open `/memory` and test scoped lexical retrieval for one cluster.
 Approvers can
 create cluster facts, runbooks, approved incident summaries, and product
