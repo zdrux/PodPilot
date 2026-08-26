@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+import urllib3
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
+from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
@@ -436,6 +438,11 @@ class KubernetesReadOnlyExplorer:
         configuration.api_key_prefix = {"BearerToken": "Bearer"}
         configuration.verify_ssl = tls_verify
         configuration.assert_hostname = tls_verify
+        if not tls_verify:
+            # The accepted risk remains visible in settings, Ask limitations, and audit
+            # events. Repeating urllib3's identical warning for every request only obscures
+            # actionable logs.
+            urllib3.disable_warnings(InsecureRequestWarning)
         api_client = client.ApiClient(configuration)
         try:
             dynamic = DynamicClient(api_client)

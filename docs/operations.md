@@ -237,6 +237,9 @@ an Approver may disable verification on that cluster entry. This also disables h
 verification for a credential-bearing request and permits interception of the bearer token
 and evidence. The UI, audit event, connection status, and affected Ask answers keep the
 exception visible. Prefer repairing trust and do not use the exception in production.
+PodPilot suppresses urllib3's identical per-request `InsecureRequestWarning` for these explicitly
+accepted connections to avoid log spam; this does not suppress connection failures or remove the
+operator-visible and audited TLS warning.
 
 An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
 is pinned when the first question is submitted; **Change** opens a new conversation while
@@ -273,6 +276,10 @@ questions. Explicit list and count questions remain inventory-only. When a
 20-object default with the configured bounded inventory window. When the model cannot turn
 validated list evidence into a useful final answer, PodPilot renders that evidence as a
 deterministic table instead.
+If the model still returns an incomplete non-inventory answer after the bounded correction, exact
+object reads are rendered as a redacted, bounded `spec`/`status` field summary with evidence
+citations. This preserves useful configuration detail without treating intended configuration as
+proof that an external system received traffic or data.
 For namespaced resources, including operator-managed custom resources such as Strimzi
 `Kafka`, the table preserves cluster, namespace, resource name, observed `Ready` condition,
 and whether the bounded list was complete. A cluster-scoped read can therefore return more

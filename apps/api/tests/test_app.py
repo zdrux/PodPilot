@@ -23,6 +23,7 @@ from podpilot_api.main import (
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
     _deterministic_log_findings_section,
+    _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
     _parse_tags,
@@ -1049,6 +1050,46 @@ def test_configuration_question_does_not_fall_back_to_names_only_inventory() -> 
     )
 
     assert rendered is None
+
+
+def test_exact_resource_fallback_renders_material_configuration_fields() -> None:
+    rendered = _deterministic_resource_detail_answer(
+        evidence=[{
+            "id": "cluster-clf-detail",
+            "cluster_id": "central",
+            "cluster_name": "Central DEV",
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder",
+                "metadata": {"namespace": "openshift-logging", "name": "instance"},
+                "spec": {
+                    "outputs": [{
+                        "name": "audit-kafka", "type": "kafka",
+                        "kafka": {"url": "tcp://kafka.example.test:9092/audit"},
+                    }],
+                    "pipelines": [{
+                        "name": "audit", "inputRefs": ["audit"],
+                        "outputRefs": ["audit-kafka"],
+                    }],
+                },
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["cluster-clf-detail"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "Central DEV · ClusterLogForwarder `openshift-logging/instance`" in content
+    assert "spec.outputs" in content
+    assert "audit-kafka" in content
+    assert "kafka.example.test:9092/audit" in content
+    assert "spec.pipelines" in content
+    assert rendered["citations"] == ["cluster-clf-detail"]
 
 
 def test_inventory_fallback_enumerates_custom_resources_without_question_classification() -> None:

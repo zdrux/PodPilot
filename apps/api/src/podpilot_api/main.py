@@ -869,6 +869,91 @@ def _deterministic_evidence_fallback_answer(
     }
 
 
+def _deterministic_resource_detail_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render bounded exact-object fields when model interpretation remains incomplete."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "get_resource"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") == "get_resource"
+        and isinstance(item.get("data"), dict)
+    ][:6]
+    if not observations:
+        return None
+
+    def bounded_value(value: object, *, limit: int = 900) -> str:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+        safe = redact_text(encoded).replace("|", "\\|").replace("`", "'")
+        return safe if len(safe) <= limit else safe[:limit] + "…"
+
+    sections = [
+        "## Detailed resource evidence",
+        "",
+        (
+            "The model provider did not return a complete interpretation after one correction, "
+            "so PodPilot rendered the material fields from the successful exact object reads."
+        ),
+    ]
+    citations: list[str] = []
+    for observation in observations:
+        data = observation["data"]
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        kind = str(data.get("kind") or "Resource")[:128]
+        namespace = str(metadata.get("namespace") or "cluster")[:253]
+        name = str(metadata.get("name") or "unnamed")[:253]
+        cluster = str(
+            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+        )[:253]
+        sections.extend([
+            "",
+            f"### {cluster} · {kind} `{namespace}/{name}`",
+            "",
+            "| Field | Observed value |",
+            "|---|---|",
+        ])
+        fields: list[tuple[str, object]] = []
+        if data.get("apiVersion"):
+            fields.append(("apiVersion", data["apiVersion"]))
+        for section_name in ("spec", "status"):
+            section = data.get(section_name)
+            if isinstance(section, dict):
+                fields.extend(
+                    (f"{section_name}.{key}", value)
+                    for key, value in list(section.items())[:16]
+                )
+        if not fields and data.get("truncated_json"):
+            fields.append(("object", data["truncated_json"]))
+        if not fields:
+            fields.append(("object", "No material spec or status fields were returned."))
+        sections.extend(
+            f"| `{field}` | `{bounded_value(value)}` |" for field, value in fields
+        )
+        citations.append(str(observation["id"]))
+    sections.extend([
+        "",
+        "## Interpretation boundary",
+        "",
+        (
+            "Named references inside these fields describe the observed object relationships. "
+            "They show intended configuration, but do not by themselves prove that an external "
+            "destination received traffic or data."
+        ),
+    ])
+    return {
+        "answer_mode": "evidence_based",
+        "content": "\n".join(sections),
+        "citations": citations,
+    }
+
+
 def _deterministic_inventory_answer(
     *,
     evidence: list[dict[str, object]],
@@ -2669,6 +2754,13 @@ def create_app(
                     observations=evidence,
                 )
                 if answer_quality_issue:
+                    LOGGER.warning(
+                        "podpilot.adhoc.answer_quality_rejected actor=%s conversation_id=%s "
+                        "attempt=1 reason=%s",
+                        username,
+                        conversation_id,
+                        answer_quality_issue,
+                    )
                     if progress:
                         await progress(
                             "answering",
@@ -2709,6 +2801,14 @@ def create_app(
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
+                        if retry_issue:
+                            LOGGER.warning(
+                                "podpilot.adhoc.answer_quality_rejected actor=%s "
+                                "conversation_id=%s attempt=2 reason=%s",
+                                username,
+                                conversation_id,
+                                retry_issue,
+                            )
                     except ModelProviderError as exc:
                         LOGGER.warning(
                             "podpilot.adhoc.answer_retry_failed actor=%s conversation_id=%s "
@@ -2726,6 +2826,10 @@ def create_app(
                     activity=activity,
                     question=message_text,
                 )
+                resource_detail_answer = _deterministic_resource_detail_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,
                     evidence=evidence,
@@ -2738,6 +2842,8 @@ def create_app(
                 )
                 deterministic_answer = (
                     route_tls_answer if route_fallback_needed else None
+                ) or (
+                    resource_detail_answer if route_fallback_needed else None
                 ) or (
                     inventory_answer if route_fallback_needed else None
                 ) or (

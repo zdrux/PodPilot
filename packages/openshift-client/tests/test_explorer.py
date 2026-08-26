@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from kubernetes.client.exceptions import ApiException
+from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import ReadIntent
 from podpilot_openshift.explorer import (
@@ -46,6 +47,7 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     monkeypatch, tls_verify,
 ):
     captured = {}
+    suppressed = []
 
     class FakeDynamicClient:
         def __init__(self, api_client):
@@ -55,6 +57,10 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     monkeypatch.setattr(
         "podpilot_openshift.explorer.DynamicClient",
         FakeDynamicClient,
+    )
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.urllib3.disable_warnings",
+        suppressed.append,
     )
 
     KubernetesReadOnlyExplorer.for_remote_cluster(
@@ -69,6 +75,7 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     assert bearer["value"] == "Bearer eyJ.test.jwt"
     assert configuration.verify_ssl is tls_verify
     assert configuration.assert_hostname is tls_verify
+    assert suppressed == ([] if tls_verify else [InsecureRequestWarning])
 
 
 def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal() -> None:
