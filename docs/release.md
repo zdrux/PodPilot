@@ -180,10 +180,11 @@ container; normalize repeated signatures; and retain only bounded samples, paths
 endpoints, and timestamps. Material findings may perform only exact Pod, Pod-Event,
 and applicable previous-log reads within the shared capped budget. A lone warning
 must not expand automatically, and all log correlation must remain separate from
-proven causality. The activity UI must label deterministic follow-ups.
+proven causality. Durable progress activity must label deterministic follow-ups.
 Compact-chat visual gates must verify that confidence appears as a keyboard-focusable
-pill beside the reply time, its explanation appears on hover/focus, evidence timelines
-are closed by default and preserve citation navigation when expanded, and reply,
+pill beside the reply time, its explanation appears on hover/focus, the single rounded evidence
+timeline replaces the redundant inspected-target disclosure, remains closed by default, and
+preserves citation navigation when expanded. Reply,
 session, and evidence timestamps render in fixed `EST (-4)` without altering UTC storage.
 Final-answer gates must reject citation-bearing heading-only or extremely brief model
 responses, send exactly one bounded correction without the rejected body, and activate

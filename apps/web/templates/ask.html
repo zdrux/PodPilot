@@ -51,16 +51,6 @@
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
         </div>
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
-        {% if message.activity and message.activity.reads %}
-        <details class="tool-activity">
-          <summary>Inspected {{ message.activity.reads | length }} cluster target{% if message.activity.reads | length != 1 %}s{% endif %}</summary>
-          <ul>
-            {% for read in message.activity.reads %}
-            <li><span class="status-dot {% if read.status == 'succeeded' %}good{% else %}warning{% endif %}"></span><strong>{{ read.tool }}</strong> {{ read.target }} <small>round {{ read.round }} · {{ read.status | replace('_', ' ') }}</small>{% if read.automatic_followup %}<em class="automatic-followup">automatic follow-up · {{ read.automatic_followup | replace('_', ' ') }}</em>{% endif %}{% if read.reason %}<span class="read-reason">{{ read.reason }}</span>{% endif %}</li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
         {% if message.citations %}
         <details class="answer-evidence">
           <summary><span>Evidence used in this answer</span><small>{{ message.citations | length }} source{% if message.citations | length != 1 %}s{% endif %}</small></summary>

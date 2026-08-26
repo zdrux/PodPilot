@@ -190,7 +190,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   Pod-Event, and applicable previous-log reads inside the existing budget. The model
   receives findings plus completed checks and must distinguish correlation from root cause.
 - Ask replies now keep confidence as a short hover/focus pill beside the timestamp
-  and collapse cited observations into an on-demand vertical timeline. Ask session,
+  and collapse cited observations into one rounded on-demand vertical timeline; the redundant
+  inspected-target disclosure is no longer rendered. Ask session,
   reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
 - Final-answer evidence is compacted into a provider-only bounded view that prioritizes
   current reads and caps Pod logs, objects, findings, and total bytes without changing

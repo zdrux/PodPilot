@@ -477,7 +477,8 @@ durable transcript. A provider outage stores a visible unavailable response whil
 leaving deterministic evidence and checks usable.
 
 For evidence-based Ask replies, the collapsed **Evidence used in this answer**
-control expands into a compact vertical timeline of supporting observations.
+rounded control replaces the separate inspected-target activity disclosure and expands into a
+compact vertical timeline of supporting observations.
 Selecting one opens and focuses its
 card in **Collected evidence**. The drawer shows normalized OpenShift coordinates
 and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
@@ -523,7 +524,8 @@ For trust-only failures such as a private, self-signed, or unknown issuer, PodPi
 automatically repeats the same bounded HTTPS probe once with verification disabled,
 subject to the normal read budget. The first observation remains the certificate
 warning; the retry can establish the HTTP/connectivity outcome but never server
-identity. The activity list labels this as an **automatic follow-up**.
+identity. Durable progress events identify the retry as an automatic follow-up, and both probe
+observations remain available through cited evidence.
 
 PodPilot prioritizes bounded logs when Pod evidence shows an unready, restarting,
 or non-running container. It scans any selected application, init, or sidecar log

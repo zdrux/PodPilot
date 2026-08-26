@@ -1875,7 +1875,8 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert created.status_code == 303
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "selector does not match" in rendered.text
-        assert "Inspected 1 cluster target" in rendered.text
+        assert "Evidence used in this answer" in rendered.text
+        assert "Inspected 1 cluster target" not in rendered.text
         assert "cluster-pod-1" in rendered.text
 
     assert len(explorer.calls) == 1
@@ -2458,8 +2459,8 @@ def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Pa
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert rendered.status_code == 200
         assert "No error lines appeared" in rendered.text
-        assert "Inspected 2 cluster targets" in rendered.text
-        assert "container=kube-apiserver" in rendered.text
+        assert "Evidence used in this answer" in rendered.text
+        assert "Inspected 2 cluster targets" not in rendered.text
         assert "cluster-api-logs" in rendered.text
         assert "exact Pod name is needed" not in rendered.text
 
@@ -2970,8 +2971,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "message.content | safe_markdown" in template
     assert "ask-sidebar" not in template
     assert "data-evidence-dialog" in template and "data-evidence-open" in template
-    assert "automatic-followup" in template
-    assert "read.reason" in template
+    assert "tool-activity" not in template
+    assert "Inspected {{ message.activity.reads" not in template
     assert 'class="answer-status answer-status-limited"' in template
     assert 'class="answer-status answer-status-grounded"' in template
     assert 'data-tooltip="This reply contains' in template

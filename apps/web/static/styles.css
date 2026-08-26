@@ -218,11 +218,11 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .chat-citations { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .chat-citations span, .chat-guidance { color: var(--subtle); font-size: 8px; }
 .chat-citations a { padding: 4px 6px; border: 1px solid rgba(69, 212, 232, .2); border-radius: 6px; color: var(--cyan); background: var(--cyan-soft); font-size: 8px; text-decoration: none; }
-.answer-evidence { margin-top: 12px; border-top: 1px solid rgba(104, 128, 157, .18); }
-.answer-evidence > summary { padding: 9px 1px 6px; color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
+.answer-evidence { margin-top: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.answer-evidence > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
 .answer-evidence > summary::marker { color: var(--cyan); }
-.answer-evidence > summary small { float: right; margin-top: 1px; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
-.answer-evidence-timeline { margin: 3px 0 2px 7px; padding: 1px 0 1px 18px; border-left: 1px solid rgba(69, 212, 232, .22); }
+.answer-evidence > summary small { margin-left: auto; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.answer-evidence-timeline { margin: 9px 0 2px 7px; padding: 1px 0 1px 18px; border-left: 1px solid rgba(69, 212, 232, .22); }
 .answer-evidence-timeline li { padding: 6px 0; list-style: none; }
 .answer-evidence-timeline a { display: grid; grid-template-columns: minmax(94px, auto) minmax(0, 1fr); gap: 11px; align-items: start; padding: 3px 5px; border-radius: 6px; color: inherit; text-decoration: none; }
 .answer-evidence-timeline a:hover, .answer-evidence-timeline a:focus-visible { background: rgba(69, 212, 232, .055); outline: 1px solid rgba(69, 212, 232, .18); }
@@ -261,14 +261,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .ask-empty p { max-width: 570px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .prompt-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 680px; }
 .prompt-examples span { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: #8fa0b8; background: #0b1320; font-size: 9px; }
-.tool-activity { margin-top: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
-.tool-activity summary { color: var(--cyan); font-size: 9px; cursor: pointer; }
-.tool-activity ul, .answer-limitations { margin: 9px 0 0; padding-left: 17px; }
-.tool-activity li { padding: 4px 0; color: var(--muted); font-size: 8px; }
-.tool-activity .status-dot { display: inline-block; margin-right: 6px; }
-.tool-activity small { color: var(--subtle); }
-.automatic-followup { display: inline-block; margin-left: 7px; padding: 2px 5px; border-radius: 5px; color: var(--cyan); background: var(--cyan-soft); font-size: 8px; font-style: normal; font-weight: 800; text-transform: uppercase; }
-.read-reason { display: block; margin: 5px 0 0 18px; color: var(--subtle); font-size: 10px; line-height: 1.45; }
+.answer-limitations { margin: 9px 0 0; padding-left: 17px; }
 .answer-limitations li { padding: 3px 0; color: var(--orange); font-size: 8px; line-height: 1.45; }
 .delete-chat-form { margin: 0; }
 .compact-button { min-height: 32px; padding: 0 11px; }
@@ -442,8 +435,8 @@ body { font-size: 15px; }
 .chat-meta, .chat-guidance, .chat-citations span, .chat-citations a { font-size: 11px; }
 .chat-meta strong { font-size: 13px; }
 .chat-markdown { font-size: 15px; line-height: 1.72; }
-.tool-activity summary { font-size: 12px; }
-.tool-activity li, .answer-limitations li { font-size: 12px; line-height: 1.55; }
+.answer-evidence > summary { font-size: 12px; }
+.answer-limitations li { font-size: 12px; line-height: 1.55; }
 .chat-form label { font-size: 12px; }
 .chat-form textarea { min-height: 96px; font-size: 15px; }
 .chat-form small { font-size: 11px; line-height: 1.45; }
