@@ -118,6 +118,7 @@ class AdHocAnswer(BaseModel):
     answer: str = Field(min_length=1, max_length=4000)
     cited_evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=6)
+    recommended_next_checks: list[str] = Field(default_factory=list, max_length=5)
 
 
 class LogAnalysisIssue(BaseModel):
@@ -302,8 +303,8 @@ class OpenAIResponsesProvider:
                     "investigation_round": 1,
                     "tool_policy": {
                         "available": [
-                            "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
-                            "query_metrics",
+                            "discover_resources", "get_resource", "list_resources", "search_resources",
+                            "watch_resources", "pod_logs", "http_probe", "query_metrics",
                         ],
                         "resource_catalog": [{
                             "resource": "pods", "apiVersion": "v1", "kind": "Pod",
@@ -341,8 +342,8 @@ class OpenAIResponsesProvider:
                     "investigation_round": 2,
                     "tool_policy": {
                         "available": [
-                            "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
-                            "query_metrics",
+                            "discover_resources", "get_resource", "list_resources", "search_resources",
+                            "watch_resources", "pod_logs", "http_probe", "query_metrics",
                         ],
                         "resource_catalog": [],
                         "pod_log_candidates": [{
@@ -469,8 +470,11 @@ class OpenAIResponsesProvider:
                     "use needs_clarification only when no safe read "
                     "can proceed without a missing identifier. Never return an empty actionable plan merely "
                     "because the wording is unfamiliar. Select no more than "
-                    "the supplied remaining_reads from only get_resource, list_resources, search_resources, "
-                    "pod_logs, http_probe, and query_metrics. Use get_resource for a known object name; list_resources with "
+                    "the supplied investigation-unit budget. Use discover_resources when the relevant API or CRD "
+                    "is not present in resource_catalog, then inspect its returned exact coordinates on the next round. "
+                    "Set working_hypothesis to a short evidence-aware possibility and next_step_summary to a concise "
+                    "operator-visible description of what PodPilot will check next; never reveal hidden reasoning. "
+                    "Use get_resource for a known object name; list_resources with "
                     "label_selector for a known label; search_resources for a bounded client-side search of any "
                     "necessary dot-separated Kubernetes object field path, such as metadata.name, spec.type, "
                     "spec.host, spec.to.name, or status.conditions.type. In particular, find a Route "
@@ -483,6 +487,8 @@ class OpenAIResponsesProvider:
                     "the original TLS stream. Treat spec.to.name as an observed backend Service name. "
                     "After search discovery, use the observed namespace and name for an exact get_resource in "
                     "the next round when more object detail is required. "
+                    "Use watch_resources only for a short bounded observation of a specific relevant resource "
+                    "type; prefer an exact name or namespace and never request an unbounded watch. "
                     "Use query_metrics for a time trend from the supplied metric_catalog. Select metric_scope=pod "
                     "with exact namespace and name, metric_scope=namespace with namespace, or "
                     "metric_scope=deployment with exact namespace/name to aggregate owned ReplicaSet Pods, "
@@ -562,6 +568,9 @@ class OpenAIResponsesProvider:
                     "Do not tell the operator to run kubectl, oc, or another check or to share command "
                     "output; PodPilot owns evidence collection. Treat failed reads as bounded limitations "
                     "without dismissing successful observations that directly answer the question. "
+                    "When evidence is incomplete, populate recommended_next_checks with up to five precise "
+                    "read-only checks PodPilot should perform next. Suggestions are not executed actions and "
+                    "must not tell the operator to run commands. "
                     "When evidence says TLS verification was bypassed, state that the probe demonstrates "
                     "reachability/SNI behavior but not authenticated server identity. "
                     "A TLS-stage certificate verification failure means the connected endpoint presented "
@@ -839,6 +848,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "in supporting_evidence_ids, and "
                 "needs_clarification only when no safe read can proceed. Do not return an empty actionable "
                 "plan just because the wording is unfamiliar. "
+                "Use discover_resources when an unfamiliar operator, policy, or CRD is relevant but absent "
+                "from resource_catalog. Set working_hypothesis and next_step_summary to short evidence-aware, "
+                "operator-visible summaries without exposing hidden reasoning. Use watch_resources only as a "
+                "short bounded watch of a relevant exact resource type, preferably scoped by namespace or name. "
                 "Prefer the resource field with an exact plural name from resource_catalog; the server resolves API "
                 "coordinates and scope. Use get_resource for a known object name, list_resources plus "
                 "label_selector for labels, and search_resources with any necessary dot-separated Kubernetes "
@@ -910,6 +923,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "configuration evidence alone cannot prove the policy caused a timeout because probes do not originate "
                 "inside the affected source Pod. "
                 "A failed read is a limitation but does not invalidate successful observations that answer the question. "
+                "When proof is still missing, return up to five precise recommended_next_checks describing what "
+                "PodPilot should inspect next. Do not tell the operator to run commands. "
                 "For anything longer than a brief answer, use 2-5 short Markdown sections with blank lines, "
                 "descriptive headings, and bullets where useful; never return one dense paragraph. "
                 "For technical diagnoses, name exact OpenShift objects/containers and material fields or probe "

@@ -708,6 +708,38 @@ def test_https_probe_may_explicitly_disable_tls_verification() -> None:
         ReadIntent(tool="http_probe", url="http://mesh-control.example.test/", tls_verify=False)
 
 
+def test_dynamic_discovery_and_bounded_watch_have_strict_contracts() -> None:
+    discovery = ReadIntent(tool="discover_resources", discovery_query="Authorino policy")
+    watch = ReadIntent(
+        tool="watch_resources", resource="authconfigs.authorino.kuadrant.io",
+        namespace="kuadrant-system", name="maas", watch_seconds=15,
+    )
+
+    assert discovery.discovery_query == "Authorino policy"
+    assert watch.watch_seconds == 15
+    with pytest.raises(ValidationError, match="requires a discovery_query"):
+        ReadIntent(tool="discover_resources")
+    with pytest.raises(ValidationError, match="only for watch_resources"):
+        ReadIntent(tool="get_resource", resource="pods", watch_seconds=3)
+
+
+def test_authorino_permission_denied_log_is_a_deterministic_signal() -> None:
+    observation = AdHocObservation(
+        id="cluster-authorino-log-1", tool="pod_logs", summary="Collected Authorino logs.",
+        source="kubernetes:v1:Pod/log:kuadrant-system/authorino-1?current",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "container": "authorino",
+            "tail": "request rejected: PERMISSION_DENIED (HTTP 401) by authorization policy",
+        },
+    )
+
+    findings = derive_adhoc_findings([observation.to_dict()])
+
+    assert findings[0]["category"] == "authentication_or_authorization"
+    assert findings[0]["severity"] == "error"
+
+
 def test_resource_search_accepts_a_valid_field_path_and_requires_a_value() -> None:
     intent = ReadIntent(
         tool="search_resources", resource="services", match_field="spec.type",

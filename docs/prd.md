@@ -332,9 +332,11 @@ copying message content into the audit record.
 ### 5.11 Standalone Ask PodPilot
 
 An Investigator can start a durable, attributed conversation without a firing
-alert. For each turn, up to five schema-validated planning rounds select at most twelve total reads
-from named resource GET, bounded resource LIST, bounded current or previous
-Pod logs, and typed HTTP/HTTPS probes. A policy-filtered, five-minute discovery catalog lets planning address
+alert. For each turn, up to ten schema-validated planning rounds select work within a
+25-unit weighted investigation budget from adaptive API discovery, named resource GET,
+bounded resource LIST/search/watch, bounded current or previous Pod logs, metrics, and typed
+HTTP/HTTPS probes. Five units are reserved for evidence-derived follow-ups. A policy-filtered,
+five-minute discovery catalog lets planning address
 common Kubernetes/OpenShift objects and installed CRDs by plural resource name.
 The server resolves apiVersion, Kind, namespaced scope, and advertised read verb;
 it rejects ambiguous cross-group names unless qualified. Each round
@@ -343,13 +345,15 @@ collection without requiring an operator follow-up. ConfigMaps, logs, and
 unauthenticated network results are first-class evidence. An HTTP probe may target
 any absolute URL, uses HEAD or bounded GET, validates TLS, does not follow redirects,
 and supports a separate TCP connection host while retaining the URL hostname for
-HTTP Host and TLS SNI. Secrets, access-review resources, arbitrary subresources,
+HTTP Host and TLS SNI. Secrets, token/identity/access-review resources, arbitrary subresources,
 commands, authenticated requests, and mutations are rejected. The model infers
 inventory, health, diagnosis, log, comparison, and explanation goals from natural
 language. The API derives the decision from typed intents, rejects unsupported operational answers, retries
 the planner once with bounded feedback, and may compile a matching safe LIST from
-live discovery after a second refusal. No wording-specific object allowlist is
-required, and neither inference nor fallback can exceed broker policy or RBAC.
+live discovery after a second refusal. The planner may also search discovery itself when a
+clue identifies an unfamiliar operator API. No wording-specific object allowlist is required,
+and neither inference nor fallback can exceed the sensitive-resource denylist, read-only verb
+policy, weighted budget, or RBAC. Watches last at most 15 seconds and retain at most 50 events.
 
 When a Pod inventory is needed before logs, PodPilot must derive exact log-target
 candidates from the returned objects and let the planner select opaque IDs rather
@@ -385,9 +389,11 @@ Submitting a turn must clear the composer immediately, place the attributed user
 message in the timeline, and show a pulsating/spinner assistant placeholder. The
 API must persist the turn as a recoverable job and stream truthful workflow phases
 such as resource discovery, safe-read planning, exact resource/log collection,
-and evidence-backed answer preparation. Reloads and reconnects must preserve the
-current phase. Progress must not claim an action before it starts and must not
-expose model chain-of-thought. Only one turn may run in a conversation at a time.
+and evidence-backed answer preparation. While the spinner is present, the UI may show a rolling
+six-item journal of concise working hypotheses, intended next checks, and observed findings.
+Reloads and reconnects must preserve the current phase. Progress must not claim an action
+before it starts, persist as final-chat clutter, or expose hidden model chain-of-thought. Only
+one turn may run in a conversation at a time.
 
 ## 6. Cluster Memory
 

@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 import urllib3
-from kubernetes import client, config
+from kubernetes import client, config, watch as kubernetes_watch
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
 from urllib3.exceptions import InsecureRequestWarning
@@ -408,6 +408,7 @@ class KubernetesReadOnlyExplorer:
         max_search_scan_objects: int = 2_000,
         http_probe: BoundedHttpProbe | None = None,
         metric_reader: BoundedMetricTrendReader | None = None,
+        watch_factory: Any = kubernetes_watch.Watch,
     ) -> None:
         self._dynamic = dynamic_client
         self._core = core_api
@@ -418,6 +419,7 @@ class KubernetesReadOnlyExplorer:
         self._max_search_scan_objects = max_search_scan_objects
         self._http_probe = http_probe or BoundedHttpProbe()
         self._metric_reader = metric_reader
+        self._watch_factory = watch_factory
 
     @classmethod
     def for_remote_cluster(
@@ -488,6 +490,8 @@ class KubernetesReadOnlyExplorer:
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         try:
+            if intent.tool == "discover_resources":
+                return self._discover_resources(intent)
             if intent.tool == "http_probe":
                 return self._http_probe.execute(intent)
             if intent.tool == "query_metrics":
@@ -497,6 +501,8 @@ class KubernetesReadOnlyExplorer:
             self._ensure_clients()
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)
+            if intent.tool == "watch_resources":
+                return self._resource_watch(intent)
             return self._resource_read(intent)
         except ReadOnlyExplorerError:
             raise
@@ -506,7 +512,10 @@ class KubernetesReadOnlyExplorer:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
             resource_name = intent.resource or intent.kind or "resource"
-            action = "get" if intent.tool in {"get_resource", "pod_logs"} else "list"
+            action = (
+                "get" if intent.tool in {"get_resource", "pod_logs"} else
+                "watch" if intent.tool == "watch_resources" else "list"
+            )
             if intent.tool == "pod_logs":
                 resource_name = "pods/log"
             scope = (
@@ -541,7 +550,9 @@ class KubernetesReadOnlyExplorer:
     def preflight(self, intent: ReadIntent) -> None:
         """Validate resource discovery and scope without issuing an evidence read."""
 
-        if intent.tool not in {"get_resource", "list_resources", "search_resources"}:
+        if intent.tool not in {
+            "get_resource", "list_resources", "search_resources", "watch_resources"
+        }:
             return
         try:
             self._ensure_clients()
@@ -559,7 +570,10 @@ class KubernetesReadOnlyExplorer:
         self, intent: ReadIntent
     ) -> tuple[str, str, bool | None, str | None, str | None]:
         assert self._dynamic is not None
-        verb = "get" if intent.tool == "get_resource" else "list"
+        verb = (
+            "get" if intent.tool == "get_resource" else
+            "watch" if intent.tool == "watch_resources" else "list"
+        )
         namespaced: bool | None = None
         if intent.resource:
             if self._catalog is None:
@@ -586,6 +600,92 @@ class KubernetesReadOnlyExplorer:
         if namespaced is True and intent.tool == "get_resource" and not namespace:
             raise ReadOnlyExplorerError("A namespace is required to read that namespaced resource by name.")
         return api_version, kind, namespaced, namespace, name
+
+    def _discover_resources(self, intent: ReadIntent) -> ReadResult:
+        entries = self.resource_catalog(
+            query=str(intent.discovery_query or ""), limit=min(intent.limit, 50)
+        )
+        collected_at = datetime.now(timezone.utc)
+        return ReadResult(observations=(AdHocObservation(
+            id=f"cluster-discovery-{uuid4()}",
+            tool="discover_resources",
+            summary=(
+                f"Discovered {len(entries)} readable API resource type"
+                f"{'s' if len(entries) != 1 else ''} relevant to "
+                f"{str(intent.discovery_query or 'the investigation')[:120]}."
+            ),
+            source="kubernetes:api-discovery",
+            collected_at=collected_at,
+            data={
+                "query": str(intent.discovery_query or "")[:253],
+                "resources": entries,
+                "count": len(entries),
+                "policy": "dynamic discovery with sensitive resource types excluded",
+            },
+        ),))
+
+    def _resource_watch(self, intent: ReadIntent) -> ReadResult:
+        assert self._dynamic is not None
+        api_version, kind, _namespaced, namespace, name = self._resolve_resource_read(intent)
+        resource = self._dynamic.resources.get(api_version=api_version, kind=kind)
+        watcher = self._watch_factory()
+        event_limit = min(intent.limit, 50)
+        kwargs: dict[str, object] = {
+            "timeout": intent.watch_seconds,
+            "watcher": watcher,
+        }
+        if namespace:
+            kwargs["namespace"] = namespace
+        if intent.label_selector:
+            kwargs["label_selector"] = intent.label_selector
+        if name:
+            kwargs["name"] = name
+        events: list[dict[str, object]] = []
+        try:
+            for event in resource.watch(**kwargs):
+                if not isinstance(event, dict):
+                    continue
+                obj = event.get("object")
+                raw = obj.to_dict() if hasattr(obj, "to_dict") else (
+                    dict(obj) if isinstance(obj, dict) else {}
+                )
+                events.append({
+                    "type": str(event.get("type") or "UNKNOWN")[:32],
+                    "object": _list_projection(kind, raw),
+                })
+                if len(events) >= event_limit:
+                    break
+        finally:
+            watcher.stop()
+        scope = namespace or "cluster"
+        collected_at = datetime.now(timezone.utc)
+        limitations = (
+            (f"The bounded {kind} watch reached its {event_limit}-event ceiling.",)
+            if len(events) >= event_limit else ()
+        )
+        return ReadResult(
+            observations=(AdHocObservation(
+                id=f"cluster-watch-{uuid4()}",
+                tool="watch_resources",
+                summary=(
+                    f"Observed {len(events)} {kind} change event"
+                    f"{'s' if len(events) != 1 else ''} during a bounded "
+                    f"{intent.watch_seconds}-second watch in {scope}."
+                ),
+                source=f"kubernetes:{api_version}:{kind}/watch:{scope}/{name or '*'}",
+                collected_at=collected_at,
+                data={
+                    "apiVersion": api_version,
+                    "kind": kind,
+                    "scope": scope,
+                    "name": name,
+                    "watchSeconds": intent.watch_seconds,
+                    "eventLimit": event_limit,
+                    "events": events,
+                },
+            ),),
+            limitations=limitations,
+        )
 
     def _resource_read(self, intent: ReadIntent) -> ReadResult:
         assert self._dynamic is not None

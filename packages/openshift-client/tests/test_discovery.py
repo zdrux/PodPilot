@@ -77,6 +77,22 @@ def test_catalog_requires_requested_read_verb() -> None:
         catalog.resolve("widgets", verb="get")
 
 
+def test_catalog_accepts_watch_only_resources_and_exposes_available_verbs() -> None:
+    catalog = ResourceCatalog(lambda **_kwargs: [
+        resource("authconfigs", "authorino.kuadrant.io/v1beta3", "AuthConfig", verbs=("watch",)),
+    ])
+
+    prompt = catalog.prompt_entries(query="Authorino policy", limit=5)
+
+    assert prompt == [{
+        "resource": "authconfigs",
+        "apiVersion": "authorino.kuadrant.io/v1beta3",
+        "kind": "AuthConfig",
+        "namespaced": True,
+        "verbs": ["watch"],
+    }]
+
+
 def test_catalog_prefers_stable_version_and_qualifies_cross_group_collisions() -> None:
     catalog = ResourceCatalog(lambda **_kwargs: [
         resource("widgets", "example.io/v1beta2", "Widget"),

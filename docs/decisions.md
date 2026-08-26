@@ -712,3 +712,27 @@ Consequences: Azure, bare-metal, and other environment knowledge can coexist wit
 guidance in one index. Restricted entries remain previewable only by Approvers and never enter Ask
 workers. This supersedes the 2026-08-25 preview-only restriction while retaining deterministic
 retrieval and provenance boundaries.
+
+## 2026-08-26 - Adaptive read-only traversal uses weighted units and transient plan summaries
+
+Context: A twelve-read investigation could exhaust its budget after finding an initial clue, and
+the fixed catalog slice made unfamiliar operator APIs difficult to traverse. Operators also had
+little feedback while a longer investigation was active.
+
+Decision: Allow up to ten planning rounds within 25 weighted investigation units and reserve five
+units for server-derived correlations. Discovery/get/list/search cost one unit, logs/metrics/HTTP
+probes cost two, and a watch costs three. Let the planner query live Kubernetes discovery and use
+any resource advertising `get`, `list`, or `watch`; retain the small sensitive-resource and
+subresource denylist, exact-coordinate validation, redaction, bounded payloads, and ServiceAccount
+RBAC. Bound watches to 15 seconds and 50 compact events. Permit structured `working_hypothesis`
+and `next_step_summary` fields and stream those alongside server-observed findings in a six-item
+journal that exists only while the spinner is active. These fields are concise operator status,
+not hidden chain-of-thought. Let incomplete final answers recommend precise next checks and retry
+once when the provider declines to interpret evidence PodPilot already collected.
+
+Consequences: Investigations can follow Authorino and other installed-operator clues without a
+maintained CR allowlist, while Secrets, identity/token/access-review APIs, subresources, mutation,
+and unavailable RBAC remain outside the broker. Longer runs provide useful progress without
+cluttering completed chat history. This supersedes the five-round/twelve-read ceiling in the
+2026-08-25 broader-agentic-reads decision and the shared twelve-read ceiling in the 2026-08-26
+multi-cluster decision.

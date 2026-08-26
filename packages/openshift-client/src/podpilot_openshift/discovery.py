@@ -28,6 +28,7 @@ class ResourceDescriptor:
             "apiVersion": self.api_version,
             "kind": self.kind,
             "namespaced": self.namespaced,
+            "verbs": list(self.verbs),
         }
 
 
@@ -68,7 +69,7 @@ def resource_is_safe(descriptor: ResourceDescriptor) -> bool:
     name = descriptor.name.lower()
     if "/" in name or name in _DENIED_NAMES or descriptor.kind in _DENIED_KINDS:
         return False
-    return bool({"get", "list"}.intersection(descriptor.verbs))
+    return bool({"get", "list", "watch"}.intersection(descriptor.verbs))
 
 
 class ResourceCatalog:

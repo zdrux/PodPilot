@@ -100,7 +100,7 @@ connection. Live QA must retain the fixture only long enough to verify the three
 checks and remove both its namespace and platform PrometheusRule afterward.
 
 Milestone 10 adds gates for Investigator-only standalone chat, schema-valid
-multi-round read plans, a five-round and twelve-total-read budget, duplicate
+multi-round read plans, a ten-round and 25-unit weighted investigation budget, duplicate
 suppression, discovery-followed-by-exact-container-log collection, ConfigMap and bounded-log evidence, Secret/subresource
 denial, recursive redaction, persisted provenance, and withholding of uncited
 cluster-specific answers. Audit both `cluster-reader` effective permissions and
@@ -117,6 +117,8 @@ cross-group ambiguity and qualification, question-relevant catalog ranking,
 advertised verb and namespaced-scope enforcement, sensitive resource/subresource
 filtering, deterministic explicit inventory compilation, continue-token
 pagination, compact projections, payload truncation, and installed-CRD reads.
+They must also cover planner-initiated discovery, watch-only resources, 15-second/50-event
+watch bounds, stop-on-ceiling behavior, projected/redacted events, and weighted unit accounting.
 Tests must distinguish object-ceiling truncation from detail compaction, retain
 all collected names, suppress provider-facing observation paths in prose, and
 surface HTTP 403 limitations with ServiceAccount, verb, resource, and scope.
@@ -131,6 +133,8 @@ Collision gates must install both `routes.route.openshift.io` and
 `routes.serving.knative.dev`, prove an OpenShift browser Route selects only the former,
 reject mismatched coordinates, and verify ambiguity preflight consumes no read budget.
 Tests must not treat a 403 from one same-plural API as authorization to try another.
+Progress gates must prove that hypothesis, next-check, and finding updates are bounded,
+owner-private, truthful to the current run, and removed when the final answer renders.
 Route investigation gates must prove that projected backend Service references ground exact
 follow-up reads and that edge/reencrypt/passthrough answers cite the matched Route while
 distinguishing configured TLS behavior from live backend reachability.
@@ -232,7 +236,7 @@ Ask prompts. Tests must prove restricted or mismatched memory is absent from pro
 Cluster registry gates must cover Approver authorization, CSRF, HTTPS-origin validation,
 secret-backed token non-disclosure/rotation/removal, runtime-cluster immutability, soft
 disable, and audited connection tests. Multi-cluster conversations must pin one to ten IDs,
-retain prior sessions when selection changes, share the twelve-read ceiling, attribute every
+retain prior sessions when selection changes, share the 25-unit weighted ceiling, attribute every
 observation and limitation, and preserve partial results. TLS verification must default on;
 the explicit off setting must be visible, audited, cluster-specific, and documented as a
 credential-interception risk.

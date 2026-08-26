@@ -27,6 +27,7 @@ from podpilot_api.main import (
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
+    _investigation_unit_cost,
     _parse_tags,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
@@ -92,6 +93,21 @@ def test_cluster_tags_support_labels_and_key_value_pairs() -> None:
         "production": "",
         "region": "toronto",
     }
+
+
+def test_investigation_budget_weights_high_volume_operations() -> None:
+    assert _investigation_unit_cost(ReadIntent(
+        tool="discover_resources", discovery_query="Authorino",
+    )) == 1
+    assert _investigation_unit_cost(ReadIntent(
+        tool="get_resource", resource="pods", namespace="payments", name="api",
+    )) == 1
+    assert _investigation_unit_cost(ReadIntent(
+        tool="pod_logs", candidate_id="podlog-api",
+    )) == 2
+    assert _investigation_unit_cost(ReadIntent(
+        tool="watch_resources", resource="pods", namespace="payments", watch_seconds=5,
+    )) == 3
 
 
 def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
@@ -516,6 +532,11 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     assert _adhoc_answer_quality_issue(
         content="No errors.",
     ) is None
+    assert _adhoc_answer_quality_issue(
+        content="There is not enough information to answer.",
+        answer_mode="insufficient_evidence",
+        has_evidence=True,
+    ) == "insufficient_interpretation_with_available_evidence"
 
 
 def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence() -> None:
@@ -3722,7 +3743,7 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         conversation_id = created.headers["location"].rsplit("/", 1)[-1]
 
         pending_page = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "Working on your question" in pending_page.text
+        assert "Live investigation" in pending_page.text
         assert "thinking-spinner" in pending_page.text
         run_match = re.search(r'data-adhoc-run-id="([^"]+)"', pending_page.text)
         assert run_match is not None
@@ -3780,7 +3801,7 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
 
         completed = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "selector does not match" in completed.text
-        assert "Working on your question" not in completed.text
+        assert "Live investigation" not in completed.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:

@@ -83,7 +83,7 @@ removes the usable token but retains metadata and historical attribution.
 Every standalone Ask conversation stores an immutable ordered selection of one to ten
 cluster IDs. Changing selection starts another conversation and preserves the old session.
 The worker fans a question out across the selected enabled clusters within one shared
-twelve-read ceiling, builds a separate Kubernetes client and discovery catalog for each,
+25-unit weighted investigation ceiling, builds a separate Kubernetes client and discovery catalog for each,
 and attributes every observation, read record, citation, limitation, and comparison to its
 source cluster. A failed or disabled target becomes a cluster-specific limitation instead
 of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
@@ -144,8 +144,9 @@ Milestone 8 adds durable `ChatMessage` records and a provider-level structured
 chat contract. The API composes bounded context from one investigation, redacts
 the operator message before storage, and sends no Kubernetes credentials or
 generic Kubernetes client to the provider. Incident chat now shares Ask
-PodPilot's bounded read-plan broker: up to five planning rounds and twelve total
-resource, ConfigMap, Event, Pod-log, or HTTP-probe reads run under the same read-only identity,
+PodPilot's bounded read-plan broker: up to ten planning rounds and 25 weighted
+investigation units cover resource, ConfigMap, Event, Pod-log, metric, HTTP-probe, and
+bounded-watch reads under the same read-only identity,
 deny policy, normalization, redaction, and evidence cap. Trusted alert labels seed
 exact scope for deterministic cases such as a failed Job, and newly collected
 observations are persisted into the investigation before interpretation. Model
@@ -183,10 +184,10 @@ top workload consumers; any unexplained difference may be host, kernel, cache, o
 work and must remain a limitation rather than being assigned to a Pod.
 
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
-broker later shared by incident chat. Up to five
-schema-validated planning rounds may select at most twelve total reads from
-`get_resource`, `list_resources`, `search_resources`, `pod_logs`, `http_probe`, and
-`query_metrics`; each round receives the bounded
+broker later shared by incident chat. Up to ten
+schema-validated planning rounds may spend at most 25 weighted units on
+`discover_resources`, `get_resource`, `list_resources`, `search_resources`,
+`watch_resources`, `pod_logs`, `http_probe`, and `query_metrics`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.
 Normal code validates the discovered resource, scope, verb, limits, duplicate
 suppression, and deny policy. A five-minute, process-local discovery catalog
@@ -256,8 +257,16 @@ graph from an observed Route to its exact Service, Service-selected Pods, Endpoi
 legacy Endpoints. Endpoint projections retain bounded Pod target references. PodPilot reads
 logs from up to three relevant backend containers even when the Pods are Running and Ready,
 because application failures need not affect Kubernetes health. This deterministic traversal
-uses the same twelve-read ceiling, deduplication, redaction, and RBAC boundary as model-planned
+uses the same 25-unit investigation ceiling, deduplication, redaction, and RBAC boundary as model-planned
 reads; it is a safety net for basic Kubernetes relationships, not unrestricted crawling.
+
+The planner can also query the live discovery catalog during a turn. This is not a curated
+resource allowlist: any discovered resource advertising `get`, `list`, or `watch` may be
+selected, subject to the explicit sensitive-resource/subresource denylist and the selected
+ServiceAccount's RBAC. A bounded watch costs three investigation units, lasts at most 15
+seconds, and retains at most 50 compact events. Pod logs, HTTP probes, and metric queries cost
+two units; discovery and ordinary resource reads cost one. Five units are reserved for
+server-derived follow-ups so an initially useful clue can still trigger correlation work.
 
 An explicit TCP/connectivity question that names one Pod in each of two namespaces receives a
 separate deterministic policy check before model planning. Normal code reads both exact Pods,
@@ -294,10 +303,12 @@ per conversation, and atomically stores the assistant reply with the terminal jo
 state. A restart changes interrupted `running` jobs back to `queued`, so the worker
 can recover them from the PVC. The browser receives an immediate redirect, renders
 the submitted question optimistically, and follows owner-authorized Server-Sent
-Events for durable `starting`, `discovering`, `planning`, `collecting`, `answering`,
+Events for durable `starting`, `discovering`, `planning`, `hypothesis`, `next_check`,
+`collecting`, `finding`, `answering`,
 and terminal updates. Reloading reconstructs the same state from SQLite, and an
 SSE heartbeat keeps the OpenShift Route connection active. These events describe
-server-observed workflow actions; PodPilot does not expose model chain-of-thought.
+short operator-visible hypotheses and server-observed workflow actions; PodPilot does not
+expose hidden model chain-of-thought. The rolling journal exists only while a run is active.
 The final schema-validated answer remains a complete response rather than token
 streaming.
 For an individual Ask question, the operator may opt in to retaining the raw final-answer

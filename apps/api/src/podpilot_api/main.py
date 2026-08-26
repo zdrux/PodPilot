@@ -392,6 +392,9 @@ def _validated_adhoc_answer(
             redact_text(item)[:500]
             for item in [*claim_limitations, *answer.limitations][:6]
         ],
+        "recommended_next_checks": [
+            redact_text(item)[:500] for item in answer.recommended_next_checks[:5]
+        ],
     }
 
 
@@ -596,7 +599,9 @@ _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
 
 
-def _adhoc_answer_quality_issue(*, content: str) -> str | None:
+def _adhoc_answer_quality_issue(
+    *, content: str, answer_mode: str | None = None, has_evidence: bool = False,
+) -> str | None:
     """Retry only structurally empty answers; trust checks happen during validation."""
 
     # Citation allowlisting and unsupported-claim guards are enforced by
@@ -614,6 +619,8 @@ def _adhoc_answer_quality_issue(*, content: str) -> str | None:
     body = re.sub(r"\s+", " ", body).strip()
     if not body_lines or not body:
         return "heading_only_response"
+    if answer_mode == "insufficient_evidence" and has_evidence:
+        return "insufficient_interpretation_with_available_evidence"
     return None
 
 
@@ -1209,8 +1216,8 @@ def _deterministic_resource_detail_answer(
         "## Question-focused resource evidence",
         "",
         (
-            "The model provider did not return a complete interpretation after one correction, "
-            "so PodPilot rendered only the exact-object fields most relevant to the question."
+            "The model did not return an evidence-backed interpretation, so PodPilot rendered "
+            "the successfully collected exact-object fields most relevant to the question."
         ),
     ]
     citations: list[str] = []
@@ -1703,7 +1710,20 @@ def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object
         str(analysis.get("overview") or "The bounded Pod log excerpts were analyzed for potential issues."),
     ]
     citations: list[str] = []
-    if not issues:
+    overview = str(analysis.get("overview") or "")
+    overview_has_signal = bool(re.search(
+        r"(?i)\b(?:denied|unauthorized|forbidden|error|fail(?:ed|ure)?|401|403|permission)\b",
+        overview,
+    ))
+    if not issues and overview_has_signal:
+        lines.extend((
+            "",
+            "The overview noted a possible operational signal, but the model did not return a "
+            "validated cited issue. Treat that signal as unconfirmed and continue correlating it "
+            "with resource, policy, event, or probe evidence.",
+        ))
+        citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
+    elif not issues:
         lines.extend((
             "",
             "No potential operational issue was identified in the supplied bounded excerpts.",
@@ -1962,6 +1982,7 @@ class _BoundedReadCollection:
     activity: list[dict[str, object]]
     limitations: list[str]
     scope_summary: str
+    units_used: int = 0
 
 
 ProgressReporter = Callable[[str, str], Awaitable[None]]
@@ -1977,6 +1998,8 @@ def _read_intent_signature(intent: ReadIntent) -> str:
 
 
 def _read_progress_message(intent) -> str:
+    if intent.tool == "discover_resources":
+        return f"Looking for readable OpenShift APIs related to {intent.discovery_query}."
     if intent.tool == "http_probe":
         verification = " without certificate verification" if not intent.tls_verify else ""
         return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}{verification}."
@@ -1996,7 +2019,20 @@ def _read_progress_message(intent) -> str:
         return f"Inspecting {resource} {intent.namespace or 'cluster'}/{intent.name}."
     if intent.tool == "search_resources":
         return f"Searching {resource}{scope} by {intent.match_field}."
+    if intent.tool == "watch_resources":
+        target = f" {intent.namespace}/{intent.name}" if intent.name else scope
+        return f"Watching {resource}{target} for up to {intent.watch_seconds} seconds."
     return f"Getting a list of {resource}{scope}."
+
+
+def _investigation_unit_cost(intent: ReadIntent) -> int:
+    """Weight slower or higher-volume evidence operations inside one bounded turn."""
+
+    if intent.tool == "watch_resources":
+        return 3
+    if intent.tool in {"pod_logs", "http_probe", "query_metrics"}:
+        return 2
+    return 1
 
 
 def _display_probe_url(value: str | None) -> str:
@@ -2107,7 +2143,7 @@ def _bind_plan_log_intents(
         if (
             error is None
             and resolved is not None
-            and resolved.tool == "get_resource"
+            and resolved.tool in {"get_resource", "watch_resources"}
             and resolved.name
             and not resolved.namespace
         ):
@@ -2117,7 +2153,7 @@ def _bind_plan_log_intents(
         if (
             error is None
             and resolved is not None
-            and resolved.tool == "get_resource"
+            and resolved.tool in {"get_resource", "watch_resources"}
             and resolved.name
             and resolved.name.lower() not in observed_names
             and not re.search(
@@ -2218,7 +2254,7 @@ async def _collect_bounded_cluster_reads(
     activity: list[dict[str, object]] = []
     limitations: list[str] = []
     seen_intents: set[str] = set()
-    reads_used = 0
+    units_used = 0
     automatic_tls_retries = 0
     automatic_traffic_followups = 0
     automatic_log_followups = 0
@@ -2292,8 +2328,8 @@ async def _collect_bounded_cluster_reads(
             "investigation_round": round_number,
             "tool_policy": {
                 "available": [
-                    "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
-                    "query_metrics",
+                    "discover_resources", "get_resource", "list_resources", "search_resources",
+                    "watch_resources", "pod_logs", "http_probe", "query_metrics",
                 ],
                 "resource_catalog": catalog_entries,
                 "pod_log_candidates": [
@@ -2302,6 +2338,14 @@ async def _collect_bounded_cluster_reads(
                 "max_rounds": settings.adhoc_max_rounds,
                 "max_reads_total": settings.adhoc_max_reads_per_turn,
                 "remaining_reads": remaining_reads,
+                "max_investigation_units": settings.adhoc_max_reads_per_turn,
+                "remaining_investigation_units": remaining_reads,
+                "reserved_followup_units": settings.adhoc_followup_reserve_units,
+                "unit_costs": {
+                    "discover_resources": 1, "get_resource": 1, "list_resources": 1,
+                    "search_resources": 1, "watch_resources": 3, "pod_logs": 2,
+                    "http_probe": 2, "query_metrics": 2,
+                },
                 "max_list_objects": settings.adhoc_inventory_max_objects,
                 "max_search_scan_objects": settings.adhoc_search_max_scan_objects,
                 "max_metric_range_seconds": settings.adhoc_metrics_max_range_seconds,
@@ -2323,6 +2367,8 @@ async def _collect_bounded_cluster_reads(
                 "cluster_wide_inventory_allowed": True,
                 "logs_and_configmaps_allowed": True,
                 "secrets_and_mutations_allowed": False,
+                "adaptive_discovery_allowed": True,
+                "bounded_watch": {"max_seconds": 15, "max_events": 50},
             },
         }
         if feedback:
@@ -2330,8 +2376,14 @@ async def _collect_bounded_cluster_reads(
         return context
 
     for round_number in range(1, settings.adhoc_max_rounds + 1):
-        remaining_reads = settings.adhoc_max_reads_per_turn - reads_used
+        remaining_reads = settings.adhoc_max_reads_per_turn - units_used
         if remaining_reads <= 0:
+            break
+        regular_unit_ceiling = max(
+            1,
+            settings.adhoc_max_reads_per_turn - settings.adhoc_followup_reserve_units,
+        )
+        if units_used >= regular_unit_ceiling:
             break
         terminal_plan = False
         if round_number == 1 and deterministic_plan:
@@ -2454,6 +2506,13 @@ async def _collect_bounded_cluster_reads(
                 )
                 break
             assert plan is not None
+        if progress and plan.working_hypothesis:
+            await progress(
+                "hypothesis",
+                f"Working hypothesis: {plan.working_hypothesis}",
+            )
+        if progress and plan.next_step_summary:
+            await progress("next_check", plan.next_step_summary)
         scope_summary = plan.scope_summary
         new_intents = []
         current_log_candidates = pod_log_candidates_from_evidence(evidence)
@@ -2489,10 +2548,16 @@ async def _collect_bounded_cluster_reads(
         queue_index = 0
         while (
             queue_index < len(intent_queue)
-            and reads_used < settings.adhoc_max_reads_per_turn
+            and units_used < settings.adhoc_max_reads_per_turn
         ):
             intent, automatic_code, automatic_reason, trigger_evidence_ids = intent_queue[queue_index]
             queue_index += 1
+            unit_cost = _investigation_unit_cost(intent)
+            unit_ceiling = (
+                settings.adhoc_max_reads_per_turn if automatic_code else regular_unit_ceiling
+            )
+            if units_used + unit_cost > unit_ceiling:
+                continue
             if progress:
                 message = _read_progress_message(intent)
                 if automatic_code == "tls_trust_retry":
@@ -2509,6 +2574,7 @@ async def _collect_bounded_cluster_reads(
             entry: dict[str, object] = {
                 "round": round_number,
                 "tool": intent.tool,
+                "investigation_units": unit_cost,
                 "target": (
                     f"{_display_probe_url(intent.url)} via {intent.connect_host or 'DNS'}"
                     if intent.tool == "http_probe" else
@@ -2516,6 +2582,8 @@ async def _collect_bounded_cluster_reads(
                     f"{intent.namespace + '/' if intent.namespace else ''}{intent.name or '*'} "
                     f"range={intent.range_seconds}s"
                     if intent.tool == "query_metrics" else
+                    f"discovery query={intent.discovery_query}"
+                    if intent.tool == "discover_resources" else
                     f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
                     f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
                     + (f" container={intent.container}" if intent.container else "")
@@ -2530,7 +2598,7 @@ async def _collect_bounded_cluster_reads(
                 preflight = getattr(cluster_reader, "preflight", None)
                 if callable(preflight):
                     await run_in_threadpool(preflight, intent)
-                reads_used += 1
+                units_used += unit_cost
                 read_started = True
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
@@ -2589,8 +2657,13 @@ async def _collect_bounded_cluster_reads(
                 if automatic_reason:
                     entry["reason"] = automatic_reason
                 if progress:
+                    summaries = [
+                        str(item.summary).strip() for item in result.observations
+                        if str(item.summary).strip()
+                    ]
                     await progress(
-                        "collecting",
+                        "finding",
+                        f"Found: {summaries[0]}" if summaries else
                         f"Collected {len(result.observations)} evidence item"
                         f"{'s' if len(result.observations) != 1 else ''}.",
                     )
@@ -2622,6 +2695,7 @@ async def _collect_bounded_cluster_reads(
         activity=activity,
         limitations=list(dict.fromkeys(limitations))[:10],
         scope_summary=scope_summary,
+        units_used=units_used,
     )
 
 
@@ -3104,6 +3178,10 @@ def create_app(
                     cluster_settings = app_settings.model_copy(update={
                         "cluster_name": cluster_label,
                         "adhoc_max_reads_per_turn": cluster_budget,
+                        "adhoc_followup_reserve_units": min(
+                            app_settings.adhoc_followup_reserve_units,
+                            max(0, cluster_budget // 5),
+                        ),
                     })
                     cluster_knowledge = [
                         item for item in knowledge_context
@@ -3124,8 +3202,7 @@ def create_app(
                         knowledge=cluster_knowledge,
                         progress=progress,
                     )
-                    new_read_count = len(collected.activity)
-                    remaining_budget = max(0, remaining_budget - new_read_count)
+                    remaining_budget = max(0, remaining_budget - collected.units_used)
                     for item in collected.evidence:
                         attributed = dict(item)
                         attributed["cluster_id"] = selected_cluster.id
@@ -3258,6 +3335,8 @@ def create_app(
                 )
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
+                    answer_mode=str(validated["answer_mode"]),
+                    has_evidence=bool(evidence),
                 )
                 if answer_quality_issue:
                     LOGGER.warning(
@@ -3273,14 +3352,21 @@ def create_app(
                             "The first answer was incomplete; requesting one bounded correction.",
                         )
                     retry_context = dict(answer_context)
+                    feedback_message = (
+                        "The prior response declined to interpret available evidence. Explain the "
+                        "confirmed observations, the strongest evidence-supported hypothesis, what "
+                        "remains unverified, and precise recommended_next_checks for PodPilot. Do not "
+                        "tell the operator to collect evidence or run commands."
+                        if answer_quality_issue == "insufficient_interpretation_with_available_evidence"
+                        else
+                        "The prior response contained headings but no readable body. Return a direct "
+                        "operator-facing answer with substantive prose or bullets beneath any useful "
+                        "headings. Do not return headings alone."
+                    )
                     retry_context["answer_feedback"] = {
                         "code": "incomplete_final_answer",
                         "reason": answer_quality_issue,
-                        "message": (
-                            "The prior response contained headings but no readable body. Return a direct "
-                            "operator-facing answer with substantive prose or bullets beneath any useful "
-                            "headings. Do not return headings alone."
-                        ),
+                        "message": feedback_message,
                     }
                     try:
                         with capture_raw_model_responses(include_raw_response) as captured:
@@ -3313,6 +3399,8 @@ def create_app(
                         )
                         retry_issue = _adhoc_answer_quality_issue(
                             content=str(retry_validated["content"]),
+                            answer_mode=str(retry_validated["answer_mode"]),
+                            has_evidence=bool(evidence),
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -3457,7 +3545,11 @@ def create_app(
                 content=str(validated["content"]), answer_mode=str(validated["answer_mode"]),
                 citations_json=json.dumps(validated["citations"], sort_keys=True),
                 tool_activity_json=json.dumps(
-                    {"reads": activity, "limitations": validated["limitations"]}, sort_keys=True
+                    {
+                        "reads": activity,
+                        "limitations": validated["limitations"],
+                        "recommended_next_checks": validated.get("recommended_next_checks", []),
+                    }, sort_keys=True
                 ),
                 provider_status=provider_status,
                 raw_responses_json=json.dumps(raw_responses, sort_keys=True),

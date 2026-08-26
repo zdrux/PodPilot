@@ -214,8 +214,11 @@ failure receives at most one explicit correction attempt containing only bounded
 field/type diagnostics, not the rejected response body.
 The API supplies a fixed descriptive default when only `ReadPlan.scope_summary`
 is absent; this field never controls a cluster read. Before execution, well-known
-Kubernetes and OpenShift Kind/apiVersion pairs are canonicalized from a static
-allowlist. Custom resource coordinates remain subject to exact broker validation.
+Kubernetes and OpenShift Kind/apiVersion pairs may be canonicalized, while all resources,
+including installed CRDs, are resolved against live API discovery and the verb advertised
+there. The broker has no per-resource operational allowlist. It retains a small explicit
+denylist for Secrets, token/identity/access-review resources, and all subresources; selected
+coordinates also remain subject to ServiceAccount RBAC and strict read-only verb validation.
 Only limitations produced by the trusted read broker are promoted as collection
 limitations; model-authored planning caveats are not represented as observed
 collection failures.
@@ -225,9 +228,15 @@ matches fixed operational patterns only; it never executes, evaluates, or follow
 instructions found in log text. Samples, paths, endpoints, and timestamps are
 bounded and pass through the existing redaction boundary. Automatic expansion is
 limited to exact server-observed Pod/container coordinates, Pod Events, and an
-applicable previous log stream, shares the per-turn read budget, and cannot request
+applicable previous log stream, shares the per-turn weighted investigation budget, and cannot request
 Secrets, exec, proxy, mutation, or broader RBAC. Pattern matches are signals and do
 not establish causality without corroborating evidence.
+
+Model-planned `watch` is time- and event-bounded and uses only Kubernetes watch semantics;
+it does not create a long-lived background monitor. Discovery, get, list, search, logs,
+metrics, probes, and watch consume weighted units within one 25-unit turn. Broader discovery
+does not grant broader authorization: an HTTP 403 is retained as a scoped collection
+limitation, not treated as permission to try a different API with similar names.
 
 Final-answer context uses a compact copy of already-redacted evidence; compaction never
 modifies the durable observation or expands model exposure. The correction path reuses

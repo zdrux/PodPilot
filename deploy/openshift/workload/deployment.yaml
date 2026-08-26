@@ -72,6 +72,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_max_reads_per_turn
+            - name: PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_followup_reserve_units
             - name: PODPILOT_ADHOC_HTTP_PROBE_TIMEOUT_SECONDS
               valueFrom:
                 configMapKeyRef:

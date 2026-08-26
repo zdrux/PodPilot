@@ -334,7 +334,10 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .thinking-state p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .thinking-spinner { width: 24px; height: 24px; flex: 0 0 24px; border: 3px solid rgba(69, 212, 232, .18); border-top-color: var(--cyan); border-radius: 50%; animation: podpilot-spin .9s linear infinite, podpilot-pulse 1.8s ease-in-out infinite; }
 .progress-timeline { margin: 12px 0 0; padding: 0; list-style: none; }
-.progress-timeline li { display: flex; gap: 9px; align-items: baseline; padding: 4px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.progress-timeline li { display: flex; gap: 9px; align-items: baseline; padding: 5px 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.progress-timeline li div { display: grid; gap: 1px; }
+.progress-timeline li small { color: #6f829b; font-size: 8px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.progress-timeline li[data-phase="hypothesis"] small, .progress-timeline li[data-phase="finding"] small { color: var(--cyan); }
 .progress-timeline li span { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px rgba(69, 212, 232, .08); }
 @keyframes podpilot-spin { to { transform: rotate(360deg); } }
 @keyframes podpilot-pulse { 50% { opacity: .58; box-shadow: 0 0 0 7px rgba(69, 212, 232, .08); } }
@@ -345,6 +348,10 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .prompt-examples span { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: #8fa0b8; background: #0b1320; font-size: 9px; }
 .answer-limitations { margin: 9px 0 0; padding-left: 17px; }
 .answer-limitations li { padding: 3px 0; color: var(--orange); font-size: 8px; line-height: 1.45; }
+.recommended-checks { margin-top: 13px; padding: 11px 13px; border: 1px solid rgba(69, 212, 232, .18); border-radius: 9px; background: rgba(69, 212, 232, .035); }
+.recommended-checks h3 { margin: 0 0 7px; color: var(--cyan); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.recommended-checks ul { margin: 0; padding-left: 17px; }
+.recommended-checks li { padding: 3px 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .metric-result { margin-top: 14px; padding: 14px; border: 1px solid rgba(69, 212, 232, .22); border-radius: 10px; background: rgba(69, 212, 232, .035); }
 .metric-result-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 .metric-result-heading h3 { margin: 7px 0 3px; font-size: 14px; }

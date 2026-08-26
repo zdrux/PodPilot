@@ -140,12 +140,25 @@ class FakeResource:
     def __init__(self, items):
         self.items = items
         self.calls = []
+        self.watch_calls = []
 
     def get(self, **kwargs):
         self.calls.append(kwargs)
         if "name" in kwargs:
             return self.items[0]
         return SimpleNamespace(items=self.items)
+
+    def watch(self, **kwargs):
+        self.watch_calls.append(kwargs)
+        watcher = kwargs["watcher"]
+        stream_kwargs = {"timeout_seconds": kwargs["timeout"]}
+        if kwargs.get("namespace"):
+            stream_kwargs["namespace"] = kwargs["namespace"]
+        if kwargs.get("label_selector"):
+            stream_kwargs["label_selector"] = kwargs["label_selector"]
+        if kwargs.get("name"):
+            stream_kwargs["field_selector"] = f"metadata.name={kwargs['name']}"
+        return watcher.stream(self.get, **stream_kwargs)
 
 
 class FakeResources:
@@ -226,6 +239,19 @@ class FakeCore:
         return "token=do-not-leak\nserver started"
 
 
+class FakeWatch:
+    def __init__(self):
+        self.calls = []
+        self.stopped = False
+
+    def stream(self, operation, **kwargs):
+        self.calls.append((operation, kwargs))
+        yield {"type": "MODIFIED", "object": FakeObject()}
+
+    def stop(self):
+        self.stopped = True
+
+
 class PreviousLogsMissingCore:
     def __init__(self):
         self.calls = []
@@ -275,6 +301,58 @@ def test_list_supports_grouped_api_versions_and_enforces_limit():
     assert result.observations[0].data["count"] == 2
     assert len(result.observations[0].data["items"]) == 2
     assert resource.calls == [{"limit": 2, "namespace": "payments", "label_selector": "app=api"}]
+
+
+def test_adaptive_discovery_returns_policy_filtered_resource_coordinates():
+    discovered = [
+        SimpleNamespace(
+            name="authconfigs", group_version="authorino.kuadrant.io/v1beta3",
+            kind="AuthConfig", namespaced=True, verbs=("get", "list", "watch"),
+            singular_name="authconfig", short_names=(),
+        ),
+        SimpleNamespace(
+            name="secrets", group_version="v1", kind="Secret", namespaced=True,
+            verbs=("get", "list", "watch"), singular_name="secret", short_names=(),
+        ),
+    ]
+    dynamic = SimpleNamespace(resources=FakeResources(FakeResource([]), discovered=discovered))
+    target = KubernetesReadOnlyExplorer(dynamic_client=dynamic, core_api=FakeCore())
+
+    result = target.execute(ReadIntent(
+        tool="discover_resources", discovery_query="Authorino policy", limit=10,
+    ))
+
+    resources = result.observations[0].data["resources"]
+    assert [item["kind"] for item in resources] == ["AuthConfig"]
+    assert resources[0]["verbs"] == ["get", "list", "watch"]
+
+
+def test_watch_is_bounded_and_projects_events_without_secret_fields():
+    resource = FakeResource([])
+    watcher = FakeWatch()
+    dynamic = SimpleNamespace(resources=FakeResources(resource))
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=dynamic, core_api=FakeCore(), watch_factory=lambda: watcher,
+    )
+
+    result = target.execute(ReadIntent(
+        tool="watch_resources", api_version="v1", kind="ConfigMap",
+        namespace="payments", name="api", watch_seconds=4, limit=5,
+    ))
+
+    event = result.observations[0].data["events"][0]
+    assert event["type"] == "MODIFIED"
+    assert event["object"]["metadata"]["name"] == "api"
+    assert event["object"]["metadata"]["namespace"] == "payments"
+    assert "data" not in event["object"]
+    assert watcher.calls[0][1] == {
+        "timeout_seconds": 4,
+        "namespace": "payments",
+        "field_selector": "metadata.name=api",
+    }
+    assert resource.watch_calls[0]["timeout"] == 4
+    assert resource.watch_calls[0]["name"] == "api"
+    assert watcher.stopped is True
 
 
 def test_resource_name_resolves_from_discovery_and_compacts_list_payload():

@@ -73,7 +73,8 @@ _LOG_SIGNAL_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
         "authentication_or_authorization", "error",
         re.compile(
             r"(?i)\b(?:unauthorized|forbidden|authentication failed|authorization failed|"
-            r"access denied|permission denied|invalid token|token expired|http\s+(?:401|403))\b",
+            r"access[_ -]denied|permission[_ -]denied|invalid[_ -]token|token[_ -]expired|"
+            r"http(?:\s+|[_ .-]?(?:status[_ .-]?code)?[=:]?\s*)(?:401|403))\b",
         ),
     ),
     (
@@ -134,9 +135,10 @@ class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
     tool: Literal[
-        "get_resource", "list_resources", "search_resources", "pod_logs", "http_probe",
-        "query_metrics",
+        "discover_resources", "get_resource", "list_resources", "search_resources",
+        "watch_resources", "pod_logs", "http_probe", "query_metrics",
     ]
+    discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
     api_version: str | None = Field(default=None, max_length=128)
     kind: str | None = Field(default=None, max_length=128)
@@ -165,6 +167,7 @@ class ReadIntent(BaseModel):
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
+    watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
 
     @field_validator(
@@ -245,6 +248,15 @@ class ReadIntent(BaseModel):
                 raise ValueError("persistent_volume_claim scope supports only persistent_volume_usage")
         elif self.metric or self.metric_scope:
             raise ValueError("metric and metric_scope are valid only for query_metrics")
+        if self.tool == "discover_resources":
+            if not self.discovery_query:
+                raise ValueError("discover_resources requires a discovery_query")
+            if any((self.resource, self.api_version, self.kind, self.namespace, self.name)):
+                raise ValueError("discover_resources accepts only a discovery_query and limit")
+        elif self.discovery_query:
+            raise ValueError("discovery_query is valid only for discover_resources")
+        if self.tool != "watch_resources" and self.watch_seconds != 10:
+            raise ValueError("watch_seconds is valid only for watch_resources")
         return self
 
 
@@ -260,6 +272,8 @@ class ReadPlan(BaseModel):
     limitations: list[str] = Field(default_factory=list, max_length=5)
     clarification: str | None = Field(default=None, max_length=500)
     supporting_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    working_hypothesis: str | None = Field(default=None, max_length=500)
+    next_step_summary: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def normalize_decision(self) -> "ReadPlan":

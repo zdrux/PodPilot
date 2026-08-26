@@ -110,6 +110,12 @@
         {% if message.activity and message.activity.limitations %}
         <ul class="answer-limitations">{% for item in message.activity.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
         {% endif %}
+        {% if message.activity and message.activity.recommended_next_checks %}
+        <section class="recommended-checks">
+          <h3>Suggested next checks</h3>
+          <ul>{% for item in message.activity.recommended_next_checks %}<li>{{ item }}</li>{% endfor %}</ul>
+        </section>
+        {% endif %}
       </article>
       {% endfor %}
       {% if active_run %}
@@ -117,10 +123,10 @@
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>
-          <div><strong>Working on your question</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+          <div><strong>Live investigation</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
-          {% for event in active_run.events[-5:] %}<li data-seq="{{ event.seq }}"><span></span>{{ event.message }}</li>{% endfor %}
+          {% for event in active_run.events[-6:] %}<li data-seq="{{ event.seq }}" data-phase="{{ event.phase }}"><span></span><div><small>{{ event.phase | replace('_', ' ') }}</small>{{ event.message }}</div></li>{% endfor %}
         </ol>
       </article>
       {% endif %}

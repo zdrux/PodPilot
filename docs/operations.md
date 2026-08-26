@@ -243,7 +243,7 @@ operator-visible and audited TLS warning.
 
 An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
 is pinned when the first question is submitted; **Change** opens a new conversation while
-the prior session remains in history. All selected clusters share the twelve-read turn
+the prior session remains in history. All selected clusters share the 25-unit weighted turn
 budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
@@ -613,8 +613,14 @@ question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
 requires the configured model.
 
-The default ad-hoc budget is five planning rounds and twelve total reads, configured
-with `PODPILOT_ADHOC_MAX_ROUNDS` and `PODPILOT_ADHOC_MAX_READS_PER_TURN`. A typed
+The default ad-hoc budget is ten planning rounds and 25 weighted investigation units,
+configured with `PODPILOT_ADHOC_MAX_ROUNDS` and
+`PODPILOT_ADHOC_MAX_READS_PER_TURN`. Five units are reserved for deterministic follow-ups
+through `PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS`. Discovery and ordinary resource reads cost
+one unit; Pod logs, HTTP probes, and metric queries cost two; bounded watches cost three.
+The planner may search live API discovery for any resource advertising `get`, `list`, or
+`watch`, but the broker still rejects sensitive resources and subresources and RBAC remains
+authoritative. A watch lasts at most 15 seconds and retains at most 50 projected events. A typed
 `http_probe` read can issue an unauthenticated HEAD or bounded GET to any absolute
 HTTP/HTTPS URL. `connect_host` overrides only DNS/TCP routing; the URL hostname
 remains the HTTP Host and HTTPS SNI name for passthrough Route tests. TLS verification
@@ -659,7 +665,7 @@ Route, HTTP 5xx, and connectivity questions additionally follow an observed Open
 through its exact Service to bounded Service-selected Pods, EndpointSlices, and Endpoints.
 Compact endpoint evidence retains Pod target references. Current logs are collected from at
 most three relevant backend containers even when those Pods are healthy, then material signals
-use the same Pod/Event/previous-log correlations above. These reads share the normal twelve-read
+use the same Pod/Event/previous-log correlations above. These reads share the normal 25-unit
 budget. A later malformed model plan is reported as a limitation but does not discard the
 deterministic traffic-path reads already derived from cluster evidence.
 
@@ -799,8 +805,11 @@ On Pod startup, interrupted `running` rows are returned to `queued` and retried.
 The work is read-only, but a restart can therefore repeat model inference and
 bounded reads. While a run is active, a second turn and conversation deletion
 return HTTP 409. Inspect phase transitions without payloads through
-`podpilot.adhoc.*` application logs. Progress updates deliberately describe
-server-observed actions and do not stream model reasoning. The final structured
+`podpilot.adhoc.*` application logs. The active assistant placeholder keeps only the latest six
+human-readable updates, including the planner's bounded working hypothesis, its proposed next
+check, and summaries of evidence actually found. These transient updates disappear when the
+final answer replaces the spinner. They are structured plan/action summaries, not hidden model
+reasoning. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
 
 Every run has an overall execution deadline, defaulting to 300 seconds through

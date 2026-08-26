@@ -109,8 +109,16 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "model_timeout_max_seconds",
     }
-    assert runtime["data"]["adhoc_max_rounds"] == "5"
-    assert runtime["data"]["adhoc_max_reads_per_turn"] == "12"
+    assert runtime["data"]["adhoc_max_rounds"] == "10"
+    assert runtime["data"]["adhoc_max_reads_per_turn"] == "25"
+    assert runtime["data"]["adhoc_followup_reserve_units"] == "5"
+    reserve = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS"
+    )
+    assert reserve["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_followup_reserve_units",
+    }
     assert runtime["data"]["adhoc_http_probe_timeout_seconds"] == "8"
     assert runtime["data"]["adhoc_http_probe_max_bytes"] == "16384"
     oauth_proxy = next(

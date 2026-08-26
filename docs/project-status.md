@@ -30,7 +30,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   persisted display name can be changed without modifying its deployment-managed identity.
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
-  One shared twelve-read budget fans out across selected clusters, partial failures remain
+  One shared 25-unit weighted investigation budget fans out across selected clusters, partial failures remain
   scoped limitations, and all evidence/citations identify their source cluster. Alert,
   investigation, dashboard, remote metrics, and remediation routing are unchanged.
 - Curated memory now supports global entries, explicit cluster sets, and all-required
@@ -47,6 +47,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
+- Standalone Ask now supports ten planning rounds within 25 weighted investigation units,
+  reserves five units for evidence-derived follow-ups, can search live API discovery and issue
+  bounded watches against any RBAC-readable non-sensitive resource, and shows a transient
+  six-item live investigation journal with hypotheses, next checks, and findings.
 - Alertmanager queue with expected Watchdog separation and durable
   investigations.
 - Bounded Pod status, event, current/previous log, owner-chain, rollout, and node
@@ -98,8 +102,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   must use the separate existing check control and its CSRF, atomic claim, scope,
   and audit gates.
 - Standalone Ask PodPilot conversations can investigate symptoms without an alert.
-  Up to five schema-validated planning rounds select at most twelve total bounded
-  resource, ConfigMap, Pod-log, or HTTP-probe reads. Earlier observations feed later rounds so
+  Up to ten schema-validated planning rounds spend at most 25 weighted units on adaptive
+  discovery, bounded resource/search/watch, ConfigMap, Pod-log, metric, or HTTP-probe reads.
+  Earlier observations feed later rounds so
   discovery can lead to exact container logs; a final pass answers from persisted, redacted evidence with
   server-validated citations. HTTP probes are unauthenticated, SNI-aware, TLS-verified,
   response-bounded, and do not follow redirects. Secrets, access reviews, arbitrary
@@ -259,7 +264,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Deployed application version: `0.11.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 272 tests passing with 84% aggregate branch coverage.
+- Local automated suite: 278 tests passing with 84% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

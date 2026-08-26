@@ -545,7 +545,7 @@
     spinner.setAttribute("aria-hidden", "true");
     const thinkingCopy = document.createElement("div");
     const thinkingTitle = document.createElement("strong");
-    thinkingTitle.textContent = "Working on your question";
+    thinkingTitle.textContent = "Live investigation";
     const thinkingStatus = document.createElement("p");
     thinkingStatus.textContent = "Submitting the investigation…";
     thinkingCopy.append(thinkingTitle, thinkingStatus);
@@ -569,9 +569,14 @@
       if (log && event.message) {
         const item = document.createElement("li");
         if (Number.isFinite(seq)) item.dataset.seq = String(seq);
-        item.append(document.createElement("span"), document.createTextNode(event.message));
+        item.dataset.phase = event.phase || "investigating";
+        const copy = document.createElement("div");
+        const phase = document.createElement("small");
+        phase.textContent = (event.phase || "investigating").replaceAll("_", " ");
+        copy.append(phase, document.createTextNode(event.message));
+        item.append(document.createElement("span"), copy);
         log.append(item);
-        while (log.children.length > 5) log.firstElementChild?.remove();
+        while (log.children.length > 6) log.firstElementChild?.remove();
       }
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
