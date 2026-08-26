@@ -3,6 +3,28 @@
 Last reviewed: 2026-08-26
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-26 - Every current Pod-log read receives bounded semantic model analysis
+
+Context: Deterministic keyword and regex classification can preserve known high-value log
+signals and drive safe registered follow-ups, but it cannot scale to every application,
+framework, or failure vocabulary. Sending the entire conversation again solely to interpret
+logs would waste context and make attribution harder.
+
+Decision: After bounded collection, every turn with successful Pod-log reads makes one separate
+structured provider request containing all current redacted excerpts under a shared size cap,
+the operator question, coordinates, and evidence IDs—without conversation history. The model
+returns potential issues, severity, impact, confidence, citations, and a short supporting quote.
+Normal code allowlists citations and requires each quote to occur in its cited excerpt before
+rendering a **Model-assisted log analysis** section. The final-answer request receives the
+validated analysis instead of duplicate raw tails, while deterministic log classification remains available for known safe
+automatic follow-ups. Analysis failure is a visible limitation and does not fail the turn.
+
+Consequences: Novel log failures can be surfaced without expanding an ever-growing regex list,
+including application-specific errors. Model findings remain hypotheses rather than ground
+truth, cannot authorize reads or mutation, and are bounded by the same redaction and evidence
+provenance boundary as other provider calls. One additional provider request is incurred only
+on turns that actually collect Pod logs.
+
 ## 2026-08-26 - Final answers require substance and bounded provider context
 
 Context: A schema-valid `evidence_based` response could contain citations but only

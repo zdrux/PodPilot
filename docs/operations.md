@@ -676,15 +676,28 @@ Before requesting the final model answer, PodPilot compacts a provider-only evid
 view. Current-turn reads are prioritized, Pod-log tails are capped, large object/list
 values are reduced, at most 12 compact findings are included, and observation context
 is bounded to 96 KB. This does not truncate persisted evidence or the operator's
-provenance drawer. An evidence-backed response containing only headings or fewer than
-six meaningful words is rejected and retried once. A second incomplete response uses
+provenance drawer. An evidence-backed response containing only headings is rejected and
+retried once; concise readable answers are accepted. A second incomplete response uses
 a deterministic cited answer; recognized Route/TLS and inventory questions retain
-their specialized renderers. A reply that omits citations for current structured Pod-log
-findings is also corrected. Normal code always appends a bounded **Backend log findings**
+their specialized renderers. Inventory-only citations produce a limitation rather than
+discarding readable prose. Normal code always appends a bounded **Backend log findings**
 section for current signals, including exact Pod/container, category, severity, count,
 paths/endpoints, one sample, completed correlation checks, and citations. This section is
 composed with—not replaced by—the Route/TLS fallback. Equivalent TLS trust/bypass and
 empty-Event limitations are shown once rather than repeated.
+
+Every turn that successfully collects Pod logs also sends all current bounded, redacted
+log excerpts through a separate structured model request with no conversation history. The
+payload includes a two-sentence OpenShift investigation context and the bounded original
+operator request so the analyzer can prioritize relevant connectivity or TLS signals without
+assuming the operator's suspected mechanism is correct.
+The request is capped across excerpts and treats log text as untrusted data. PodPilot accepts
+only issue citations from the supplied log IDs and displays a supporting excerpt only when it
+can be found verbatim after whitespace normalization in the cited evidence. The resulting
+**Model-assisted log analysis** describes semantic potential issues and confidence without
+claiming root cause. After successful analysis, raw tails are omitted from the main final-answer
+request and replaced by the validated structured analysis; persisted evidence remains complete.
+Failure of this optional analysis does not fail the investigation.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is

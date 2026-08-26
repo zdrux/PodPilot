@@ -308,6 +308,12 @@ application backend serves plain HTTP. The evidence drawer renders only the same
 persisted redacted observation payloads and normalized facts already inside this
 boundary. Jinja autoescaping remains enabled, raw cluster HTML is never trusted,
 and bounded log excerpts retain the collector's existing size and redaction limits.
+When current-turn Pod logs exist, the API makes a separate structured provider request that
+contains only the redacted operator question, bounded log coordinates/excerpts, and evidence
+IDs; it supplies no conversation history or credentials. Log text remains untrusted input.
+Normal code allowlists returned citations and rejects a model-quoted supporting excerpt unless
+it occurs in the cited supplied log text after whitespace normalization. The analysis is shown
+as a potential issue rather than authoritative evidence or root cause.
 Trust-only TLS failures may trigger one identical probe with verification disabled;
 the retry remains unauthenticated, carries no credentials, preserves Host/SNI, is
 bounded by the normal read budget, and records the identity-verification limitation.

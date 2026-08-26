@@ -375,7 +375,9 @@ supporting evidence citations.
 2. The API establishes scope, time range, and a bounded tool budget.
 3. Deterministic tools collect only the required cluster evidence.
 4. The diagnostics engine correlates observations and records provenance.
-5. Sensitive values are removed before any external model call.
+5. Sensitive values are removed before any external model call. When Pod logs were read,
+   a separate context-isolated structured request semantically analyzes all current bounded
+   excerpts and returns only cited potential issues.
 6. A supported server-owned plan can execute registered read-only follow-up checks.
 7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
 8. Investigation chat may collect additional bounded alert-scoped evidence and

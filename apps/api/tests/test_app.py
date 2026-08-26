@@ -34,6 +34,8 @@ from podpilot_api.main import (
 )
 from podpilot_api.model_provider import (
     AdHocAnswer,
+    AdHocLogAnalysis,
+    LogAnalysisIssue,
     CapabilityReport,
     InvestigationChatAnswer,
     ModelProfileConfig,
@@ -1355,6 +1357,7 @@ class FakeModelProvider:
         self.chat_calls: list[dict[str, object]] = []
         self.adhoc_plan_calls: list[dict[str, object]] = []
         self.adhoc_answer_calls: list[dict[str, object]] = []
+        self.log_analysis_calls: list[dict[str, object]] = []
 
     def probe(self, profile, api_key: str) -> CapabilityReport:
         assert api_key == "test-api-token"
@@ -1413,6 +1416,16 @@ class FakeModelProvider:
             answer="The Pod selector does not match an available node.",
             cited_evidence_ids=[evidence_id],
             limitations=["No scheduler event was collected."],
+        )
+
+    def analyze_logs(
+        self, profile, api_key: str, context: dict[str, object]
+    ) -> AdHocLogAnalysis:
+        self.log_analysis_calls.append(context)
+        return AdHocLogAnalysis(
+            overview="No additional semantic log issue was identified.",
+            issues=[],
+            limitations=[],
         )
 
 
@@ -1791,6 +1804,24 @@ class RouteOnlyAnswerProvider(RouteBackendProvider):
             ),
             cited_evidence_ids=["cluster-route-1"],
             limitations=[],
+        )
+
+    def analyze_logs(
+        self, profile, api_key: str, context: dict[str, object]
+    ) -> AdHocLogAnalysis:
+        self.log_analysis_calls.append(context)
+        return AdHocLogAnalysis(
+            overview="The backend excerpt contains a certificate-loading failure.",
+            issues=[LogAnalysisIssue(
+                evidence_ids=["cluster-backend-logs"],
+                severity="error",
+                category="certificate loading",
+                summary="The backend process could not load its configured PEM certificate.",
+                potential_impact="The backend TLS listener may fail to initialize.",
+                supporting_excerpt="FileNotFoundError: [Errno 2] No such file or directory",
+                confidence="high",
+            )],
+            limitations=["Only a bounded log tail was analyzed."],
         )
 
 
@@ -3106,7 +3137,23 @@ def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
     # A readable answer is retained even when the model omits a structured log
     # citation; the deterministic log section still exposes and cites that signal.
     assert len(provider.adhoc_answer_calls) == 1
+    assert len(provider.log_analysis_calls) == 1
+    assert provider.log_analysis_calls[0]["logs"][0]["evidence_id"] == "cluster-backend-logs"
+    assert provider.log_analysis_calls[0]["investigation_context"] == (
+        "This is a read-only OpenShift troubleshooting investigation. Analyze the bounded "
+        "Pod logs for potential issues relevant to the operator request, including connectivity "
+        "and TLS signals when present, without assuming they are causal."
+    )
+    assert "Internal Server Error over HTTPS" in provider.log_analysis_calls[0]["operator_request"]
+    final_log = next(
+        item for item in provider.adhoc_answer_calls[0]["observations"]
+        if item["tool"] == "pod_logs"
+    )
+    assert "tail" not in final_log["data"]
+    assert final_log["data"]["tailOmittedFromFinalContext"] is True
     assert "router forwards the client TLS stream" in rendered.text
+    assert "Model-assisted log analysis" in rendered.text
+    assert "backend process could not load its configured PEM certificate" in rendered.text
     assert "passthrough" in rendered.text
     assert "Backend log findings" in rendered.text
     assert "tls or certificate" in rendered.text

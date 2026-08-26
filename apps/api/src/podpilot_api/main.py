@@ -32,6 +32,7 @@ from podpilot_api.knowledge import (
 from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
     AdHocAnswer,
+    AdHocLogAnalysis,
     InvestigationChatAnswer,
     ModelProfileConfig,
     ModelProvider,
@@ -1590,6 +1591,133 @@ def _deterministic_log_findings_section(
     }
 
 
+def _current_log_analysis_payload(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]], question: str,
+) -> tuple[dict[str, object] | None, dict[str, str]]:
+    """Build a fresh, bounded provider payload containing every current log read."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "pod_logs"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    logs = [
+        item for item in evidence
+        if item.get("tool") == "pod_logs"
+        and str(item.get("id") or "") in current_ids
+        and isinstance(item.get("data"), dict)
+        and str(item["data"].get("tail") or "").strip()
+    ]
+    if not logs:
+        return None, {}
+    per_log_limit = max(1_500, 30_000 // len(logs))
+    excerpts: list[dict[str, object]] = []
+    text_by_id: dict[str, str] = {}
+    for item in logs:
+        evidence_id = str(item["id"])
+        data = item["data"]
+        tail = redact_text(str(data.get("tail") or ""))[-per_log_limit:]
+        text_by_id[evidence_id] = tail
+        excerpts.append({
+            "evidence_id": evidence_id,
+            "cluster": str(item.get("cluster_name") or item.get("cluster_id") or "cluster")[:253],
+            "source": str(item.get("source") or "")[:500],
+            "container": str(data.get("container") or "default")[:253],
+            "previous": bool(data.get("previous")),
+            "excerpt": tail,
+            "excerpt_limit": "bounded tail; earlier log lines may be absent",
+        })
+    return {
+        "investigation_context": (
+            "This is a read-only OpenShift troubleshooting investigation. Analyze the bounded "
+            "Pod logs for potential issues relevant to the operator request, including connectivity "
+            "and TLS signals when present, without assuming they are causal."
+        ),
+        "operator_request": redact_text(question)[:1_000],
+        "logs": excerpts,
+        "analysis_boundary": (
+            "Identify potential issues in these excerpts only. They may be incomplete and do not prove causality."
+        ),
+    }, text_by_id
+
+
+def _validated_model_log_analysis(
+    analysis: AdHocLogAnalysis, *, text_by_id: dict[str, str],
+) -> dict[str, object]:
+    """Allow only cited issues whose quoted excerpt exists in the supplied logs."""
+
+    issues: list[dict[str, object]] = []
+    for issue in analysis.issues:
+        evidence_ids = list(dict.fromkeys(
+            item for item in issue.evidence_ids if item in text_by_id
+        ))
+        excerpt = redact_text(issue.supporting_excerpt)[:500]
+        normalized_excerpt = re.sub(r"\s+", " ", excerpt).strip().casefold()
+        if not evidence_ids or not normalized_excerpt:
+            continue
+        if not any(
+            normalized_excerpt in re.sub(r"\s+", " ", text_by_id[item]).casefold()
+            for item in evidence_ids
+        ):
+            continue
+        issues.append({
+            "evidence_ids": evidence_ids,
+            "severity": issue.severity,
+            "category": redact_text(issue.category)[:100],
+            "summary": redact_text(issue.summary)[:500],
+            "potential_impact": redact_text(issue.potential_impact)[:700],
+            "supporting_excerpt": excerpt,
+            "confidence": issue.confidence,
+        })
+    return {
+        "overview": redact_text(analysis.overview)[:700],
+        "issues": issues[:10],
+        "limitations": [redact_text(item)[:500] for item in analysis.limitations[:4]],
+        "analyzed_evidence_ids": list(text_by_id),
+    }
+
+
+def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object]:
+    """Render separately analyzed logs as hypotheses with evidence provenance."""
+
+    issues = analysis.get("issues") if isinstance(analysis.get("issues"), list) else []
+    lines = [
+        "## Model-assisted log analysis",
+        "",
+        str(analysis.get("overview") or "The bounded Pod log excerpts were analyzed for potential issues."),
+    ]
+    citations: list[str] = []
+    if not issues:
+        lines.extend((
+            "",
+            "No potential operational issue was identified in the supplied bounded excerpts.",
+        ))
+        citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
+    for issue in issues[:10]:
+        if not isinstance(issue, dict):
+            continue
+        lines.extend((
+            "",
+            f"### {str(issue.get('severity') or 'info').title()} · "
+            f"{str(issue.get('category') or 'potential issue')}",
+            "",
+            f"- **Potential issue:** {str(issue.get('summary') or '')}",
+            f"- **Potential impact:** {str(issue.get('potential_impact') or '')}",
+            f"- **Confidence:** {str(issue.get('confidence') or 'low')}",
+            "- **Supporting log excerpt:** `"
+            + str(issue.get("supporting_excerpt") or "").replace("`", "'")
+            + "`",
+        ))
+        citations.extend(str(item) for item in issue.get("evidence_ids", []))
+    lines.extend((
+        "",
+        "This is semantic analysis of bounded log excerpts, not proof of root cause. "
+        "Corroborating resource, event, metric, or probe evidence is still required.",
+    ))
+    return {"content": "\n".join(lines), "citations": list(dict.fromkeys(citations))}
+
+
 def _evidence_value(value: object, *, limit: int = 1200) -> str:
     if isinstance(value, (dict, list, tuple)):
         rendered = json.dumps(value, sort_keys=True, default=str)
@@ -3014,6 +3142,66 @@ def create_app(
                 deterministic_log_section = _deterministic_log_findings_section(
                     evidence=evidence, activity=activity
                 )
+                model_log_analysis: dict[str, object] | None = None
+                log_payload, log_text_by_id = _current_log_analysis_payload(
+                    evidence=evidence, activity=activity, question=message_text,
+                )
+                analyze_logs = getattr(provider, "analyze_logs", None)
+                if log_payload is not None and callable(analyze_logs):
+                    provider_phase = "log_analysis"
+                    if progress:
+                        await progress(
+                            "analyzing_logs",
+                            f"Analyzing {len(log_text_by_id)} bounded Pod log excerpt"
+                            f"{'s' if len(log_text_by_id) != 1 else ''} for potential issues.",
+                        )
+                    try:
+                        raw_log_analysis = await run_in_threadpool(
+                            analyze_logs, profile_snapshot, api_key, log_payload,
+                        )
+                        model_log_analysis = _validated_model_log_analysis(
+                            raw_log_analysis, text_by_id=log_text_by_id,
+                        )
+                        limitations.extend(
+                            str(item) for item in model_log_analysis.get("limitations", [])
+                        )
+                        LOGGER.info(
+                            "podpilot.adhoc.log_analysis_complete actor=%s conversation_id=%s "
+                            "logs=%s issues=%s",
+                            username,
+                            conversation_id,
+                            len(log_text_by_id),
+                            len(model_log_analysis.get("issues", [])),
+                        )
+                    except ModelProviderError as exc:
+                        LOGGER.warning(
+                            "podpilot.adhoc.log_analysis_failed actor=%s conversation_id=%s error=%s",
+                            username,
+                            conversation_id,
+                            exc,
+                        )
+                        limitations.append(
+                            "The dedicated model-assisted Pod log analysis was unavailable; "
+                            "the bounded log evidence remains available for inspection."
+                        )
+                    finally:
+                        provider_phase = "final_answer"
+                if model_log_analysis is not None:
+                    compact_without_log_tails: list[dict[str, object]] = []
+                    for observation in answer_observations:
+                        candidate = dict(observation)
+                        if candidate.get("tool") == "pod_logs" and isinstance(
+                            candidate.get("data"), dict
+                        ):
+                            data = dict(candidate["data"])
+                            data.pop("tail", None)
+                            data["tailOmittedFromFinalContext"] = True
+                            data["tailAnalysis"] = (
+                                "See model_log_analysis; the complete bounded excerpt remains in evidence."
+                            )
+                            candidate["data"] = data
+                        compact_without_log_tails.append(candidate)
+                    answer_observations = compact_without_log_tails
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": message_text,
@@ -3024,6 +3212,7 @@ def create_app(
                     "curated_knowledge": knowledge_context[:20],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
+                    "model_log_analysis": model_log_analysis,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
                 answer = await run_in_threadpool(
@@ -3153,6 +3342,16 @@ def create_app(
                     validated["citations"] = list(dict.fromkeys([
                         *[str(item) for item in validated["citations"]],
                         *[str(item) for item in deterministic_log_section["citations"]],
+                    ]))
+                if model_log_analysis is not None:
+                    model_log_section = _model_log_analysis_section(model_log_analysis)
+                    content = str(validated["content"]).rstrip()
+                    validated["content"] = (
+                        f"{content}\n\n{model_log_section['content']}"
+                    ).strip()
+                    validated["citations"] = list(dict.fromkeys([
+                        *[str(item) for item in validated["citations"]],
+                        *[str(item) for item in model_log_section["citations"]],
                     ]))
                 validated["limitations"] = _dedupe_limitations([
                     *[str(item) for item in validated.get("limitations", [])],
