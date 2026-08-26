@@ -143,6 +143,102 @@
     });
   });
 
+  const setupTagEditor = (form, {onChange} = {}) => {
+    const tagEditor = form?.querySelector("[data-tag-editor]");
+    if (!tagEditor) return {commit: () => true, tags: new Map()};
+    const tagInput = tagEditor.querySelector("[data-tag-input]");
+    const tagList = tagEditor.querySelector("[data-tag-list]");
+    const tagValue = form.querySelector("[data-tags-value]");
+    const tagError = form.querySelector("[data-tag-error]");
+    const tags = new Map();
+    const showError = (message = "") => {
+      if (!tagError) return;
+      tagError.textContent = message;
+      tagError.hidden = !message;
+    };
+    const sync = () => {
+      if (tagValue) {
+        tagValue.value = JSON.stringify(Object.fromEntries(
+          Array.from(tags.entries()).sort(([left], [right]) => left.localeCompare(right)),
+        ));
+      }
+      tagList?.replaceChildren();
+      tags.forEach((value, key) => {
+        const chip = document.createElement("span");
+        chip.className = "tag-chip";
+        const copy = document.createElement("span");
+        copy.textContent = value ? `${key}:${value}` : key;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.setAttribute("aria-label", `Remove tag ${copy.textContent}`);
+        remove.textContent = "×";
+        remove.addEventListener("click", () => {
+          tags.delete(key);
+          sync();
+          tagInput?.focus();
+        });
+        chip.append(copy, remove);
+        tagList?.append(chip);
+      });
+      onChange?.(tags);
+    };
+    const add = (rawTag) => {
+      const tag = rawTag.trim();
+      if (!tag) return true;
+      const separator = tag.indexOf(":");
+      const key = (separator === -1 ? tag : tag.slice(0, separator)).trim();
+      const value = (separator === -1 ? "" : tag.slice(separator + 1)).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(key)) {
+        showError("Tag names may use letters, numbers, dots, underscores, and hyphens.");
+        return false;
+      }
+      if (separator !== -1 && !value) {
+        showError("Add a value after the colon, or remove the colon for a single-word tag.");
+        return false;
+      }
+      if (value && !/^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,126}$/.test(value)) {
+        showError("Tag values may use letters, numbers, spaces, dots, underscores, slashes, colons, and hyphens.");
+        return false;
+      }
+      if (!tags.has(key) && tags.size >= 30) {
+        showError("A tag set can contain at most 30 tags.");
+        return false;
+      }
+      tags.set(key, value);
+      showError();
+      sync();
+      return true;
+    };
+    const commit = () => {
+      if (!tagInput?.value.trim()) return true;
+      const rawTags = tagInput.value.split(",").map((item) => item.trim()).filter(Boolean);
+      for (const rawTag of rawTags) {
+        if (!add(rawTag)) return false;
+      }
+      tagInput.value = "";
+      return true;
+    };
+    try {
+      Object.entries(JSON.parse(tagEditor.dataset.tags || "{}")).forEach(([key, value]) => {
+        tags.set(String(key), String(value));
+      });
+    } catch (_error) { /* server data is validated before rendering */ }
+    sync();
+    tagInput?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        commit();
+      } else if (event.key === "Backspace" && !tagInput.value && tags.size) {
+        const lastKey = Array.from(tags.keys()).at(-1);
+        tags.delete(lastKey);
+        sync();
+      }
+    });
+    tagInput?.addEventListener("blur", commit);
+    tagEditor.addEventListener("click", () => tagInput?.focus());
+    return {commit, input: tagInput, tags};
+  };
+
   const knowledgeForm = document.querySelector("#knowledge-form");
   if (knowledgeForm?.dataset.saveUrl) {
     const knowledgeClusterIds = knowledgeForm.querySelector("[data-knowledge-cluster-ids]");
@@ -154,10 +250,31 @@
         );
       }
     };
+    const matchPreview = knowledgeForm.querySelector("[data-knowledge-tag-matches]");
+    const knowledgeTags = setupTagEditor(knowledgeForm, {onChange: (requiredTags) => {
+      if (!matchPreview) return;
+      if (!requiredTags.size) {
+        matchPreview.textContent = "No required tags: use explicit clusters above or leave both empty for global knowledge.";
+        return;
+      }
+      const matchingNames = knowledgeClusterBoxes.filter((item) => {
+        try {
+          const clusterTags = JSON.parse(item.dataset.clusterTags || "{}");
+          return Array.from(requiredTags).every(([key, value]) => clusterTags[key] === value);
+        } catch (_error) { return false; }
+      }).map((item) => item.dataset.clusterName || item.value);
+      matchPreview.textContent = matchingNames.length
+        ? `Tag match: ${matchingNames.join(", ")}.`
+        : "No configured clusters currently match every required tag.";
+    }});
     knowledgeClusterBoxes.forEach((item) => item.addEventListener("change", syncKnowledgeClusters));
     syncKnowledgeClusters();
     knowledgeForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (!knowledgeTags.commit()) {
+        knowledgeTags.input?.focus();
+        return;
+      }
       const submit = knowledgeForm.querySelector('button[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = "Saving…"; }
       try {
@@ -201,105 +318,14 @@
   if (clusterSettingsForm?.dataset.saveUrl) {
     const verifyCheckbox = clusterSettingsForm.querySelector('[name="tls_verify_checkbox"]');
     const verifyValue = clusterSettingsForm.querySelector('[name="tls_verify"]');
-    const tagEditor = clusterSettingsForm.querySelector("[data-tag-editor]");
-    const tagInput = clusterSettingsForm.querySelector("[data-tag-input]");
-    const tagList = clusterSettingsForm.querySelector("[data-tag-list]");
-    const tagValue = clusterSettingsForm.querySelector("[data-tags-value]");
-    const tagError = clusterSettingsForm.querySelector("[data-tag-error]");
-    const clusterTags = new Map();
-    const showTagError = (message = "") => {
-      if (!tagError) return;
-      tagError.textContent = message;
-      tagError.hidden = !message;
-    };
-    const syncClusterTags = () => {
-      if (tagValue) {
-        tagValue.value = JSON.stringify(Object.fromEntries(
-          Array.from(clusterTags.entries()).sort(([left], [right]) => left.localeCompare(right)),
-        ));
-      }
-      if (!tagList) return;
-      tagList.replaceChildren();
-      clusterTags.forEach((value, key) => {
-        const chip = document.createElement("span");
-        chip.className = "tag-chip";
-        const copy = document.createElement("span");
-        copy.textContent = value ? `${key}:${value}` : key;
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.setAttribute("aria-label", `Remove tag ${copy.textContent}`);
-        remove.textContent = "×";
-        remove.addEventListener("click", () => {
-          clusterTags.delete(key);
-          syncClusterTags();
-          tagInput?.focus();
-        });
-        chip.append(copy, remove);
-        tagList.append(chip);
-      });
-    };
-    const addClusterTag = (rawTag) => {
-      const tag = rawTag.trim();
-      if (!tag) return true;
-      const separator = tag.indexOf(":");
-      const key = (separator === -1 ? tag : tag.slice(0, separator)).trim();
-      const value = (separator === -1 ? "" : tag.slice(separator + 1)).trim();
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/.test(key)) {
-        showTagError("Tag names may use letters, numbers, dots, underscores, and hyphens.");
-        return false;
-      }
-      if (separator !== -1 && !value) {
-        showTagError("Add a value after the colon, or remove the colon for a single-word tag.");
-        return false;
-      }
-      if (value && !/^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,126}$/.test(value)) {
-        showTagError("Tag values may use letters, numbers, spaces, dots, underscores, slashes, colons, and hyphens.");
-        return false;
-      }
-      if (!clusterTags.has(key) && clusterTags.size >= 30) {
-        showTagError("A cluster can have at most 30 tags.");
-        return false;
-      }
-      clusterTags.set(key, value);
-      showTagError();
-      syncClusterTags();
-      return true;
-    };
-    const commitTagInput = () => {
-      if (!tagInput?.value.trim()) return true;
-      const rawTags = tagInput.value.split(",").map((item) => item.trim()).filter(Boolean);
-      for (const rawTag of rawTags) {
-        if (!addClusterTag(rawTag)) return false;
-      }
-      tagInput.value = "";
-      return true;
-    };
-    if (tagEditor) {
-      try {
-        Object.entries(JSON.parse(tagEditor.dataset.tags || "{}")).forEach(([key, value]) => {
-          clusterTags.set(String(key), String(value));
-        });
-      } catch (_error) { /* server data is validated before rendering */ }
-      syncClusterTags();
-      tagInput?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === ",") {
-          event.preventDefault();
-          commitTagInput();
-        } else if (event.key === "Backspace" && !tagInput.value && clusterTags.size) {
-          const lastKey = Array.from(clusterTags.keys()).at(-1);
-          clusterTags.delete(lastKey);
-          syncClusterTags();
-        }
-      });
-      tagInput?.addEventListener("blur", commitTagInput);
-    }
+    const clusterTagEditor = setupTagEditor(clusterSettingsForm);
     verifyCheckbox?.addEventListener("change", () => {
       if (verifyValue) verifyValue.value = verifyCheckbox.checked ? "true" : "false";
     });
     clusterSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!commitTagInput()) {
-        tagInput?.focus();
+      if (!clusterTagEditor.commit()) {
+        clusterTagEditor.input?.focus();
         return;
       }
       const submit = clusterSettingsForm.querySelector('button[type="submit"]');

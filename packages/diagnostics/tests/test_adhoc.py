@@ -333,6 +333,92 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
     assert legacy_pod_reads[0].intent.name == "model-server-abc"
 
 
+def test_configuration_question_expands_inventory_to_exact_object_reads() -> None:
+    inventory = AdHocObservation(
+        id="cluster-clf-list", tool="list_resources",
+        summary="Read ClusterLogForwarder resources.",
+        source="kubernetes:observability.openshift.io/v1:ClusterLogForwarder:cluster/*",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "observability.openshift.io/v1",
+            "kind": "ClusterLogForwarder",
+            "resource": "clusterlogforwarders.observability.openshift.io",
+            "objects": [{"namespace": "openshift-logging", "name": "instance"}],
+        },
+    )
+
+    followups = automatic_read_followups(
+        ReadIntent(
+            tool="list_resources",
+            resource="clusterlogforwarders.observability.openshift.io",
+            api_version="observability.openshift.io/v1",
+            kind="ClusterLogForwarder",
+        ),
+        (inventory,),
+        question="Are the cluster log forwarders set up to forward logs?",
+        goal_type="explain",
+    )
+
+    assert len(followups) == 1
+    assert followups[0].code == "configuration_detail"
+    assert followups[0].evidence_ids == ("cluster-clf-list",)
+    assert followups[0].intent == ReadIntent(
+        tool="get_resource",
+        resource="clusterlogforwarders.observability.openshift.io",
+        api_version="observability.openshift.io/v1",
+        kind="ClusterLogForwarder",
+        namespace="openshift-logging",
+        name="instance",
+    )
+
+
+def test_plain_inventory_question_does_not_expand_every_object() -> None:
+    inventory = AdHocObservation(
+        id="cluster-widget-list", tool="list_resources", summary="Read Widgets.",
+        source="kubernetes:example.io/v1:Widget:apps/*",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "example.io/v1", "kind": "Widget", "resource": "widgets",
+            "objects": [{"namespace": "apps", "name": "one"}],
+        },
+    )
+
+    assert automatic_read_followups(
+        ReadIntent(
+            tool="list_resources", resource="widgets",
+            api_version="example.io/v1", kind="Widget",
+        ),
+        (inventory,),
+        question="List the Widgets in the cluster.",
+        goal_type="inventory",
+    ) == ()
+
+
+def test_non_inventory_health_question_expands_inventory_to_details() -> None:
+    inventory = AdHocObservation(
+        id="cluster-operator-list", tool="list_resources", summary="Read operators.",
+        source="kubernetes:config.openshift.io/v1:ClusterOperator:cluster/*",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "config.openshift.io/v1", "kind": "ClusterOperator",
+            "resource": "clusteroperators", "objects": [{"name": "ingress"}],
+        },
+    )
+
+    followups = automatic_read_followups(
+        ReadIntent(
+            tool="list_resources", resource="clusteroperators",
+            api_version="config.openshift.io/v1", kind="ClusterOperator",
+        ),
+        (inventory,),
+        question="Are the cluster operators healthy?",
+        goal_type="health",
+    )
+
+    assert [item.code for item in followups] == ["configuration_detail"]
+    assert followups[0].intent.name == "ingress"
+
+
 def test_log_priority_is_scoped_to_the_affected_container() -> None:
     evidence = [{
         "id": "cluster-pods-2", "tool": "list_resources",

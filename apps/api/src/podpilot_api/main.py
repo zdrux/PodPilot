@@ -583,6 +583,8 @@ _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
 def _adhoc_answer_quality_issue(
     *, answer_mode: str, content: str, citations: list[str],
     required_log_citations: set[str] | None = None,
+    question: str = "",
+    observations: list[dict[str, object]] | None = None,
 ) -> str | None:
     """Reject schema-valid final answers that contain no useful operator explanation."""
 
@@ -592,6 +594,22 @@ def _adhoc_answer_quality_issue(
         (required_log_citations or set()) - set(citations)
     ):
         return "missing_material_log_citations"
+    if _question_requires_object_details(question) and citations:
+        cited_tools = {
+            str(item.get("tool") or "")
+            for item in (observations or [])
+            if str(item.get("id") or "") in citations
+        }
+        if (
+            cited_tools
+            and cited_tools <= {"list_resources", "search_resources"}
+            and not _inventory_citations_have_material_details(
+                citations=citations,
+                observations=observations or [],
+                question=question,
+            )
+        ):
+            return "non_inventory_answer_cites_inventory_only"
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -608,6 +626,63 @@ def _adhoc_answer_quality_issue(
     if len(body) < 35 or len(words) < 6:
         return "response_too_brief"
     return None
+
+
+def _question_requires_object_details(question: str) -> bool:
+    """Treat only explicit enumeration/count requests as inventory-only."""
+
+    if not question.strip():
+        return False
+    explanatory_signal = bool(re.search(
+        r"(?i)\b(?:why|health|healthy|unhealthy|status|state|ready|readiness|degraded|"
+        r"configur(?:e|ed|ation)|set\s*up|setup|details?|forward(?:ed|ing)?|routing?|"
+        r"pipeline|destinations?|connect(?:ed|ion)?|integrat(?:e|ed|ion)|"
+        r"how(?!\s+many\b))\b",
+        question,
+    ))
+    if explanatory_signal:
+        return True
+    explicit_inventory = bool(re.search(
+        r"(?i)\b(?:list|show|display|enumerate|inventory|count|how\s+many)\b",
+        question,
+    )) or bool(re.search(
+        r"(?i)\b(?:what|which)\b.{0,80}\b(?:available|exist|present|installed)\b",
+        question,
+    ))
+    return not explicit_inventory
+
+
+def _inventory_citations_have_material_details(
+    *, citations: list[str], observations: list[dict[str, object]], question: str,
+) -> bool:
+    configuration_signal = bool(re.search(
+        r"(?i)\b(?:configur(?:e|ed|ation)|set\s*up|setup|forward(?:ed|ing)?|routing?|"
+        r"pipeline|outputs?|inputs?|destinations?|connect(?:ed|ion)?|integrat(?:e|ed|ion))\b",
+        question,
+    ))
+    for observation in observations:
+        if (
+            str(observation.get("id") or "") not in citations
+            or observation.get("tool") not in {"list_resources", "search_resources"}
+        ):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        if data.get("detailsTruncated"):
+            continue
+        items = data.get("items") if isinstance(data.get("items"), list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            spec = item.get("spec") if isinstance(item.get("spec"), dict) else {}
+            status = item.get("status") if isinstance(item.get("status"), dict) else {}
+            if spec or (status and not configuration_signal):
+                return True
+            if not configuration_signal and any(
+                key not in {"apiVersion", "kind", "metadata", "spec", "status"}
+                for key in item
+            ):
+                return True
+    return False
 
 
 def _compact_provider_value(
@@ -798,8 +873,12 @@ def _deterministic_inventory_answer(
     *,
     evidence: list[dict[str, object]],
     activity: list[dict[str, object]],
+    question: str = "",
 ) -> dict[str, object] | None:
     """Render validated list evidence when the model cannot produce a useful answer."""
+
+    if _question_requires_object_details(question):
+        return None
 
     current_ids = {
         str(evidence_id)
@@ -1456,6 +1535,7 @@ def _bind_plan_log_intents(
     errors: list[str] = []
     rejected: list[ReadIntent] = []
     observed_names: set[str] = set()
+    observed_scopes: dict[str, set[str]] = {}
     for observation in evidence:
         data = observation.get("data")
         if not isinstance(data, dict):
@@ -1463,6 +1543,14 @@ def _bind_plan_log_intents(
         names = data.get("names")
         if isinstance(names, list):
             observed_names.update(str(name).lower() for name in names if name)
+        refs = data.get("objects")
+        if isinstance(refs, list):
+            for ref in refs:
+                if not isinstance(ref, dict) or not ref.get("name") or not ref.get("namespace"):
+                    continue
+                observed_scopes.setdefault(str(ref["name"]).lower(), set()).add(
+                    str(ref["namespace"])
+                )
         metadata = data.get("metadata")
         if isinstance(metadata, dict) and metadata.get("name"):
             observed_names.add(str(metadata["name"]).lower())
@@ -1491,6 +1579,16 @@ def _bind_plan_log_intents(
     for intent in plan.intents:
         normalized = normalize_read_intent(intent)
         resolved, error = _bind_pod_log_intent(normalized, candidates)
+        if (
+            error is None
+            and resolved is not None
+            and resolved.tool == "get_resource"
+            and resolved.name
+            and not resolved.namespace
+        ):
+            namespaces = observed_scopes.get(resolved.name.lower(), set())
+            if len(namespaces) == 1:
+                resolved = resolved.model_copy(update={"namespace": next(iter(namespaces))})
         if (
             error is None
             and resolved is not None
@@ -1599,6 +1697,7 @@ async def _collect_bounded_cluster_reads(
     automatic_tls_retries = 0
     automatic_traffic_followups = 0
     automatic_log_followups = 0
+    automatic_configuration_followups = 0
     scope_summary = "Bounded read-only cluster investigation."
     deterministic_plan = plan_known_read(
         question,
@@ -1879,6 +1978,8 @@ async def _collect_bounded_cluster_reads(
                     message = "Following the observed Route traffic path to its backend workloads."
                 elif automatic_code == "log_signal_investigation":
                     message = "Correlating a notable bounded log signal with exact Pod evidence."
+                elif automatic_code == "configuration_detail":
+                    message = "Reading exact discovered objects to explain their configuration."
                 await progress("collecting", message)
             entry: dict[str, object] = {
                 "round": round_number,
@@ -1910,7 +2011,7 @@ async def _collect_bounded_cluster_reads(
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
                 for followup in automatic_read_followups(
-                    intent, result.observations, question=question
+                    intent, result.observations, question=question, goal_type=plan.goal_type
                 ):
                     if (
                         followup.code == "tls_trust_retry"
@@ -1918,6 +2019,9 @@ async def _collect_bounded_cluster_reads(
                     ) or (
                         followup.code == "traffic_path_investigation"
                         and automatic_traffic_followups >= 8
+                    ) or (
+                        followup.code == "configuration_detail"
+                        and automatic_configuration_followups >= 6
                     ) or (
                         followup.code in {"pod_log_investigation", "log_signal_investigation"}
                         and automatic_log_followups >= 6
@@ -1931,6 +2035,8 @@ async def _collect_bounded_cluster_reads(
                         automatic_tls_retries += 1
                     elif followup.code == "traffic_path_investigation":
                         automatic_traffic_followups += 1
+                    elif followup.code == "configuration_detail":
+                        automatic_configuration_followups += 1
                     else:
                         automatic_log_followups += 1
                     seen_intents.add(signature)
@@ -2559,6 +2665,8 @@ def create_app(
                     content=str(validated["content"]),
                     citations=[str(item) for item in validated["citations"]],
                     required_log_citations=required_log_citations,
+                    question=message_text,
+                    observations=evidence,
                 )
                 if answer_quality_issue:
                     if progress:
@@ -2572,7 +2680,9 @@ def create_app(
                         "reason": answer_quality_issue,
                         "message": (
                             "Return a complete operator-facing technical answer with substantive prose "
-                            "under each useful heading. Address every supplied structured log finding and "
+                            "under each useful heading. For configuration or behavior questions, cite exact "
+                            "object reads and explain their material spec/status fields rather than returning "
+                            "an inventory. Address every supplied structured log finding and "
                             "cite each corresponding Pod-log evidence ID. Do not return headings only."
                         ),
                     }
@@ -2594,6 +2704,8 @@ def create_app(
                             content=str(retry_validated["content"]),
                             citations=[str(item) for item in retry_validated["citations"]],
                             required_log_citations=required_log_citations,
+                            question=message_text,
+                            observations=evidence,
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -2612,6 +2724,7 @@ def create_app(
                 inventory_answer = _deterministic_inventory_answer(
                     evidence=evidence,
                     activity=activity,
+                    question=message_text,
                 )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,
@@ -3949,6 +4062,9 @@ def create_app(
                 "clusters": [_cluster_summary(item) for item in clusters],
                 "selected_target_ids": (
                     json.loads(selected.target_cluster_ids_json or "[]") if selected else []
+                ),
+                "selected_target_tags": (
+                    json.loads(selected.target_tags_json or "{}") if selected else {}
                 ),
                 "csrf_token": csrf_token,
             },

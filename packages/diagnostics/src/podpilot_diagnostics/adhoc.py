@@ -479,7 +479,7 @@ def plan_needs_evidence_repair(
 ) -> bool:
     """Reject an unsupported no-read answer for a model-classified operational goal."""
 
-    actionable = {"inventory", "health", "diagnose", "logs", "compare"}
+    actionable = {"inventory", "health", "diagnose", "logs", "compare", "explain"}
     has_valid_support = bool(known_evidence_ids.intersection(plan.supporting_evidence_ids))
     return (
         plan.goal_type in actionable
@@ -830,7 +830,7 @@ class AutomaticReadFollowup:
 
     code: Literal[
         "tls_trust_retry", "traffic_path_investigation", "pod_log_investigation",
-        "log_signal_investigation",
+        "log_signal_investigation", "configuration_detail",
     ]
     reason: str
     intent: ReadIntent
@@ -1030,6 +1030,7 @@ def automatic_read_followups(
     observations: tuple[AdHocObservation, ...],
     *,
     question: str = "",
+    goal_type: str | None = None,
 ) -> tuple[AutomaticReadFollowup, ...]:
     """Plan narrow retries and evidence expansion from normalized observations."""
 
@@ -1212,6 +1213,46 @@ def automatic_read_followups(
                 intent=intent.model_copy(update={"tls_verify": False}),
                 evidence_ids=tuple(item.id for item in trust_failures),
             ),)
+
+    detail_question = (goal_type is not None and goal_type != "inventory") or bool(re.search(
+        r"(?i)\b(?:configur(?:e|ed|ation)|set\s*up|setup|settings?|details?|"
+        r"forward(?:ed|ing)?|routing?|pipeline|outputs?|inputs?|destinations?|"
+        r"connect(?:ed|ion)?|integrat(?:e|ed|ion)|how\s+(?:does|do|is|are))\b",
+        question,
+    ))
+    if detail_question and intent.tool in {"list_resources", "search_resources"}:
+        detail_reads: list[AutomaticReadFollowup] = []
+        seen_targets: set[tuple[str, str]] = set()
+        for observation in observations:
+            data = observation.data
+            refs = data.get("objects") if isinstance(data.get("objects"), list) else []
+            api_version = str(data.get("apiVersion") or intent.api_version or "") or None
+            kind = str(data.get("kind") or intent.kind or "") or None
+            resource = str(data.get("resource") or intent.resource or "") or None
+            for ref in refs:
+                if not isinstance(ref, dict):
+                    continue
+                name = str(ref.get("name") or "")[:253]
+                namespace = str(ref.get("namespace") or "")[:253] or None
+                if not name or (namespace or "", name) in seen_targets:
+                    continue
+                seen_targets.add((namespace or "", name))
+                detail_reads.append(AutomaticReadFollowup(
+                    code="configuration_detail",
+                    reason=(
+                        f"Read the exact {kind or 'resource'} {namespace + '/' if namespace else ''}"
+                        f"{name} discovered by the bounded list so its material configuration can be explained."
+                    ),
+                    intent=ReadIntent(
+                        tool="get_resource", resource=resource, api_version=api_version,
+                        kind=kind, namespace=namespace, name=name,
+                    ),
+                    evidence_ids=(observation.id,),
+                ))
+                if len(detail_reads) >= 3:
+                    return tuple(detail_reads)
+        if detail_reads:
+            return tuple(detail_reads)
 
     if intent.tool in {"get_resource", "list_resources", "search_resources"}:
         candidates = pod_log_candidates_from_evidence(

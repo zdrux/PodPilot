@@ -255,10 +255,20 @@ label such as `production` or an exact key/value tag such as `region:toronto`; p
 comma after each tag. A cluster supports up to 30 tags, and adding another value for an
 existing key replaces that key's earlier value.
 
+Cluster-memory target tags use the same removable-chip editor. The form previews the configured
+clusters whose tags satisfy every required tag, while explicitly checked clusters remain an
+additional OR target. With neither explicit clusters nor required tags, the entry is global.
+
 Ask PodPilot accepts free-form operational questions; it does not gate cluster reads on a
 catalog of recognized phrases or sentiment. The model may propose only the registered read
 tools, normal code validates every target, sensitive resources remain denied, and the
 selected cluster ServiceAccount provides the final Kubernetes RBAC boundary. When a
+question is not an explicit list or count request, a bounded object list is treated as discovery
+rather than a complete answer. PodPilot follows up on up to three discovered
+objects per read with exact namespace/name reads, within the existing per-turn budget, and the
+answer must interpret material fields from those details rather than returning object names alone.
+This applies to health, diagnosis, comparison, explanation, configuration, topology, and behavior
+questions. Explicit list and count questions remain inventory-only. When a
 `list_resources` plan omits a deliberate limit, the broker replaces the model schema's
 20-object default with the configured bounded inventory window. When the model cannot turn
 validated list evidence into a useful final answer, PodPilot renders that evidence as a

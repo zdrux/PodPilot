@@ -78,6 +78,9 @@ a { color: inherit; }
 .knowledge-targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; }
 .knowledge-targets legend { padding: 0 6px; color: #b7c3d4; font-size: 11px; font-weight: 700; }
 .knowledge-targets > p { grid-column: 1 / -1; margin: 0; }
+.knowledge-targets .checkbox-field { align-items: flex-start; }
+.cluster-tag-summary { display: block; margin-top: 3px; color: var(--subtle); font-size: 9px; font-weight: 500; line-height: 1.4; }
+.tag-match-preview { display: block; color: #91dce6 !important; }
 .memory-results { padding: 0 20px 20px; }
 .memory-results ol { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
 .memory-results li { padding: 15px; border: 1px solid var(--border); border-radius: 10px; background: rgba(7, 13, 23, .7); }

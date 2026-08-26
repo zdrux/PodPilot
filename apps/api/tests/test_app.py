@@ -516,12 +516,73 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
         content="No error lines appeared in the bounded application log tail.",
         citations=["cluster-log-1"],
     ) is None
+
+
+def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence() -> None:
+    plan = ReadPlan(
+        goal_type="explain",
+        scope_summary="Read the discovered forwarder configuration.",
+        intents=[ReadIntent(
+            tool="get_resource",
+            resource="clusterlogforwarders.observability.openshift.io",
+            api_version="observability.openshift.io/v1",
+            kind="ClusterLogForwarder",
+            name="instance",
+        )],
+    )
+
+    bound, errors, rejected = _bind_plan_log_intents(
+        plan,
+        [],
+        question="How is the ClusterLogForwarder instance configured?",
+        evidence=[{
+            "id": "cluster-clf-list",
+            "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder",
+                "names": ["instance"],
+                "objects": [{"namespace": "openshift-logging", "name": "instance"}],
+            },
+        }],
+    )
+
+    assert errors == []
+    assert rejected == []
+    assert bound.intents[0].namespace == "openshift-logging"
     assert _adhoc_answer_quality_issue(
         answer_mode="evidence_based",
         content="The Route configuration was inspected and uses TLS passthrough.",
         citations=["cluster-route-1"],
         required_log_citations={"cluster-log-1"},
     ) == "missing_material_log_citations"
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="The configured forwarder objects were found in the selected clusters.",
+        citations=["cluster-clf-list"],
+        question="How are the log forwarders configured?",
+        observations=[{"id": "cluster-clf-list", "tool": "list_resources"}],
+    ) == "non_inventory_answer_cites_inventory_only"
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="The exact forwarder routes application logs through the configured Kafka output.",
+        citations=["cluster-clf-detail"],
+        question="How are the log forwarders configured?",
+        observations=[{"id": "cluster-clf-detail", "tool": "get_resource"}],
+    ) is None
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="The operator objects were found and report their current names.",
+        citations=["cluster-operator-list"],
+        question="Are the cluster operators healthy?",
+        observations=[{"id": "cluster-operator-list", "tool": "list_resources"}],
+    ) == "non_inventory_answer_cites_inventory_only"
+    assert _adhoc_answer_quality_issue(
+        answer_mode="evidence_based",
+        content="The following cluster operators are available: ingress and monitoring.",
+        citations=["cluster-operator-list"],
+        question="List the available cluster operators.",
+        observations=[{"id": "cluster-operator-list", "tool": "list_resources"}],
+    ) is None
 
 
 def test_deterministic_log_findings_render_missing_certificate_details() -> None:
@@ -969,6 +1030,25 @@ def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None
     assert "| 2 | `openshift-logging` | `collector-b` | — |" in str(rendered["content"])
     assert "complete for this snapshot" in str(rendered["content"])
     assert rendered["citations"] == ["cluster-pods-1"]
+
+
+def test_configuration_question_does_not_fall_back_to_names_only_inventory() -> None:
+    rendered = _deterministic_inventory_answer(
+        question="How is the ClusterLogForwarder set up to forward logs?",
+        evidence=[{
+            "id": "cluster-clf-list", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder", "scope": "openshift-logging",
+                "names": ["instance"], "objectListComplete": True,
+            },
+        }],
+        activity=[{
+            "tool": "list_resources", "status": "succeeded",
+            "evidence_ids": ["cluster-clf-list"],
+        }],
+    )
+
+    assert rendered is None
 
 
 def test_inventory_fallback_enumerates_custom_resources_without_question_classification() -> None:
@@ -5212,6 +5292,10 @@ def test_cluster_memory_targets_global_explicit_and_tag_matched_clusters(tmp_pat
             db_session.commit()
         engine.dispose()
         page = client.get("/memory", headers={"x-forwarded-user": "ada"})
+        assert "data-knowledge-tag-matches" in page.text
+        assert 'name="target_tags_json" data-tags-value' in page.text
+        assert '<textarea name="target_tags_json"' not in page.text
+        assert "platform:azure" in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text).group(1)
         headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf}
 
@@ -5228,10 +5312,16 @@ def test_cluster_memory_targets_global_explicit_and_tag_matched_clusters(tmp_pat
                 "target_tags_json": json.dumps(tags),
             })
             assert response.status_code == 200
+            return response.json()
 
         save("Global guidance", [], {})
-        save("Azure guidance", [], {"platform": "azure"})
+        azure_saved = save("Azure guidance", [], {"platform": "azure"})
         save("Metal explicit guidance", [metal_id], {})
+        edited = client.get(
+            f"/memory?edit={azure_saved['document_id']}",
+            headers={"x-forwarded-user": "ada"},
+        )
+        assert 'data-tags=\'{"platform": "azure"}\'' in edited.text
         azure = client.get(
             f"/api/v1/knowledge/search?q=sharedneedle&cluster_id={azure_id}",
             headers={"x-forwarded-user": "ada"},
