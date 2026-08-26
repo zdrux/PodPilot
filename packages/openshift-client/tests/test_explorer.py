@@ -41,6 +41,36 @@ def test_remote_discovery_errors_are_actionable_without_raw_headers(status, expe
     assert "do-not-display" not in detail
 
 
+@pytest.mark.parametrize("tls_verify", [True, False])
+def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
+    monkeypatch, tls_verify,
+):
+    captured = {}
+
+    class FakeDynamicClient:
+        def __init__(self, api_client):
+            captured["configuration"] = api_client.configuration
+            self.resources = SimpleNamespace(search=lambda **_kwargs: [])
+
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.DynamicClient",
+        FakeDynamicClient,
+    )
+
+    KubernetesReadOnlyExplorer.for_remote_cluster(
+        api_url="https://api.remote.example:6443",
+        token="eyJ.test.jwt",
+        tls_verify=tls_verify,
+    )
+
+    configuration = captured["configuration"]
+    bearer = configuration.auth_settings()["BearerToken"]
+    assert bearer["key"] == "authorization"
+    assert bearer["value"] == "Bearer eyJ.test.jwt"
+    assert configuration.verify_ssl is tls_verify
+    assert configuration.assert_hostname is tls_verify
+
+
 def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal() -> None:
     endpoint_slice = _list_projection("EndpointSlice", {
         "metadata": {"name": "api-1", "namespace": "payments"},

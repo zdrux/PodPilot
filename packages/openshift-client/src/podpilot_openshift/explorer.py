@@ -428,8 +428,12 @@ class KubernetesReadOnlyExplorer:
     ) -> "KubernetesReadOnlyExplorer":
         configuration = client.Configuration()
         configuration.host = api_url.rstrip("/")
-        configuration.api_key = {"authorization": token}
-        configuration.api_key_prefix = {"authorization": "Bearer"}
+        # kubernetes-client 36.x generated clients look up the BearerToken key.
+        # Its legacy `authorization` alias does not carry an alias-configured
+        # prefix forward, which would send the JWT without the required
+        # `Bearer` scheme and cause an authenticated API to reject the request.
+        configuration.api_key = {"BearerToken": token}
+        configuration.api_key_prefix = {"BearerToken": "Bearer"}
         configuration.verify_ssl = tls_verify
         configuration.assert_hostname = tls_verify
         api_client = client.ApiClient(configuration)

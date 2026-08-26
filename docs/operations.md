@@ -226,7 +226,11 @@ Secret value but keeps metadata for historical conversations.
 HTTP 401 means the bearer token must be replaced; HTTP 403 means the identity needs API
 discovery and read-only `cluster-reader` access on the remote cluster. PodPilot reduces
 Kubernetes client exceptions to these actionable messages and never returns raw response
-headers or authorization material to the browser.
+headers or authorization material to the browser. The remote adapter sends tokens through
+the Kubernetes client's `BearerToken` authentication setting, producing an
+`Authorization: Bearer …` header whether TLS verification is enabled or explicitly
+disabled. Disabling verification changes certificate and hostname validation only; it
+does not remove or alter bearer authentication.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname
