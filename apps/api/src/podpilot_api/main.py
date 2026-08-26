@@ -3422,7 +3422,20 @@ def create_app(
             await run_in_threadpool(reader.resource_catalog, query="namespaces", limit=1)
         except Exception as exc:
             status_value = "unavailable"
-            error_detail = redact_text(str(exc))[:500] or type(exc).__name__
+            if isinstance(exc, (ReadOnlyExplorerError, CredentialStoreError)):
+                error_detail = redact_text(str(exc))[:500] or type(exc).__name__
+            else:
+                error_detail = (
+                    "The cluster connection test failed before read-only discovery completed. "
+                    "Check the API pod logs for the failure category."
+                )
+            LOGGER.warning(
+                "Cluster connection test failed for cluster=%r actor=%r error_type=%s detail=%s",
+                cluster_snapshot["name"],
+                user.username,
+                type(exc).__name__,
+                error_detail,
+            )
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)

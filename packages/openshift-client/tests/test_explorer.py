@@ -8,6 +8,7 @@ from podpilot_openshift.explorer import (
     KubernetesReadOnlyExplorer,
     ReadOnlyExplorerError,
     _list_projection,
+    _remote_discovery_error,
 )
 
 
@@ -22,6 +23,22 @@ class FakeObject:
 
     def to_dict(self):
         return self._payload
+
+
+@pytest.mark.parametrize(("status", "expected"), [
+    (401, "rejected the configured bearer token"),
+    (403, "denied read-only API discovery"),
+    (500, "could not complete read-only discovery"),
+])
+def test_remote_discovery_errors_are_actionable_without_raw_headers(status, expected):
+    exc = ApiException(status=status, reason="Forbidden")
+    exc.headers = {"Audit-Id": "do-not-display"}
+
+    detail = _remote_discovery_error(exc)
+
+    assert expected in detail
+    assert "Audit-Id" not in detail
+    assert "do-not-display" not in detail
 
 
 def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal() -> None:
@@ -537,7 +554,7 @@ def test_log_permission_errors_are_reported_as_authorization_failures():
         ))
 
 
-def test_resource_permission_error_names_service_account_action_and_scope():
+def test_resource_permission_error_names_cluster_identity_action_and_scope():
     class ForbiddenResource:
         def get(self, **_kwargs):
             raise ApiException(status=403, reason="Forbidden")
@@ -547,7 +564,7 @@ def test_resource_permission_error_names_service_account_action_and_scope():
     with pytest.raises(
         ReadOnlyExplorerError,
         match=(
-            "podpilot-investigator ServiceAccount permission to list IngressController "
+            "configured cluster identity permission to list IngressController "
             "at cluster-wide scope"
         ),
     ):

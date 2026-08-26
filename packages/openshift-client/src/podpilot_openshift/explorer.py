@@ -43,6 +43,21 @@ _SENSITIVE_KEYS = re.compile(
 )
 
 
+def _remote_discovery_error(exc: ApiException) -> str:
+    if exc.status == 401:
+        return (
+            "The remote Kubernetes API rejected the configured bearer token (HTTP 401). "
+            "Replace the token and test the connection again."
+        )
+    if exc.status == 403:
+        return (
+            "The remote Kubernetes API denied read-only API discovery (HTTP 403). "
+            "Grant the token identity Kubernetes discovery and cluster-reader access, then retry."
+        )
+    status = f" (HTTP {exc.status})" if exc.status else ""
+    return f"The remote Kubernetes API could not complete read-only discovery{status}."
+
+
 def _safe_identifier(value: str | None, label: str, *, required: bool = True) -> str | None:
     if not value:
         if required:
@@ -418,7 +433,15 @@ class KubernetesReadOnlyExplorer:
         configuration.verify_ssl = tls_verify
         configuration.assert_hostname = tls_verify
         api_client = client.ApiClient(configuration)
-        dynamic = DynamicClient(api_client)
+        try:
+            dynamic = DynamicClient(api_client)
+        except ApiException as exc:
+            raise ReadOnlyExplorerError(_remote_discovery_error(exc)) from exc
+        except Exception as exc:
+            raise ReadOnlyExplorerError(
+                "PodPilot could not establish a remote Kubernetes API discovery session. "
+                "Verify the API URL, TLS setting, and network path."
+            ) from exc
         return cls(
             dynamic_client=dynamic,
             core_api=client.CoreV1Api(api_client),
@@ -484,7 +507,7 @@ class KubernetesReadOnlyExplorer:
                 target += f" for {intent.name}"
             if exc.status == 403:
                 detail = (
-                    "OpenShift RBAC denied the podpilot-investigator ServiceAccount permission "
+                    "OpenShift RBAC denied the configured cluster identity permission "
                     f"to {action} {target} (HTTP 403). An administrator must grant that read "
                     "permission before PodPilot can collect this evidence."
                 )

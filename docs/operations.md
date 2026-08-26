@@ -222,6 +222,12 @@ cluster is added automatically and uses its projected service-account identity. 
 tokens are never stored in SQLite or returned by the API. Disabling an entry removes its
 Secret value but keeps metadata for historical conversations.
 
+**Test connection** performs remote Kubernetes API discovery with the stored identity.
+HTTP 401 means the bearer token must be replaced; HTTP 403 means the identity needs API
+discovery and read-only `cluster-reader` access on the remote cluster. PodPilot reduces
+Kubernetes client exceptions to these actionable messages and never returns raw response
+headers or authorization material to the browser.
+
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname
 verification for a credential-bearing request and permits interception of the bearer token

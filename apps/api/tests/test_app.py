@@ -2147,6 +2147,50 @@ def test_cluster_save_reports_and_logs_credential_store_failure(
     assert "never-log-this-token" not in caplog.text
 
 
+def test_cluster_test_does_not_return_raw_remote_client_exception(tmp_path: Path) -> None:
+    cluster_credentials = MemoryCredentialStore()
+
+    def failing_remote_reader(_cluster, _token):
+        raise RuntimeError(
+            "403 Forbidden HTTP response headers: Audit-Id=do-not-display "
+            "Authorization=Bearer-do-not-display"
+        )
+
+    app, _settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        cluster_credential_store=cluster_credentials,
+        remote_read_explorer_factory=failing_remote_reader,
+    )
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        saved = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "name": "forbidden-cluster",
+                "api_url": "https://api.forbidden.example:6443",
+                "token": "sha256~remote-cluster-token",
+                "tags_json": "{}",
+                "tls_verify": "false",
+            },
+        )
+        tested = client.post(
+            f"/api/v1/clusters/{saved.json()['cluster_id']}/test",
+            headers=headers,
+        )
+
+    assert tested.status_code == 200
+    assert tested.json()["status"] == "unavailable"
+    assert "failed before read-only discovery" in tested.json()["detail"]
+    assert "Audit-Id" not in tested.text
+    assert "Authorization" not in tested.text
+
+
 def test_ask_conversation_pins_and_reads_multiple_clusters(tmp_path: Path) -> None:
     cluster_credentials = MemoryCredentialStore()
     provider = FakeModelProvider()
