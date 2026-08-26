@@ -933,7 +933,6 @@ def test_direct_model_pod_log_target_requires_collected_candidate() -> None:
 
 def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None:
     rendered = _deterministic_inventory_answer(
-        question="Give me a list of Pods in openshift-logging",
         evidence=[{
             "id": "cluster-pods-1",
             "tool": "list_resources",
@@ -959,9 +958,8 @@ def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None
     assert rendered["citations"] == ["cluster-pods-1"]
 
 
-def test_existence_question_enumerates_custom_resources_with_namespace_and_readiness() -> None:
+def test_inventory_fallback_enumerates_custom_resources_without_question_classification() -> None:
     rendered = _deterministic_inventory_answer(
-        question="Do we have any Kafka clusters running here?",
         evidence=[{
             "id": "cluster-kafka-1",
             "tool": "list_resources",
@@ -995,6 +993,102 @@ def test_existence_question_enumerates_custom_resources_with_namespace_and_readi
     assert "| `kafka-observability` | `observability-kafka` | True |" in content
     assert "complete for this snapshot" in content
     assert rendered["citations"] == ["cluster-kafka-1"]
+
+
+def test_free_form_model_planned_list_uses_configured_broker_ceiling() -> None:
+    class FreeFormPlanner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.calls += 1
+            if context["completed_reads"]:
+                return ReadPlan(
+                    goal_type="explain",
+                    decision="answer_from_evidence",
+                    scope_summary="The collected topic evidence answers the request.",
+                    supporting_evidence_ids=["cluster-topics-1"],
+                )
+            return ReadPlan(
+                goal_type="explain",
+                scope_summary="Inspect the installed KafkaTopic resources.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="kafkatopics",
+                    api_version="kafka.strimzi.io/v1beta2",
+                    kind="KafkaTopic",
+                    namespace="kafka-observability",
+                )],
+            )
+
+    class KafkaTopicExplorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "kafkatopics",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "KafkaTopic",
+                "namespaced": True,
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-topics-1",
+                tool="list_resources",
+                summary="Read KafkaTopic resources in kafka-observability.",
+                source=(
+                    "kubernetes:kafka.strimzi.io/v1beta2:KafkaTopic:"
+                    "kafka-observability/*"
+                ),
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "KafkaTopic",
+                    "scope": "kafka-observability",
+                    "names": ["audit-events"],
+                    "objectListComplete": True,
+                },
+            ),))
+
+    provider = FreeFormPlanner()
+    explorer = KafkaTopicExplorer()
+    settings = Settings(
+        auth_mode="test",
+        role_investigator_groups=[],
+        role_approver_groups=[],
+        role_breakglass_groups=[],
+        adhoc_inventory_max_objects=500,
+    )
+    question = "Tell me what's going on with the messaging setup over there."
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test",
+            base_url="https://models.example.test/v1",
+            chat_model="test",
+            embedding_model=None,
+            timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=settings,
+        actor="ivy",
+        workflow_id="workflow-kafka-topics",
+        question=question,
+        conversation=[],
+        existing_evidence=[],
+    ))
+
+    assert provider.calls == 2
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].resource == "kafkatopics"
+    assert explorer.calls[0].namespace == "kafka-observability"
+    assert explorer.calls[0].limit == 500
+    assert result.evidence[-1]["data"]["names"] == ["audit-events"]
 
 
 class FakeAlertSource:

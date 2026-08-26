@@ -796,21 +796,11 @@ def _deterministic_evidence_fallback_answer(
 
 def _deterministic_inventory_answer(
     *,
-    question: str,
     evidence: list[dict[str, object]],
     activity: list[dict[str, object]],
 ) -> dict[str, object] | None:
-    """Render explicit inventory requests from validated list evidence, not model prose."""
+    """Render validated list evidence when the model cannot produce a useful answer."""
 
-    if not (
-        re.search(r"\b(?:list|inventory)\b", question, re.IGNORECASE)
-        or re.search(r"\bshow\s+me\b", question, re.IGNORECASE)
-        or re.search(r"\bwhich\b.+\bclusters?\b", question, re.IGNORECASE)
-        or re.search(r"\b(?:do|does)\s+.+\bhave\s+any\b", question, re.IGNORECASE)
-        or re.search(r"\bare\s+there\s+any\b", question, re.IGNORECASE)
-        or re.search(r"\bhow\s+many\b", question, re.IGNORECASE)
-    ):
-        return None
     current_ids = {
         str(evidence_id)
         for entry in activity
@@ -1639,7 +1629,6 @@ async def _collect_bounded_cluster_reads(
             catalog_entries,
             inventory_limit=settings.adhoc_inventory_max_objects,
         )
-
     def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
         known_evidence_ids = {str(item.get("id")) for item in evidence}
         if plan_needs_evidence_repair(
@@ -1846,6 +1835,17 @@ async def _collect_bounded_cluster_reads(
         current_log_candidates = pod_log_candidates_from_evidence(evidence)
         for proposed_intent in plan.intents[:remaining_reads]:
             intent = normalize_read_intent(proposed_intent)
+            if (
+                intent.tool == "list_resources"
+                and intent.limit == ReadIntent.model_fields["limit"].default
+            ):
+                # The read broker, not a wording classifier, owns the bounded LIST policy.
+                # Replace the schema's implicit 20-object default so free-form questions
+                # receive the configured inventory window. Preserve a deliberate planner
+                # limit used by purpose-built diagnostic reads.
+                intent = intent.model_copy(
+                    update={"limit": settings.adhoc_inventory_max_objects}
+                )
             intent, binding_error = _bind_pod_log_intent(intent, current_log_candidates)
             if binding_error:
                 limitations.append(
@@ -2610,7 +2610,6 @@ def create_app(
                             "PodPilot used deterministic evidence instead."
                         )
                 inventory_answer = _deterministic_inventory_answer(
-                    question=message_text,
                     evidence=evidence,
                     activity=activity,
                 )
@@ -2626,7 +2625,9 @@ def create_app(
                 )
                 deterministic_answer = (
                     route_tls_answer if route_fallback_needed else None
-                ) or inventory_answer or (
+                ) or (
+                    inventory_answer if route_fallback_needed else None
+                ) or (
                     _deterministic_evidence_fallback_answer(
                         evidence=evidence, activity=activity
                     ) if answer_quality_issue is not None else None

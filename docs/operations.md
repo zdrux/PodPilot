@@ -244,8 +244,14 @@ the prior session remains in history. All selected clusters share the twelve-rea
 budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
-Explicit list, inventory, count, and existence questions use a deterministic table from
-validated `list_resources` evidence even when the model returns an incomplete final answer.
+Ask PodPilot accepts free-form operational questions; it does not gate cluster reads on a
+catalog of recognized phrases or sentiment. The model may propose only the registered read
+tools, normal code validates every target, sensitive resources remain denied, and the
+selected cluster ServiceAccount provides the final Kubernetes RBAC boundary. When a
+`list_resources` plan omits a deliberate limit, the broker replaces the model schema's
+20-object default with the configured bounded inventory window. When the model cannot turn
+validated list evidence into a useful final answer, PodPilot renders that evidence as a
+deterministic table instead.
 For namespaced resources, including operator-managed custom resources such as Strimzi
 `Kafka`, the table preserves cluster, namespace, resource name, observed `Ready` condition,
 and whether the bounded list was complete. A cluster-scoped read can therefore return more
@@ -557,11 +563,13 @@ Evidence-backed and Not-confirmed states appear as short pills beside the reply
 time; hover or keyboard focus exposes their explanation. Ask UI timestamps use
 fixed `EST (-4)` presentation while database and API timestamps remain UTC.
 
-Straightforward inventory questions bypass model planning: StorageClass discovery
-and explicit list/show questions compile against the live, safe API discovery
-catalog to one deterministic bounded read. This works for common Kubernetes and
-OpenShift resources plus installed CRDs. Named reads require exact namespace
-scope; inventory LISTs may be cluster-wide when the operator supplies no
+StorageClass discovery remains a deterministic convenience. Other free-form information
+requests use model planning against the live, safe API discovery catalog, which works for
+common Kubernetes and OpenShift resources plus installed CRDs. The planner can propose only
+registered, read-only operations; the broker validates exact API coordinates, rejects
+sensitive kinds and unsupported operations, applies collection ceilings, and relies on the
+selected ServiceAccount's `get`, `list`, and `watch` permissions. Named reads require exact
+namespace scope; inventory LISTs may be cluster-wide when the operator supplies no
 namespace and remain subject to ServiceAccount RBAC. Investigative questions still use iterative model planning, but the
 question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
