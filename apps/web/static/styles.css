@@ -220,7 +220,11 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .chat-citations a { padding: 4px 6px; border: 1px solid rgba(69, 212, 232, .2); border-radius: 6px; color: var(--cyan); background: var(--cyan-soft); font-size: 8px; text-decoration: none; }
 .answer-evidence { margin-top: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
 .answer-evidence > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--cyan); cursor: pointer; font-size: 10px; font-weight: 800; letter-spacing: .035em; text-transform: uppercase; }
-.answer-evidence > summary::marker { color: var(--cyan); }
+.answer-evidence > summary::marker { content: ""; }
+.answer-evidence > summary::-webkit-details-marker { display: none; }
+.answer-evidence > summary::before { content: ">"; flex: 0 0 auto; color: var(--cyan); font-size: 12px; line-height: 1; transform-origin: center; transition: transform .14s ease; }
+.answer-evidence[open] > summary::before { transform: rotate(90deg); }
+.answer-evidence > summary > span { margin-right: auto; }
 .answer-evidence > summary small { margin-left: auto; color: var(--subtle); font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; }
 .answer-evidence-timeline { margin: 9px 0 2px 7px; padding: 1px 0 1px 18px; border-left: 1px solid rgba(69, 212, 232, .22); }
 .answer-evidence-timeline li { padding: 6px 0; list-style: none; }
@@ -256,13 +260,29 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .progress-timeline li span { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px rgba(69, 212, 232, .08); }
 @keyframes podpilot-spin { to { transform: rotate(360deg); } }
 @keyframes podpilot-pulse { 50% { opacity: .58; box-shadow: 0 0 0 7px rgba(69, 212, 232, .08); } }
-@media (prefers-reduced-motion: reduce) { .thinking-spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .thinking-spinner { animation: none; } .answer-evidence > summary::before { transition: none; } }
 .ask-empty { min-height: 390px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; }
 .ask-empty p { max-width: 570px; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .prompt-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 680px; }
 .prompt-examples span { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: #8fa0b8; background: #0b1320; font-size: 9px; }
 .answer-limitations { margin: 9px 0 0; padding-left: 17px; }
 .answer-limitations li { padding: 3px 0; color: var(--orange); font-size: 8px; line-height: 1.45; }
+.metric-result { margin-top: 14px; padding: 14px; border: 1px solid rgba(69, 212, 232, .22); border-radius: 10px; background: rgba(69, 212, 232, .035); }
+.metric-result-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
+.metric-result-heading h3 { margin: 7px 0 3px; font-size: 14px; }
+.metric-result-heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.metric-result > small { display: block; margin-top: 9px; color: var(--subtle); font-size: 10px; }
+.metric-table-wrap { overflow-x: auto; }
+.metric-ranking-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.metric-ranking-table th, .metric-ranking-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.metric-ranking-table th { color: var(--subtle); font-size: 9px; text-transform: uppercase; }
+.metric-ranking-table code { color: #cbd8e5; font-size: 10px; }
+.metric-current { min-width: 190px; }
+.metric-current progress { width: 108px; height: 8px; margin-right: 9px; border: 0; border-radius: 999px; vertical-align: middle; overflow: hidden; background: #101a28; }
+.metric-current progress::-webkit-progress-bar { background: #101a28; }
+.metric-current progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #1daec3, var(--cyan)); }
+.metric-current progress::-moz-progress-bar { border-radius: 999px; background: linear-gradient(90deg, #1daec3, var(--cyan)); }
+.metric-current strong { color: #e6f6f8; font-size: 11px; }
 .delete-chat-form { margin: 0; }
 .compact-button { min-height: 32px; padding: 0 11px; }
 .context-divider { padding: 9px 12px; border: 1px dashed var(--border-bright); border-radius: 8px; color: var(--muted); text-align: center; font-size: 12px; }
@@ -414,6 +434,8 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   .page-footer { flex-direction: column; gap: 5px; }
   .evidence-dialog { width: 100vw; }
   .evidence-facts { grid-template-columns: 1fr; }
+  .metric-result-heading { align-items: stretch; flex-direction: column; }
+  .metric-result-heading button { align-self: start; }
 }
 
 /* Readability baseline: the interface previously used 8–11px text extensively. */
@@ -437,6 +459,8 @@ body { font-size: 15px; }
 .chat-markdown { font-size: 15px; line-height: 1.72; }
 .answer-evidence > summary { font-size: 12px; }
 .answer-limitations li { font-size: 12px; line-height: 1.55; }
+.metric-result-heading p, .metric-result > small, .metric-ranking-table { font-size: 12px; }
+.metric-ranking-table th { font-size: 10px; }
 .chat-form label { font-size: 12px; }
 .chat-form textarea { min-height: 96px; font-size: 15px; }
 .chat-form small { font-size: 11px; line-height: 1.45; }

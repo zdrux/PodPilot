@@ -632,6 +632,33 @@ def test_operator_evidence_view_surfaces_probe_diagnostics_and_redacted_payload(
     assert '"resolvedAddresses": [' in view["data_json"]
 
 
+def test_operator_evidence_view_builds_metric_ranking_for_direct_rendering() -> None:
+    view = _adhoc_evidence_view({
+        "id": "metric-cpu-1",
+        "tool": "query_metrics",
+        "summary": "Ranked CPU consumers.",
+        "source": "thanos:query_range/top_cpu_consumers",
+        "data": {
+            "metric": "top_cpu_consumers",
+            "unit": "cores",
+            "complete": True,
+            "ranking": [{
+                "labels": {"namespace": "logging", "pod": "collector-1", "container": "collector"},
+                "average": 0.7, "current": 0.9, "maximum": 1.0,
+            }],
+        },
+    })
+
+    ranking = view["metric_ranking"]
+    assert ranking["title"] == "Top CPU Consumers"
+    assert ranking["scale_max"] == 0.9
+    assert ranking["rows"][0] == {
+        "rank": 1, "namespace": "logging", "pod": "collector-1",
+        "container": "collector", "average": "0.700 cores",
+        "current": "0.900 cores", "maximum": "1.000 cores", "progress": 0.9,
+    }
+
+
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
     invented = ReadPlan(
         scope_summary="Inspect a guessed collector.",
@@ -2335,6 +2362,11 @@ def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan
     assert explorer.calls[0].metric == "top_cpu_consumers"
     assert explorer.calls[0].metric_scope == "namespace"
     assert explorer.calls[0].namespace == "openshift-logging"
+    assert "Top CPU Consumers" in rendered.text
+    assert "collector-1" in rendered.text
+    assert "0.900 cores" in rendered.text
+    assert "Download CSV" in rendered.text
+    assert re.search(r'data-csv-table="metric-table-[^"]+-metric-cpu-1"', rendered.text)
 
 
 def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(

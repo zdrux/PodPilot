@@ -51,6 +51,44 @@
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
         </div>
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
+        {% if message.role == 'assistant' and message.citations %}
+          {% for id in message.citations %}
+            {% set cited = evidence_by_id.get(id) %}
+            {% if cited and cited.metric_ranking %}
+            <section class="metric-result" aria-labelledby="metric-result-{{ message.id }}-{{ id }}">
+              <div class="metric-result-heading">
+                <div>
+                  <span class="evidence-tool">Observed metric</span>
+                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }}</h3>
+                  <p>Current values compared within this bounded result. Average and peak cover the collected period.</p>
+                </div>
+                <button class="button secondary compact-button" type="button"
+                  data-csv-table="metric-table-{{ message.id }}-{{ id }}"
+                  data-csv-filename="podpilot-{{ cited.data.metric if cited.data else 'metrics' }}.csv">Download CSV</button>
+              </div>
+              <div class="metric-table-wrap">
+                <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
+                  <thead><tr><th>Rank</th><th>Namespace</th><th>Pod</th><th>Container</th><th>Average</th><th>Current</th><th>Peak</th></tr></thead>
+                  <tbody>
+                  {% for row in cited.metric_ranking.rows %}
+                    <tr>
+                      <td>{{ row.rank }}</td>
+                      <td><code>{{ row.namespace }}</code></td>
+                      <td><code>{{ row.pod }}</code></td>
+                      <td><code>{{ row.container }}</code></td>
+                      <td>{{ row.average }}</td>
+                      <td class="metric-current"><progress max="{{ cited.metric_ranking.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.pod }} current value {{ row.current }}"></progress><strong>{{ row.current }}</strong></td>
+                      <td>{{ row.maximum }}</td>
+                    </tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <small>{% if cited.metric_ranking.complete %}Complete bounded result{% else %}Result reached a collection limit and may be incomplete{% endif %} · Source: {{ cited.source }}</small>
+            </section>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
         {% if message.citations %}
         <details class="answer-evidence">
           <summary><span>Evidence used in this answer</span><small>{{ message.citations | length }} source{% if message.citations | length != 1 %}s{% endif %}</small></summary>

@@ -1019,6 +1019,82 @@ def _evidence_value(value: object, *, limit: int = 1200) -> str:
     return rendered[:limit]
 
 
+def _format_metric_value(value: object, unit: str) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "—"
+    numeric = float(value)
+    if unit == "bytes":
+        labels = ("B", "KiB", "MiB", "GiB", "TiB")
+        magnitude = abs(numeric)
+        index = 0
+        while magnitude >= 1024 and index < len(labels) - 1:
+            numeric /= 1024
+            magnitude /= 1024
+            index += 1
+        return f"{numeric:.2f} {labels[index]}"
+    if unit == "bytes_per_second":
+        return f"{_format_metric_value(numeric, 'bytes')}/s"
+    if unit == "percent":
+        return f"{numeric:.2f}%"
+    if unit == "cores":
+        return f"{numeric:.3f} cores"
+    if unit == "ratio":
+        return f"{numeric:.3f}"
+    return f"{numeric:.3f} {unit}".strip()
+
+
+def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
+    ranking = data.get("ranking")
+    if not isinstance(ranking, list) or not ranking:
+        return None
+    unit = str(data.get("unit") or "")
+    rows: list[dict[str, object]] = []
+    current_values = [
+        float(item["current"])
+        for item in ranking
+        if isinstance(item, dict)
+        and isinstance(item.get("current"), (int, float))
+        and not isinstance(item.get("current"), bool)
+    ]
+    scale_max = max(current_values, default=0.0)
+    if scale_max <= 0:
+        scale_max = 1.0
+    for index, item in enumerate(ranking[:10], start=1):
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+        current = item.get("current")
+        progress = (
+            max(0.0, float(current))
+            if isinstance(current, (int, float)) and not isinstance(current, bool)
+            else 0.0
+        )
+        rows.append({
+            "rank": index,
+            "namespace": str(labels.get("namespace") or "—"),
+            "pod": str(labels.get("pod") or "—"),
+            "container": str(labels.get("container") or "—"),
+            "average": _format_metric_value(item.get("average"), unit),
+            "current": _format_metric_value(current, unit),
+            "maximum": _format_metric_value(item.get("maximum"), unit),
+            "progress": progress,
+        })
+    if not rows:
+        return None
+    metric_name = str(data.get("metric") or "metric")
+    metric_title = {
+        "top_cpu_consumers": "Top CPU Consumers",
+        "top_memory_consumers": "Top Memory Consumers",
+    }.get(metric_name, metric_name.replace("_", " ").title())
+    return {
+        "title": metric_title,
+        "unit": unit,
+        "scale_max": scale_max,
+        "rows": rows,
+        "complete": data.get("complete") is True,
+    }
+
+
 def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
     """Build redacted, operator-facing facts from one persisted evidence observation."""
 
@@ -1065,6 +1141,7 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         add("Unit", data.get("unit"))
         add("Statistics", data.get("statistics"))
         add("Complete", data.get("complete"))
+        view["metric_ranking"] = _metric_ranking_view(data)
     else:
         add("API version", data.get("apiVersion"))
         add("Kind", data.get("kind"))
@@ -2680,7 +2757,7 @@ def create_app(
                 ).order_by(AdHocRun.created_at.desc()).limit(1)
             )
         messages = [{
-            "role": row.role, "actor": row.actor, "content": row.content,
+            "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
             "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
             "activity": json.loads(row.tool_activity_json), "provider_status": row.provider_status,
             "created_at": row.created_at,

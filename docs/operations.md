@@ -484,6 +484,10 @@ card in **Collected evidence**. The drawer shows normalized OpenShift coordinate
 and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
 the exact Pod/container and bounded log excerpt as applicable. **View technical
 details** displays the complete persisted redacted payload used by the answer.
+Replies that cite a top-consumer metric render its persisted ranking directly as
+an operator-visible horizontal bar table with average, current, and peak values.
+The table can be downloaded as CSV; neither the visualization nor the export depends
+on the model reproducing numeric values in Markdown.
 This is evidence provenance, not model chain-of-thought.
 Evidence-backed and Not-confirmed states appear as short pills beside the reply
 time; hover or keyboard focus exposes their explanation. Ask UI timestamps use

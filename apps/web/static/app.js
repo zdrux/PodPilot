@@ -499,6 +499,27 @@
     const target = document.getElementById(window.location.hash.slice(1));
     if (target) focusEvidence(target, {smooth: false});
   }
+  document.querySelectorAll("[data-csv-table]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const table = document.getElementById(button.dataset.csvTable);
+      if (!table) return;
+      const escapeCell = (value) => {
+        const safeValue = /^[=+\-@]/.test(value) ? `'${value}` : value;
+        return `"${safeValue.replaceAll('"', '""')}"`;
+      };
+      const csv = Array.from(table.rows).map((row) =>
+        Array.from(row.cells).map((cell) => escapeCell(cell.textContent.trim())).join(",")
+      ).join("\r\n");
+      const url = URL.createObjectURL(new Blob([csv], {type: "text/csv;charset=utf-8"}));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = button.dataset.csvFilename || "podpilot-metrics.csv";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+  });
   document.querySelectorAll(".delete-chat-form").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
