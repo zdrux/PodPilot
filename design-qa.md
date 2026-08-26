@@ -1,46 +1,83 @@
-# Design QA: compact Ask PodPilot session header
+# Ask PodPilot pinned-session layout QA
 
-## Sources
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-63365a39-70cb-4b62-9e14-3cfa063ef4e4.png`
+- Implementation screenshot: `C:\Users\zdrux\AppData\Local\Temp\podpilot-ask-pinned-layout-final.png`
+- Desktop viewport: 2101 × 1012 CSS px at device scale factor 1
+- Source pixels: 2101 × 1012
+- Implementation pixels: 2101 × 1012
+- Density normalization: none; source and implementation were captured at identical pixel dimensions
+- State: desktop dark theme. The source shows a populated conversation; the isolated QA database shows the empty-session state. The shared header, transcript region, cluster selector, and composer shell are directly comparable.
 
-- Source visual truth: `C:/Users/zdrux/AppData/Local/Temp/codex-clipboard-c9d20f53-0546-4a13-a79c-52fcf3234761.png` (1806 x 993, 1x). This is the supplied pre-change conversation state.
-- Browser-rendered implementation: `C:/Users/zdrux/.codex/visualizations/2026/08/26/01a03ed6-326e-7f72-9f7b-6314972d2216/ask-compact-header.png` (1806 x 993, 1x).
-- Focused tooltip state: `C:/Users/zdrux/.codex/visualizations/2026/08/26/01a03ed6-326e-7f72-9f7b-6314972d2216/ask-compact-header-tooltip.png` (1806 x 993, 1x).
-- Narrow implementation: `C:/Users/zdrux/.codex/visualizations/2026/08/26/01a03ed6-326e-7f72-9f7b-6314972d2216/ask-compact-header-mobile.png` (700 x 900, 1x).
-- Combined full-view comparison: `C:/Users/zdrux/.codex/visualizations/2026/08/26/01a03ed6-326e-7f72-9f7b-6314972d2216/ask-header-comparison.png` (3612 x 993).
+## Full-view comparison evidence
 
-## Viewport and state
+The supplied source and the final browser-rendered screenshot were opened together at the same 2101 × 1012 size. The implementation preserves the sidebar and dark blue-grey chat hue while removing the previous inset outer panel. The main session now fills the complete area to the right of the 248px sidebar. The 88px header begins at viewport top, the composer terminates exactly at viewport bottom, and the center region consumes the remaining height.
 
-- Browser: Codex in-app browser.
-- Desktop comparison viewport: 1806 x 993 CSS pixels at device scale 1. Source and implementation required no density normalization.
-- State: existing conversation with collected evidence; compact boundary pill immediately precedes the evidence button.
-- Narrow responsive check: 700 x 900 CSS pixels. The header controls stayed side by side, the panel remained within the viewport, and no horizontal overflow was present.
+Measured final desktop geometry:
 
-## Findings
+- Session surface: left 248, top 0, right 2101, bottom 1012
+- Header: top 0, bottom 88
+- Composer in the model-not-ready QA state: top 658, bottom 1012
+- Body scroll height: 1012, equal to viewport height
+- Outer panel border: 0px none
+- Outer panel radius: 0px
+- Outer panel shadow: none
 
-- No actionable P0, P1, or P2 differences remain for the requested changes.
-- Fonts and typography: the relocated `Read-only cluster assistant` text inherits the existing gray subtitle font, size, line height, and weight. It no longer uses the cyan uppercase eyebrow treatment.
-- Spacing and layout rhythm: the full-width warning was removed. The conversation panel begins at 121.8 px in the desktop implementation instead of roughly 223 px in the supplied screenshot, reclaiming about 101 px of vertical space. Both compact header controls are 38 px tall with a 9 px gap.
-- Colors and visual tokens: the boundary pill retains the existing orange warning semantics at low visual weight; the evidence control retains its cyan evidence styling.
-- Image quality and assets: the affected area contains no raster imagery or custom image assets. The existing text-based information mark was preserved and no new image approximation was introduced.
-- Copy and content: the complete investigation-boundary explanation remains unchanged in meaning and is available through both pointer hover and keyboard focus. The visible label is shortened to `Cluster selection locked`.
+## Focused region comparison evidence
 
-## Interaction and accessibility checks
+Separate crops were not needed because the full-resolution captures keep the header and composer typography, controls, spacing, and divider lines readable. Focused inspection confirmed:
 
-- Keyboard focus on the boundary pill displayed the complete explanation; the tooltip pseudo-element reported opacity `1`.
-- The pill exposes the complete explanation in its accessible label.
-- `Collected evidence` still opens its dialog, changes `aria-expanded` to `true`, closes normally, and restores `aria-expanded` to `false`.
-- Browser console warning/error check returned no entries.
+- Header: brief session summary and title remain left-aligned; status controls remain right-aligned; the bottom divider is subtle and continuous.
+- Conversation: the retained dark blue-grey field has no outer card edge; message cards remain available as intentional attribution boundaries when messages exist.
+- Composer: cluster selection and message input are grouped in one bottom region with a continuous top divider. Permission and model-readiness notices stay inside the same pinned region.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Inter/system stack, sizes, weights, wrapping, and hierarchy are unchanged. No new type styles were introduced.
+- Spacing and layout rhythm: the old page padding and panel inset are removed only for Ask PodPilot. Header, transcript, and composer form a full-height three-row grid. Existing internal 18–20px spacing remains consistent.
+- Colors and visual tokens: existing dark blue-grey surfaces, cyan accents, orange boundary status, muted text, and border tokens are preserved. Divider opacity uses the existing blue-grey palette.
+- Image quality and asset fidelity: the screen contains no new raster assets. Existing brand and UI marks were left unchanged.
+- Copy and content: all existing product copy, evidence labels, cluster-selection guidance, composer help, and empty-state prompts are unchanged.
+
+## Interaction and responsive verification
+
+- Opened the cluster picker successfully.
+- Filled and cleared the question textarea successfully.
+- Submit was intentionally not attempted because the isolated QA model profile was not configured.
+- At 700 × 900, the sidebar collapses to the top, the main area fills the remaining 765px, the header and composer remain bounded inside it, and body scroll height remains equal to viewport height.
+- Browser console errors checked: none.
 
 ## Comparison history
 
-1. The initial browser render placed the compact warning directly to the left of `Collected evidence`, aligned both controls at 38 px high, and moved the read-only context into the subtitle line. No P0/P1/P2 issue was found.
-2. The focused state verified that removing the banner did not remove its detailed safety explanation.
-3. The 700 px responsive pass verified wrapping and overflow. No follow-up visual fix was required.
+### Pass 1
 
-## Focused region comparison
+- [P2] The generic `.panel` rule appeared later in the cascade and restored a faint 1px outer border and 16px radius around the Ask session.
+- Fix: increased selector specificity to `.ask-page .ask-panel`, preserving the edge-to-edge overrides against the generic panel rule.
+- Post-fix evidence: the final screenshot and computed styles show no border, no radius, and no shadow; the session bounds exactly match the main viewport bounds.
 
-The page-header and conversation-header regions were inspected at native size because the supplied screenshot is a pre-change state and contains different conversation content. The requested delta is visible and measurable: the cyan eyebrow and full-width orange banner are absent, while the gray subtitle text and compact orange pill are present in their requested locations.
+### Pass 2
 
-## Final result
+No actionable P0, P1, or P2 differences remain for the requested layout change.
 
-passed
+## Findings
+
+No blocking visual, interaction, accessibility, or responsive findings remain.
+
+## Open questions
+
+None.
+
+## Implementation checklist
+
+- [x] Remove Ask page outer card inset, border, radius, and shadow.
+- [x] Pin the session summary header to the top region.
+- [x] Make the transcript the only independently scrolling region when messages overflow.
+- [x] Pin cluster selection and the message composer to the bottom region.
+- [x] Add subtle continuous separators between all three regions.
+- [x] Preserve the existing dark blue-grey chat background and sidebar contrast.
+- [x] Verify desktop and responsive geometry, core controls, and browser console.
+
+## Follow-up polish
+
+No P3 follow-up is required for this scoped change.
+
+final result: passed
