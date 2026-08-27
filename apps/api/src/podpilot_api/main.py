@@ -4436,6 +4436,13 @@ async def _collect_bounded_cluster_reads(
                     and not target_errors
                 ):
                     plan = bound_plan
+                    discarded_intents = getattr(plan, "_discarded_intent_count", 0)
+                    if discarded_intents:
+                        limitations.append(
+                            "PodPilot retained the valid model-selected reads and discarded "
+                            f"{discarded_intents} malformed object read"
+                            f"{'s' if discarded_intents != 1 else ''}."
+                        )
                     LOGGER.info(
                         "podpilot.adhoc.plan_decision actor=%s workflow_id=%s round=%s "
                         "attempt=%s goal=%s decision=%s intents=%s novel=%s",
@@ -4601,6 +4608,33 @@ async def _collect_bounded_cluster_reads(
                 LOGGER.warning(
                     "podpilot.adhoc.action_candidate_recovery actor=%s workflow_id=%s "
                     "candidate_id=%s capability=%s reason=empty_selection",
+                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
+                )
+            elif (
+                needs_fallback
+                and planner_error is not None
+                and activity
+                and read_candidates
+            ):
+                selected_candidate = read_candidates[0]
+                plan = ReadPlan(
+                    goal_type=pinned_goal or "diagnose",
+                    scope_summary=(
+                        "Continue the investigation with the highest-priority broker-validated "
+                        "candidate after the model's corrected action selection remained invalid."
+                    ),
+                    intents=[selected_candidate.intent],
+                )
+                target_errors = []
+                candidate_errors = []
+                limitations.append(
+                    "The model's proposed read remained malformed after one correction attempt; "
+                    "PodPilot continued with the highest-priority unread candidate grounded in "
+                    "already collected evidence."
+                )
+                LOGGER.warning(
+                    "podpilot.adhoc.invalid_plan_candidate_recovery actor=%s workflow_id=%s "
+                    "candidate_id=%s capability=%s",
                     actor, workflow_id, selected_candidate.id, selected_candidate.capability,
                 )
             elif needs_fallback and log_fallback is not None:

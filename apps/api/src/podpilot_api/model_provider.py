@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 from podpilot_diagnostics.adhoc import CandidateReadPlan, InvestigationGap, ReadIntent, ReadPlan
 
@@ -167,6 +167,8 @@ class AuthoredObjectRead(BaseModel):
 class ActionSelection(BaseModel):
     """Compact continuation contract: supplied IDs and/or broker-validated object reads."""
 
+    _discarded_object_reads: int = PrivateAttr(default=0)
+
     action_ids: list[str] = Field(default_factory=list, max_length=4)
     object_reads: list[AuthoredObjectRead] = Field(default_factory=list, max_length=3)
 
@@ -181,7 +183,7 @@ class ActionSelection(BaseModel):
     def to_read_plan(self) -> ReadPlan:
         intents = [item.to_read_intent() for item in self.object_reads]
         if self.action_ids or intents:
-            return ReadPlan(
+            plan = ReadPlan(
                 goal_type="diagnose",
                 decision="collect",
                 scope_summary="Collect the selected or model-authored read-only evidence.",
@@ -189,6 +191,8 @@ class ActionSelection(BaseModel):
                 intents=intents,
                 next_step_summary="Collect the selected or model-authored read-only evidence.",
             )
+            plan._discarded_intent_count = self._discarded_object_reads
+            return plan
         return ReadPlan(
             goal_type="diagnose",
             decision="answer_from_evidence",
@@ -1033,6 +1037,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
                 if retried_empty_content:
+                    salvaged = self._salvage_action_selection(schema, content)
+                    if salvaged is not None:
+                        return salvaged
                     raise ModelProviderError(
                         f"Provider response does not match {schema.__name__}. "
                         f"{self._schema_correction_detail(schema, first_error)}"
@@ -1058,7 +1065,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 if not corrected_content:
                     raise ModelProviderError("The provider returned no corrected structured response content.")
                 _record_raw_response(corrected_content)
-                return self._validate_structured_content(schema, corrected_content)
+                try:
+                    return self._validate_structured_content(schema, corrected_content)
+                except ValidationError:
+                    salvaged = self._salvage_action_selection(schema, corrected_content)
+                    if salvaged is not None:
+                        return salvaged
+                    raise
         except ModelProviderError:
             raise
         except ValidationError as exc:
@@ -1078,6 +1091,48 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         if schema is ReadPlan and isinstance(payload, dict) and "scope_summary" not in payload:
             payload["scope_summary"] = "Bounded read-only cluster investigation."
         return schema.model_validate(payload)
+
+    @staticmethod
+    def _salvage_action_selection(schema, content: str) -> ActionSelection | None:
+        """Retain independently valid actions after the bounded correction attempt fails."""
+
+        if schema is not ActionSelection:
+            return None
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        action_ids: list[str] = []
+        for value in payload.get("action_ids") or []:
+            try:
+                validated = ActionSelection(action_ids=[value]).action_ids[0]
+            except (IndexError, TypeError, ValidationError):
+                continue
+            if validated not in action_ids:
+                action_ids.append(validated)
+            if len(action_ids) >= 4:
+                break
+
+        object_reads: list[AuthoredObjectRead] = []
+        discarded = 0
+        raw_reads = payload.get("object_reads") or []
+        if not isinstance(raw_reads, list):
+            raw_reads = []
+            discarded = 1
+        for value in raw_reads[:3]:
+            try:
+                object_reads.append(AuthoredObjectRead.model_validate(value))
+            except (TypeError, ValidationError):
+                discarded += 1
+
+        if not action_ids and not object_reads:
+            return None
+        selection = ActionSelection(action_ids=action_ids, object_reads=object_reads)
+        selection._discarded_object_reads = discarded
+        return selection
 
     @classmethod
     def _schema_correction_detail(cls, schema, error: ValidationError) -> str:

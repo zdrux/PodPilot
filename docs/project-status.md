@@ -70,7 +70,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   emits sanitized phase/outcome events for provider troubleshooting, and gives
   Chat Completions models one bounded field/type plus static cross-field schema correction attempt.
   A schema-invalid correction after a valid premature stop may fall back to one exact
-  operator-grounded discovery anchor; a plan malformed from its first response still executes nothing.
+  operator-grounded discovery anchor. After successful evidence collection, independently valid action
+  selections survive a malformed sibling read, and a fully invalid corrected selection may continue
+  with one exact unread broker candidate derived from that evidence. A plan malformed from its first
+  response still executes nothing.
   The compatibility boundary safely defaults a missing descriptive plan summary,
   uses a smaller synthetic answer budget during probes, canonicalizes known
   Kubernetes/OpenShift Kind and apiVersion pairs, and keeps model-authored plan

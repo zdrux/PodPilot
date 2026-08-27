@@ -6175,6 +6175,92 @@ def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
     assert "reason=invalid_correction" in caplog.text
 
 
+def test_invalid_later_plan_continues_with_discovered_exact_candidate(caplog) -> None:
+    class Provider(FakeModelProvider):
+        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+            self.adhoc_plan_calls.append(context)
+            completed = context["completed_reads"]
+            if not completed:
+                return ReadPlan(
+                    goal_type="diagnose", decision="collect",
+                    scope_summary="Discover Kafka resources before inspecting metrics configuration.",
+                    intents=[ReadIntent(
+                        tool="list_resources", resource="kafkas.kafka.strimzi.io",
+                        api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
+                        namespace="vc-streams", limit=20,
+                    )],
+                )
+            if len(completed) == 1:
+                raise ModelProviderError(
+                    "Provider response does not match ActionSelection. Provider returned content "
+                    "that failed schema validation (object_reads.0: value_error)."
+                )
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                scope_summary="The exact Kafka configuration is available.",
+                supporting_evidence_ids=["cluster-kafka-detail"],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            if intent.tool == "list_resources":
+                return ReadResult((AdHocObservation(
+                    id="cluster-kafka-list", tool=intent.tool,
+                    summary="Read 1 Kafka resource.",
+                    source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:vc-streams/*",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "resource": "kafkas.kafka.strimzi.io",
+                        "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                        "scope": "vc-streams",
+                        "objects": [{"namespace": "vc-streams", "name": "vc-cluster"}],
+                    },
+                ),))
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-detail", tool=intent.tool,
+                summary="Read Kafka vc-streams/vc-cluster.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:vc-streams/vc-cluster",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Kafka", "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+                    "spec": {"kafka": {"metricsConfig": {"type": "jmxPrometheusExporter"}}},
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="invalid-plan-candidate-recovery",
+        question="Do the Kafka clusters have Prometheus metrics exporting set up?",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [call.tool for call in explorer.calls] == ["list_resources", "get_resource"]
+    assert explorer.calls[1].namespace == "vc-streams"
+    assert explorer.calls[1].name == "vc-cluster"
+    assert any(item["id"] == "cluster-kafka-detail" for item in result.evidence)
+    assert "highest-priority unread candidate" in " ".join(result.limitations)
+    assert "podpilot.adhoc.invalid_plan_candidate_recovery" in caplog.text
+
+
 def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
     tmp_path: Path,
 ) -> None:

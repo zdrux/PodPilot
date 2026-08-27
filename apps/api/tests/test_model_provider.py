@@ -529,6 +529,32 @@ def test_action_selection_normalizes_cluster_wide_namespace_placeholder() -> Non
     assert selected.to_read_plan().intents[0].namespace is None
 
 
+def test_action_selection_salvage_retains_valid_reads_after_failed_correction() -> None:
+    selected = OpenAIChatCompletionsProvider._salvage_action_selection(
+        ActionSelection,
+        json.dumps({
+            "action_ids": ["read-0123456789abcdefabcd", "invented-action"],
+            "object_reads": [
+                {
+                    "tool": "get_resource", "resource": "kafkas.kafka.strimzi.io",
+                    "api_version": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                    "namespace": "vc-streams", "name": "vc-cluster",
+                },
+                {
+                    "tool": "search_resources", "resource": "servicemonitors",
+                    "namespace": "vc-streams",
+                },
+            ],
+        }),
+    )
+
+    assert selected is not None
+    plan = selected.to_read_plan()
+    assert plan.candidate_ids == ["read-0123456789abcdefabcd"]
+    assert [intent.name for intent in plan.intents] == ["vc-cluster"]
+    assert plan._discarded_intent_count == 1
+
+
 def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
     context = {
         "question": "Why is this workload failing?",

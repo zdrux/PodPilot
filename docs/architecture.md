@@ -243,8 +243,11 @@ observations, and cluster-specific answers are withheld unless they cite persist
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
 Automatic continuation is limited to mechanical safeguards such as the trust-only retry of the same
 HTTPS probe and bounded recovery from a repeated model stop. Object traversal, log selection, Events,
-metrics, and configuration reads otherwise require a schema-valid model action selection and return
-through the same broker on the next round.
+metrics, and configuration reads otherwise require a model-selected direction and return through the
+same broker on the next round. If a corrected action selection remains malformed after evidence has
+already produced exact unread candidates, PodPilot may execute the highest-priority broker-owned
+candidate and visibly record that recovery. A malformed initial plan with no collected evidence still
+executes nothing.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.
@@ -303,6 +306,13 @@ may use one non-terminal read compiled from a single exact coordinate in the ope
 recovery anchor. A Route URL, for example, can seed one exact `spec.host` search. This does not
 activate a generic catalog fallback or a deterministic troubleshooting graph: the resulting
 observation is returned to the planner, which selects every later diagnostic hop.
+
+After at least one successful read, a planner-contract failure no longer has to discard the discovered
+frontier. Chat Completions retains independently valid action IDs and object reads after its single
+schema-repair attempt. If no valid selection survives but exact unread candidates were derived from
+trusted observations, PodPilot performs one highest-priority candidate through the normal broker and
+returns that evidence to the next model round. Rejected model fields never supply coordinates, and the
+recovery is disclosed in limitations and audit logs.
 
 For diagnostic, log, and explanation goals, the first evidence-supported request to stop is
 subject to one model sufficiency review. The review receives the same observations, findings,

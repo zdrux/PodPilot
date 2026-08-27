@@ -262,6 +262,7 @@ class ReadIntent(BaseModel):
 
 class ReadPlan(BaseModel):
     _selection_incomplete: bool = PrivateAttr(default=False)
+    _discarded_intent_count: int = PrivateAttr(default=0)
 
     goal_type: Literal[
         "inventory", "health", "diagnose", "logs", "compare", "explain"
