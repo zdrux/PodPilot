@@ -481,6 +481,13 @@ returned application status.
    answers with server-validated citations.
 9. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
 
+Clickable suggested checks are focused evidence extensions rather than new open-ended
+investigations. The server revalidates the opaque candidate, executes exactly that one read,
+and stops collection. The answer model receives a compact task containing the original operator
+question, the selected-check label, and bounded evidence; prior chat prose, summaries, knowledge
+payloads, and another planning cycle are excluded. Already-collected capability classes are not
+offered again as buttons in the same evidence state.
+
 ## Source Of Truth Boundaries
 
 - The cluster API is authoritative for Kubernetes and OpenShift resource state.

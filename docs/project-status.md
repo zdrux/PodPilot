@@ -289,8 +289,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   the unchanged broker; successful logs still receive the separate bounded semantic analysis.
 - Up to three remaining unread server-owned candidates may expose a **Run check** button independently
   of model recommendation wording. The CSRF-protected click creates a linked
-  same-conversation run with fresh model context, revalidates the opaque candidate, and executes it
-  through the unchanged read broker; mutation guidance remains display-only.
+  same-conversation run with fresh model context, revalidates the opaque candidate, and executes
+  exactly that one read through the unchanged broker. Its answer receives only the original question,
+  selected-check label, and bounded evidence; it does not restart planning or inherit chat prose.
+  Collected capability classes are suppressed from the next button set, and the recommendation cards
+  use larger high-contrast text and controls. Mutation guidance remains display-only.
 - The concise answer contract now contains only `answer` and `citations`. It does not request
   certainty, gaps, capability names, coordinates, or recommendations. Provider attempts to append a
   recommendation schema are removed before Markdown rendering; suggested controls come from normal code.

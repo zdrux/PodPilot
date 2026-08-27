@@ -36,6 +36,7 @@ from podpilot_api.main import (
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _merge_validated_recommendations,
+    _model_log_analysis_section,
     _model_fact_cards,
     _parse_tags,
     _partition_investigation_gaps,
@@ -328,6 +329,7 @@ def test_remaining_candidates_become_clickable_actions_without_model_recommendat
     visible, actions = _compile_remaining_candidate_followups(
         question="Why does the Route return HTTP 500?",
         evidence=[route_evidence],
+        activity=[],
         cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
         remaining_units=5,
     )
@@ -338,6 +340,50 @@ def test_remaining_candidates_become_clickable_actions_without_model_recommendat
     assert actions[0]["cluster_id"] == SYSTEM_CLUSTER_ID
     assert actions[0]["label"] in visible
     assert actions[0]["capability"] == "service_spec"
+
+
+def test_remaining_candidates_hide_capabilities_already_collected() -> None:
+    cluster = Cluster(id=SYSTEM_CLUSTER_ID, name="Runtime cluster")
+    pod_evidence = {
+        "id": "cluster-pod-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "tool": "get_resource",
+        "data": {
+            "kind": "Pod",
+            "metadata": {"namespace": "maas", "name": "gateway-abc"},
+            "spec": {"containers": [{"name": "istio-proxy"}]},
+        },
+    }
+    log_evidence = {
+        "id": "cluster-log-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "tool": "pod_logs",
+        "source": "kubernetes:v1:Pod/log:maas/gateway-abc?current",
+        "data": {"container": "istio-proxy", "tail": "certificate load failed"},
+    }
+
+    _, actions = _compile_remaining_candidate_followups(
+        question="Why is the gateway returning HTTP 500?",
+        evidence=[pod_evidence, log_evidence],
+        activity=[],
+        cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
+        remaining_units=5,
+    )
+
+    assert all(action["capability"] != "pod_logs" for action in actions)
+
+
+def test_log_analysis_plural_failure_overview_is_not_reported_as_no_issue() -> None:
+    section = _model_log_analysis_section({
+        "overview": "The proxy shows repeated certificate failures and upstream errors.",
+        "issues": [],
+        "analyzed_evidence_ids": ["cluster-log-1"],
+        "rejected_issue_count": 1,
+    })
+
+    assert "Treat the overview as a hypothesis" in section["content"]
+    assert "No potential operational issue" not in section["content"]
+    assert section["citations"] == ["cluster-log-1"]
 
 
 def test_embedded_gap_prose_promotes_only_fixed_available_capabilities() -> None:
@@ -3782,6 +3828,7 @@ def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
+        source_created_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         db_session.add(ModelProfile(
             id=1, provider_label="Internal", base_url="https://models.example.test/v1",
             chat_model="test-model", embedding_model=None, timeout_seconds=30,
@@ -3796,6 +3843,14 @@ def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
             evidence_json=json.dumps([route_evidence]),
         ))
         db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000140",
+            conversation_id=conversation_id,
+            role="user",
+            actor="ivy",
+            content="Why does the Route return HTTP 500?",
+            created_at=source_created_at,
+        ))
+        db_session.add(AdHocMessage(
             id=message_id,
             conversation_id=conversation_id,
             role="assistant",
@@ -3808,6 +3863,7 @@ def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
                 "recommended_next_checks": [action["label"]],
                 "suggested_followup_actions": actions,
             }),
+            created_at=source_created_at + timedelta(milliseconds=500),
         ))
         db_session.commit()
     engine.dispose()
@@ -3836,8 +3892,10 @@ def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
 
     assert [call.tool for call in explorer.calls] == ["get_resource"]
     assert explorer.calls[0].kind == "Service"
-    assert provider.adhoc_plan_calls
-    assert all(context["conversation"] == [] for context in provider.adhoc_plan_calls)
+    assert provider.adhoc_plan_calls == []
+    assert provider.adhoc_answer_calls
+    assert "Original question:" in provider.adhoc_answer_calls[0]["question"]
+    assert "Selected check:" in provider.adhoc_answer_calls[0]["question"]
     engine = build_engine(settings)
     with Session(engine) as db_session:
         run = db_session.scalar(select(AdHocRun).where(
@@ -3847,6 +3905,7 @@ def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
         stored_action = json.loads(run.followup_action_json)
         assert stored_action["id"] == action["id"]
         assert stored_action["source_message_id"] == message_id
+        assert stored_action["source_question"] == "Why does the Route return HTTP 500?"
         assert "Run suggested check:" in run.message_text
     engine.dispose()
 

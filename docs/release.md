@@ -303,8 +303,9 @@ state, reject collected checks described as uncollected, and remove comma-separa
 markers while retaining their allowlisted citations.
 Suggested-action gates must remove already-collected recommendations, render controls only for exact
 unread server candidates, and prove that a valid owner/CSRF click persists a linked run, sends no prior
-chat messages or summary to the provider, executes the exact rederived read through the broker, and
-appends the result to the same conversation. Unknown IDs, another user's message, stale candidates,
+chat messages or summary to the provider, retains a bounded original question, executes only the exact
+rederived read through the broker without restarting planning, and appends a labeled result to the same
+conversation. Unknown IDs, another user's message, stale candidates,
 mutation wording, and tampered cluster/capability metadata must execute nothing.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual

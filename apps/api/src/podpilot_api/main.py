@@ -2306,6 +2306,7 @@ def _validated_model_log_analysis(
     """Allow only cited issues whose quoted excerpt exists in the supplied logs."""
 
     issues: list[dict[str, object]] = []
+    rejected_issue_count = 0
     for issue in analysis.issues:
         evidence_ids = list(dict.fromkeys(
             item for item in issue.evidence_ids if item in text_by_id
@@ -2313,11 +2314,13 @@ def _validated_model_log_analysis(
         excerpt = redact_text(issue.supporting_excerpt)[:500]
         normalized_excerpt = re.sub(r"\s+", " ", excerpt).strip().casefold()
         if not evidence_ids or not normalized_excerpt:
+            rejected_issue_count += 1
             continue
         if not any(
             normalized_excerpt in re.sub(r"\s+", " ", text_by_id[item]).casefold()
             for item in evidence_ids
         ):
+            rejected_issue_count += 1
             continue
         issues.append({
             "evidence_ids": evidence_ids,
@@ -2333,6 +2336,7 @@ def _validated_model_log_analysis(
         "issues": issues[:10],
         "limitations": [redact_text(item)[:500] for item in analysis.limitations[:4]],
         "analyzed_evidence_ids": list(text_by_id),
+        "rejected_issue_count": rejected_issue_count,
     }
 
 
@@ -2348,15 +2352,15 @@ def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object
     citations: list[str] = []
     overview = str(analysis.get("overview") or "")
     overview_has_signal = bool(re.search(
-        r"(?i)\b(?:denied|unauthorized|forbidden|error|fail(?:ed|ure)?|401|403|permission)\b",
+        r"(?i)\b(?:denied|unauthorized|forbidden|errors?|fail(?:ed|ures?)?|401|403|permission)\b",
         overview,
     ))
     if not issues and overview_has_signal:
         lines.extend((
             "",
-            "The overview noted a possible operational signal, but the model did not return a "
-            "validated cited issue. Treat that signal as unconfirmed and continue correlating it "
-            "with resource, policy, event, or probe evidence.",
+            "The overview noted a possible operational signal, but no structured issue could be "
+            "verified against an exact cited log excerpt. Treat the overview as a hypothesis and "
+            "continue correlating it with resource, event, metric, or probe evidence.",
         ))
         citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
     elif not issues:
@@ -3086,6 +3090,7 @@ def _compile_remaining_candidate_followups(
     *,
     question: str,
     evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
     cluster_runtimes: list[dict[str, object]],
     remaining_units: int,
     limit: int = 3,
@@ -3114,6 +3119,19 @@ def _compile_remaining_candidate_followups(
             dict(item) for item in evidence
             if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
         ]
+        cluster_activity = [
+            dict(item) for item in activity
+            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
+        ]
+        capability_states = {
+            str(item.get("capability")): str(item.get("state"))
+            for item in _investigation_capability_ledger(
+                evidence=cluster_evidence,
+                activity=cluster_activity,
+                remaining_units=remaining_units,
+            ).get("checks", [])
+            if isinstance(item, dict)
+        }
         candidates = _grounded_read_candidates(
             question=question,
             evidence=cluster_evidence,
@@ -3124,6 +3142,8 @@ def _compile_remaining_candidate_followups(
             limit=max(8, limit * 2),
         )
         for candidate in candidates:
+            if capability_states.get(candidate.capability) == "collected":
+                continue
             if candidate.id in used_ids:
                 continue
             used_ids.add(candidate.id)
@@ -3860,6 +3880,9 @@ async def _collect_bounded_cluster_reads(
                 scope_summary="Run the operator-selected grounded read-only follow-up check.",
                 intents=[requested_candidate.intent],
             )
+            # A user-selected suggestion is one exact broker-validated read. Do
+            # not re-enter open-ended planning after it completes.
+            terminal_plan = True
             if progress:
                 await progress("planning", "Validated the selected read-only follow-up check.")
         elif round_number == 1 and deterministic_plan:
@@ -4761,6 +4784,20 @@ def create_app(
         followup_action: dict[str, object] | None = None,
         progress: ProgressReporter | None = None,
     ) -> str:
+        source_question = redact_text(str(
+            (followup_action or {}).get("source_question") or message_text
+        ))[:app_settings.chat_max_chars]
+        selected_check_label = redact_text(str(
+            (followup_action or {}).get("label") or ""
+        ))[:500]
+        provider_question = source_question
+        if followup_action:
+            provider_question = (
+                f"Original question: {source_question}\n"
+                f"Selected check: {selected_check_label}\n"
+                "Explain only what this new evidence adds, how it affects the original question, "
+                "and what remains uncertain."
+            )[:app_settings.chat_max_chars]
         if progress:
             await progress("starting", "Starting the read-only investigation.")
         with Session(engine, expire_on_commit=False) as db_session:
@@ -4779,11 +4816,11 @@ def create_app(
             ]
             knowledge_context: list[dict[str, object]] = []
             seen_knowledge: set[tuple[str, str]] = set()
-            for selected_cluster in selected_clusters:
+            for selected_cluster in ([] if followup_action else selected_clusters):
                 cluster_tags = json.loads(selected_cluster.tags_json or "{}")
                 for result in search_knowledge(
                     db_session,
-                    query=message_text,
+                    query=source_question,
                     cluster_id=selected_cluster.id,
                     cluster_tags=cluster_tags,
                     include_restricted=False,
@@ -4936,14 +4973,14 @@ def create_app(
                         settings=cluster_settings,
                         actor=username,
                         workflow_id=f"{conversation_id}:{selected_cluster.id}",
-                        question=message_text,
+                        question=source_question,
                         conversation=history,
                         earlier_context_summary=context_summary,
                         existing_evidence=prior_cluster_evidence,
                         knowledge=[] if followup_action else cluster_knowledge,
                         investigation_gaps=([
                             InvestigationGap(
-                                question=str(followup_action.get("label") or message_text)[:500],
+                                question=str(followup_action.get("label") or source_question)[:500],
                                 capability=str(followup_action.get("capability") or "resource_read"),
                                 priority="high",
                                 supporting_evidence_ids=[
@@ -4997,7 +5034,7 @@ def create_app(
                 )
                 model_log_analysis: dict[str, object] | None = None
                 log_payload, log_text_by_id = _current_log_analysis_payload(
-                    evidence=evidence, activity=activity, question=message_text,
+                    evidence=evidence, activity=activity, question=provider_question,
                 )
                 analyze_logs = getattr(provider, "analyze_logs", None)
                 if log_payload is not None and callable(analyze_logs):
@@ -5057,7 +5094,7 @@ def create_app(
                     answer_observations = compact_without_log_tails
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
-                    "question": message_text,
+                    "question": provider_question,
                     "conversation": [
                         {
                             "role": str(item.get("role") or "")[:16],
@@ -5210,7 +5247,12 @@ def create_app(
                     validated_answer=validated,
                     capability_ledger=answer_context["capability_ledger"],
                 )
-                if structured_gaps and remaining_budget > 0 and cluster_runtimes:
+                if (
+                    not followup_action
+                    and structured_gaps
+                    and remaining_budget > 0
+                    and cluster_runtimes
+                ):
                     if progress:
                         await progress(
                             "planning",
@@ -5496,7 +5538,7 @@ def create_app(
                     *[str(item) for item in validated.get("limitations", [])],
                     *_adhoc_answer_advisories(
                         citations=[str(item) for item in validated["citations"]],
-                        question=message_text,
+                        question=source_question,
                         observations=evidence,
                     ),
                 ])
@@ -5578,10 +5620,11 @@ def create_app(
                         "limitations": [str(exc)],
                     }
         suggested_checks, suggested_followup_actions = _compile_remaining_candidate_followups(
-            question=message_text,
+            question=source_question,
             evidence=evidence,
+            activity=activity,
             cluster_runtimes=cluster_runtimes,
-            remaining_units=app_settings.adhoc_max_reads_per_turn,
+            remaining_units=remaining_budget,
             limit=3,
         )
         validated["recommended_next_checks"] = suggested_checks
@@ -5592,6 +5635,14 @@ def create_app(
         validated["guidance_next_checks"] = [
             item for item in suggested_checks if item not in actionable_labels
         ]
+        if followup_action:
+            content = str(validated.get("content") or "").strip()
+            if not content.startswith("## Suggested check result"):
+                validated["content"] = (
+                    "## Suggested check result\n\n"
+                    f"**Check performed:** {selected_check_label}\n\n"
+                    f"{content}"
+                ).strip()
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
@@ -6220,6 +6271,18 @@ def create_app(
                 )
             raw_supporting_ids = action.get("supporting_evidence_ids")
             supporting_ids = raw_supporting_ids if isinstance(raw_supporting_ids, list) else []
+            source_user_message = db_session.scalar(
+                select(AdHocMessage).where(
+                    AdHocMessage.conversation_id == conversation_id,
+                    AdHocMessage.role == "user",
+                    AdHocMessage.created_at <= message.created_at,
+                ).order_by(
+                    AdHocMessage.created_at.desc(), AdHocMessage.id.desc()
+                ).limit(1)
+            )
+            source_question = redact_text(
+                source_user_message.content if source_user_message is not None else label
+            )[:app_settings.chat_max_chars]
             objective = f"Run suggested check: {label}"[:app_settings.chat_max_chars]
             run_id = _queue_adhoc_run(
                 db_session,
@@ -6238,6 +6301,7 @@ def create_app(
                         for item in supporting_ids[:8]
                     ],
                     "source_message_id": message_id,
+                    "source_question": source_question,
                 },
             )
             db_session.commit()
