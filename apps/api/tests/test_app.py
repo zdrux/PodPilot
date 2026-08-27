@@ -16,6 +16,8 @@ from podpilot_api.database import build_engine
 from podpilot_api.main import (
     _adhoc_answer_quality_issue,
     _adhoc_answer_advisories,
+    _adhoc_capability_wording_issue,
+    _actionable_investigation_gaps,
     _adhoc_evidence_view,
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
@@ -27,6 +29,7 @@ from podpilot_api.main import (
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
+    _investigation_capability_ledger,
     _investigation_unit_cost,
     _parse_tags,
     _validated_adhoc_answer,
@@ -65,7 +68,13 @@ from podpilot_diagnostics.workloads import (
     WorkloadEvidence,
 )
 from podpilot_diagnostics.checks import CheckObservation, DiagnosticCheckResult
-from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadPlan, ReadResult
+from podpilot_diagnostics.adhoc import (
+    AdHocObservation,
+    InvestigationGap,
+    ReadIntent,
+    ReadPlan,
+    ReadResult,
+)
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
 from podpilot_openshift.credentials import CredentialStoreError
@@ -108,6 +117,160 @@ def test_investigation_budget_weights_high_volume_operations() -> None:
     assert _investigation_unit_cost(ReadIntent(
         tool="watch_resources", resource="pods", namespace="payments", watch_seconds=5,
     )) == 3
+
+
+def test_capability_ledger_distinguishes_available_uncollected_from_unavailable() -> None:
+    ledger = _investigation_capability_ledger(
+        evidence=[{
+            "id": "route-1", "tool": "search_resources",
+            "data": {"kind": "Route", "items": []},
+        }],
+        activity=[{
+            "tool": "search_resources", "status": "succeeded",
+            "evidence_ids": ["route-1"],
+        }],
+        remaining_units=12,
+    )
+
+    checks = {item["capability"]: item for item in ledger["checks"]}
+    assert checks["service_spec"]["state"] == "available_not_attempted"
+    assert checks["metrics"]["state"] == "available_not_attempted"
+    assert checks["http_probe"]["state"] == "available_not_attempted"
+    assert checks["pod_logs"]["state"] == "requires_target"
+    assert "not collected" in ledger["language_rule"]
+    assert _adhoc_capability_wording_issue(
+        content="No logs, metrics, or probe results are available.",
+        capability_ledger=ledger,
+    ) == "available_check_described_as_unavailable"
+    assert _adhoc_capability_wording_issue(
+        content="Logs, metrics, and probes were not collected.",
+        capability_ledger=ledger,
+    ) is None
+
+
+def test_recommended_next_check_is_promoted_only_to_typed_planner_input() -> None:
+    ledger = _investigation_capability_ledger(
+        evidence=[{
+            "id": "route-1", "tool": "get_resource",
+            "data": {"kind": "Route", "metadata": {"name": "frontend"}},
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["route-1"],
+        }],
+        remaining_units=6,
+    )
+
+    gaps = _actionable_investigation_gaps(
+        validated_answer={
+            "investigation_gaps": [],
+            "recommended_next_checks": [
+                "Read the backend Service spec to verify its targetPort mapping.",
+                "Change the Deployment to expose port 443.",
+            ],
+        },
+        capability_ledger=ledger,
+    )
+
+    assert len(gaps) == 1
+    assert gaps[0].capability == "service_spec"
+    assert gaps[0].question.startswith("Read the backend Service spec")
+    assert "not executable" in gaps[0].reason
+
+
+def test_duplicate_plan_is_repaired_to_novel_read_and_goal_stays_pinned() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if not context["completed_reads"]:
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Inspect the named Pod.",
+                    intents=[ReadIntent(
+                        tool="get_resource", resource="pods", api_version="v1",
+                        kind="Pod", namespace="payments", name="api-7d9",
+                    )],
+                )
+            if context.get("planner_feedback", {}).get("code") == "no_progress":
+                return ReadPlan(
+                    goal_type="inventory",
+                    scope_summary="Use a novel Service read.",
+                    intents=[ReadIntent(
+                        tool="get_resource", resource="services", api_version="v1",
+                        kind="Service", namespace="payments", name="api-service",
+                    )],
+                )
+            if not any(item.get("target", "").startswith("services ") for item in context["completed_reads"]):
+                return ReadPlan(
+                    goal_type="inventory",
+                    scope_summary="Accidentally repeat the Pod read.",
+                    intents=[ReadIntent(
+                        tool="get_resource", resource="pods", api_version="v1",
+                        kind="Pod", namespace="payments", name="api-7d9",
+                    )],
+                )
+            return ReadPlan(
+                goal_type="inventory",
+                decision="answer_from_evidence",
+                scope_summary="The Pod and Service are available.",
+                supporting_evidence_ids=["pod-1", "service-1"],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            kind = str(intent.kind)
+            evidence_id = "pod-1" if kind == "Pod" else "service-1"
+            return ReadResult((AdHocObservation(
+                id=evidence_id,
+                tool="get_resource",
+                summary=f"Read {kind}.",
+                source=f"kubernetes:{intent.api_version}:{kind}:payments/{intent.name}",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": intent.api_version,
+                    "kind": kind,
+                    "metadata": {"namespace": "payments", "name": intent.name},
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="duplicate-repair",
+        question="Inspect Pod api-7d9 and Service api-service in namespace payments.",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [call.kind for call in explorer.calls] == ["Pod", "Service"]
+    assert [item["id"] for item in result.evidence] == ["pod-1", "service-1"]
+    no_progress_context = next(
+        context for context in provider.contexts
+        if context.get("planner_feedback", {}).get("code") == "no_progress"
+    )
+    assert no_progress_context["pinned_goal_type"] == "diagnose"
+    assert all(
+        context.get("pinned_goal_type") in {None, "diagnose"}
+        for context in provider.contexts
+    )
 
 
 def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
@@ -2139,6 +2302,73 @@ class EarlyStoppingRouteProvider(RouteBackendProvider):
         return super().plan_ad_hoc(profile, api_key, context)
 
 
+class StructuredGapRouteProvider(RouteBackendProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        completed = context["completed_reads"]
+        observations = context["observations"]
+        if not completed and not observations:
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Find the Route named by the URL.",
+                intents=[ReadIntent(
+                    tool="search_resources", resource="routes.route.openshift.io",
+                    api_version="route.openshift.io/v1", kind="Route",
+                    match_field="spec.host", match_value="maas.apps.example.test", limit=5,
+                )],
+            )
+        has_service = any(
+            item.get("data", {}).get("kind") == "Service" for item in observations
+        )
+        if context.get("investigation_gaps") and not has_service:
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Resolve the structured Service evidence gap.",
+                intents=[ReadIntent(
+                    tool="get_resource", resource="services", api_version="v1",
+                    kind="Service", namespace="maas", name="model-server",
+                )],
+            )
+        return ReadPlan(
+            goal_type="diagnose",
+            decision="answer_from_evidence",
+            scope_summary="Answer from the evidence currently available.",
+            supporting_evidence_ids=[str(item["id"]) for item in observations],
+        )
+
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        has_service = any(
+            item.get("data", {}).get("kind") == "Service"
+            for item in context["observations"]
+        )
+        if not has_service:
+            return AdHocAnswer(
+                answer_mode="evidence_based",
+                conclusion_status="probable",
+                answer=(
+                    "The Route uses passthrough TLS, but the backend Service mapping is not "
+                    "collected yet."
+                ),
+                cited_evidence_ids=["cluster-route-1"],
+                investigation_gaps=[InvestigationGap(
+                    question="Does the referenced Service expose the expected HTTPS target port?",
+                    capability="service_spec",
+                    priority="high",
+                    supporting_evidence_ids=["cluster-route-1"],
+                )],
+            )
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            conclusion_status="confirmed",
+            answer=(
+                "The Route uses passthrough TLS and the collected Service maps its `https` port "
+                "to the backend Pods."
+            ),
+            cited_evidence_ids=["cluster-route-1", "cluster-service-1"],
+        )
+
+
 class RouteOnlyAnswerProvider(RouteBackendProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
@@ -3456,6 +3686,65 @@ def test_diagnostic_stop_is_reviewed_before_deferring_available_typed_reads(
         for item in review_calls[0]["completed_reads"]
     )
     assert "reason=evidence_sufficiency_review" in caplog.text
+
+
+def test_structured_answer_gap_is_replanned_into_typed_read_and_answer_regenerated(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = StructuredGapRouteProvider()
+    explorer = RouteBackendExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "Validate this Route backend: https://maas.apps.example.test/v1/models"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "collected Service maps its" in rendered.text
+    assert [call.tool for call in explorer.calls] == [
+        "search_resources", "get_resource",
+    ]
+    assert len(provider.adhoc_answer_calls) == 2
+    gap_plan_context = next(
+        context for context in provider.adhoc_plan_calls
+        if context.get("investigation_gaps")
+    )
+    assert gap_plan_context["capability_ledger"]["checks"][0]["capability"] == (
+        "service_spec"
+    )
+    assert any(
+        edge["relation"] == "routes_to"
+        for edge in gap_plan_context["relationship_graph"]["edges"]
+    )
+    assert "podpilot.adhoc.gap_followup_complete" in caplog.text
 
 
 def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(

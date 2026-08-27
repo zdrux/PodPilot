@@ -223,6 +223,15 @@ Only limitations produced by the trusted read broker are promoted as collection
 limitations; model-authored planning caveats are not represented as observed
 collection failures.
 
+Evidence relationship graphs and capability ledgers are deterministic, bounded projections of
+already-redacted observations and server-known broker state. Graph frontier hints, structured
+investigation gaps, and model-authored recommended checks are untrusted planning context, not tool
+calls. Recommendation promotion recognizes only a fixed diagnostic capability label and never
+extracts executable resource coordinates from prose. The model must return a new schema-valid typed
+intent, which is independently checked for grounding, duplicate suppression, budget, resource
+sensitivity, read-only verb, live discovery, and ServiceAccount RBAC before execution. Goal pinning
+and no-progress repair do not widen that authority.
+
 Bounded Pod logs are untrusted evidence. Deterministic log-signal classification
 matches fixed operational patterns only; it never executes, evaluates, or follows
 instructions found in log text. Samples, paths, endpoints, and timestamps are
@@ -243,6 +252,9 @@ modifies the durable observation or expands model exposure. The correction path 
 the same compact context and adds only a fixed validation code and bounded instruction;
 it never includes the rejected model response or additional evidence. Deterministic fallback content is built solely
 from persisted summaries and stable evidence IDs and cannot initiate new reads or actions.
+Answer-time capability wording is checked against the server ledger. Calling an actionable,
+unattempted check "unavailable" causes one bounded correction; collection failures and RBAC denials
+remain visible and are never rewritten as successful evidence.
 
 ## PoC Storage Exception
 

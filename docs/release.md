@@ -258,6 +258,13 @@ Dynamic-traversal gates must also prove that the first evidence-supported stop f
 a diagnostic goal receives one bounded sufficiency review, that the model can turn
 that feedback into broker-validated typed reads, and that repeating the stop is
 accepted without executing recommendation prose.
+They must verify typed relationship-graph edges/frontiers, object-specific capability-ledger states,
+and the distinction between available-but-not-collected and explicitly unavailable evidence. Tests
+must prove that the first goal remains pinned, duplicate-only plans receive no-progress repair, and
+read signatures suppress repeats across the initial and answer-gap passes. Structured medium/high
+gaps and capability-matched recommendations may trigger a bounded follow-up collection phase and answer regeneration,
+but recommendation prose, graph hints, and gap text must never execute directly or bypass broker
+grounding, deny policy, budget, discovery, verb, or RBAC checks.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal

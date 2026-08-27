@@ -9,12 +9,47 @@ from podpilot_diagnostics.adhoc import (
     ReadPlan,
     automatic_read_followups,
     derive_adhoc_findings,
+    derive_evidence_relationship_graph,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
+
+
+def test_relationship_graph_exposes_typed_route_service_endpoint_pod_frontier() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "route-1",
+        "tool": "search_resources",
+        "data": {
+            "kind": "Route",
+            "items": [{
+                "apiVersion": "route.openshift.io/v1",
+                "kind": "Route",
+                "metadata": {"namespace": "maas", "name": "gateway"},
+                "spec": {"to": {"kind": "Service", "name": "gateway-service"}},
+            }],
+        },
+    }, {
+        "id": "service-1",
+        "tool": "get_resource",
+        "data": {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"namespace": "maas", "name": "gateway-service"},
+            "spec": {"selector": {"app": "gateway"}},
+        },
+    }])
+
+    relations = {(edge["relation"], edge["target"]) for edge in graph["edges"]}
+    assert ("routes_to", "Service:maas/gateway-service") in relations
+    assert any(relation == "selects" for relation, _target in relations)
+    assert any(relation == "has_endpoints" for relation, _target in relations)
+    route_edge = next(edge for edge in graph["edges"] if edge["relation"] == "routes_to")
+    assert route_edge["target_observed"] is True
+    frontier_relations = {edge["relation"] for edge in graph["frontier"]}
+    assert frontier_relations == {"selects", "has_endpoints"}
 
 
 def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:

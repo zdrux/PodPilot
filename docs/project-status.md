@@ -157,14 +157,13 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Route backend Service references are grounded from projected `spec.to.name` data, allowing
   exact Route-to-Service follow-up reads. Edge, reencrypt, passthrough, and unsecured Route
   behavior has a deterministic cited answer when model follow-up planning is incomplete.
-- Route, HTTP-5xx, and connectivity investigations follow a deterministic bounded traffic graph
-  through the exact Service, selected Pods, EndpointSlices, and Endpoints. Relevant healthy
-  backend containers receive bounded log inspection, so a malformed later ReadPlan cannot
-  prevent basic workload evidence collection.
-- Explicit cross-namespace Pod TCP/connectivity questions deterministically collect both exact
-  Pods, both Namespace label sets, and bounded NetworkPolicies from both namespaces. Policy
-  evidence retains ingress/egress selectors and ports for additive source-egress and
-  destination-ingress analysis while disclosing that configuration alone cannot prove a drop.
+- Route, HTTP-5xx, and connectivity investigations receive a deterministic bounded relationship
+  graph covering observed Route, Service, EndpointSlice/Endpoints, Pod, owner, selector, and mount
+  edges. The model selects each traversal as a typed read; graph frontier hints never execute.
+- Cross-namespace Pod TCP/connectivity questions expose exact Pods, Namespace label sets, and
+  NetworkPolicies as evidence-grounded candidates. The model decides which reads discriminate its
+  hypothesis, while policy interpretation still separates source egress from destination ingress
+  and discloses that configuration alone cannot prove a drop.
 - HTTPS troubleshooting probes keep verification enabled by default but may explicitly
   select `tls_verify=false` for private, self-signed, or component-managed certificates.
   SNI is preserved and both evidence and limitations state that server identity was not verified.
@@ -242,6 +241,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
+- Ask planning now pins the initial goal, detects duplicate-only no-progress plans across collection
+  phases, and supplies an object-specific capability ledger so available-but-uncollected Service,
+  endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured
+  answer gaps—and capability-matched suggested checks—can trigger one bounded typed collection phase
+  and answer regeneration. Gap, graph, and recommendation prose remains non-executable.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

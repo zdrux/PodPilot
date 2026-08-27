@@ -797,3 +797,25 @@ longer substitute silently for material reads the model can still request. This 
 correlation reserve and deterministic diagnostic continuations in the adaptive-traversal,
 traffic-path, cross-namespace-policy, and log-correlation decisions; their evidence normalization
 and safety constraints remain in force.
+
+## 2026-08-26 - Evidence graphs and structured gaps close the autonomous read loop
+
+Context: Model-directed traversal removed preconceived server paths, but the planner could repeat a
+read, drift away from the original goal, or stop with useful next checks that the final-answer layer
+described incorrectly as unavailable. Free-form recommendations were useful diagnostic input but
+could not safely authorize a cluster operation.
+
+Decision: Derive a bounded typed relationship graph and an object-specific capability ledger from
+current evidence and broker activity. Pin the first collection goal and retain normalized intent
+signatures across initial and answer-gap collection. Repair duplicate-only plans as no progress.
+Allow final answers to return structured investigation gaps; when budget remains, submit actionable
+medium/high gaps to one further bounded collection phase and regenerate the answer. A legacy recommended check
+may be promoted only to a fixed capability category when the ledger says it is actionable. Graph
+hints, gaps, and recommendation prose remain untrusted and non-executable; only a new validated
+`ReadPlan` reaches the existing broker.
+
+Consequences: The model can methodically traverse downstream or upstream relationships and act on
+its own evidence needs without a hard-coded scenario graph. Operators can distinguish evidence that
+was unavailable from evidence PodPilot simply had not collected. Additional model calls and reads
+remain bounded by the existing round, unit, evidence, redaction, discovery, sensitivity, verb, and
+RBAC controls.

@@ -57,12 +57,14 @@ from podpilot_api.models import (
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.adhoc import (
+    InvestigationGap,
     PodLogCandidate,
     ReadIntent,
     ReadOnlyExplorer,
     ReadPlan,
     automatic_read_followups,
     derive_adhoc_findings,
+    derive_evidence_relationship_graph,
     normalize_read_intent,
     plan_known_read,
     plan_needs_evidence_repair,
@@ -395,6 +397,17 @@ def _validated_adhoc_answer(
     )
     if rbac_limitation and rbac_limitation not in content:
         content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
+    investigation_gaps: list[InvestigationGap] = []
+    for gap in answer.investigation_gaps[:5]:
+        supporting_ids = [
+            str(item)[:128] for item in gap.supporting_evidence_ids
+            if str(item)[:128] in known_evidence_ids
+        ]
+        investigation_gaps.append(gap.model_copy(update={
+            "question": redact_text(gap.question)[:500],
+            "reason": redact_text(gap.reason)[:500] if gap.reason else None,
+            "supporting_evidence_ids": list(dict.fromkeys(supporting_ids)),
+        }))
     return {
         "answer_mode": mode,
         "conclusion_status": (
@@ -410,6 +423,7 @@ def _validated_adhoc_answer(
         "recommended_next_checks": [
             redact_text(item)[:500] for item in answer.recommended_next_checks[:5]
         ],
+        "investigation_gaps": investigation_gaps,
     }
 
 
@@ -649,6 +663,94 @@ def _adhoc_answer_quality_issue(
     if answer_mode == "insufficient_evidence" and has_evidence and not has_citations:
         return "insufficient_interpretation_with_available_evidence"
     return None
+
+
+def _adhoc_capability_wording_issue(
+    *, content: str, capability_ledger: dict[str, object] | None
+) -> str | None:
+    """Reject 'unavailable' wording when a typed check is merely uncollected."""
+
+    if not capability_ledger:
+        return None
+    patterns = {
+        "service_spec": r"\b(?:service(?:\s+(?:spec|definition|object))?).{0,80}\b(?:unavailable|not available)\b",
+        "endpoints": r"\bendpoints?(?:lices)?.{0,80}\b(?:unavailable|not available)\b",
+        "pod_spec": r"\bpod(?:s|\s+(?:spec|definition|object))?.{0,80}\b(?:unavailable|not available)\b",
+        "pod_logs": r"\b(?:pod\s+)?logs?.{0,80}\b(?:unavailable|not available)\b|\bno\s+logs?.{0,80}\bavailable\b",
+        "metrics": r"\bmetrics?.{0,80}\b(?:unavailable|not available)\b|\bno\s+metrics?.{0,80}\bavailable\b",
+        "http_probe": r"\bprobes?(?:\s+results?)?.{0,80}\b(?:unavailable|not available)\b|\bno\s+probes?.{0,80}\bavailable\b",
+    }
+    for check in capability_ledger.get("checks") or []:
+        if not isinstance(check, dict) or check.get("state") not in {
+            "available_not_attempted", "requires_target",
+        }:
+            continue
+        pattern = patterns.get(str(check.get("capability") or ""))
+        if pattern and re.search(pattern, content, re.IGNORECASE | re.DOTALL):
+            return "available_check_described_as_unavailable"
+    return None
+
+
+def _actionable_investigation_gaps(
+    *,
+    validated_answer: dict[str, object],
+    capability_ledger: dict[str, object],
+) -> list[InvestigationGap]:
+    """Promote structured gaps, or safe capability-matched recommendation prose, to planner input."""
+
+    available_states = {"available_not_attempted", "requires_target"}
+    check_states = {
+        str(item.get("capability")): str(item.get("state"))
+        for item in capability_ledger.get("checks") or []
+        if isinstance(item, dict)
+    }
+    result: list[InvestigationGap] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(gap: InvestigationGap) -> None:
+        if gap.priority == "low":
+            return
+        if (
+            gap.capability in check_states
+            and check_states[gap.capability] not in available_states
+        ):
+            return
+        key = (gap.capability, re.sub(r"\s+", " ", gap.question.lower()).strip())
+        if key in seen or len(result) >= 5:
+            return
+        seen.add(key)
+        result.append(gap)
+
+    for gap in validated_answer.get("investigation_gaps") or []:
+        if isinstance(gap, InvestigationGap):
+            add(gap)
+
+    capability_patterns = (
+        ("service_spec", r"\bservice\b"),
+        ("endpoints", r"\bendpoint(?:s|slice)?\b"),
+        ("pod_logs", r"\b(?:pod\s+)?logs?\b"),
+        ("metrics", r"\bmetrics?\b"),
+        ("http_probe", r"\b(?:probe|curl|https?\s+request)\b"),
+        ("pod_spec", r"\bpods?\b"),
+    )
+    for recommendation in validated_answer.get("recommended_next_checks") or []:
+        text = redact_text(str(recommendation))[:500]
+        capability = next((
+            name for name, pattern in capability_patterns
+            if re.search(pattern, text, re.IGNORECASE)
+            and check_states.get(name) in available_states
+        ), None)
+        if capability:
+            add(InvestigationGap(
+                question=text,
+                capability=capability,
+                priority="medium",
+                reason=(
+                    "Promoted from operator-facing recommendation text for typed replanning; "
+                    "the text itself is not executable."
+                ),
+            ))
+    return result
 
 
 def _adhoc_answer_advisories(
@@ -2010,6 +2112,7 @@ class _BoundedReadCollection:
     limitations: list[str]
     scope_summary: str
     units_used: int = 0
+    read_signatures: list[str] | None = None
 
 
 ProgressReporter = Callable[[str, str], Awaitable[None]]
@@ -2060,6 +2163,141 @@ def _investigation_unit_cost(intent: ReadIntent) -> int:
     if intent.tool in {"pod_logs", "http_probe", "query_metrics"}:
         return 2
     return 1
+
+
+def _investigation_capability_ledger(
+    *,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+    remaining_units: int,
+) -> dict[str, object]:
+    """Distinguish available-but-uncollected checks from blocked or completed checks."""
+
+    attempts_by_tool: dict[str, list[dict[str, object]]] = {}
+    for entry in activity:
+        attempts_by_tool.setdefault(str(entry.get("tool") or "unknown"), []).append(entry)
+    evidence_tools = {str(item.get("tool") or "") for item in evidence}
+    observed_kinds: set[str] = set()
+    for item in evidence:
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        if data.get("kind"):
+            observed_kinds.add(str(data["kind"]))
+        if isinstance(data.get("metadata"), dict) and data.get("kind"):
+            observed_kinds.add(str(data["kind"]))
+        for obj in data.get("items") or []:
+            if isinstance(obj, dict) and obj.get("kind"):
+                observed_kinds.add(str(obj["kind"]))
+
+    log_candidates = pod_log_candidates_from_evidence(evidence)
+
+    def tool_state(tool: str, *, prerequisite: str | None = None) -> dict[str, object]:
+        attempts = attempts_by_tool.get(tool, [])
+        succeeded = sum(1 for item in attempts if item.get("status") == "succeeded")
+        failed = len(attempts) - succeeded
+        if succeeded or tool in evidence_tools:
+            state = "collected"
+            reason = "At least one observation was collected."
+        elif attempts:
+            state = "attempted_failed"
+            reason = "The check was attempted but did not produce a successful observation."
+        elif remaining_units <= 0:
+            state = "budget_exhausted"
+            reason = "No investigation units remain."
+        elif prerequisite:
+            state = "requires_target"
+            reason = prerequisite
+        else:
+            state = "available_not_attempted"
+            reason = "The typed read is available but has not been attempted."
+        return {
+            "tool": tool,
+            "state": state,
+            "attempts": len(attempts),
+            "succeeded": succeeded,
+            "failed": failed,
+            "reason": reason,
+        }
+
+    tools = [
+        tool_state("discover_resources"),
+        tool_state("get_resource"),
+        tool_state("list_resources"),
+        tool_state("search_resources"),
+        tool_state("watch_resources"),
+        tool_state(
+            "pod_logs",
+            prerequisite=(
+                None if log_candidates else
+                "Collect an exact Pod/container candidate before requesting logs."
+            ),
+        ),
+        tool_state("http_probe"),
+        tool_state("query_metrics"),
+    ]
+
+    def check_state(
+        name: str,
+        tool: str,
+        collected: bool,
+        prerequisite: str | None = None,
+        target_patterns: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        relevant_attempts = [
+            item for item in attempts_by_tool.get(tool, [])
+            if not target_patterns or any(
+                pattern in str(item.get("target") or "").lower()
+                for pattern in target_patterns
+            )
+        ]
+        if collected:
+            state = "collected"
+            reason = "Relevant evidence was collected."
+        elif relevant_attempts:
+            state = "attempted_failed"
+            reason = "The targeted check was attempted but produced no relevant evidence."
+        elif remaining_units <= 0:
+            state = "budget_exhausted"
+            reason = "No investigation units remain."
+        elif prerequisite:
+            state = "requires_target"
+            reason = prerequisite
+        else:
+            state = "available_not_attempted"
+            reason = "The typed read is available but has not been attempted."
+        return {"capability": name, "tool": tool, "state": state, "reason": reason}
+
+    checks = [
+        check_state(
+            "service_spec", "get_resource", "Service" in observed_kinds,
+            target_patterns=(" service ", " services "),
+        ),
+        check_state(
+            "endpoints", "list_resources",
+            bool({"EndpointSlice", "Endpoints"}.intersection(observed_kinds)),
+            target_patterns=("endpoint",),
+        ),
+        check_state(
+            "pod_spec", "get_resource", "Pod" in observed_kinds,
+            target_patterns=(" pod ", " pods "),
+        ),
+        check_state(
+            "pod_logs", "pod_logs", "pod_logs" in evidence_tools,
+            None if log_candidates else "Pod discovery is required before logs can be selected.",
+        ),
+        check_state("metrics", "query_metrics", "query_metrics" in evidence_tools),
+        check_state("http_probe", "http_probe", "http_probe" in evidence_tools),
+    ]
+    return {
+        "remaining_investigation_units": max(0, remaining_units),
+        "tools": tools,
+        "checks": checks,
+        "language_rule": (
+            "Say 'not collected' for available_not_attempted or requires_target. Reserve "
+            "'unavailable' for an explicit denied, failed, unsupported, or budget-exhausted state."
+        ),
+    }
 
 
 def _display_probe_url(value: str | None) -> str:
@@ -2333,6 +2571,8 @@ async def _collect_bounded_cluster_reads(
     existing_evidence: list[dict[str, object]],
     earlier_context_summary: str = "",
     knowledge: list[dict[str, object]] | None = None,
+    investigation_gaps: list[InvestigationGap] | None = None,
+    existing_read_signatures: list[str] | None = None,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
     progress: ProgressReporter | None = None,
@@ -2340,9 +2580,10 @@ async def _collect_bounded_cluster_reads(
     evidence = list(existing_evidence)
     activity: list[dict[str, object]] = []
     limitations: list[str] = []
-    seen_intents: set[str] = set()
+    seen_intents: set[str] = set(existing_read_signatures or [])
     units_used = 0
     automatic_tls_retries = 0
+    pinned_goal: str | None = "diagnose" if investigation_gaps else None
     scope_summary = "Bounded read-only cluster investigation."
     known_plan = plan_known_read(
         question,
@@ -2397,7 +2638,7 @@ async def _collect_bounded_cluster_reads(
         )
         has_successful_read = any(
             item.get("status") == "succeeded" for item in activity
-        )
+        ) or bool(investigation_gaps and evidence)
         return (
             plan.goal_type in {"diagnose", "logs", "explain"}
             and plan.decision == "answer_from_evidence"
@@ -2409,6 +2650,12 @@ async def _collect_bounded_cluster_reads(
         *, round_number: int, remaining_reads: int, feedback: dict[str, object] | None = None
     ) -> dict[str, object]:
         log_candidates = pod_log_candidates_from_evidence(evidence)
+        relationship_graph = derive_evidence_relationship_graph(evidence)
+        capability_ledger = _investigation_capability_ledger(
+            evidence=evidence,
+            activity=activity,
+            remaining_units=remaining_reads,
+        )
         context: dict[str, object] = {
             "cluster": settings.cluster_name,
             "question": question,
@@ -2421,6 +2668,12 @@ async def _collect_bounded_cluster_reads(
             "observations": evidence[-settings.adhoc_max_evidence :],
             "curated_knowledge": knowledge or [],
             "findings": derive_adhoc_findings(evidence),
+            "relationship_graph": relationship_graph,
+            "capability_ledger": capability_ledger,
+            "pinned_goal_type": pinned_goal,
+            "investigation_gaps": [
+                gap.model_dump() for gap in (investigation_gaps or [])
+            ],
             "completed_reads": activity,
             "investigation_round": round_number,
             "tool_policy": {
@@ -2491,6 +2744,7 @@ async def _collect_bounded_cluster_reads(
             feedback: dict[str, object] | None = None
             target_errors: list[str] = []
             rejected_log_intents: list[ReadIntent] = []
+            no_progress_plan = False
             for planning_attempt in range(1, 3):
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -2508,6 +2762,17 @@ async def _collect_bounded_cluster_reads(
                 except ModelProviderError as exc:
                     planner_error = exc
                     break
+                if pinned_goal is None:
+                    pinned_goal = plan.goal_type
+                elif plan.goal_type != pinned_goal:
+                    LOGGER.info(
+                        "podpilot.adhoc.goal_pinned actor=%s workflow_id=%s proposed=%s pinned=%s",
+                        actor,
+                        workflow_id,
+                        plan.goal_type,
+                        pinned_goal,
+                    )
+                    plan = plan.model_copy(update={"goal_type": pinned_goal})
                 candidates = pod_log_candidates_from_evidence(evidence)
                 bound_plan, target_errors, rejected = _bind_plan_log_intents(
                     plan,
@@ -2516,6 +2781,21 @@ async def _collect_bounded_cluster_reads(
                     evidence=evidence,
                 )
                 rejected_log_intents.extend(rejected)
+                prepared_signatures: list[str] = []
+                for proposed_intent in bound_plan.intents:
+                    prepared = normalize_read_intent(proposed_intent)
+                    if (
+                        prepared.tool == "list_resources"
+                        and prepared.limit == ReadIntent.model_fields["limit"].default
+                    ):
+                        prepared = prepared.model_copy(
+                            update={"limit": settings.adhoc_inventory_max_objects}
+                        )
+                    prepared_signatures.append(_read_intent_signature(prepared))
+                novel_intents = sum(
+                    1 for signature in prepared_signatures if signature not in seen_intents
+                )
+                no_progress_plan = bool(bound_plan.intents) and novel_intents == 0
                 evidence_repair_needed = plan_requires_repair(
                     plan, round_number=round_number
                 )
@@ -2528,13 +2808,21 @@ async def _collect_bounded_cluster_reads(
                 if (
                     not evidence_repair_needed
                     and not sufficiency_review_needed
+                    and not no_progress_plan
                     and not target_errors
                 ):
                     plan = bound_plan
+                    LOGGER.info(
+                        "podpilot.adhoc.plan_decision actor=%s workflow_id=%s round=%s "
+                        "attempt=%s goal=%s decision=%s intents=%s novel=%s",
+                        actor, workflow_id, round_number, planning_attempt,
+                        plan.goal_type, plan.decision, len(plan.intents), novel_intents,
+                    )
                     break
                 repair_reason = (
                     "ungrounded_target" if target_errors else
                     "unsupported_answer" if evidence_repair_needed else
+                    "no_progress" if no_progress_plan else
                     "evidence_sufficiency_review"
                 )
                 LOGGER.warning(
@@ -2566,6 +2854,17 @@ async def _collect_bounded_cluster_reads(
                         "catalog target can answer the question."
                     ),
                 } if evidence_repair_needed else {
+                    "code": "no_progress",
+                    "message": (
+                        "Every proposed intent repeats a read already completed in this turn. "
+                        "Use the supplied relationship_graph frontier, capability_ledger, findings, "
+                        "and investigation_gaps to choose a novel typed read that materially advances "
+                        "the pinned goal. If no novel allowed read would improve the answer, return "
+                        "answer_from_evidence with exact supporting IDs and a stop reason rather than "
+                        "repeating an intent."
+                    ),
+                    "duplicate_intent_count": len(prepared_signatures),
+                } if no_progress_plan else {
                     "code": "review_evidence_sufficiency",
                     "message": (
                         "Before ending this diagnostic investigation, review the supplied "
@@ -2685,6 +2984,11 @@ async def _collect_bounded_cluster_reads(
                 seen_intents.add(signature)
                 new_intents.append(intent)
         if not new_intents:
+            if plan.intents:
+                limitations.append(
+                    "The model planner repeated only reads already completed in this turn; "
+                    "PodPilot requested a novel evidence step before stopping."
+                )
             break
         intent_queue: list[tuple[ReadIntent, str | None, str | None, tuple[str, ...]]] = [
             (intent, None, None, ()) for intent in new_intents
@@ -2824,6 +3128,7 @@ async def _collect_bounded_cluster_reads(
         limitations=list(dict.fromkeys(limitations))[:10],
         scope_summary=scope_summary,
         units_used=units_used,
+        read_signatures=sorted(seen_intents),
     )
 
 
@@ -3266,6 +3571,7 @@ def create_app(
                 }
                 scope_summaries: list[str] = []
                 remaining_budget = app_settings.adhoc_max_reads_per_turn
+                cluster_runtimes: list[dict[str, object]] = []
                 for cluster_index, selected_cluster in enumerate(selected_clusters):
                     cluster_label = selected_cluster.name
                     if not selected_cluster.is_enabled:
@@ -3324,6 +3630,13 @@ def create_app(
                         item for item in knowledge_context
                         if item["applicable_cluster"]["id"] == selected_cluster.id
                     ]
+                    cluster_runtime: dict[str, object] = {
+                        "cluster": selected_cluster,
+                        "reader": reader,
+                        "knowledge": cluster_knowledge,
+                        "read_signatures": [],
+                    }
+                    cluster_runtimes.append(cluster_runtime)
                     collected = await _collect_bounded_cluster_reads(
                         model_provider=provider,
                         cluster_reader=reader,
@@ -3338,6 +3651,9 @@ def create_app(
                         existing_evidence=prior_cluster_evidence,
                         knowledge=cluster_knowledge,
                         progress=progress,
+                    )
+                    cluster_runtime["read_signatures"] = (
+                        collected.read_signatures or []
                     )
                     remaining_budget = max(0, remaining_budget - collected.units_used)
                     for item in collected.evidence:
@@ -3443,6 +3759,12 @@ def create_app(
                     "curated_knowledge": knowledge_context[:20],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
+                    "relationship_graph": derive_evidence_relationship_graph(evidence),
+                    "capability_ledger": _investigation_capability_ledger(
+                        evidence=evidence,
+                        activity=activity,
+                        remaining_units=remaining_budget,
+                    ),
                     "model_log_analysis": model_log_analysis,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
@@ -3475,6 +3797,9 @@ def create_app(
                     answer_mode=str(validated["answer_mode"]),
                     has_evidence=bool(evidence),
                     has_citations=bool(validated["citations"]),
+                ) or _adhoc_capability_wording_issue(
+                    content=str(validated["content"]),
+                    capability_ledger=answer_context.get("capability_ledger"),
                 )
                 if answer_quality_issue:
                     LOGGER.warning(
@@ -3496,6 +3821,12 @@ def create_app(
                         "remains unverified, and precise recommended_next_checks for PodPilot. Do not "
                         "tell the operator to collect evidence or run commands."
                         if answer_quality_issue == "insufficient_interpretation_with_available_evidence"
+                        else
+                        "The prior response described a typed check as unavailable even though the "
+                        "capability ledger says it is available but not collected or still needs a "
+                        "grounded target. Use 'not collected' language and add a structured "
+                        "investigation_gap when that read could materially improve the conclusion."
+                        if answer_quality_issue == "available_check_described_as_unavailable"
                         else
                         "The prior response contained headings but no readable body. Return a direct "
                         "operator-facing answer with substantive prose or bullets beneath any useful "
@@ -3540,6 +3871,9 @@ def create_app(
                             answer_mode=str(retry_validated["answer_mode"]),
                             has_evidence=bool(evidence),
                             has_citations=bool(retry_validated["citations"]),
+                        ) or _adhoc_capability_wording_issue(
+                            content=str(retry_validated["content"]),
+                            capability_ledger=retry_context.get("capability_ledger"),
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -3562,6 +3896,211 @@ def create_app(
                         limitations.append(
                             "The model provider could not correct its incomplete final answer; "
                             "PodPilot used deterministic evidence instead."
+                        )
+                structured_gaps = _actionable_investigation_gaps(
+                    validated_answer=validated,
+                    capability_ledger=answer_context["capability_ledger"],
+                )
+                if structured_gaps and remaining_budget > 0 and cluster_runtimes:
+                    if progress:
+                        await progress(
+                            "planning",
+                            "Turning unresolved evidence questions into safe typed follow-up reads.",
+                        )
+                    activity_before_gaps = len(activity)
+                    runtimes_remaining = len(cluster_runtimes)
+                    for runtime in cluster_runtimes:
+                        if remaining_budget <= 0:
+                            break
+                        selected_cluster = runtime["cluster"]
+                        reader = runtime["reader"]
+                        cluster_knowledge = runtime["knowledge"]
+                        cluster_budget = max(
+                            1, remaining_budget // max(1, runtimes_remaining)
+                        )
+                        cluster_budget = min(cluster_budget, remaining_budget)
+                        runtimes_remaining -= 1
+                        prior_cluster_evidence = [
+                            dict(item) for item in evidence_by_id.values()
+                            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID)
+                            == selected_cluster.id
+                        ]
+                        cluster_settings = app_settings.model_copy(update={
+                            "cluster_name": selected_cluster.name,
+                            "adhoc_max_reads_per_turn": cluster_budget,
+                            "adhoc_followup_reserve_units": 0,
+                        })
+                        gap_collection = await _collect_bounded_cluster_reads(
+                            model_provider=provider,
+                            cluster_reader=reader,
+                            profile=profile_snapshot,
+                            api_key=api_key,
+                            settings=cluster_settings,
+                            actor=username,
+                            workflow_id=(
+                                f"{conversation_id}:{selected_cluster.id}:answer-gaps"
+                            ),
+                            question=message_text,
+                            conversation=history,
+                            earlier_context_summary=context_summary,
+                            existing_evidence=prior_cluster_evidence,
+                            knowledge=cluster_knowledge,
+                            investigation_gaps=structured_gaps,
+                            existing_read_signatures=list(
+                                runtime.get("read_signatures") or []
+                            ),
+                            progress=progress,
+                        )
+                        runtime["read_signatures"] = (
+                            gap_collection.read_signatures or []
+                        )
+                        remaining_budget = max(
+                            0, remaining_budget - gap_collection.units_used
+                        )
+                        for item in gap_collection.evidence:
+                            attributed = dict(item)
+                            attributed["cluster_id"] = selected_cluster.id
+                            attributed["cluster_name"] = selected_cluster.name
+                            evidence_by_id[str(attributed.get("id"))] = attributed
+                        for item in gap_collection.activity:
+                            attributed_activity = dict(item)
+                            attributed_activity["cluster_id"] = selected_cluster.id
+                            attributed_activity["cluster_name"] = selected_cluster.name
+                            activity.append(attributed_activity)
+                        limitations.extend(
+                            gap_collection.limitations
+                            if len(selected_clusters) == 1 else
+                            [
+                                f"Cluster {selected_cluster.name}: {item}"
+                                for item in gap_collection.limitations
+                            ]
+                        )
+                    if len(activity) > activity_before_gaps:
+                        evidence = list(evidence_by_id.values())[
+                            -app_settings.adhoc_max_evidence:
+                        ]
+                        answer_observations, answer_context_metadata = (
+                            _compact_answer_evidence(evidence, activity=activity)
+                        )
+                        answer_findings = _compact_answer_findings(
+                            derive_adhoc_findings(evidence)
+                        )
+                        deterministic_log_section = _deterministic_log_findings_section(
+                            evidence=evidence, activity=activity
+                        )
+                        model_log_analysis = None
+                        log_payload, log_text_by_id = _current_log_analysis_payload(
+                            evidence=evidence, activity=activity, question=message_text,
+                        )
+                        if log_payload is not None and callable(analyze_logs):
+                            try:
+                                raw_log_analysis = await run_in_threadpool(
+                                    analyze_logs, profile_snapshot, api_key, log_payload,
+                                )
+                                model_log_analysis = _validated_model_log_analysis(
+                                    raw_log_analysis, text_by_id=log_text_by_id,
+                                )
+                            except ModelProviderError as exc:
+                                LOGGER.warning(
+                                    "podpilot.adhoc.gap_log_analysis_failed actor=%s "
+                                    "conversation_id=%s error=%s",
+                                    username, conversation_id, exc,
+                                )
+                        if model_log_analysis is not None:
+                            without_log_tails: list[dict[str, object]] = []
+                            for observation in answer_observations:
+                                candidate = dict(observation)
+                                if candidate.get("tool") == "pod_logs" and isinstance(
+                                    candidate.get("data"), dict
+                                ):
+                                    data = dict(candidate["data"])
+                                    data.pop("tail", None)
+                                    data["tailOmittedFromFinalContext"] = True
+                                    data["tailAnalysis"] = (
+                                        "See model_log_analysis; the complete bounded excerpt "
+                                        "remains in evidence."
+                                    )
+                                    candidate["data"] = data
+                                without_log_tails.append(candidate)
+                            answer_observations = without_log_tails
+                        answer_context = {
+                            "clusters": [
+                                _cluster_summary(item) for item in selected_clusters
+                            ],
+                            "question": message_text,
+                            "conversation": history,
+                            "earlier_context_summary": context_summary,
+                            "scope_summary": collected_scope_summary,
+                            "observations": answer_observations,
+                            "curated_knowledge": knowledge_context[:20],
+                            "evidence_context": answer_context_metadata,
+                            "findings": answer_findings,
+                            "relationship_graph": (
+                                derive_evidence_relationship_graph(evidence)
+                            ),
+                            "capability_ledger": _investigation_capability_ledger(
+                                evidence=evidence,
+                                activity=activity,
+                                remaining_units=remaining_budget,
+                            ),
+                            "model_log_analysis": model_log_analysis,
+                            "collection_limitations": _dedupe_limitations(
+                                limitations, limit=10
+                            ),
+                            "resolved_investigation_gaps": [
+                                gap.model_dump() for gap in structured_gaps
+                            ],
+                        }
+                        with capture_raw_model_responses(
+                            include_raw_response
+                        ) as captured:
+                            try:
+                                answer = await run_in_threadpool(
+                                    provider.answer_ad_hoc,
+                                    profile_snapshot,
+                                    api_key,
+                                    answer_context,
+                                )
+                            finally:
+                                _bounded_raw_response_attempts(
+                                    raw_responses,
+                                    captured,
+                                    stage="evidence follow-up answer",
+                                )
+                        if include_raw_response and not captured:
+                            _bounded_raw_response_attempts(
+                                raw_responses,
+                                [
+                                    answer.model_dump_json()
+                                    if hasattr(answer, "model_dump_json") else str(answer)
+                                ],
+                                stage="evidence follow-up answer",
+                            )
+                        validated = _validated_adhoc_answer(
+                            answer,
+                            known_evidence_ids={
+                                str(item.get("id")) for item in evidence
+                            },
+                            collection_limitations=limitations,
+                            observations=evidence,
+                        )
+                        answer_quality_issue = _adhoc_answer_quality_issue(
+                            content=str(validated["content"]),
+                            answer_mode=str(validated["answer_mode"]),
+                            has_evidence=bool(evidence),
+                            has_citations=bool(validated["citations"]),
+                        ) or _adhoc_capability_wording_issue(
+                            content=str(validated["content"]),
+                            capability_ledger=answer_context.get("capability_ledger"),
+                        )
+                        LOGGER.info(
+                            "podpilot.adhoc.gap_followup_complete actor=%s "
+                            "conversation_id=%s gaps=%s new_reads=%s remaining_units=%s",
+                            username,
+                            conversation_id,
+                            len(structured_gaps),
+                            len(activity) - activity_before_gaps,
+                            remaining_budget,
                         )
                 inventory_answer = _deterministic_inventory_answer(
                     evidence=evidence,
@@ -3688,6 +4227,11 @@ def create_app(
                         "reads": activity,
                         "limitations": validated["limitations"],
                         "recommended_next_checks": validated.get("recommended_next_checks", []),
+                        "investigation_gaps": [
+                            gap.model_dump()
+                            for gap in validated.get("investigation_gaps", [])
+                            if isinstance(gap, InvestigationGap)
+                        ],
                         "conclusion_status": validated.get("conclusion_status", "confirmed"),
                     }, sort_keys=True
                 ),

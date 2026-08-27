@@ -279,6 +279,29 @@ one material read now when that read would otherwise appear as an unperformed fi
 otherwise the model may confirm its stop with exact supporting IDs. Recommendation prose is never
 executed, and normal broker validation remains unchanged.
 
+Each planning round also receives two server-derived views of current state. A bounded evidence
+relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
+Service-to-EndpointSlice, endpoint-to-Pod, owner, and volume-source relationships. Its frontier
+contains non-executable read hints for observed-but-unread neighbors. A capability ledger separately
+records whether Service specs, endpoints, Pod specs, Pod logs, metrics, and probes are collected,
+attempted unsuccessfully, budget-exhausted, awaiting an exact target, or available but not attempted.
+The ledger is authoritative for answer wording: the last two available states are described as
+"not collected", not "unavailable".
+
+The first accepted goal type is pinned for the collection pass. Later plans may revise hypotheses
+and choose different evidence, but cannot silently change the operator's diagnostic goal. Normalized
+intent signatures are retained across rounds and the answer-gap pass; a duplicate-only plan receives
+bounded `no_progress` feedback that includes the graph frontier, ledger, and current findings so the
+model can select a novel typed read or explicitly stop.
+
+Final answers may return up to five structured investigation gaps containing a question, typed
+capability, priority, supporting evidence IDs, and reason. Medium/high gaps that the ledger still
+marks actionable initiate one bounded follow-up collection phase, after which the answer is regenerated
+with any new evidence. For compatibility, a model's operator-facing recommended next check may be
+promoted to the same structured planner input only when its text matches a known read capability and
+the ledger says that capability remains actionable. Neither gap nor recommendation text is converted
+to coordinates or executed; only a subsequent schema-valid `ReadPlan` can reach the broker.
+
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
 retains `podSelector`, `policyTypes`, ingress and egress peers, and ports. Configuration evidence

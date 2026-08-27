@@ -728,6 +728,22 @@ read would not materially improve the answer. Logs record this review as
 `podpilot.adhoc.plan_repair reason=evidence_sufficiency_review`; the displayed
 recommendation text itself is never executed.
 
+Planning context includes a bounded relationship graph and capability ledger. The graph exposes
+observed Route, Service, endpoint, Pod, owner, and mount relationships plus unread frontier hints.
+The ledger distinguishes `collected`, `attempted_failed`, `budget_exhausted`, `requires_target`, and
+`available_not_attempted`. Operator answers must say **not collected** for the latter two states;
+**unavailable** is reserved for an explicit failure, denial, unsupported operation, or exhausted
+budget.
+
+The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
+as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
+duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. A final answer
+may return structured medium/high evidence gaps. If budget remains, PodPilot submits those gaps—or a
+capability-matched suggested check—to one additional bounded collection phase and regenerates the
+answer after novel reads. Completion is logged as `podpilot.adhoc.gap_followup_complete`. These records contain
+workflow metadata, not operator questions, recommendation bodies, prompts, or evidence payloads.
+Gap and recommendation text is never executed; the follow-up must produce a normal typed plan.
+
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name
 collisions are represented as `resource.group` (for example,

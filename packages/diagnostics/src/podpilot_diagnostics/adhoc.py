@@ -289,6 +289,19 @@ class ReadPlan(BaseModel):
         return self
 
 
+class InvestigationGap(BaseModel):
+    """A model-identified evidence question; never an executable instruction."""
+
+    question: str = Field(min_length=1, max_length=500)
+    capability: Literal[
+        "resource_read", "service_spec", "endpoints", "pod_spec", "pod_logs",
+        "metrics", "http_probe", "other",
+    ] = "resource_read"
+    priority: Literal["low", "medium", "high"] = "medium"
+    supporting_evidence_ids: list[str] = Field(default_factory=list, max_length=8)
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class PodLogCandidate(BaseModel):
     """An exact server-derived Pod/container target a model may select by opaque ID."""
 
@@ -483,6 +496,235 @@ def pod_log_candidates_from_evidence(
                 phase=data.get("phase"),
             )
     return candidates
+
+
+def derive_evidence_relationship_graph(
+    evidence: list[dict[str, object]],
+    *,
+    max_nodes: int = 120,
+    max_edges: int = 240,
+) -> dict[str, object]:
+    """Build a bounded graph from explicit Kubernetes references in normalized evidence."""
+
+    nodes: dict[str, dict[str, object]] = {}
+    edges: list[dict[str, object]] = []
+    edge_keys: set[tuple[str, str, str]] = set()
+
+    def node_key(
+        kind: object, namespace: object, name: object, *, selector: str | None = None
+    ) -> str:
+        scope = str(namespace or "cluster")[:253]
+        coordinate = str(name or (f"selector:{selector}" if selector else "unknown"))[:512]
+        return f"{str(kind or 'Resource')[:128]}:{scope}/{coordinate}"
+
+    def add_node(
+        kind: object,
+        namespace: object,
+        name: object,
+        *,
+        evidence_id: str | None = None,
+        observed: bool = False,
+        selector: str | None = None,
+    ) -> str:
+        key = node_key(kind, namespace, name, selector=selector)
+        node = nodes.setdefault(key, {
+            "id": key,
+            "kind": str(kind or "Resource")[:128],
+            "namespace": str(namespace or "cluster")[:253],
+            "name": str(name)[:253] if name else None,
+            "selector": selector,
+            "observed": False,
+            "evidence_ids": [],
+        })
+        node["observed"] = bool(node["observed"] or observed)
+        if evidence_id and evidence_id not in node["evidence_ids"]:
+            node["evidence_ids"].append(evidence_id)
+        return key
+
+    def add_edge(
+        source: str,
+        target: str,
+        relation: str,
+        evidence_id: str,
+        read_hint: dict[str, object] | None = None,
+    ) -> None:
+        key = (source, target, relation)
+        if key in edge_keys or len(edges) >= max_edges:
+            return
+        edge_keys.add(key)
+        edges.append({
+            "source": source,
+            "target": target,
+            "relation": relation,
+            "evidence_ids": [evidence_id],
+            "target_observed": bool(nodes.get(target, {}).get("observed")),
+            "read_hint": read_hint,
+        })
+
+    def objects_from_observation(
+        observation: dict[str, object],
+    ) -> list[dict[str, object]]:
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            return []
+        items = data.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        if isinstance(data.get("metadata"), dict):
+            return [data]
+        return []
+
+    for observation in evidence:
+        evidence_id = str(observation.get("id") or "")[:128]
+        if not evidence_id:
+            continue
+        for obj in objects_from_observation(observation):
+            metadata = obj.get("metadata") if isinstance(obj.get("metadata"), dict) else {}
+            spec = obj.get("spec") if isinstance(obj.get("spec"), dict) else {}
+            kind = str(obj.get("kind") or (
+                observation.get("data", {}).get("kind")
+                if isinstance(observation.get("data"), dict) else "Resource"
+            ) or "Resource")
+            namespace = metadata.get("namespace") or "cluster"
+            name = metadata.get("name")
+            if not name:
+                continue
+            source = add_node(
+                kind, namespace, name, evidence_id=evidence_id, observed=True
+            )
+
+            owners = metadata.get("ownerReferences") or metadata.get("owner_references")
+            if isinstance(owners, list):
+                for owner in owners:
+                    if not isinstance(owner, dict) or not owner.get("name"):
+                        continue
+                    owner_kind = owner.get("kind") or "Resource"
+                    target = add_node(owner_kind, namespace, owner.get("name"))
+                    add_edge(source, target, "owned_by", evidence_id, {
+                        "tool": "get_resource", "kind": owner_kind,
+                        "api_version": owner.get("apiVersion") or owner.get("api_version"),
+                        "namespace": namespace, "name": owner.get("name"),
+                    })
+
+            if kind == "Route":
+                backends: list[dict[str, object]] = []
+                if isinstance(spec.get("to"), dict):
+                    backends.append(spec["to"])
+                if isinstance(spec.get("alternateBackends"), list):
+                    backends.extend(
+                        item for item in spec["alternateBackends"] if isinstance(item, dict)
+                    )
+                for backend in backends:
+                    if not backend.get("name"):
+                        continue
+                    target = add_node("Service", namespace, backend.get("name"))
+                    add_edge(source, target, "routes_to", evidence_id, {
+                        "tool": "get_resource", "resource": "services",
+                        "api_version": "v1", "kind": "Service",
+                        "namespace": namespace, "name": backend.get("name"),
+                    })
+
+            if kind == "Service":
+                selector = spec.get("selector") if isinstance(spec.get("selector"), dict) else {}
+                selector_text = ",".join(
+                    f"{key}={value}" for key, value in sorted(selector.items())
+                )
+                if selector_text:
+                    target = add_node("Pod", namespace, None, selector=selector_text)
+                    add_edge(source, target, "selects", evidence_id, {
+                        "tool": "list_resources", "resource": "pods", "api_version": "v1",
+                        "kind": "Pod", "namespace": namespace,
+                        "label_selector": selector_text,
+                    })
+                endpoint_selector = f"kubernetes.io/service-name={name}"
+                target = add_node("EndpointSlice", namespace, None, selector=endpoint_selector)
+                add_edge(source, target, "has_endpoints", evidence_id, {
+                    "tool": "list_resources", "resource": "endpointslices",
+                    "api_version": "discovery.k8s.io/v1", "kind": "EndpointSlice",
+                    "namespace": namespace, "label_selector": endpoint_selector,
+                })
+
+            if kind in {"EndpointSlice", "Endpoints"}:
+                target_refs: list[dict[str, object]] = []
+                endpoints = obj.get("endpoints")
+                if not isinstance(endpoints, list):
+                    endpoints = spec.get("endpoints") if isinstance(spec.get("endpoints"), list) else []
+                for endpoint in endpoints:
+                    if not isinstance(endpoint, dict):
+                        continue
+                    target_ref = endpoint.get("targetRef") or endpoint.get("target_ref")
+                    if isinstance(target_ref, dict):
+                        target_refs.append(target_ref)
+                subsets = obj.get("subsets") if isinstance(obj.get("subsets"), list) else []
+                for subset in subsets:
+                    if not isinstance(subset, dict):
+                        continue
+                    for address in [
+                        *list(subset.get("addresses") or []),
+                        *list(subset.get("notReadyAddresses") or []),
+                    ]:
+                        if not isinstance(address, dict):
+                            continue
+                        target_ref = address.get("targetRef") or address.get("target_ref")
+                        if isinstance(target_ref, dict):
+                            target_refs.append(target_ref)
+                for target_ref in target_refs:
+                    if not target_ref.get("name"):
+                        continue
+                    target_kind = target_ref.get("kind") or "Pod"
+                    target_namespace = target_ref.get("namespace") or namespace
+                    target = add_node(target_kind, target_namespace, target_ref.get("name"))
+                    add_edge(source, target, "targets", evidence_id, {
+                        "tool": "get_resource", "kind": target_kind,
+                        "api_version": target_ref.get("apiVersion") or "v1",
+                        "namespace": target_namespace, "name": target_ref.get("name"),
+                    })
+
+            mounts = obj.get("podpilotMounts")
+            if isinstance(mounts, list):
+                source_kinds = {
+                    "ConfigMap": ("ConfigMap", "configmaps", "v1"),
+                    "PersistentVolumeClaim": ("PersistentVolumeClaim", "persistentvolumeclaims", "v1"),
+                    "Secret": ("Secret", "secrets", "v1"),
+                }
+                for mount in mounts:
+                    if not isinstance(mount, dict) or not mount.get("sourceName"):
+                        continue
+                    source_type = str(mount.get("sourceType") or "Resource")
+                    target_kind, resource, api_version = source_kinds.get(
+                        source_type, (source_type, None, None)
+                    )
+                    target = add_node(target_kind, namespace, mount.get("sourceName"))
+                    read_hint = None if target_kind == "Secret" else {
+                        "tool": "get_resource", "resource": resource,
+                        "api_version": api_version, "kind": target_kind,
+                        "namespace": namespace, "name": mount.get("sourceName"),
+                    }
+                    add_edge(source, target, "mounts_from", evidence_id, read_hint)
+
+    bounded_nodes = list(nodes.values())[:max_nodes]
+    bounded_ids = {str(node["id"]) for node in bounded_nodes}
+    bounded_edges = []
+    for edge in edges:
+        if edge["source"] not in bounded_ids or edge["target"] not in bounded_ids:
+            continue
+        normalized_edge = dict(edge)
+        normalized_edge["target_observed"] = bool(
+            nodes.get(str(edge["target"]), {}).get("observed")
+        )
+        bounded_edges.append(normalized_edge)
+        if len(bounded_edges) >= max_edges:
+            break
+    frontier = [
+        edge for edge in bounded_edges
+        if not edge["target_observed"] and edge.get("read_hint") is not None
+    ]
+    return {
+        "nodes": bounded_nodes,
+        "edges": bounded_edges,
+        "frontier": frontier,
+        "truncated": len(nodes) > max_nodes or len(edges) > max_edges,
+    }
 
 
 def plan_needs_evidence_repair(
