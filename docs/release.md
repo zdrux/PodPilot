@@ -284,6 +284,11 @@ for messages, observations, findings, graph, completed reads, and candidates mus
 provider activation probe must exercise discovery followed by an exact candidate selection. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
+They must also prove that exact operator URLs become grounded probe candidates only after Route
+evidence or a structured probe gap, and that normal-priority healthy Pod logs are offered only for a
+structured log gap. Follow-up answer tests must partition resolved/remaining gaps from final ledger
+state, reject collected checks described as uncollected, and remove comma-separated internal citation
+markers while retaining their allowlisted citations.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal

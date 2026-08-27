@@ -32,6 +32,7 @@ from podpilot_api.main import (
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _parse_tags,
+    _partition_investigation_gaps,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -146,6 +147,48 @@ def test_capability_ledger_distinguishes_available_uncollected_from_unavailable(
         content="Logs, metrics, and probes were not collected.",
         capability_ledger=ledger,
     ) is None
+
+
+def test_capability_wording_rejects_collected_checks_listed_as_still_missing() -> None:
+    ledger = _investigation_capability_ledger(
+        evidence=[{
+            "id": "service-1", "tool": "get_resource",
+            "data": {"kind": "Service", "metadata": {"name": "gateway"}},
+        }, {
+            "id": "endpoint-1", "tool": "list_resources",
+            "data": {"kind": "EndpointSlice", "items": []},
+        }],
+        activity=[
+            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["service-1"]},
+            {"tool": "list_resources", "status": "succeeded", "evidence_ids": ["endpoint-1"]},
+        ],
+        remaining_units=6,
+    )
+
+    assert _adhoc_capability_wording_issue(
+        content=(
+            "Investigation gaps: pod_logs, service_spec, endpoints. "
+            "These are still not collected."
+        ),
+        capability_ledger=ledger,
+    ) == "collected_check_described_as_uncollected"
+
+
+def test_final_gap_partition_uses_trusted_collected_states() -> None:
+    gaps = [
+        InvestigationGap(question="Read Service", capability="service_spec"),
+        InvestigationGap(question="Read logs", capability="pod_logs"),
+    ]
+    resolved, remaining = _partition_investigation_gaps(
+        gaps,
+        capability_ledger={"checks": [
+            {"capability": "service_spec", "state": "collected"},
+            {"capability": "pod_logs", "state": "available_not_attempted"},
+        ]},
+    )
+
+    assert [gap.capability for gap in resolved] == ["service_spec"]
+    assert [gap.capability for gap in remaining] == ["pod_logs"]
 
 
 def test_recommended_next_check_is_promoted_only_to_typed_planner_input() -> None:
@@ -1140,6 +1183,28 @@ def test_adhoc_answer_recovers_exact_inline_evidence_id_from_empty_citation_arra
         has_evidence=True,
         has_citations=True,
     ) is None
+
+
+def test_adhoc_answer_removes_comma_separated_internal_citation_marker() -> None:
+    first = "cluster-0228778f-93f6-41b5-bddc-68597cfcce9f"
+    second = "cluster-bca2be53-6576-49d0-9a1d-187a6a228d2f"
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        answer=(
+            f"## Service and Endpoints (cited_evidence_ids:{first}, {second})\n\n"
+            "The collected objects show the backend topology."
+        ),
+        cited_evidence_ids=[first, second],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer, known_evidence_ids={first, second},
+    )
+
+    assert validated["citations"] == [first, second]
+    assert "cited_evidence_ids" not in str(validated["content"])
+    assert first not in str(validated["content"])
+    assert second not in str(validated["content"])
 
 
 def test_adhoc_answer_does_not_recover_unknown_inline_evidence_id() -> None:
@@ -4014,6 +4079,11 @@ def test_embedded_answer_gap_is_recovered_without_rendering_serialized_fields(
     assert "investigation_gaps" not in rendered.text
     assert "structured_fields_embedded_in_answer" in caplog.text
     assert "podpilot.adhoc.gap_followup_complete" in caplog.text
+    final_context = provider.adhoc_answer_calls[-1]
+    assert [
+        gap["capability"] for gap in final_context["resolved_investigation_gaps"]
+    ] == ["service_spec"]
+    assert final_context["remaining_investigation_gaps"] == []
 
 
 def test_candidate_first_planner_selects_route_then_service_with_compact_context() -> None:
@@ -4064,6 +4134,11 @@ def test_candidate_first_planner_selects_route_then_service_with_compact_context
         item["capability"] == "service_spec"
         for item in second_context["read_candidates"]
     )
+    assert any(
+        item["capability"] == "http_probe"
+        and item["target"] == "GET https://maas.apps.example.test/v1/models"
+        for item in second_context["read_candidates"]
+    )
 
 
 def test_unknown_candidate_id_executes_no_cluster_read() -> None:
@@ -4091,6 +4166,85 @@ def test_unknown_candidate_id_executes_no_cluster_read() -> None:
     assert explorer.calls == []
     assert result.evidence == []
     assert len(provider.adhoc_plan_calls) == 2
+
+
+def test_structured_log_gap_offers_healthy_pod_log_candidate() -> None:
+    class HealthyLogGapProvider:
+        def __init__(self) -> None:
+            self.contexts: list[dict[str, object]] = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            if not context["completed_reads"]:
+                candidate = next(
+                    item for item in context["read_candidates"]
+                    if item["capability"] == "pod_logs"
+                )
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Read the exact healthy backend container logs for the 500.",
+                    candidate_ids=[candidate["id"]],
+                )
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                stop_reason="evidence_sufficient",
+                scope_summary="The bounded backend logs were collected.",
+                supporting_evidence_ids=["cluster-backend-logs"],
+            )
+
+    provider = HealthyLogGapProvider()
+    explorer = RouteBackendExplorer()
+    existing_pod = {
+        "id": "cluster-healthy-pod",
+        "tool": "get_resource",
+        "summary": "Read the healthy backend Pod.",
+        "data": {
+            "kind": "Pod",
+            "metadata": {"namespace": "maas", "name": "model-server-abc"},
+            "spec": {"containers": [{"name": "server"}]},
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{
+                    "name": "server", "ready": True, "restartCount": 0,
+                }],
+            },
+        },
+    }
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="healthy-log-gap",
+        question="Why does this backend request return HTTP 500?",
+        conversation=[], existing_evidence=[existing_pod],
+        investigation_gaps=[InvestigationGap(
+            question="What do the application logs show for the HTTP 500?",
+            capability="pod_logs", priority="high",
+            supporting_evidence_ids=["cluster-healthy-pod"],
+        )],
+    ))
+
+    assert [call.tool for call in explorer.calls] == ["pod_logs"]
+    assert any(item["id"] == "cluster-backend-logs" for item in result.evidence)
+    first_context = provider.contexts[0]
+    assert first_context["tool_policy"]["pod_log_candidates"][0][
+        "investigation_priority"
+    ] == "normal"
+    assert any(
+        item["capability"] == "pod_logs"
+        for item in first_context["read_candidates"]
+    )
 
 
 def test_structured_gap_recovery_executes_matching_grounded_candidate(

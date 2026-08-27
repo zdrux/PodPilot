@@ -758,6 +758,11 @@ The ledger distinguishes `collected`, `attempted_failed`, `budget_exhausted`, `r
 `available_not_attempted`. Operator answers must say **not collected** for the latter two states;
 **unavailable** is reserved for an explicit failure, denial, unsupported operation, or exhausted
 budget.
+Before the evidence-follow-up answer, PodPilot recomputes that ledger and supplies separate
+`resolved_investigation_gaps` and `remaining_investigation_gaps`. Claiming that a collected Service,
+endpoint, Pod, log, metric, or probe is still not collected is rejected with
+`reason=collected_check_described_as_uncollected`. Internal single- or multi-ID
+`cited_evidence_ids` markers are removed from displayed prose after citation allowlisting.
 
 Candidate planning keeps at most four recent messages, a 1,500-character earlier-context summary,
 sixteen compact observations, eight findings, sixty graph nodes, eighty graph edges, twelve completed
@@ -765,6 +770,10 @@ reads, and twelve grounded candidates. Candidate-visible graph edges omit execut
 If the model twice stops while a structured medium/high gap has a matching candidate, PodPilot logs
 `podpilot.adhoc.gap_candidate_recovery`, performs that one broker-validated read, and states the
 recovery as a limitation.
+For a Route investigation, an exact URL in the operator question becomes a grounded bounded GET
+probe candidate once Route evidence is present. A structured `pod_logs` gap also admits exact
+Running/Ready containers at normal priority, allowing application-error investigation without
+requiring a restart or readiness failure first.
 
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a

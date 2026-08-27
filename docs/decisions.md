@@ -51,6 +51,11 @@ correction. When explicit recommendation/gap prose is the only surviving express
 need, compatibility recovery retains only fixed capability categories that the trusted ledger marks
 actionable; it never extracts targets or operations, and candidate compilation plus broker policy
 remain mandatory.
+Final follow-up answers receive resolved and remaining gaps recomputed from the trusted ledger;
+collected checks cannot remain operator-visible as missing. Citation field markers are presentation
+metadata and are stripped after exact allowlisted IDs are recovered. Exact operator URLs and observed
+healthy Pod/container tuples may become probe or log candidates when Route evidence or structured
+gaps make them relevant, but their executable typed intents remain server-owned.
 Regardless of model success or fallback, normal code appends a
 bounded operator-facing log-finding section with exact Pod/container, category, severity,
 occurrence count, paths/endpoints, sample, correlated checks, and evidence citations.

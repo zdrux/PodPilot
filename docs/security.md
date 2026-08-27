@@ -240,6 +240,10 @@ and no-progress repair do not widen that authority.
 Malformed answer strings that embed `investigation_gaps` or recommended evidence receive the same
 treatment: only a fixed capability whose server ledger is still actionable may be promoted. Names,
 namespaces, URLs, JSON fields, mutations, and other prose are never retained as an intent.
+The sole URL-probe exception is an absolute HTTP/HTTPS URL copied exactly from the operator request;
+normal code validates it and retains the typed intent server-side. Healthy Pod-log candidates are
+exact namespace/Pod/container tuples derived from collected Pod evidence and are exposed only when a
+structured log gap makes them relevant. Both still pass budget, deny, read-only, redaction, and audit policy.
 
 Bounded Pod logs are untrusted evidence. Deterministic log-signal classification
 matches fixed operational patterns only; it never executes, evaluates, or follows

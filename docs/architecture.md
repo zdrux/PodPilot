@@ -289,6 +289,10 @@ Candidate rounds receive only four recent conversation messages, a short earlier
 the sixteen most relevant compact observations, eight findings, a graph without executable hints,
 twelve completed-read summaries, the capability ledger, gaps, and up to twelve candidates. Resource
 catalog and curated knowledge payloads are omitted until the discovery escape hatch is needed.
+An exact operator-supplied HTTP/HTTPS URL becomes a grounded GET-probe candidate after Route
+evidence exists, or when a structured probe gap remains. A structured Pod-log gap may similarly
+offer exact normal-priority Running/Ready container candidates; unhealthy/restarting candidates
+retain higher priority. Neither case permits the model to author coordinates.
 
 Each planning round also receives two server-derived views of current state. A bounded evidence
 relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
@@ -437,6 +441,9 @@ string and inline pipe-delimited tables without Markdown row boundaries. If a co
 places evidence recommendations in that malformed prose, normal code may retain only fixed
 capability categories that the ledger marks actionable; coordinates and prose are discarded before
 the normal grounded-candidate pass.
+Before a follow-up answer, structured gaps are partitioned against the final capability ledger into
+resolved and remaining sets. Final validation rejects prose that calls a collected capability “not
+collected,” and provider-facing citation markers are removed after allowlisted citations are recovered.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
 cited-observation fallback rendering. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving

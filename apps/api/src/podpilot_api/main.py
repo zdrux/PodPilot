@@ -607,6 +607,16 @@ def _clean_adhoc_markdown(
         )
         cleaned = parenthetical_citations.sub("", cleaned)
 
+    # Provider-facing citation fields are never operator prose. Remove the complete
+    # bounded marker after exact allowlisted IDs have already been recovered above;
+    # this also handles comma-separated IDs that smaller models place in headings.
+    cleaned = re.sub(
+        r"\s*\((?:cited[_ ]evidence[_ ]ids?|evidence\s+ids?)\s*:\s*[^)\n]{1,1000}\)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -699,7 +709,7 @@ def _adhoc_capability_wording_issue(
 
     if not capability_ledger:
         return None
-    patterns = {
+    unavailable_patterns = {
         "service_spec": r"\b(?:service(?:\s+(?:spec|definition|object))?).{0,80}\b(?:unavailable|not available)\b",
         "endpoints": r"\bendpoints?(?:lices)?.{0,80}\b(?:unavailable|not available)\b",
         "pod_spec": r"\bpod(?:s|\s+(?:spec|definition|object))?.{0,80}\b(?:unavailable|not available)\b",
@@ -707,14 +717,43 @@ def _adhoc_capability_wording_issue(
         "metrics": r"\bmetrics?.{0,80}\b(?:unavailable|not available)\b|\bno\s+metrics?.{0,80}\bavailable\b",
         "http_probe": r"\bprobes?(?:\s+results?)?.{0,80}\b(?:unavailable|not available)\b|\bno\s+probes?.{0,80}\bavailable\b",
     }
+    capability_mentions = {
+        "service_spec": r"\bservice(?:_spec|\s+(?:spec|definition|object))\b",
+        "endpoints": r"\bendpoint(?:s|slices?)?\b",
+        "pod_spec": r"\bpod(?:_spec|s|\s+(?:spec|definition|object))\b",
+        "pod_logs": r"\b(?:pod_logs|pod\s+logs?|logs?)\b",
+        "metrics": r"\bmetrics?\b",
+        "http_probe": r"\b(?:http_probe|https?\s+probe|probes?)\b",
+    }
     for check in capability_ledger.get("checks") or []:
-        if not isinstance(check, dict) or check.get("state") not in {
-            "available_not_attempted", "requires_target",
-        }:
+        if not isinstance(check, dict):
             continue
-        pattern = patterns.get(str(check.get("capability") or ""))
-        if pattern and re.search(pattern, content, re.IGNORECASE | re.DOTALL):
+        capability = str(check.get("capability") or "")
+        state = str(check.get("state") or "")
+        pattern = unavailable_patterns.get(capability)
+        if (
+            state in {"available_not_attempted", "requires_target"}
+            and pattern
+            and re.search(pattern, content, re.IGNORECASE | re.DOTALL)
+        ):
             return "available_check_described_as_unavailable"
+        mention = capability_mentions.get(capability)
+        if state == "collected" and mention:
+            stale_gap_section = re.search(
+                r"\binvestigation gaps?\b[^\n]{0,500}\b(?:still\s+)?not collected\b",
+                content,
+                re.IGNORECASE,
+            )
+            local_stale_claim = re.search(
+                rf"{mention}.{{0,160}}\b(?:still\s+)?not collected\b",
+                content,
+                re.IGNORECASE | re.DOTALL,
+            )
+            if (
+                local_stale_claim
+                or (stale_gap_section and re.search(mention, stale_gap_section.group(0), re.IGNORECASE))
+            ):
+                return "collected_check_described_as_uncollected"
     return None
 
 
@@ -802,6 +841,25 @@ def _actionable_investigation_gaps(
                     ),
                 ))
     return result
+
+
+def _partition_investigation_gaps(
+    gaps: list[InvestigationGap],
+    *,
+    capability_ledger: dict[str, object],
+) -> tuple[list[InvestigationGap], list[InvestigationGap]]:
+    """Reconcile requested evidence gaps against the final trusted capability ledger."""
+
+    states = {
+        str(item.get("capability")): str(item.get("state"))
+        for item in capability_ledger.get("checks") or []
+        if isinstance(item, dict)
+    }
+    resolved: list[InvestigationGap] = []
+    unresolved: list[InvestigationGap] = []
+    for gap in gaps:
+        (resolved if states.get(gap.capability) == "collected" else unresolved).append(gap)
+    return resolved, unresolved
 
 
 def _adhoc_answer_advisories(
@@ -2247,6 +2305,7 @@ class _GroundedReadCandidate:
 
 def _grounded_read_candidates(
     *,
+    question: str,
     evidence: list[dict[str, object]],
     relationship_graph: dict[str, object],
     recovery_anchor_plan: ReadPlan | None,
@@ -2317,7 +2376,10 @@ def _grounded_read_candidates(
         )
 
     for log_candidate in pod_log_candidates_from_evidence(evidence):
-        if log_candidate.investigation_priority not in {"high", "elevated"}:
+        if (
+            log_candidate.investigation_priority not in {"high", "elevated"}
+            and "pod_logs" not in gap_capabilities
+        ):
             continue
         add(
             ReadIntent(tool="pod_logs", candidate_id=log_candidate.id),
@@ -2328,11 +2390,42 @@ def _grounded_read_candidates(
             ),
             reason=(
                 ", ".join(log_candidate.trigger_reasons)
-                or "Collected Pod state makes this bounded log read relevant."
+                or "A structured diagnostic gap makes this exact healthy-Pod log read relevant."
             ),
             evidence_ids=[log_candidate.evidence_id],
             relation="has_logs",
         )
+
+    route_evidence_ids = [
+        str(item.get("id"))
+        for item in evidence
+        if item.get("id") and isinstance(item.get("data"), dict)
+        and (
+            item["data"].get("kind") == "Route"
+            or any(
+                isinstance(candidate, dict) and candidate.get("kind") == "Route"
+                for candidate in (item["data"].get("items") or [])
+            )
+        )
+    ]
+    if route_evidence_ids or "http_probe" in gap_capabilities:
+        for match in re.finditer(r"https?://[^\s\"'<>]+", question, re.IGNORECASE):
+            url = match.group(0).rstrip(".,;:!?)]}")
+            parsed = urlsplit(url)
+            if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+                continue
+            try:
+                probe_intent = ReadIntent(tool="http_probe", url=url, method="GET")
+            except ValueError:
+                continue
+            add(
+                probe_intent,
+                capability="http_probe",
+                target=f"GET {url}",
+                reason="Exact operator-supplied URL can directly test the observed Route behavior.",
+                evidence_ids=route_evidence_ids,
+                relation="probes",
+            )
 
     if recovery_anchor_plan is not None:
         for intent in recovery_anchor_plan.intents:
@@ -3051,6 +3144,7 @@ async def _collect_bounded_cluster_reads(
             for planning_attempt in range(1, 3):
                 relationship_graph = derive_evidence_relationship_graph(evidence)
                 read_candidates = _grounded_read_candidates(
+                    question=question,
                     evidence=evidence,
                     relationship_graph=relationship_graph,
                     recovery_anchor_plan=recovery_anchor_plan,
@@ -4211,6 +4305,11 @@ def create_app(
                         "separate physical lines. Do not flatten a table into an inline pipe-delimited sentence."
                         if answer_quality_issue == "malformed_markdown_structure"
                         else
+                        "The prior response listed a capability as not collected even though the final "
+                        "capability ledger marks it collected. Remove resolved gaps, describe the collected "
+                        "observation, and retain only checks whose final ledger state is not collected."
+                        if answer_quality_issue == "collected_check_described_as_uncollected"
+                        else
                         "The prior response declined to interpret available evidence. Explain the "
                         "confirmed observations, the strongest evidence-supported hypothesis, what "
                         "remains unverified, and precise recommended_next_checks for PodPilot. Do not "
@@ -4421,6 +4520,15 @@ def create_app(
                                     candidate["data"] = data
                                 without_log_tails.append(candidate)
                             answer_observations = without_log_tails
+                        final_capability_ledger = _investigation_capability_ledger(
+                            evidence=evidence,
+                            activity=activity,
+                            remaining_units=remaining_budget,
+                        )
+                        resolved_gaps, remaining_gaps = _partition_investigation_gaps(
+                            structured_gaps,
+                            capability_ledger=final_capability_ledger,
+                        )
                         answer_context = {
                             "clusters": [
                                 _cluster_summary(item) for item in selected_clusters
@@ -4439,17 +4547,16 @@ def create_app(
                             "curated_knowledge": knowledge_context[:6],
                             "evidence_context": answer_context_metadata,
                             "findings": answer_findings,
-                            "capability_ledger": _investigation_capability_ledger(
-                                evidence=evidence,
-                                activity=activity,
-                                remaining_units=remaining_budget,
-                            ),
+                            "capability_ledger": final_capability_ledger,
                             "model_log_analysis": model_log_analysis,
                             "collection_limitations": _dedupe_limitations(
                                 limitations, limit=10
                             ),
                             "resolved_investigation_gaps": [
-                                gap.model_dump() for gap in structured_gaps
+                                gap.model_dump() for gap in resolved_gaps
+                            ],
+                            "remaining_investigation_gaps": [
+                                gap.model_dump() for gap in remaining_gaps
                             ],
                         }
                         with capture_raw_model_responses(

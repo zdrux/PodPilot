@@ -254,6 +254,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   Markdown tables. It requests clean operator prose plus real top-level gaps, and can recover only
   fixed ledger-actionable capability labels from an explicit recommendation section. Those labels
   return to grounded candidate planning; model-authored coordinates and mutation text are discarded.
+- Evidence-follow-up answers now receive ledger-reconciled resolved and remaining gaps, and stale
+  “not collected” wording for completed checks is rejected. Internal multi-ID citation markers are
+  removed from prose. Exact operator URLs can become grounded Route-probe candidates, while structured
+  log gaps can admit exact healthy Running/Ready Pod containers without weakening log target binding.
 - Ask planning now pins the initial goal, detects duplicate-only no-progress plans across collection
   phases, and supplies an object-specific capability ledger so available-but-uncollected Service,
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured
