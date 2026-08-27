@@ -569,7 +569,14 @@ _ADHOC_SECTION_LABEL = re.compile(
     r"(?:\*\*)?\s*:\s*",
     re.IGNORECASE,
 )
+_ADHOC_INLINE_BOLD_SECTION = re.compile(
+    r"(?:^|\s+)\*\*(observation|interpretation|summary|evidence|findings?|"
+    r"remaining uncertainties|recommended next steps?|next steps?|limitations?)\*\*\s*:?\s*",
+    re.IGNORECASE,
+)
 _ADHOC_SECTION_TITLES = {
+    "observation": "Observed evidence",
+    "interpretation": "Interpretation",
     "summary": "Summary",
     "finding": "Finding",
     "findings": "Findings",
@@ -582,6 +589,9 @@ _ADHOC_SECTION_TITLES = {
     "next steps": "Next steps",
     "limitation": "Limitation",
     "limitations": "Limitations",
+    "remaining uncertainties": "Remaining uncertainties",
+    "recommended next step": "Recommended next steps",
+    "recommended next steps": "Recommended next steps",
 }
 
 
@@ -620,6 +630,21 @@ def _clean_adhoc_markdown(
     cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
     cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    # Some constrained providers flatten bold section labels and Unicode bullets
+    # onto one line. Restore block structure without changing authored multiline
+    # Markdown or the underlying wording.
+    if "\n" not in cleaned and ("•" in cleaned or _ADHOC_INLINE_BOLD_SECTION.search(cleaned)):
+        cleaned = _ADHOC_INLINE_BOLD_SECTION.sub(
+            lambda match: (
+                "\n\n### "
+                + _ADHOC_SECTION_TITLES[match.group(1).lower()]
+                + "\n\n"
+            ),
+            cleaned,
+        ).strip()
+        cleaned = re.sub(r"[ \t]*•[ \t]*", "\n- ", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
     # Some chat-completions providers flatten an otherwise substantive Markdown
     # answer onto one physical line beginning with a heading. Without restoring
@@ -3600,7 +3625,7 @@ async def _collect_bounded_cluster_reads(
                 candidate_stop_requires_repair = bool(
                     actionable_gap_candidates
                     and bound_plan.decision == "answer_from_evidence"
-                )
+                ) or bool(getattr(bound_plan, "_selection_incomplete", False))
                 evidence_repair_needed = plan_requires_repair(
                     plan, round_number=round_number
                 ) or candidate_stop_requires_repair
@@ -3733,6 +3758,32 @@ async def _collect_bounded_cluster_reads(
                 LOGGER.warning(
                     "podpilot.adhoc.gap_candidate_recovery actor=%s workflow_id=%s "
                     "candidate_id=%s capability=%s",
+                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
+                )
+            elif (
+                needs_fallback
+                and plan is not None
+                and getattr(plan, "_selection_incomplete", False)
+                and read_candidates
+                and not target_errors
+            ):
+                selected_candidate = read_candidates[0]
+                plan = ReadPlan(
+                    goal_type=pinned_goal or "diagnose",
+                    scope_summary=(
+                        "Continue the model-requested investigation with the highest-priority "
+                        "supplied evidence action after its empty selection."
+                    ),
+                    intents=[selected_candidate.intent],
+                )
+                candidate_errors = []
+                limitations.append(
+                    "The model requested more investigation but twice omitted an action ID; "
+                    "PodPilot used the highest-priority supplied read-only evidence action."
+                )
+                LOGGER.warning(
+                    "podpilot.adhoc.action_candidate_recovery actor=%s workflow_id=%s "
+                    "candidate_id=%s capability=%s reason=empty_selection",
                     actor, workflow_id, selected_candidate.id, selected_candidate.capability,
                 )
             elif needs_fallback and log_fallback is not None:

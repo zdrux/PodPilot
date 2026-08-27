@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from podpilot_api.model_provider import (
+    ActionSelection,
     AdHocAnswer,
     AdHocLogAnalysis,
     CapabilityReport,
@@ -438,6 +439,27 @@ def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
     assert payload["available_actions"] == []
     assert "tool_policy" not in payload
+
+
+def test_action_selection_uses_exact_ids_as_the_safe_continuation_signal() -> None:
+    selected = ActionSelection.model_validate({
+        "decision": "answer",
+        "action_ids": ["read-0123456789abcdefabcd"],
+        "reason": "Inspect the suggested Pod logs.",
+    })
+    empty = ActionSelection.model_validate({
+        "decision": "investigate",
+        "action_ids": [],
+        "reason": "No action was selected.",
+    })
+
+    assert selected.decision == "investigate"
+    assert selected.to_read_plan().candidate_ids == ["read-0123456789abcdefabcd"]
+    assert empty.decision == "investigate"
+    empty_plan = empty.to_read_plan()
+    assert empty_plan.decision == "answer_from_evidence"
+    assert empty_plan.candidate_ids == []
+    assert empty_plan._selection_incomplete is True
 
 
 def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:

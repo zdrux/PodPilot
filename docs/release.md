@@ -287,6 +287,11 @@ contract must preserve exact evidence citations, multi-cluster attribution, unce
 Markdown, and useful remediation recommendations without embedding correction policy or resource-specific
 semantics. The
 provider activation probe must exercise discovery followed by an exact candidate selection. A model
+that pairs exact supplied IDs with `answer` must continue safely without a correction round; an empty
+`investigate` may recover only after the bounded retry and only with an exact action already supplied
+to the model. Presentation tests must turn flattened bold
+section labels and Unicode bullets into valid headings and lists. Follow-up Pod-log collection must
+invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
 They must also prove that exact operator URLs become grounded probe candidates only after Route

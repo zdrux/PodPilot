@@ -21,6 +21,7 @@ from podpilot_api.main import (
     _adhoc_evidence_view,
     _bind_plan_log_intents,
     _collect_bounded_cluster_reads,
+    _clean_adhoc_markdown,
     _compact_answer_evidence,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
@@ -877,6 +878,18 @@ def test_final_answer_quality_rejects_embedded_schema_and_flattened_table() -> N
         has_evidence=True,
         has_citations=True,
     ) is None
+
+
+def test_inline_bold_sections_and_unicode_bullets_become_readable_markdown() -> None:
+    cleaned = _clean_adhoc_markdown(
+        "**Observation** • The Route uses passthrough TLS. • The Service receives port 443. "
+        "**Interpretation** • The backend must accept TLS. "
+        "**Recommended next steps** • Inspect Pod logs for certificate errors."
+    )
+
+    assert cleaned.startswith("### Observed evidence\n\n- The Route")
+    assert "\n\n### Interpretation\n\n- The backend" in cleaned
+    assert "\n\n### Recommended next steps\n\n- Inspect Pod logs" in cleaned
 
 
 def test_flattened_heading_answer_is_normalized_before_quality_validation() -> None:
@@ -2768,6 +2781,29 @@ class GapStoppingCandidateProvider(StructuredGapRouteProvider):
         )
 
 
+class EmptyInvestigateRouteProvider(CandidateSelectingRouteProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if not context["completed_reads"]:
+            candidate = next(
+                item for item in context["read_candidates"]
+                if item["capability"] == "initial_discovery"
+            )
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Select the exact Route discovery candidate.",
+                candidate_ids=[candidate["id"]],
+            )
+        plan = ReadPlan(
+            goal_type="diagnose",
+            decision="collect",
+            scope_summary="Continue investigating the supplied evidence actions.",
+            intents=[],
+        )
+        plan._selection_incomplete = True
+        return plan
+
+
 class RouteOnlyAnswerProvider(RouteBackendProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
@@ -2935,6 +2971,19 @@ class RouteBackendExplorer:
                     "matchField": "involvedObject.name", "matchValue": "model-server-abc",
                 },
             ),), ("No Event resources matched the bounded query.",))
+        if intent.tool == "http_probe":
+            return ReadResult((AdHocObservation(
+                id="cluster-route-probe", tool="http_probe",
+                summary="The Route endpoint completed TLS and returned HTTP 500.",
+                source="http:https://maas.apps.example.test/v1/models",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "logicalHost": "maas.apps.example.test",
+                    "statusCode": 500,
+                    "tlsVerificationRequested": True,
+                    "tls": {"verified": True, "version": "TLSv1.3"},
+                },
+            ),))
         assert intent.tool == "pod_logs"
         return ReadResult((AdHocObservation(
             id="cluster-backend-logs", tool="pod_logs",
@@ -4489,6 +4538,49 @@ def test_structured_gap_recovery_executes_matching_grounded_candidate(
     assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
     assert "collected Service maps its" in rendered.text
     assert "podpilot.adhoc.gap_candidate_recovery" in caplog.text
+
+
+def test_empty_investigate_selection_recovers_with_a_supplied_action(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = EmptyInvestigateRouteProvider()
+    explorer = RouteBackendExplorer(route_termination="passthrough")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": (
+                "Validate this Route backend: https://maas.apps.example.test/v1/models"
+            )},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [call.tool for call in explorer.calls][:2] == ["search_resources", "http_probe"]
+    assert any(call.tool == "get_resource" and call.kind == "Service" for call in explorer.calls)
+    assert "podpilot.adhoc.action_candidate_recovery" in caplog.text
 
 
 def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(

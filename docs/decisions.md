@@ -877,6 +877,9 @@ without requiring the model to manufacture tool calls. Use a separate concise fi
 containing Markdown, exact evidence citations, certainty, and useful operator recommendations. A
 recommendation may inform another read only after normal code maps it to a known action and the
 unchanged broker accepts it; model text never executes and mutations remain outside this flow.
+Treat exact supplied action IDs as the authoritative continuation signal when the constrained model
+pairs them with an inconsistent decision label. After a bounded retry, an empty `investigate` may
+recover only through the highest-priority server-owned action already supplied to the model.
 
 Consequences: Pods, Nodes, Routes, custom resources, and future Kubernetes objects follow the same
 investigation protocol. Prompt and schema load is substantially smaller, while the model still owns

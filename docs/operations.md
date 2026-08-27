@@ -779,6 +779,11 @@ Candidate planning keeps at most two recent messages, twelve compact fact cards 
 aggregate limit, eight completed action summaries, twelve grounded action cards, four unresolved
 questions, and the remaining read budget. Unknown but listable resource types discovered in the
 cluster catalog are converted to the same bounded action-card format; the catalog itself is not sent.
+When a constrained model returns valid supplied action IDs with an inconsistent decision label,
+PodPilot treats the IDs as the safe continuation signal. An empty `investigate` selection becomes
+an incomplete selection; after the bounded retry, PodPilot may use the highest-priority action it
+already supplied because the model explicitly requested further investigation. Unknown or malformed
+IDs still execute nothing.
 If the model twice stops while a structured medium/high gap has a matching candidate, PodPilot logs
 `podpilot.adhoc.gap_candidate_recovery`, performs that one broker-validated read, and states the
 recovery as a limitation.
@@ -798,6 +803,8 @@ logged as `podpilot.adhoc.gap_followup_complete`. These records contain
 workflow metadata, not operator questions, recommendation bodies, prompts, or evidence payloads.
 Recommendation text is never executed; any follow-up must select a server-owned action ID and pass
 the unchanged broker checks.
+Collected Pod logs are always eligible for the dedicated bounded log-analysis request, including logs
+obtained during this recommendation-driven follow-up, before the regenerated final answer.
 
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name

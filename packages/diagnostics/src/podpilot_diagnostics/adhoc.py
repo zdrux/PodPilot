@@ -7,7 +7,7 @@ from hashlib import sha256
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 
 _DEFERRED_TARGET = re.compile(
@@ -261,6 +261,8 @@ class ReadIntent(BaseModel):
 
 
 class ReadPlan(BaseModel):
+    _selection_incomplete: bool = PrivateAttr(default=False)
+
     goal_type: Literal[
         "inventory", "health", "diagnose", "logs", "compare", "explain"
     ] = "diagnose"

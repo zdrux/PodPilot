@@ -277,6 +277,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   reason. Live-catalog matches for unfamiliar resources become the same bounded action cards rather
   than reopening the broad typed planner. Unknown IDs fail closed, and a repeated stop on
   a matching high/medium structured gap can recover one highest-priority candidate through the normal broker.
+- Action selection now tolerates the constrained model's inconsistent decision label when it also
+  returns exact supplied action IDs: the IDs continue the investigation, while an empty investigate
+  response receives the bounded retry and can recover with the highest-priority supplied action.
+  Flattened bold answer sections and Unicode bullets are restored
+  to readable Markdown headings and lists. Pod logs collected during recommendation follow-up still
+  pass through the dedicated bounded model log analysis before answer regeneration.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

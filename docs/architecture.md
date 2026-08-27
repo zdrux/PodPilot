@@ -203,7 +203,9 @@ Normal code derives up to twelve opaque actions from exact operator coordinates,
 relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches
 from live API discovery. Every resource type uses the same small `ActionSelection` contract: the
 model returns `investigate`, `answer`, or `uncertain`, a short reason, and up to four exact action IDs
-when continuing. The server compiles selected IDs back to typed intents it retained privately. The
+when continuing. Exact valid action IDs are authoritative when a constrained model pairs them with
+the wrong decision label. A non-empty selection continues; an empty `investigate` is retried and may
+recover with the highest-priority action the server already supplied. The server compiles selected IDs back to typed intents it retained privately. The
 catalog, deterministic findings, ownership, selectors, endpoints, and mount relationships remain
 server-side inputs to action construction rather than a prescribed scenario path or model prompt.
 Invalid or empty plans receive one structured repair attempt; the API does not silently
@@ -432,7 +434,8 @@ allowlisted evidence ID, cluster attribution, summary, concise material facts, a
 projection or 1,500-character log excerpt. The final model receives only the question, two recent
 messages, cluster labels, those fact cards, up to six collection issues, and optional correction feedback.
 Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
-no claimed mutation, concise Markdown, and useful resolution recommendations. Domain teaching, graph,
+no claimed mutation, concise sectioned Markdown, and useful resolution recommendations. Single-line
+bold labels and Unicode bullets are normalized into headings and lists before rendering. Domain teaching, graph,
 capability-ledger, findings, knowledge, and raw observation payloads stay server-side. The database and
 evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
