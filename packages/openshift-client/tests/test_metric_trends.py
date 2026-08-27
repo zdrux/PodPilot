@@ -146,7 +146,7 @@ def test_deployment_scope_joins_replicaset_and_pod_ownership() -> None:
     assert "on(namespace, pod)" in query
 
 
-def test_node_top_cpu_ranks_monitored_containers() -> None:
+def test_node_top_cpu_ranks_monitored_pods() -> None:
     source = FakeRangeSource(series=(
         MetricSeries(labels={"namespace": "payments", "pod": "api-1", "container": "api"}, points=(
             MetricPoint(NOW, 0.9),
@@ -165,7 +165,7 @@ def test_node_top_cpu_ranks_monitored_containers() -> None:
     ))
 
     query = source.calls[0]["promql"]
-    assert "topk(10" in query
+    assert "topk(20" in query
     assert 'kube_pod_info{node="worker-2"}' in query
     assert result.observations[0].data["ranking"][0]["labels"]["pod"] == "api-1"
     assert result.observations[0].data["ranking"][0]["current"] == 0.9
@@ -183,7 +183,7 @@ def test_node_top_memory_uses_working_set_not_host_process_metrics() -> None:
     ))
 
     query = source.calls[0]["promql"]
-    assert "topk(10" in query
+    assert "topk(20" in query
     assert "container_memory_working_set_bytes" in query
     assert "process" not in query
 
@@ -209,10 +209,37 @@ def test_namespace_top_consumers_are_ranked_within_exact_namespace(
     ))
 
     query = source.calls[0]["promql"]
-    assert query.startswith("topk(10")
+    assert query.startswith("topk(20")
     assert metric_name in query
     assert 'namespace="openshift-logging"' in query
-    assert "sum by (namespace, pod, container)" in query
+    assert "sum by (namespace, pod)" in query
+
+
+def test_cluster_top_cpu_honors_limit_and_aggregates_by_pod() -> None:
+    source = FakeRangeSource(series=tuple(
+        MetricSeries(
+            labels={"namespace": "payments", "pod": f"api-{index}"},
+            points=(MetricPoint(NOW, float(10 - index)),),
+        )
+        for index in range(7)
+    ))
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric="top_cpu_consumers",
+        metric_scope="cluster",
+        limit=5,
+    ))
+
+    query = source.calls[0]["promql"]
+    assert query.startswith("topk(5")
+    assert "sum by (namespace, pod)" in query
+    assert "container" not in query.split("sum by", 1)[1].split(")", 1)[0]
+    observation = result.observations[0]
+    assert observation.data["scope"] == "cluster"
+    assert observation.data["limit"] == 5
+    assert len(observation.data["ranking"]) == 5
 
 
 def test_deployment_top_consumers_use_owner_membership() -> None:
@@ -228,7 +255,7 @@ def test_deployment_top_consumers_use_owner_membership() -> None:
     ))
 
     query = source.calls[0]["promql"]
-    assert "topk(10" in query
+    assert "topk(20" in query
     assert "kube_pod_owner" in query
     assert 'owner_kind="Deployment",owner_name="api"' in query
 

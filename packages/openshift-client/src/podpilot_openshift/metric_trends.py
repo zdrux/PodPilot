@@ -139,10 +139,10 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         expression = _scoped(
             f"rate(container_cpu_usage_seconds_total{{{container}}}[{window}])", intent,
         )
-        return f"topk(10, sum by (namespace, pod, container) ({expression}))"
+        return f"topk({intent.limit}, sum by (namespace, pod) ({expression}))"
     if metric == "top_memory_consumers":
         expression = _scoped(f"container_memory_working_set_bytes{{{container}}}", intent)
-        return f"topk(10, sum by (namespace, pod, container) ({expression}))"
+        return f"topk({intent.limit}, sum by (namespace, pod) ({expression}))"
     if metric == "node_cpu_utilization":
         node = json.dumps(intent.name)
         return (
@@ -223,6 +223,8 @@ class BoundedMetricTrendReader:
             key=lambda item: item["current"] if isinstance(item["current"], (int, float)) else -math.inf,
             reverse=True,
         )
+        if intent.metric in {"top_cpu_consumers", "top_memory_consumers"}:
+            ranking = ranking[:intent.limit]
         stats = self._statistics(all_values)
         if intent.metric in {"top_cpu_consumers", "top_memory_consumers"} and ranking:
             stats["current"] = ranking[0]["current"]
@@ -242,6 +244,7 @@ class BoundedMetricTrendReader:
                 f"The requested resolution was increased to {step_seconds} seconds to keep the trend bounded."
             )
         target = (
+            "cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
             intent.name if intent.metric_scope == "node" else
             f"{intent.namespace}/{intent.name}"
@@ -266,6 +269,7 @@ class BoundedMetricTrendReader:
                 "ranking": ranking,
                 "statistics": stats,
                 "complete": snapshot.is_complete,
+                "limit": intent.limit,
             },
         ),), limitations=tuple(limitations))
 

@@ -162,7 +162,7 @@ class ReadIntent(BaseModel):
         "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
     ] | None = None
     metric_scope: Literal[
-        "pod", "namespace", "deployment", "node", "persistent_volume_claim"
+        "cluster", "pod", "namespace", "deployment", "node", "persistent_volume_claim"
     ] | None = None
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
@@ -221,7 +221,7 @@ class ReadIntent(BaseModel):
         if self.tool == "query_metrics":
             if not self.metric or not self.metric_scope:
                 raise ValueError("query_metrics requires metric and metric_scope")
-            if self.metric_scope != "node" and not self.namespace:
+            if self.metric_scope not in {"cluster", "node"} and not self.namespace:
                 raise ValueError("the selected metric scope requires an exact namespace")
             if self.metric_scope in {
                 "pod", "deployment", "node", "persistent_volume_claim"
@@ -234,9 +234,9 @@ class ReadIntent(BaseModel):
             if self.metric in {
                 "top_cpu_consumers", "top_memory_consumers",
             }:
-                if self.metric_scope not in {"namespace", "deployment", "node"}:
+                if self.metric_scope not in {"cluster", "namespace", "deployment", "node"}:
                     raise ValueError(
-                        "the selected top-consumer metric requires namespace, deployment, or node scope"
+                        "the selected top-consumer metric requires cluster, namespace, deployment, or node scope"
                     )
             if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
                 if self.metric_scope != "node":

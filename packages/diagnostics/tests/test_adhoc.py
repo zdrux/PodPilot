@@ -937,7 +937,12 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         metric_scope="namespace", namespace="payments",
     )
     assert namespace.name is None
-    with pytest.raises(ValidationError, match="requires namespace, deployment, or node scope"):
+    cluster = ReadIntent(
+        tool="query_metrics", metric="top_cpu_consumers",
+        metric_scope="cluster", limit=5,
+    )
+    assert cluster.namespace is None and cluster.name is None and cluster.limit == 5
+    with pytest.raises(ValidationError, match="requires cluster, namespace, deployment, or node scope"):
         ReadIntent(
             tool="query_metrics", metric="top_memory_consumers",
             metric_scope="pod", namespace="payments", name="api-1",

@@ -1718,6 +1718,87 @@ def _deterministic_resource_detail_answer(
     }
 
 
+def _deterministic_metric_ranking_answer(
+    *,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render compact per-cluster pod rankings without asking the model to copy values."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "query_metrics"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id")) in current_ids
+        and item.get("tool") == "query_metrics"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("metric") in {
+            "top_cpu_consumers", "top_memory_consumers",
+        }
+    ]
+    if not observations:
+        return None
+
+    metric = str(observations[0]["data"].get("metric"))
+    if any(str(item["data"].get("metric")) != metric for item in observations):
+        return None
+    unit = str(observations[0]["data"].get("unit") or "")
+    title = "CPU" if metric == "top_cpu_consumers" else "memory"
+    rows: list[str] = []
+    citations: list[str] = []
+    incomplete = False
+    requested_limit = 0
+    for observation in observations:
+        data = observation["data"]
+        cluster_name = str(
+            observation.get("cluster_name")
+            or observation.get("cluster_id")
+            or "cluster"
+        )
+        citations.append(str(observation["id"]))
+        requested_limit = max(requested_limit, int(data.get("limit") or 0))
+        incomplete = incomplete or data.get("complete") is not True
+        ranking = data.get("ranking") if isinstance(data.get("ranking"), list) else []
+        ranked = [item for item in ranking if isinstance(item, dict)]
+        if not ranked:
+            rows.append(
+                f"| `{cluster_name}` | — | — | _No finite samples returned_ | — |"
+            )
+            continue
+        for rank, item in enumerate(ranked, 1):
+            labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+            namespace = str(labels.get("namespace") or "—")
+            pod = str(labels.get("pod") or "—")
+            rows.append(
+                f"| `{cluster_name}` | {rank} | `{namespace}` | `{pod}` | "
+                f"{_format_metric_value(item.get('current'), unit)} |"
+            )
+
+    qualifier = f"top {requested_limit} " if requested_limit else ""
+    content = (
+        f"## {qualifier}{title}-consuming pods by cluster\n\n"
+        "| OpenShift cluster | Rank | Namespace | Pod | Current usage |\n"
+        "|---|---:|---|---|---:|\n"
+        + "\n".join(rows)
+        + "\n\nValues are pod-level totals aggregated across application containers over the "
+        "bounded metrics window. Each cluster was queried independently."
+    )
+    if incomplete:
+        content += (
+            " One or more monitoring responses reached a configured series or point ceiling, "
+            "so those rankings may be incomplete."
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": content,
+        "citations": citations,
+    }
+
+
 def _deterministic_inventory_answer(
     *,
     evidence: list[dict[str, object]],
@@ -2538,7 +2619,13 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     scale_max = max(current_values, default=0.0)
     if scale_max <= 0:
         scale_max = 1.0
-    for index, item in enumerate(ranking[:10], start=1):
+    limit = data.get("limit")
+    display_limit = (
+        min(100, max(1, int(limit)))
+        if isinstance(limit, int) and not isinstance(limit, bool)
+        else 10
+    )
+    for index, item in enumerate(ranking[:display_limit], start=1):
         if not isinstance(item, dict):
             continue
         labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
@@ -3381,6 +3468,7 @@ def _read_progress_message(intent) -> str:
         return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}{verification}."
     if intent.tool == "query_metrics":
         target = (
+            "the cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
             intent.name if intent.metric_scope == "node" else
             f"{intent.namespace}/{intent.name}"
@@ -3864,6 +3952,37 @@ async def _classify_ad_hoc_inquiry(
         return None
 
 
+def _semantic_metric_read_plan(
+    inquiry: InquirySemantics | None,
+) -> tuple[ReadPlan, bool] | None:
+    """Compile a small model-owned metric semantic into one registered safe query."""
+
+    if (
+        inquiry is None
+        or inquiry.mode != "metrics"
+        or inquiry.metric_query not in {"top_cpu_consumers", "top_memory_consumers"}
+        or inquiry.metric_scope != "cluster"
+    ):
+        return None
+    limit = inquiry.result_limit or 10
+    metric_label = "CPU" if inquiry.metric_query == "top_cpu_consumers" else "memory"
+    return (
+        ReadPlan(
+            goal_type="compare",
+            scope_summary=(
+                f"Rank the top {limit} pod {metric_label} consumers across this cluster."
+            ),
+            intents=[ReadIntent(
+                tool="query_metrics",
+                metric=inquiry.metric_query,
+                metric_scope="cluster",
+                limit=limit,
+            )],
+        ),
+        True,
+    )
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -3896,6 +4015,7 @@ async def _collect_bounded_cluster_reads(
         "diagnose" if investigation_gaps else inquiry.planner_goal if inquiry else None
     )
     scope_summary = "Bounded read-only cluster investigation."
+    semantic_metric_plan = _semantic_metric_read_plan(inquiry)
     known_plan = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
@@ -3904,7 +4024,7 @@ async def _collect_bounded_cluster_reads(
     )
     # Keep deterministic compilation only for terminal, unambiguous inventory or
     # metric requests. Troubleshooting and object traversal remain model-directed.
-    deterministic_plan = (
+    deterministic_plan = semantic_metric_plan or (
         (
             known_plan[0],
             False
@@ -5450,10 +5570,21 @@ def create_app(
                     )
                     else None
                 )
-                if fast_inventory_answer is not None:
+                fast_metric_answer = (
+                    _deterministic_metric_ranking_answer(
+                        evidence=evidence,
+                        activity=activity,
+                    )
+                    if not followup_action
+                    and inquiry is not None
+                    and inquiry.mode == "metrics"
+                    else None
+                )
+                fast_deterministic_answer = fast_metric_answer or fast_inventory_answer
+                if fast_deterministic_answer is not None:
                     inventory_fast_path = True
                     validated = {
-                        **fast_inventory_answer,
+                        **fast_deterministic_answer,
                         "conclusion_status": "confirmed",
                         "limitations": _dedupe_limitations(limitations),
                         "recommended_next_checks": [],
@@ -5827,6 +5958,10 @@ def create_app(
                         inquiry.mode == "inventory" if inquiry is not None else None
                     ),
                 )
+                metric_ranking_answer = _deterministic_metric_ranking_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 resource_detail_answer = _deterministic_resource_detail_answer(
                     evidence=evidence,
                     activity=activity,
@@ -5846,6 +5981,8 @@ def create_app(
                     route_tls_answer if route_fallback_needed else None
                 ) or (
                     resource_detail_answer if route_fallback_needed else None
+                ) or (
+                    metric_ranking_answer if route_fallback_needed else None
                 ) or (
                     inventory_answer if route_fallback_needed else None
                 ) or (

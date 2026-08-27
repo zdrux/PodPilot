@@ -31,6 +31,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
+    _deterministic_metric_ranking_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
@@ -45,6 +46,7 @@ from podpilot_api.main import (
     _parse_tags,
     _partition_investigation_gaps,
     _reconcile_validated_answer_gaps,
+    _semantic_metric_read_plan,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -1709,6 +1711,69 @@ def test_operator_evidence_view_builds_metric_ranking_for_direct_rendering() -> 
         "container": "collector", "average": "0.700 cores",
         "current": "0.900 cores", "maximum": "1.000 cores", "progress": 0.9,
     }
+
+
+def test_semantic_cluster_metric_plan_preserves_requested_top_n() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        resource_query="Pod",
+        needs_object_details=True,
+        evidence_goal="Rank CPU-consuming pods on each selected cluster.",
+        metric_query="top_cpu_consumers",
+        metric_scope="cluster",
+        result_limit=5,
+    ))
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.goal_type == "compare"
+    assert len(plan.intents) == 1
+    assert plan.intents[0].tool == "query_metrics"
+    assert plan.intents[0].metric_scope == "cluster"
+    assert plan.intents[0].limit == 5
+
+
+def test_deterministic_metric_ranking_renders_clusters_and_no_data() -> None:
+    evidence = [
+        {
+            "id": "metric-central", "tool": "query_metrics",
+            "cluster_id": "central", "cluster_name": "Central DEV",
+            "data": {
+                "metric": "top_cpu_consumers", "scope": "cluster",
+                "unit": "cores", "limit": 5, "complete": True,
+                "ranking": [{
+                    "labels": {"namespace": "payments", "pod": "api-1"},
+                    "current": 1.25,
+                }],
+            },
+        },
+        {
+            "id": "metric-east", "tool": "query_metrics",
+            "cluster_id": "east", "cluster_name": "East DEV",
+            "data": {
+                "metric": "top_cpu_consumers", "scope": "cluster",
+                "unit": "cores", "limit": 5, "complete": True,
+                "ranking": [],
+            },
+        },
+    ]
+    activity = [
+        {"tool": "query_metrics", "status": "succeeded", "evidence_ids": ["metric-central"]},
+        {"tool": "query_metrics", "status": "succeeded", "evidence_ids": ["metric-east"]},
+    ]
+
+    answer = _deterministic_metric_ranking_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert "top 5 CPU-consuming pods by cluster" in answer["content"]
+    assert "Central DEV" in answer["content"]
+    assert "`payments`" in answer["content"]
+    assert "`api-1`" in answer["content"]
+    assert "1.250 cores" in answer["content"]
+    assert "East DEV" in answer["content"]
+    assert "No finite samples returned" in answer["content"]
+    assert answer["citations"] == ["metric-central", "metric-east"]
 
 
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
@@ -4608,6 +4673,114 @@ def test_ask_conversation_pins_and_reads_multiple_clusters(tmp_path: Path) -> No
     assert {item["name"] for item in provider.adhoc_answer_calls[0]["clusters"]} == {
         "azure-one", "metal-one"
     }
+
+
+def test_ask_top_cpu_runs_one_cluster_metric_query_and_renders_table(
+    tmp_path: Path,
+) -> None:
+    cluster_credentials = MemoryCredentialStore()
+
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, _profile, _api_key, _context):
+            return InquirySemantics(
+                mode="metrics", resource_query="Pod", needs_object_details=True,
+                evidence_goal="Rank CPU-consuming pods on each selected cluster.",
+                metric_query="top_cpu_consumers", metric_scope="cluster", result_limit=5,
+            )
+
+    class Explorer:
+        def __init__(self, cluster_name: str):
+            self.cluster_name = cluster_name
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            slug = self.cluster_name.casefold().replace(" ", "-")
+            return ReadResult((AdHocObservation(
+                id=f"metric-{slug}", tool="query_metrics",
+                summary=f"Ranked CPU consumers in {self.cluster_name}.",
+                source="thanos:query_range/top_cpu_consumers",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": "top_cpu_consumers", "scope": "cluster",
+                    "unit": "cores", "limit": intent.limit, "complete": True,
+                    "ranking": [{
+                        "labels": {"namespace": "payments", "pod": f"api-{slug}"},
+                        "current": 0.75, "average": 0.5, "maximum": 0.9,
+                    }],
+                },
+            ),))
+
+    provider = Provider()
+    explorers: dict[str, Explorer] = {}
+
+    def explorer_factory(cluster, _token):
+        explorer = Explorer(cluster.name)
+        explorers[cluster.name] = explorer
+        return explorer
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        cluster_credential_store=cluster_credentials,
+        model_provider=provider,
+        remote_read_explorer_factory=explorer_factory,
+    )
+    cluster_ids = [
+        "20000000-0000-0000-0000-000000000001",
+        "20000000-0000-0000-0000-000000000002",
+    ]
+    engine = build_engine(settings)
+    with TestClient(app):
+        pass
+    with Session(engine) as db_session:
+        now = datetime.now(timezone.utc)
+        for cluster_id, name in zip(cluster_ids, ("Central DEV", "East DEV"), strict=True):
+            key = f"cluster_{cluster_id.replace('-', '')}"
+            cluster_credentials.set(f"token-{name}", key)
+            db_session.add(Cluster(
+                id=cluster_id, name=name, api_url=f"https://api.{name}.example:6443",
+                credential_key=key, tags_json="{}", tls_verify=True, is_enabled=True,
+                is_system=False, status="ready", created_by="ada", updated_by="ada",
+                created_at=now, updated_at=now,
+            ))
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Show me the top 5 CPU-consuming pods on each cluster.",
+                "cluster_ids": json.dumps(cluster_ids),
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "top 5 CPU-consuming pods by cluster" in rendered.text
+    assert "Central DEV" in rendered.text and "East DEV" in rendered.text
+    assert "api-central-dev" in rendered.text and "api-east-dev" in rendered.text
+    assert provider.adhoc_plan_calls == []
+    assert provider.adhoc_answer_calls == []
+    assert set(explorers) == {"Central DEV", "East DEV"}
+    for explorer in explorers.values():
+        assert len(explorer.calls) == 1
+        assert explorer.calls[0].tool == "query_metrics"
+        assert explorer.calls[0].metric_scope == "cluster"
+        assert explorer.calls[0].limit == 5
+
 
 def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
     provider = RbacAwareAdHocProvider()

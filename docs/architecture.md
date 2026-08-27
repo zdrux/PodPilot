@@ -167,15 +167,16 @@ is separate from PromQL and never attaches the service-account token or model
 credentials to a request.
 
 Ask PodPilot later reuses the authenticated adapter through `query_metrics`. The model
-selects only a registered metric, pod/namespace/Deployment/node/PVC scope, exact coordinates, range, and
+selects only a registered metric, cluster/pod/namespace/Deployment/node/PVC scope, exact coordinates, range, and
 step. Normal code compiles server-owned PromQL and calls `/api/v1/query_range`, accepts only
 matrix results, caps series/points/body/time, redacts labels, and persists normalized points
 plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
 is increased automatically when necessary to keep the series within its point ceiling.
 Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
 Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
-and memory queries support namespace, Deployment, and node scopes while retaining bounded
-namespace/Pod/container labels and per-series rankings. Common namespace top-consumer
+and memory queries support cluster, namespace, Deployment, and node scopes. Top-consumer
+queries aggregate application containers into namespace/Pod totals and honor the requested bounded
+rank count. Common namespace top-consumer
 questions compile deterministically so a planner schema failure cannot prevent the typed query.
 These are container/workload observations, not host process telemetry.
 Overall node CPU/memory utilization comes from bounded node-exporter templates joined to
@@ -201,7 +202,10 @@ only as a compatibility path for older model output.
 Before per-cluster collection, one compact semantic-classification call interprets the
 operator's wording across the selected cluster set. It returns only a coarse mode
 (`inventory`, `investigate`, `logs`, `metrics`, or `explain`), a short resource concept,
-whether exact object details are needed, and the evidence goal. This lets the model handle
+whether exact object details are needed, and the evidence goal. For a top-consumer metric request,
+the same small contract may additionally identify CPU or memory, cluster scope, and the requested
+rank count. Normal code compiles that semantic result into one registered query per selected cluster
+and renders the evidence directly as a multi-cluster table. This lets the model handle
 unfamiliar phrasing without maintaining a growing question-pattern list. For inventory mode,
 normal code always resolves the model's resource concept against each cluster's live safe catalog and
 runs the same bounded LIST. A request for object details may open a subsequent model-directed detail
