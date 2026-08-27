@@ -228,8 +228,15 @@ collection failures.
 
 Evidence relationship graphs and capability ledgers are deterministic, bounded projections of
 already-redacted observations and server-known broker state. Graph frontier hints, structured
-investigation gaps, and model-authored recommended checks are untrusted planning context, not tool
-calls. Recommendation promotion recognizes only a fixed diagnostic capability label and never
+investigation gaps, model-authored recommendations, and cluster content remain non-executable.
+Suggested-check buttons are
+compiled only from unread server-owned candidates and are scoped to the source assistant message and
+conversation owner. Their CSRF-protected endpoint reloads the persisted descriptor, verifies the
+conversation cluster and read-only capability, rejects mutation language, and lets the unchanged
+broker rederive and authorize the exact action. The browser cannot submit a target, namespace, tool
+payload, Secret read, or mutation. A linked evidence-extension run excludes prior chat history and
+summary from model context while retaining bounded, redacted supporting evidence.
+Recommendation promotion recognizes only a fixed diagnostic capability label and never
 extracts executable resource coordinates from prose. For ordinary traversal, server code holds each
 typed intent and exposes only an opaque candidate ID plus a redacted description. Unknown, modified,
 or stale IDs are rejected; candidate prose is never parsed for coordinates. The model must return a

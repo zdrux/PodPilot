@@ -320,6 +320,13 @@ remains and permits `uncertain` when none can resolve the open question. Final r
 operator-facing resolution guidance. For compatibility, a recommendation that clearly names a known
 read capability may enter one bounded follow-up planning pass only when the trusted ledger still marks
 that capability actionable; recommendation text never becomes coordinates or executes directly.
+After the final answer, normal code removes recommendations whose capability is already collected and
+may render a **Run check** control only when an unread server-owned candidate exactly matches the
+remaining recommendation. The browser posts the source message and opaque candidate ID; it cannot
+provide coordinates or an intent. The resulting `AdHocRun` stores the validated descriptor, starts with
+no conversation messages or summary in model context, executes that exact candidate through the normal
+broker, and appends the evidence extension to the same conversation. Mutation-language recommendations
+remain guidance only and never receive this control.
 
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence

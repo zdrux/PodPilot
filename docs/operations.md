@@ -811,6 +811,14 @@ the unchanged broker checks.
 Collected Pod logs are always eligible for the dedicated bounded log-analysis request, including logs
 obtained during this recommendation-driven follow-up, before the regenerated final answer.
 
+Eligible final recommendations may also display **Run check**. The server shows this control only when
+the recommendation maps to an unread exact action already derived from collected evidence. Clicking it
+creates a linked run in the same conversation, but sends no previous chat messages or context summary to
+the model. The selected cluster, capability, opaque candidate ID, and supporting evidence IDs are stored
+on the run and revalidated against current persisted evidence before collection. Unknown, stale,
+cross-conversation, mutation-worded, or non-owner actions fail closed. Apply migration
+`0014_adhoc_followup_actions` before enabling this UI on an existing database.
+
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name
 collisions are represented as `resource.group` (for example,

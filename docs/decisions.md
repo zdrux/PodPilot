@@ -3,6 +3,25 @@
 Last reviewed: 2026-08-27
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-27 - Suggested checks become user-triggered linked evidence extensions
+
+Context: Final model recommendations are often useful, but automatically feeding their prose back
+through the full conversation increases context load and makes ambiguous suggestions look executable.
+Operators also need a way to direct further investigation without manually rewriting a good check.
+
+Decision: Reconcile final recommendations against the trusted capability ledger and compile a button
+only when a remaining read-only recommendation matches an exact unread server-owned candidate. Persist
+the candidate descriptor on a new `AdHocRun`, scoped to the source assistant message, owner, and selected
+cluster. On click, rederive the candidate from persisted evidence, execute it through the unchanged
+broker, and append the result in the same conversation. The evidence-extension provider task receives
+no prior chat messages, context summary, or curated knowledge. Mutation-language and ungrounded
+recommendations remain guidance only.
+
+Consequences: Operators can lead agentic follow-through while each check starts with materially less
+context. Recommendation prose still has no authority, stale or tampered IDs fail closed, and all reads
+retain RBAC, budget, redaction, audit, and Secret/mutation denial. This user-triggered PoC establishes
+the safety and UX boundary needed before considering an opt-in automatic continuation mode.
+
 ## 2026-08-27 - Failure investigations keep exact workload logs material
 
 Context: The model could traverse Route to Service and EndpointSlice, recommend Pod logs in its

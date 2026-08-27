@@ -264,6 +264,7 @@ class AdHocRun(Base):
     created_by: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     include_raw_response: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    followup_action_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
     progress_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

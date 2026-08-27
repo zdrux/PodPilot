@@ -782,6 +782,34 @@ def _adhoc_capability_wording_issue(
     return None
 
 
+_RECOMMENDATION_CAPABILITY_PATTERNS = (
+    ("resource_read", r"\b(?:mounts?|volumes?|configmaps?|certificate\s+configuration)\b"),
+    ("service_spec", r"\bservice\b"),
+    ("endpoints", r"\bendpoint(?:s|slice)?\b"),
+    ("pod_logs", r"\b(?:pod\s+|application\s+)?logs?\b"),
+    ("metrics", r"\bmetrics?\b"),
+    ("http_probe", r"\b(?:probe|curl|https?\s+request|tls\s+handshake)\b"),
+    ("pod_spec", r"\bpods?\b"),
+)
+
+
+def _recommendation_capability(
+    text: str,
+    check_states: dict[str, str] | None = None,
+    allowed_states: set[str] | None = None,
+) -> str | None:
+    return next((
+        name for name, pattern in _RECOMMENDATION_CAPABILITY_PATTERNS
+        if re.search(pattern, text, re.IGNORECASE)
+        and (
+            check_states is None
+            or allowed_states is None
+            or check_states.get(name) in allowed_states
+            or name not in check_states
+        )
+    ), None)
+
+
 def _actionable_investigation_gaps(
     *,
     validated_answer: dict[str, object],
@@ -816,21 +844,13 @@ def _actionable_investigation_gaps(
         if isinstance(gap, InvestigationGap):
             add(gap)
 
-    capability_patterns = (
-        ("service_spec", r"\bservice\b"),
-        ("endpoints", r"\bendpoint(?:s|slice)?\b"),
-        ("pod_logs", r"\b(?:pod\s+)?logs?\b"),
-        ("metrics", r"\bmetrics?\b"),
-        ("http_probe", r"\b(?:probe|curl|https?\s+request)\b"),
-        ("pod_spec", r"\bpods?\b"),
-    )
     for recommendation in validated_answer.get("recommended_next_checks") or []:
         text = redact_text(str(recommendation))[:500]
-        capability = next((
-            name for name, pattern in capability_patterns
-            if re.search(pattern, text, re.IGNORECASE)
-            and check_states.get(name) in available_states
-        ), None)
+        capability = _recommendation_capability(text, check_states, available_states)
+        if capability == "resource_read":
+            # Broad configuration wording is useful for user-triggered exact actions,
+            # but is intentionally too general for automatic recommendation follow-through.
+            capability = None
         if capability:
             add(InvestigationGap(
                 question=text,
@@ -851,7 +871,9 @@ def _actionable_investigation_gaps(
         content,
         re.IGNORECASE,
     ):
-        for capability, pattern in capability_patterns:
+        for capability, pattern in _RECOMMENDATION_CAPABILITY_PATTERNS:
+            if capability == "resource_read":
+                continue
             if (
                 check_states.get(capability) in available_states
                 and re.search(pattern, content, re.IGNORECASE)
@@ -2877,6 +2899,115 @@ def _grounded_read_candidates(
     return candidates[:limit]
 
 
+_MUTATING_RECOMMENDATION = re.compile(
+    r"\b(?:apply|change|create|delete|edit|install|patch|replace|restart|rollout|rotate|scale|update)\b",
+    re.IGNORECASE,
+)
+
+
+def _compile_suggested_followups(
+    *,
+    validated_answer: dict[str, object],
+    question: str,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+    cluster_runtimes: list[dict[str, object]],
+    remaining_units: int,
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Compile recommendation prose into optional exact read-only action buttons."""
+
+    recommendations = [
+        redact_text(str(item))[:500]
+        for item in validated_answer.get("recommended_next_checks") or []
+        if str(item).strip()
+    ]
+    visible: list[str] = []
+    actions: list[dict[str, object]] = []
+    used_candidates: set[tuple[str, str]] = set()
+    runtime_states: list[tuple[dict[str, object], dict[str, str]]] = []
+    for runtime in cluster_runtimes:
+        cluster = runtime["cluster"]
+        cluster_id = str(cluster.id)
+        cluster_evidence = [
+            dict(item) for item in evidence
+            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
+        ]
+        cluster_activity = [
+            dict(item) for item in activity
+            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
+        ]
+        ledger = _investigation_capability_ledger(
+            evidence=cluster_evidence,
+            activity=cluster_activity,
+            remaining_units=remaining_units,
+        )
+        states = {
+            str(item.get("capability")): str(item.get("state"))
+            for item in ledger.get("checks") or []
+            if isinstance(item, dict)
+        }
+        runtime_states.append((runtime, states))
+
+    for recommendation in recommendations:
+        capability = _recommendation_capability(recommendation)
+        mutation = bool(_MUTATING_RECOMMENDATION.search(recommendation))
+        recommendation_actions: list[dict[str, object]] = []
+        collected_everywhere = bool(runtime_states) and capability is not None
+        for runtime, states in runtime_states:
+            state = states.get(capability or "")
+            collected_everywhere = collected_everywhere and state == "collected"
+            if (
+                mutation
+                or capability is None
+                or remaining_units <= 0
+                or (state is not None and state not in {"available_not_attempted", "requires_target"})
+            ):
+                continue
+            cluster = runtime["cluster"]
+            cluster_id = str(cluster.id)
+            cluster_evidence = [
+                dict(item) for item in evidence
+                if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
+            ]
+            gap = InvestigationGap(
+                question=recommendation,
+                capability=capability,
+                priority="medium",
+            )
+            candidates = _grounded_read_candidates(
+                question=question,
+                evidence=cluster_evidence,
+                relationship_graph=derive_evidence_relationship_graph(cluster_evidence),
+                recovery_anchor_plan=None,
+                seen_intents=set(runtime.get("read_signatures") or []),
+                investigation_gaps=[gap],
+            )
+            for candidate in candidates:
+                if candidate.capability != capability:
+                    continue
+                key = (cluster_id, candidate.id)
+                if key in used_candidates:
+                    continue
+                used_candidates.add(key)
+                recommendation_actions.append({
+                    "id": candidate.id,
+                    "cluster_id": cluster_id,
+                    "cluster_name": str(cluster.name),
+                    "capability": capability,
+                    "label": recommendation,
+                    "target": candidate.target,
+                    "supporting_evidence_ids": list(candidate.supporting_evidence_ids),
+                })
+                break
+        if collected_everywhere:
+            continue
+        visible.append(recommendation)
+        actions.extend(recommendation_actions[:1])
+        if len(actions) >= 4:
+            break
+    return visible[:5], actions[:4]
+
+
 def _compile_grounded_candidate_plan(
     plan: ReadPlan,
     candidates: list[_GroundedReadCandidate],
@@ -3390,6 +3521,7 @@ async def _collect_bounded_cluster_reads(
     knowledge: list[dict[str, object]] | None = None,
     investigation_gaps: list[InvestigationGap] | None = None,
     existing_read_signatures: list[str] | None = None,
+    requested_candidate_id: str | None = None,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
     progress: ProgressReporter | None = None,
@@ -3567,7 +3699,34 @@ async def _collect_bounded_cluster_reads(
         if units_used >= regular_unit_ceiling:
             break
         terminal_plan = False
-        if round_number == 1 and deterministic_plan:
+        if round_number == 1 and requested_candidate_id:
+            requested_candidates = _grounded_read_candidates(
+                question=question,
+                evidence=evidence,
+                relationship_graph=derive_evidence_relationship_graph(evidence),
+                recovery_anchor_plan=None,
+                seen_intents=seen_intents,
+                investigation_gaps=investigation_gaps,
+                catalog_entries=catalog_entries,
+            )
+            requested_candidate = next((
+                candidate for candidate in requested_candidates
+                if candidate.id == requested_candidate_id
+            ), None)
+            if requested_candidate is None:
+                limitations.append(
+                    "The selected suggested check no longer maps to an exact unread target. "
+                    "PodPilot did not substitute a different action."
+                )
+                break
+            plan = ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Run the operator-selected grounded read-only follow-up check.",
+                intents=[requested_candidate.intent],
+            )
+            if progress:
+                await progress("planning", "Validated the selected read-only follow-up check.")
+        elif round_number == 1 and deterministic_plan:
             plan, terminal_plan = deterministic_plan
         else:
             plan = None
@@ -4463,6 +4622,7 @@ def create_app(
     async def _execute_adhoc_turn(
         *, engine, username: str, conversation_id: str, message_text: str,
         run_id: str, include_raw_response: bool = False,
+        followup_action: dict[str, object] | None = None,
         progress: ProgressReporter | None = None,
     ) -> str:
         if progress:
@@ -4516,6 +4676,12 @@ def create_app(
                 summary_char_limit=app_settings.adhoc_context_summary_chars,
             )
             context_summary = conversation.context_summary
+            if followup_action:
+                # A clicked evidence extension is a fresh model task linked to the same
+                # conversation. Exact prior evidence remains available, but chat prose and
+                # its accumulated summary are intentionally excluded from provider context.
+                history = []
+                context_summary = ""
             profile = _active_profile(db_session)
             profile_status = str(profile.status) if profile is not None else None
             profile_snapshot = (
@@ -4527,6 +4693,8 @@ def create_app(
 
         activity: list[dict[str, object]] = []
         limitations: list[str] = []
+        cluster_runtimes: list[dict[str, object]] = []
+        remaining_budget = app_settings.adhoc_max_reads_per_turn
         raw_responses: list[dict[str, str]] = []
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
@@ -4556,9 +4724,10 @@ def create_app(
                     for item in evidence if isinstance(item, dict) and item.get("id")
                 }
                 scope_summaries: list[str] = []
-                remaining_budget = app_settings.adhoc_max_reads_per_turn
-                cluster_runtimes: list[dict[str, object]] = []
+                requested_cluster_id = str(followup_action.get("cluster_id") or "") if followup_action else ""
                 for cluster_index, selected_cluster in enumerate(selected_clusters):
+                    if requested_cluster_id and selected_cluster.id != requested_cluster_id:
+                        continue
                     cluster_label = selected_cluster.name
                     if not selected_cluster.is_enabled:
                         limitations.append(
@@ -4635,7 +4804,21 @@ def create_app(
                         conversation=history,
                         earlier_context_summary=context_summary,
                         existing_evidence=prior_cluster_evidence,
-                        knowledge=cluster_knowledge,
+                        knowledge=[] if followup_action else cluster_knowledge,
+                        investigation_gaps=([
+                            InvestigationGap(
+                                question=str(followup_action.get("label") or message_text)[:500],
+                                capability=str(followup_action.get("capability") or "resource_read"),
+                                priority="high",
+                                supporting_evidence_ids=[
+                                    str(item)[:128] for item in
+                                    followup_action.get("supporting_evidence_ids", [])
+                                ],
+                            )
+                        ] if followup_action else None),
+                        requested_candidate_id=(
+                            str(followup_action.get("id")) if followup_action else None
+                        ),
                         progress=progress,
                     )
                     cluster_runtime["read_signatures"] = (
@@ -5282,6 +5465,22 @@ def create_app(
                         "citations": [],
                         "limitations": [str(exc)],
                     }
+        suggested_checks, suggested_followup_actions = _compile_suggested_followups(
+            validated_answer=validated,
+            question=message_text,
+            evidence=evidence,
+            activity=activity,
+            cluster_runtimes=cluster_runtimes,
+            remaining_units=app_settings.adhoc_max_reads_per_turn,
+        )
+        validated["recommended_next_checks"] = suggested_checks
+        validated["suggested_followup_actions"] = suggested_followup_actions
+        actionable_labels = {
+            str(item.get("label")) for item in suggested_followup_actions
+        }
+        validated["guidance_next_checks"] = [
+            item for item in suggested_checks if item not in actionable_labels
+        ]
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
@@ -5301,6 +5500,10 @@ def create_app(
                         "reads": activity,
                         "limitations": validated["limitations"],
                         "recommended_next_checks": validated.get("recommended_next_checks", []),
+                        "suggested_followup_actions": validated.get(
+                            "suggested_followup_actions", []
+                        ),
+                        "guidance_next_checks": validated.get("guidance_next_checks", []),
                         "investigation_gaps": [
                             gap.model_dump()
                             for gap in validated.get("investigation_gaps", [])
@@ -5495,6 +5698,7 @@ def create_app(
             conversation_id = run.conversation_id
             message_text = run.message_text
             include_raw_response = run.include_raw_response
+            followup_action = json.loads(run.followup_action_json or "{}")
 
         async def report(phase: str, message: str) -> None:
             await _record_run_progress(engine, run_id, phase, message)
@@ -5508,6 +5712,7 @@ def create_app(
                     message_text=message_text,
                     run_id=run_id,
                     include_raw_response=include_raw_response,
+                    followup_action=followup_action or None,
                     progress=report,
                 ),
                 timeout=app_settings.adhoc_run_timeout_seconds,
@@ -5577,6 +5782,7 @@ def create_app(
         username: str,
         message_text: str,
         include_raw_response: bool = False,
+        followup_action: dict[str, object] | None = None,
     ) -> str:
         now = datetime.now(timezone.utc)
         _enforce_adhoc_rate_limit(
@@ -5619,6 +5825,7 @@ def create_app(
             created_by=username,
             message_text=message_text,
             include_raw_response=include_raw_response,
+            followup_action_json=json.dumps(followup_action or {}, sort_keys=True),
             status="queued",
             phase="queued",
             progress_json=json.dumps(events, sort_keys=True),
@@ -5632,6 +5839,9 @@ def create_app(
                 "run_id": run_id,
                 "cluster_ids": json.loads(conversation.cluster_ids_json or "[]"),
                 "raw_response_requested": include_raw_response,
+                "followup_action_id": (
+                    str(followup_action.get("id")) if followup_action else None
+                ),
             }, sort_keys=True),
         ))
         conversation.updated_at = now
@@ -5832,6 +6042,92 @@ def create_app(
                 username=user.username,
                 message_text=message,
                 include_raw_response=include_raw_response,
+            )
+            db_session.commit()
+        await _start_queued_run(request, run_id)
+        return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
+
+    @app.post(
+        "/api/v1/adhoc-conversations/{conversation_id}/messages/"
+        "{message_id}/followups/{action_id}"
+    )
+    async def run_adhoc_suggested_followup(
+        conversation_id: str,
+        message_id: str,
+        action_id: str,
+        request: Request,
+        user: AuthContext = Depends(current_user),
+    ) -> RedirectResponse:
+        _verify_csrf(request)
+        if user.role < Role.INVESTIGATOR:
+            raise HTTPException(
+                status_code=403,
+                detail="Suggested checks require the Investigator role or higher.",
+            )
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            message = db_session.get(AdHocMessage, message_id)
+            if (
+                conversation is None
+                or conversation.created_by != user.username
+                or message is None
+                or message.conversation_id != conversation_id
+                or message.role != "assistant"
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail="That suggested check does not exist.",
+                )
+            activity = json.loads(message.tool_activity_json or "{}")
+            actions = activity.get("suggested_followup_actions") or []
+            action = next((
+                item for item in actions
+                if isinstance(item, dict) and str(item.get("id")) == action_id
+            ), None)
+            if action is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="That suggested check is no longer available.",
+                )
+            cluster_ids = set(json.loads(conversation.cluster_ids_json or "[]"))
+            if not cluster_ids:
+                cluster_ids = {SYSTEM_CLUSTER_ID}
+            capability = str(action.get("capability") or "")
+            label = redact_text(str(action.get("label") or ""))[:500]
+            if (
+                str(action.get("cluster_id") or "") not in cluster_ids
+                or capability not in {
+                    "resource_read", "service_spec", "endpoints", "pod_spec",
+                    "pod_logs", "metrics", "http_probe",
+                }
+                or not label
+                or _MUTATING_RECOMMENDATION.search(label)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The suggested check is not an eligible read-only action.",
+                )
+            raw_supporting_ids = action.get("supporting_evidence_ids")
+            supporting_ids = raw_supporting_ids if isinstance(raw_supporting_ids, list) else []
+            objective = f"Run suggested check: {label}"[:app_settings.chat_max_chars]
+            run_id = _queue_adhoc_run(
+                db_session,
+                conversation=conversation,
+                username=user.username,
+                message_text=objective,
+                followup_action={
+                    "id": str(action["id"]),
+                    "cluster_id": str(action["cluster_id"]),
+                    "cluster_name": redact_text(str(action.get("cluster_name") or ""))[:253],
+                    "capability": capability,
+                    "label": label,
+                    "target": redact_text(str(action.get("target") or ""))[:500],
+                    "supporting_evidence_ids": [
+                        str(item)[:128]
+                        for item in supporting_ids[:8]
+                    ],
+                    "source_message_id": message_id,
+                },
             )
             db_session.commit()
         await _start_queued_run(request, run_id)

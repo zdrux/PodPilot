@@ -113,7 +113,25 @@
         {% if message.activity and message.activity.recommended_next_checks %}
         <section class="recommended-checks">
           <h3>Suggested next checks</h3>
+          {% if message.activity.guidance_next_checks %}
+          <ul>{% for item in message.activity.guidance_next_checks %}<li>{{ item }}</li>{% endfor %}</ul>
+          {% elif not message.activity.suggested_followup_actions %}
           <ul>{% for item in message.activity.recommended_next_checks %}<li>{{ item }}</li>{% endfor %}</ul>
+          {% endif %}
+          {% if message.activity.suggested_followup_actions %}
+          <div class="suggested-followup-actions">
+            {% for action in message.activity.suggested_followup_actions %}
+            <form method="post" data-followup-form
+              action="/api/v1/adhoc-conversations/{{ conversation.id }}/messages/{{ message.id }}/followups/{{ action.id }}">
+              <div>
+                <strong>{{ action.label }}</strong>
+                <small>{{ action.cluster_name }} · {{ action.target }}</small>
+              </div>
+              <button class="button secondary compact-button" type="submit" {% if active_run %}disabled{% endif %}>Run check</button>
+            </form>
+            {% endfor %}
+          </div>
+          {% endif %}
         </section>
         {% endif %}
       </article>

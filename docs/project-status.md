@@ -287,6 +287,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   model omits a log recommendation. EndpointSlice/Endpoints target references ground the downstream
   Pod read, and after two model stops PodPilot can collect one remaining exact log candidate through
   the unchanged broker; successful logs still receive the separate bounded semantic analysis.
+- Final recommendations now reconcile against completed capability state and may expose a **Run check**
+  button only for an unread exact server-owned candidate. The CSRF-protected click creates a linked
+  same-conversation run with fresh model context, revalidates the opaque candidate, and executes it
+  through the unchanged read broker; mutation guidance remains display-only.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

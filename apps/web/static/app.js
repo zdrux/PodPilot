@@ -572,6 +572,33 @@
     return {empty, thread, nodes: [userMessage, pending]};
   };
 
+  document.querySelectorAll("[data-followup-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const button = form.querySelector('button[type="submit"]');
+      const label = form.querySelector("strong")?.textContent?.trim() || "Suggested check";
+      const optimistic = appendOptimisticTurn(`Run suggested check: ${label}`);
+      if (button) { button.disabled = true; button.textContent = "Starting…"; }
+      try {
+        const response = await fetch(form.action, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || "PodPilot could not run this suggested check.");
+        }
+        window.location.assign(response.url);
+      } catch (error) {
+        optimistic?.nodes.forEach((node) => node.remove());
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (button) { button.disabled = false; button.textContent = "Run check"; }
+      }
+    });
+  });
+
   const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
   if (pendingRun) {
     const progressTitle = pendingRun.querySelector("[data-progress-title]");

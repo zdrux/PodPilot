@@ -23,6 +23,7 @@ from podpilot_api.main import (
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
     _compact_answer_evidence,
+    _compile_suggested_followups,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
@@ -244,6 +245,66 @@ def test_recommended_next_check_is_promoted_only_to_typed_planner_input() -> Non
     assert gaps[0].capability == "service_spec"
     assert gaps[0].question.startswith("Read the backend Service spec")
     assert "not executable" in gaps[0].reason
+
+
+def test_suggested_followup_compiles_only_unread_grounded_read_actions() -> None:
+    cluster = Cluster(id=SYSTEM_CLUSTER_ID, name="Runtime cluster")
+    route_evidence = {
+        "id": "cluster-route-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "tool": "search_resources",
+        "data": {
+            "kind": "Route",
+            "items": [{
+                "kind": "Route",
+                "metadata": {"namespace": "maas", "name": "maas"},
+                "spec": {"to": {"kind": "Service", "name": "model-server"}},
+            }],
+        },
+    }
+    validated = {
+        "recommended_next_checks": [
+            "Inspect the Service model-server port mapping.",
+            "Change the Route TLS termination to edge.",
+        ],
+    }
+
+    visible, actions = _compile_suggested_followups(
+        validated_answer=validated,
+        question="Why does the Route return HTTP 500?",
+        evidence=[route_evidence],
+        activity=[],
+        cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
+        remaining_units=5,
+    )
+
+    assert visible == validated["recommended_next_checks"]
+    assert len(actions) == 1
+    assert actions[0]["capability"] == "service_spec"
+    assert actions[0]["target"] == "Service:maas/model-server"
+    assert actions[0]["id"].startswith("read-")
+
+    service_evidence = {
+        "id": "cluster-service-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "tool": "get_resource",
+        "data": {
+            "kind": "Service",
+            "metadata": {"namespace": "maas", "name": "model-server"},
+            "spec": {"ports": [{"port": 443, "targetPort": 8443}]},
+        },
+    }
+    visible, actions = _compile_suggested_followups(
+        validated_answer=validated,
+        question="Why does the Route return HTTP 500?",
+        evidence=[route_evidence, service_evidence],
+        activity=[],
+        cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
+        remaining_units=5,
+    )
+
+    assert visible == ["Change the Route TLS termination to edge."]
+    assert actions == []
 
 
 def test_embedded_gap_prose_promotes_only_fixed_available_capabilities() -> None:
@@ -3565,6 +3626,151 @@ def test_ask_raw_response_toggle_persists_and_displays_both_answer_attempts(
         ]
         assert event is not None
         assert json.loads(event.details_json)["raw_response_requested"] is True
+    engine.dispose()
+
+
+def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
+    tmp_path: Path,
+) -> None:
+    class FollowupProvider(FakeModelProvider):
+        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+            self.adhoc_plan_calls.append(context)
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                stop_reason="evidence_sufficient",
+                scope_summary="The selected Service check is complete.",
+                supporting_evidence_ids=["cluster-service-1"],
+            )
+
+        def answer_ad_hoc(
+            self, profile, api_key: str, context: dict[str, object]
+        ) -> AdHocAnswer:
+            self.adhoc_answer_calls.append(context)
+            return AdHocAnswer(
+                answer_mode="evidence_based",
+                conclusion_status="confirmed",
+                answer=(
+                    "## Selected check result\n\nThe backend Service port mapping was "
+                    "collected in this linked evidence extension."
+                ),
+                cited_evidence_ids=["cluster-service-1"],
+            )
+
+    provider = FollowupProvider()
+    explorer = RouteBackendExplorer(route_termination="passthrough")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000141"
+    message_id = "00000000-0000-0000-0000-000000000142"
+    route_evidence = {
+        "id": "cluster-route-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "cluster_name": "Runtime cluster",
+        "tool": "search_resources",
+        "summary": "Found the matching OpenShift Route.",
+        "source": "kubernetes:route.openshift.io/v1:Route:maas/*",
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "data": {
+            "kind": "Route",
+            "items": [{
+                "kind": "Route",
+                "metadata": {"namespace": "maas", "name": "maas"},
+                "spec": {
+                    "host": "maas.apps.example.test",
+                    "to": {"kind": "Service", "name": "model-server"},
+                },
+            }],
+        },
+    }
+    cluster = Cluster(id=SYSTEM_CLUSTER_ID, name="Runtime cluster")
+    _, actions = _compile_suggested_followups(
+        validated_answer={
+            "recommended_next_checks": ["Inspect the backend Service port mapping."]
+        },
+        question="Why does the Route return HTTP 500?",
+        evidence=[route_evidence],
+        activity=[],
+        cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
+        remaining_units=5,
+    )
+    assert len(actions) == 1
+    action = actions[0]
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.add(AdHocConversation(
+            id=conversation_id,
+            created_by="ivy",
+            title="Route failure",
+            status="active",
+            cluster_ids_json=json.dumps([SYSTEM_CLUSTER_ID]),
+            evidence_json=json.dumps([route_evidence]),
+        ))
+        db_session.add(AdHocMessage(
+            id=message_id,
+            conversation_id=conversation_id,
+            role="assistant",
+            actor=None,
+            content="The Route points to a backend Service.",
+            answer_mode="evidence_based",
+            citations_json=json.dumps(["cluster-route-1"]),
+            tool_activity_json=json.dumps({
+                "reads": [],
+                "recommended_next_checks": [action["label"]],
+                "suggested_followup_actions": actions,
+            }),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        assert "Run check" in page.text
+        assert "Inspect the backend Service port mapping" in page.text
+        unknown = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages/"
+            f"{message_id}/followups/read-ffffffffffffffffffff",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert unknown.status_code == 404
+        response = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages/"
+            f"{message_id}/followups/{action['id']}",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        rendered = client.get(response.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Selected check result" in rendered.text
+
+    assert [call.tool for call in explorer.calls] == ["get_resource"]
+    assert explorer.calls[0].kind == "Service"
+    assert provider.adhoc_plan_calls
+    assert all(context["conversation"] == [] for context in provider.adhoc_plan_calls)
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        run = db_session.scalar(select(AdHocRun).where(
+            AdHocRun.conversation_id == conversation_id
+        ))
+        assert run is not None
+        stored_action = json.loads(run.followup_action_json)
+        assert stored_action["id"] == action["id"]
+        assert stored_action["source_message_id"] == message_id
+        assert "Run suggested check:" in run.message_text
     engine.dispose()
 
 
