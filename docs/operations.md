@@ -679,11 +679,13 @@ with Pod state, Events, owner/configuration, metrics, or probes, and keep root c
 unconfirmed when that support is absent. Log text remains untrusted data. Secret
 contents remain unavailable even when a signal or Pod volume references a Secret.
 
-Before requesting the final model answer, PodPilot compacts a provider-only evidence
-view. Current-turn reads are prioritized, Pod-log tails are capped, large object/list
-values are reduced, at most 12 compact findings are included, and observation context
-is bounded to sixteen observations and 48 KB. Only four recent messages, eight findings,
-six knowledge chunks, and the capability ledger accompany it; the planning graph is omitted.
+Before requesting the final model answer, PodPilot converts current evidence to at most twelve
+resource-agnostic fact cards within 20 KB. Current-turn reads are prioritized, Pod-log excerpts are
+capped at 1,500 characters, and material object fields are projected rather than sending raw
+observation envelopes. Only the question, two recent messages, cluster labels, fact cards, up to six
+collection issues, and optional correction feedback accompany the concise final-answer contract.
+The planning graph, capability ledger, catalog, tool policy, findings, knowledge chunks, and domain
+tutorials remain server-side.
 This does not truncate persisted evidence or the operator's
 provenance drawer. Grounding and certainty are separate: a cited interpretation can remain
 `unresolved` without being discarded. An uncited refusal or response containing only headings
@@ -703,7 +705,7 @@ still receives the bounded correction.
 Answers that serialize top-level fields such as `investigation_gaps` inside visible prose, or flatten
 a Markdown table into one pipe-delimited line, receive `podpilot.adhoc.answer_quality_rejected` with
 `reason=structured_fields_embedded_in_answer` or `reason=malformed_markdown_structure`. The bounded
-correction asks for clean prose and real structured gaps. For compatibility, PodPilot may promote only
+correction asks for clean prose in the concise answer contract. For compatibility, PodPilot may promote only
 fixed capability labels found under an explicit recommendation/gap heading when the capability ledger
 still marks them actionable; it discards all coordinates and returns the category to candidate planning.
 
@@ -728,9 +730,10 @@ Failure of this optional analysis does not fail the investigation.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. When grounded reads exist, the provider receives a
-compact candidate-selection context and small schema rather than the full tool-intent union. It may
-select up to six exact opaque IDs from twelve server-derived choices. The resource catalog and
-curated knowledge are sent only when no grounded candidate exists and discovery is required. An operational no-read response is
+compact action-selection context and small schema rather than the full tool-intent union. It may
+select up to four exact opaque IDs from twelve server-derived choices. For unfamiliar resources,
+normal code converts bounded live-catalog matches to the same action cards; the resource catalog and
+curated knowledge are not sent to the planning model. An operational no-read response is
 retried once with structured feedback. If both attempts stop before any evidence, or the first
 valid response stops and its correction fails schema validation,
 and the operator supplied one exact coordinate that normal code can compile into a
@@ -752,12 +755,15 @@ read would not materially improve the answer. Logs record this review as
 `podpilot.adhoc.plan_repair reason=evidence_sufficiency_review`; the displayed
 recommendation text itself is never executed.
 
-Planning context includes a bounded relationship graph and capability ledger. The graph exposes
-observed Route, Service, endpoint, Pod, owner, and mount relationships plus unread frontier hints.
-The ledger distinguishes `collected`, `attempted_failed`, `budget_exhausted`, `requires_target`, and
-`available_not_attempted`. Operator answers must say **not collected** for the latter two states;
-**unavailable** is reserved for an explicit failure, denial, unsupported operation, or exhausted
-budget.
+PodPilot derives the relationship graph and capability ledger in trusted server code. The model does
+not receive those structures, the discovery catalog, executable tool policy, Kubernetes coordinate
+schemas, or the `ReadIntent` union during ordinary candidate selection. It receives bounded evidence
+fact cards and server-owned action cards, then returns `investigate`, `answer`, or `uncertain` with a
+short reason and, for `investigate`, up to four opaque action IDs. The ledger still distinguishes
+`collected`, `attempted_failed`, `budget_exhausted`, `requires_target`, and
+`available_not_attempted`; normal code uses those states to prevent completed checks from being
+described as missing and to reserve **unavailable** for an explicit failure, denial, unsupported
+operation, or exhausted budget.
 Before the evidence-follow-up answer, PodPilot recomputes that ledger and supplies separate
 `resolved_investigation_gaps` and `remaining_investigation_gaps`. Claiming that a collected Service,
 endpoint, Pod, log, metric, or probe is still not collected is rejected with
@@ -769,9 +775,10 @@ fallback answers combine current Route, Service, endpoint, Pod, and probe eviden
 reverting to a Route-only summary. Repeated model-stop, duplicate-read, and fallback notices collapse
 into one orchestration limitation; TLS bypass, certificate trust, RBAC, and read failures remain visible.
 
-Candidate planning keeps at most four recent messages, a 1,500-character earlier-context summary,
-sixteen compact observations, eight findings, sixty graph nodes, eighty graph edges, twelve completed
-reads, and twelve grounded candidates. Candidate-visible graph edges omit executable read hints.
+Candidate planning keeps at most two recent messages, twelve compact fact cards within a 20 KB
+aggregate limit, eight completed action summaries, twelve grounded action cards, four unresolved
+questions, and the remaining read budget. Unknown but listable resource types discovered in the
+cluster catalog are converted to the same bounded action-card format; the catalog itself is not sent.
 If the model twice stops while a structured medium/high gap has a matching candidate, PodPilot logs
 `podpilot.adhoc.gap_candidate_recovery`, performs that one broker-validated read, and states the
 recovery as a limitation.
@@ -782,12 +789,15 @@ requiring a restart or readiness failure first.
 
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
-duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. A final answer
-may return structured medium/high evidence gaps. If budget remains, PodPilot submits those gaps—or a
-capability-matched suggested check—to one additional bounded collection phase and regenerates the
-answer after novel reads. Completion is logged as `podpilot.adhoc.gap_followup_complete`. These records contain
+duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. The final answer
+uses a separate concise contract containing answer Markdown, exact citations, certainty, and optional
+operator recommendations. Recommendations remain useful resolution guidance; when normal code can map
+one to a known safe evidence capability, budget remains, and it would materially improve the answer,
+PodPilot may run one additional bounded collection phase and regenerate the answer. Completion is
+logged as `podpilot.adhoc.gap_followup_complete`. These records contain
 workflow metadata, not operator questions, recommendation bodies, prompts, or evidence payloads.
-Gap and recommendation text is never executed; the follow-up must produce a normal typed plan.
+Recommendation text is never executed; any follow-up must select a server-owned action ID and pass
+the unchanged broker checks.
 
 Discovery is cached for five minutes per Pod. Newly installed or removed APIs may
 therefore take up to five minutes to appear without a restart. Cross-group name

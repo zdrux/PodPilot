@@ -32,6 +32,7 @@ from podpilot_api.main import (
     _grounded_read_candidates,
     _investigation_capability_ledger,
     _investigation_unit_cost,
+    _model_fact_cards,
     _parse_tags,
     _partition_investigation_gaps,
     _reconcile_validated_answer_gaps,
@@ -1129,6 +1130,52 @@ def test_final_answer_context_compacts_large_logs_and_prioritizes_current_reads(
     assert compacted[0]["data"]["tailTruncatedForModel"] is True
     assert metadata["encoded_bytes"] <= 20_000
     assert metadata["observations_sent"] == len(compacted)
+
+
+def test_model_fact_cards_replace_raw_observations_with_bounded_material_facts() -> None:
+    cards = _model_fact_cards(
+        [{
+            "id": "route-1", "tool": "get_resource", "cluster_name": "east",
+            "summary": "Read the matching Route.",
+            "data": {
+                "apiVersion": "route.openshift.io/v1", "kind": "Route",
+                "metadata": {"namespace": "apps", "name": "frontend"},
+                "spec": {
+                    "host": "frontend.example.test",
+                    "to": {"kind": "Service", "name": "frontend"},
+                    "tls": {"termination": "edge"},
+                },
+            },
+        }],
+        activity=[{"status": "succeeded", "evidence_ids": ["route-1"]}],
+    )
+
+    assert cards[0]["id"] == "route-1"
+    assert cards[0]["cluster"] == "east"
+    facts = {item["label"]: item["value"] for item in cards[0]["facts"]}
+    assert facts["Route host"] == "frontend.example.test"
+    assert facts["TLS termination"] == "edge"
+    assert "data" not in cards[0]
+    assert len(json.dumps(cards[0])) < 3000
+
+
+def test_model_fact_cards_enforce_per_card_and_aggregate_payload_limits() -> None:
+    evidence = [
+        {
+            "id": f"log-{index}",
+            "tool": "pod_logs",
+            "cluster_name": "east",
+            "summary": "x" * 2_000,
+            "data": {"tail": "y" * 20_000},
+        }
+        for index in range(20)
+    ]
+
+    cards = _model_fact_cards(evidence, activity=[], max_cards=12, total_byte_limit=5_000)
+
+    assert len(cards) <= 12
+    assert all(len(json.dumps(card).encode("utf-8")) <= 3_000 for card in cards)
+    assert len(json.dumps(cards).encode("utf-8")) <= 5_200
 
 
 def test_limitations_are_semantically_deduplicated() -> None:
@@ -4823,8 +4870,9 @@ def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(
     assert explorer.calls[0].resource == "clusteroperators"
     assert explorer.calls[0].limit == 250
     assert len(provider.adhoc_plan_calls) == 3
-    catalog = provider.adhoc_plan_calls[0]["tool_policy"]["resource_catalog"]
-    assert catalog[0]["kind"] == "ClusterOperator"
+    assert provider.adhoc_plan_calls[0]["read_candidates"][0]["target"] == (
+        "List a bounded sample of ClusterOperator resources"
+    )
     assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
         "actionable_goal_requires_evidence"
     )
@@ -4868,8 +4916,8 @@ def test_ask_does_not_override_model_direction_with_catalog_fallback(
         assert "cluster-operators-1" not in rendered.text
 
     assert len(provider.adhoc_plan_calls) == 1
-    assert provider.adhoc_plan_calls[0]["tool_policy"]["resource_catalog"][0]["kind"] == (
-        "ClusterOperator"
+    assert provider.adhoc_plan_calls[0]["read_candidates"][0]["target"] == (
+        "List a bounded sample of ClusterOperator resources"
     )
     assert explorer.calls == []
 

@@ -860,3 +860,26 @@ Final server reconciliation removes gaps already satisfied by the trusted ledger
 probe returns an HTTP status, candidate ordering favors workload configuration and logs over redundant
 topology. Deterministic Route fallback composes all relevant collected topology and probe evidence while
 distinguishing proof about the tested path from inference about a particular container.
+
+## 2026-08-27 - Model calls use universal evidence and action cards
+
+Context: The available 31B instruct model became inconsistent when ordinary investigation calls
+combined domain tutorials, relationship graphs, capability ledgers, catalogs, tool-policy details,
+large conversation history, and broad structured schemas. Most of those inputs restated trusted
+server knowledge instead of asking the model to make one diagnostic judgment.
+
+Decision: Keep relationship discovery, capability state, executable coordinates, action validation,
+and all safety enforcement in normal code. For every resource type, present the model with the same
+bounded evidence fact cards and opaque server-owned action cards. The model returns only
+`investigate`, `answer`, or `uncertain`, a short reason, and up to four action IDs when continuing.
+Let it repeat this choice while useful actions and budget remain, so investigations stay agentic
+without requiring the model to manufacture tool calls. Use a separate concise final-answer contract
+containing Markdown, exact evidence citations, certainty, and useful operator recommendations. A
+recommendation may inform another read only after normal code maps it to a known action and the
+unchanged broker accepts it; model text never executes and mutations remain outside this flow.
+
+Consequences: Pods, Nodes, Routes, custom resources, and future Kubernetes objects follow the same
+investigation protocol. Prompt and schema load is substantially smaller, while the model still owns
+diagnostic direction and can pursue its ideas until the evidence is sufficient or it is unsure.
+Unknown action IDs fail closed, multi-cluster attribution remains mandatory, and grounding,
+sensitivity, budget, discovery, verb, RBAC, redaction, and audit controls remain server-enforced.

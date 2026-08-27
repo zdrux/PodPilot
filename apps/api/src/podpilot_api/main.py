@@ -2452,6 +2452,109 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
     return view
 
 
+def _model_fact_cards(
+    evidence: list[dict[str, object]],
+    *,
+    activity: list[dict[str, object]],
+    max_cards: int = 12,
+    total_byte_limit: int = 20_000,
+) -> list[dict[str, object]]:
+    """Normalize observations into small, resource-agnostic model evidence cards."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    ordered = [item for item in evidence if str(item.get("id")) in current_ids]
+    ordered.extend(
+        reversed([item for item in evidence if str(item.get("id")) not in current_ids])
+    )
+    cards: list[dict[str, object]] = []
+    used_bytes = 0
+    for item in ordered:
+        if len(cards) >= max_cards or not item.get("id"):
+            break
+        view = _adhoc_evidence_view(item)
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        card: dict[str, object] = {
+            "id": str(item["id"]),
+            "cluster": str(item.get("cluster_name") or item.get("cluster_id") or "cluster")[:253],
+            "summary": redact_text(str(item.get("summary") or "Observed cluster evidence."))[:500],
+            "facts": list(view.get("facts") or [])[:12],
+        }
+        if item.get("tool") == "pod_logs":
+            card["log_excerpt"] = redact_text(str(data.get("tail") or ""))[-1_500:]
+        else:
+            objects = data.get("items") if isinstance(data.get("items"), list) else []
+            projected = objects[:4] if objects else [data]
+            material: list[dict[str, object]] = []
+            for resource in projected:
+                if not isinstance(resource, dict):
+                    continue
+                metadata = (
+                    resource.get("metadata")
+                    if isinstance(resource.get("metadata"), dict) else {}
+                )
+                detail: dict[str, object] = {
+                    "kind": resource.get("kind") or data.get("kind"),
+                    "namespace": metadata.get("namespace"),
+                    "name": metadata.get("name"),
+                }
+                if isinstance(resource.get("spec"), dict):
+                    detail["spec"] = _compact_provider_value(
+                        resource["spec"], string_limit=300, list_limit=6
+                    )
+                if isinstance(resource.get("status"), dict):
+                    detail["status"] = _compact_provider_value(
+                        resource["status"], string_limit=300, list_limit=6
+                    )
+                if isinstance(resource.get("ports"), list):
+                    detail["ports"] = _compact_provider_value(
+                        resource["ports"], string_limit=200, list_limit=8
+                    )
+                if isinstance(resource.get("endpoints"), list):
+                    detail["endpoints"] = _compact_provider_value(
+                        resource["endpoints"], string_limit=200, list_limit=8
+                    )
+                material.append(detail)
+            if material and any(
+                any(value not in (None, "", [], {}) for value in detail.values())
+                for detail in material
+            ):
+                card["material_details"] = material
+            if isinstance(data.get("names"), list):
+                card["names"] = [str(value)[:253] for value in data["names"][:20]]
+        encoded = json.dumps(card, sort_keys=True, default=str).encode("utf-8")
+        if len(encoded) > 3_000:
+            card.pop("material_details", None)
+            card["names"] = list(card.get("names") or [])[:8]
+            card["facts"] = [
+                {
+                    "label": redact_text(str(fact.get("label") or "Fact"))[:100],
+                    "value": redact_text(str(fact.get("value") or ""))[:300],
+                }
+                for fact in card.get("facts") or []
+                if isinstance(fact, dict)
+            ][:6]
+            if "log_excerpt" in card:
+                card["log_excerpt"] = str(card["log_excerpt"])[-750:]
+            encoded = json.dumps(card, sort_keys=True, default=str).encode("utf-8")
+        if len(encoded) > 3_000:
+            card = {
+                "id": card["id"],
+                "cluster": card["cluster"],
+                "summary": str(card["summary"])[:300],
+                "facts": list(card.get("facts") or [])[:4],
+            }
+            encoded = json.dumps(card, sort_keys=True, default=str).encode("utf-8")
+        if used_bytes + len(encoded) > total_byte_limit:
+            continue
+        cards.append(card)
+        used_bytes += len(encoded)
+    return cards
+
+
 def _compact_adhoc_context(
     db_session: Session,
     *,
@@ -2543,6 +2646,7 @@ def _grounded_read_candidates(
     recovery_anchor_plan: ReadPlan | None,
     seen_intents: set[str],
     investigation_gaps: list[InvestigationGap] | None = None,
+    catalog_entries: list[dict[str, object]] | None = None,
     limit: int = 12,
 ) -> list[_GroundedReadCandidate]:
     """Build compact non-executable choices backed only by trusted server state."""
@@ -2667,6 +2771,38 @@ def _grounded_read_candidates(
                 target=_read_progress_message(intent),
                 reason="Exact coordinate compiled from the operator request.",
                 relation="operator_anchor",
+            )
+
+    # Keep the same action-selection contract for unfamiliar resources. Discovery
+    # supplies bounded server-owned list actions; the model still chooses direction
+    # but never constructs Kubernetes coordinates or receives the full tool schema.
+    if not candidates:
+        for entry in (catalog_entries or [])[:6]:
+            if not isinstance(entry, dict):
+                continue
+            verbs = entry.get("verbs")
+            if isinstance(verbs, list) and "list" not in verbs:
+                continue
+            resource = str(entry.get("resource") or "")
+            kind = str(entry.get("kind") or "")
+            if not resource or not kind:
+                continue
+            try:
+                intent = ReadIntent(
+                    tool="list_resources",
+                    resource=resource,
+                    api_version=str(entry.get("apiVersion") or "") or None,
+                    kind=kind,
+                    limit=20,
+                )
+            except ValueError:
+                continue
+            add(
+                intent,
+                capability="resource_read",
+                target=f"List a bounded sample of {kind} resources",
+                reason="The cluster discovery catalog matched this resource type to the operator request.",
+                relation="catalog_match",
             )
 
     protocol_proven = any(
@@ -3292,7 +3428,7 @@ async def _collect_bounded_cluster_reads(
             ],
             "truncated": bool(relationship_graph.get("truncated")),
         }
-        candidate_mode = bool(read_candidates)
+        candidate_mode = True
         context: dict[str, object] = {
             "cluster": settings.cluster_name,
             "question": question,
@@ -3309,6 +3445,7 @@ async def _collect_bounded_cluster_reads(
                 if alert_name else None
             ),
             "observations": compact_observations[-16:],
+            "facts": _model_fact_cards(evidence, activity=activity),
             "findings": _compact_answer_findings(derive_adhoc_findings(evidence))[-8:],
             "relationship_graph": compact_graph,
             "capability_ledger": {
@@ -3331,8 +3468,8 @@ async def _collect_bounded_cluster_reads(
             ],
             "investigation_round": round_number,
             "tool_policy": {
-                "mode": "candidate_selection" if candidate_mode else "discovery_escape_hatch",
-                "direct_intents_allowed": not candidate_mode,
+                "mode": "candidate_selection",
+                "direct_intents_allowed": False,
                 "remaining_reads": remaining_reads,
                 "remaining_investigation_units": remaining_reads,
                 "logs_and_configmaps_allowed": True,
@@ -3343,26 +3480,6 @@ async def _collect_bounded_cluster_reads(
                 ],
             },
         }
-        if not candidate_mode:
-            context["curated_knowledge"] = (knowledge or [])[:6]
-            context["tool_policy"].update({
-                "available": [
-                    "discover_resources", "get_resource", "list_resources",
-                    "search_resources", "watch_resources", "pod_logs",
-                    "http_probe", "query_metrics",
-                ],
-                "resource_catalog": catalog_entries[:40],
-                "max_list_objects": settings.adhoc_inventory_max_objects,
-                "max_search_scan_objects": settings.adhoc_search_max_scan_objects,
-                "metric_catalog": [
-                    "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
-                    "memory_working_set", "memory_requests", "memory_limits",
-                    "network_receive", "network_transmit", "container_restarts",
-                    "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
-                    "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
-                ],
-                "bounded_watch": {"max_seconds": 15, "max_events": 50},
-            })
         if feedback:
             context["planner_feedback"] = feedback
         return context
@@ -3402,6 +3519,7 @@ async def _collect_bounded_cluster_reads(
                     recovery_anchor_plan=recovery_anchor_plan,
                     seen_intents=seen_intents,
                     investigation_gaps=investigation_gaps,
+                    catalog_entries=catalog_entries,
                 )
                 gap_capabilities = {
                     gap.capability for gap in (investigation_gaps or [])
@@ -3427,6 +3545,18 @@ async def _collect_bounded_cluster_reads(
                             feedback=feedback,
                         ),
                     )
+                    if (
+                        plan.decision == "answer_from_evidence"
+                        and not plan.supporting_evidence_ids
+                        and evidence
+                    ):
+                        plan = plan.model_copy(update={
+                            "supporting_evidence_ids": [
+                                str(item.get("id"))
+                                for item in evidence[-12:]
+                                if item.get("id")
+                            ]
+                        })
                 except ModelProviderError as exc:
                     planner_error = exc
                     break
@@ -4489,6 +4619,7 @@ def create_app(
                     "earlier_context_summary": redact_text(context_summary)[-1500:],
                     "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
+                    "facts": _model_fact_cards(evidence, activity=activity),
                     "curated_knowledge": knowledge_context[:6],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
@@ -4552,9 +4683,9 @@ def create_app(
                         )
                     retry_context = dict(answer_context)
                     feedback_message = (
-                        "Keep operator-facing answer prose in the answer field. Populate the top-level "
-                        "investigation_gaps array with structured gaps and do not embed JSON, schema "
-                        "fields, or fenced serialized objects inside answer."
+                        "Keep operator-facing prose in the answer field. Do not embed JSON, schema "
+                        "fields, or fenced serialized objects inside the answer. Put any useful "
+                        "resolution guidance in recommended_actions."
                         if answer_quality_issue == "structured_fields_embedded_in_answer"
                         else
                         "Return readable Markdown with headings, paragraphs, bullets, and tables on "
@@ -4562,20 +4693,19 @@ def create_app(
                         if answer_quality_issue == "malformed_markdown_structure"
                         else
                         "The prior response listed a capability as not collected even though the final "
-                        "capability ledger marks it collected. Remove resolved gaps, describe the collected "
-                        "observation, and retain only checks whose final ledger state is not collected."
+                        "evidence shows it was collected. Describe that observation and remove the stale "
+                        "claim or recommendation."
                         if answer_quality_issue == "collected_check_described_as_uncollected"
                         else
                         "The prior response declined to interpret available evidence. Explain the "
                         "confirmed observations, the strongest evidence-supported hypothesis, what "
-                        "remains unverified, and precise recommended_next_checks for PodPilot. Do not "
+                        "remains unverified, and precise recommended_actions for PodPilot. Do not "
                         "tell the operator to collect evidence or run commands."
                         if answer_quality_issue == "insufficient_interpretation_with_available_evidence"
                         else
                         "The prior response described a typed check as unavailable even though the "
-                        "capability ledger says it is available but not collected or still needs a "
-                        "grounded target. Use 'not collected' language and add a structured "
-                        "investigation_gap when that read could materially improve the conclusion."
+                        "investigation state says it is merely not collected. Use 'not collected' language "
+                        "and put useful resolution guidance in recommended_actions."
                         if answer_quality_issue == "available_check_described_as_unavailable"
                         else
                         "The prior response contained headings but no readable body. Return a direct "
@@ -4804,6 +4934,7 @@ def create_app(
                             "earlier_context_summary": redact_text(context_summary)[-1500:],
                             "scope_summary": collected_scope_summary,
                             "observations": answer_observations,
+                            "facts": _model_fact_cards(evidence, activity=activity),
                             "curated_knowledge": knowledge_context[:6],
                             "evidence_context": answer_context_metadata,
                             "findings": answer_findings,

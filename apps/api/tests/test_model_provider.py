@@ -37,12 +37,22 @@ class RecordingCompletions:
 
     def create(self, **kwargs):
         self.requests.append(kwargs)
-        content = json.dumps({
-            "answer_mode": "evidence_based",
-            "answer": "The supplied Pod is pending.",
-            "cited_evidence_ids": ["cluster-pod-1"],
-            "limitations": [],
-        })
+        schema_name = kwargs.get("response_format", {}).get("json_schema", {}).get("name")
+        content = json.dumps(
+            {
+                "answer": "The supplied Pod is pending.",
+                "citations": ["cluster-pod-1"],
+                "certainty": "probable",
+                "recommended_actions": ["Review the application configuration that produced the error."],
+            }
+            if schema_name == "conciseadhocanswer" else
+            {
+                "answer_mode": "evidence_based",
+                "answer": "The supplied Pod is pending.",
+                "cited_evidence_ids": ["cluster-pod-1"],
+                "limitations": [],
+            }
+        )
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
@@ -77,13 +87,10 @@ class EmptyThenAnswerCompletions(RecordingCompletions):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
             )
         content = json.dumps({
-            "answer_mode": "evidence_based",
-            "conclusion_status": "probable",
             "answer": "The collected Route evidence supports TLS passthrough.",
-            "cited_evidence_ids": ["cluster-route-1"],
-            "limitations": [],
-            "recommended_next_checks": [],
-            "investigation_gaps": [],
+            "citations": ["cluster-route-1"],
+            "certainty": "probable",
+            "recommended_actions": [],
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -162,17 +169,30 @@ class CandidatePlanCompletions:
     def create(self, **kwargs):
         self.requests.append(kwargs)
         content = json.dumps({
-            "goal_type": "diagnose",
-            "decision": "collect",
-            "scope_summary": "Inspect the exact grounded backend Service.",
-            "candidate_ids": ["read-0123456789abcdefabcd"],
-            "supporting_evidence_ids": ["cluster-route-1"],
-            "working_hypothesis": "The Service port mapping may explain the protocol behavior.",
-            "next_step_summary": "Inspecting the backend Service port mapping.",
+            "decision": "investigate",
+            "action_ids": ["read-0123456789abcdefabcd"],
+            "reason": "Inspect the backend Service port mapping.",
+            "remaining_question": "Does the Service expose the expected protocol?",
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
+
+
+class NoActionPlanCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content=json.dumps({
+                "decision": "uncertain",
+                "action_ids": [],
+                "reason": "No supplied action can resolve the remaining question.",
+                "remaining_question": "Which cluster object is implicated?",
+            })
+        ))])
 
 
 class MissingSummaryPlanCompletions:
@@ -199,6 +219,9 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
 
     assert isinstance(answer, AdHocAnswer)
     assert answer.cited_evidence_ids == ["cluster-pod-1"]
+    assert answer.recommended_next_checks == [
+        "Review the application configuration that produced the error."
+    ]
     request = completions.requests[0]
     assert request["model"] == "gemma-4-31b-it"
     assert request["response_format"]["type"] == "json_schema"
@@ -378,13 +401,43 @@ def test_candidate_mode_uses_smaller_schema_without_read_intents() -> None:
 
     assert plan.candidate_ids == ["read-0123456789abcdefabcd"]
     schema = completions.requests[0]["response_format"]["json_schema"]["schema"]
-    assert "candidate_ids" in schema["properties"]
+    assert "action_ids" in schema["properties"]
     assert "intents" not in schema["properties"]
     instructions = completions.requests[0]["messages"][0]["content"]
-    assert "exact opaque" in instructions
-    assert "PodPilot owns the executable read" in instructions
+    assert "exact supplied action IDs" in instructions
+    assert "Continue investigating while a useful action remains" in instructions
     assert "discover_resources" not in instructions
     assert len(instructions) < 1300
+    payload = json.loads(completions.requests[0]["messages"][1]["content"])
+    assert set(payload) == {
+        "available_actions", "completed_actions", "conversation_context", "correction",
+        "evidence", "question", "remaining_actions", "unresolved_questions",
+    }
+    assert "relationship_graph" not in payload
+    assert "capability_ledger" not in payload
+    assert "tool_policy" not in payload
+    assert payload["available_actions"][0]["id"] == "read-0123456789abcdefabcd"
+
+
+def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
+    completions = NoActionPlanCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    plan = provider.plan_ad_hoc(profile(), "secret-token", {
+        "question": "Inspect an unfamiliar resource.",
+        "read_candidates": [],
+    })
+
+    assert plan.decision == "answer_from_evidence"
+    assert plan.stop_reason == "no_material_read"
+    schema = completions.requests[0]["response_format"]["json_schema"]["schema"]
+    assert "action_ids" in schema["properties"]
+    assert "intents" not in schema["properties"]
+    payload = json.loads(completions.requests[0]["messages"][1]["content"])
+    assert payload["available_actions"] == []
+    assert "tool_policy" not in payload
 
 
 def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:
@@ -414,14 +467,17 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     request = completions.requests[0]
     assert request["max_tokens"] == 1400
     assert "Do not tell the operator to run kubectl" in request["messages"][0]["content"]
-    assert "certificate-verification failure during TLS" in request["messages"][0]["content"]
-    assert "Observed evidence" in request["messages"][0]["content"]
-    assert "Still unverified" in request["messages"][0]["content"]
-    assert "model_log_analysis" in request["messages"][0]["content"]
-    assert "Treat log analysis as a signal" in request["messages"][0]["content"]
-    assert "never promote correlation to root cause" in request["messages"][0]["content"]
-    assert "If answer_feedback is present" in request["messages"][0]["content"]
-    assert "never headings alone" in request["messages"][0]["content"]
+    assert "Cite exact supplied evidence IDs" in request["messages"][0]["content"]
+    assert "For multiple clusters" in request["messages"][0]["content"]
+    assert "Separate observed facts from interpretation" in request["messages"][0]["content"]
+    assert len(request["messages"][0]["content"]) < 1000
+    payload = json.loads(request["messages"][1]["content"])
+    assert set(payload) == {
+        "clusters", "collection_issues", "conversation_context", "correction",
+        "evidence", "question",
+    }
+    assert "observations" not in payload
+    assert "capability_ledger" not in payload
 
 
 def test_chat_completions_raw_capture_is_explicit_and_scoped() -> None:

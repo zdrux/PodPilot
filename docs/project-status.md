@@ -245,8 +245,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
-- Final-answer context is now separately constrained to four recent messages, sixteen observations
-  within 48 KB, eight findings, and six knowledge chunks; planning graph data is omitted. An empty
+- Final-answer context is now separately constrained to two recent messages and twelve evidence fact
+  cards within 20 KB, plus cluster attribution and bounded collection issues. Graph, ledger, catalog,
+  tool-policy, raw observation envelopes, and domain teaching text are omitted. An empty
   Chat Completions payload receives one schema-only retry. Any later final-answer failure preserves
   successful reads in a cited deterministic Route/resource/inventory or observation summary instead
   of replacing the investigation with an uncited generic error.
@@ -267,12 +268,14 @@ records remain, but execution now awaits a separate approval-gated action servic
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured
   answer gaps—and capability-matched suggested checks—can trigger one bounded typed collection phase
   and answer regeneration. Gap, graph, and recommendation prose remains non-executable.
-- Grounded traversal now uses a compact candidate-first planner contract. Normal code offers at most
-  twelve opaque reads derived from exact operator anchors, observed relationships, structured gaps,
-  and implicated logs; the model selects IDs and never receives their executable intent payloads.
-  Candidate rounds omit the discovery catalog and curated knowledge, retain only four recent messages
-  plus bounded summaries, and use a schema without the `ReadIntent` union. Full typed planning remains
-  available only as the initial/discovery escape hatch. Unknown IDs fail closed, and a repeated stop on
+- Grounded traversal now uses one compact resource-agnostic action-selection contract. Normal code
+  offers at most twelve opaque reads derived from exact operator anchors, observed relationships,
+  unresolved evidence needs, implicated logs, and bounded catalog matches; the model selects up to
+  four IDs and never receives their executable intent payloads. Candidate rounds retain only two
+  recent messages, twelve fact cards within 20 KB, eight completed actions, unresolved questions, and
+  the remaining budget. The response is only `investigate`, `answer`, or `uncertain`, with a short
+  reason. Live-catalog matches for unfamiliar resources become the same bounded action cards rather
+  than reopening the broad typed planner. Unknown IDs fail closed, and a repeated stop on
   a matching high/medium structured gap can recover one highest-priority candidate through the normal broker.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;

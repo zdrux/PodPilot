@@ -198,18 +198,14 @@ apiVersion, Kind, namespaced scope, and advertised read verb. Unambiguous
 inventory questions compile directly from that live catalog so a model cannot
 omit the only required intent. The small built-in canonicalization table remains
 only as a compatibility path for older model output.
-The planner classifies natural-language intent as inventory, health, diagnosis,
-logs, comparison, or explanation. Normal code derives the collection decision
-from typed intents or clarification content instead of rejecting a useful plan
-because a redundant discriminator disagreed. The model owns troubleshooting direction, but it
-normally selects rather than authors the next read. Normal code derives up to twelve opaque
-candidates from exact operator coordinates, observed relationship frontiers, structured gaps, and
-implicated Pod-log targets. Candidate-mode planning uses a small `CandidateReadPlan` contract with
-IDs and short summaries; the server compiles selected IDs back to the typed intents it retained
-privately. If no grounded candidate exists, the full `ReadPlan` remains a discovery escape hatch so
-the model can find an unfamiliar API or first object. The catalog, deterministic findings,
-ownership, selectors, endpoints, and mount relationships are candidates rather than a
-server-prescribed path.
+The model owns troubleshooting direction, but selects rather than authors each ordinary read.
+Normal code derives up to twelve opaque actions from exact operator coordinates, observed
+relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches
+from live API discovery. Every resource type uses the same small `ActionSelection` contract: the
+model returns `investigate`, `answer`, or `uncertain`, a short reason, and up to four exact action IDs
+when continuing. The server compiles selected IDs back to typed intents it retained privately. The
+catalog, deterministic findings, ownership, selectors, endpoints, and mount relationships remain
+server-side inputs to action construction rather than a prescribed scenario path or model prompt.
 Invalid or empty plans receive one structured repair attempt; the API does not silently
 replace a diagnostic direction with a generic catalog traversal.
 ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
@@ -223,9 +219,10 @@ router address. Secrets, access-review resources, arbitrary subresources, comman
 and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
-The only automatic continuation is a mechanical trust-only retry of the same HTTPS probe.
-Object traversal, log selection, Events, metrics, and configuration reads require a
-schema-valid model selection or discovery plan and return through the same broker on the next round.
+Automatic continuation is limited to mechanical safeguards such as the trust-only retry of the same
+HTTPS probe and bounded recovery from a repeated model stop. Object traversal, log selection, Events,
+metrics, and configuration reads otherwise require a schema-valid model action selection and return
+through the same broker on the next round.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.
@@ -285,23 +282,27 @@ one material read now when that read would otherwise appear as an unperformed fi
 otherwise the model may confirm its stop with exact supporting IDs. Recommendation prose is never
 executed, and normal broker validation remains unchanged.
 
-Candidate rounds receive only four recent conversation messages, a short earlier-context summary,
-the sixteen most relevant compact observations, eight findings, a graph without executable hints,
-twelve completed-read summaries, the capability ledger, gaps, and up to twelve candidates. Resource
-catalog and curated knowledge payloads are omitted until the discovery escape hatch is needed.
+The server derives relationships, capability state, findings, and executable intents internally, but
+candidate-mode model calls do not receive those implementation structures. Every model-directed
+resource investigation receives only the question, two recent conversation messages, up to twelve
+normalized fact cards, up to twelve action cards, eight completed-action summaries, remaining budget,
+and short unresolved questions or correction feedback. The universal `ActionSelection` contract asks
+for `investigate`, `answer`, or `uncertain`, up to four exact action IDs, and one short reason.
+Unknown resource questions use the same contract: top resource-catalog matches become bounded server-owned
+list action cards rather than exposing the catalog and full `ReadIntent` union to the model.
 An exact operator-supplied HTTP/HTTPS URL becomes a grounded GET-probe candidate after Route
 evidence exists, or when a structured probe gap remains. A structured Pod-log gap may similarly
 offer exact normal-priority Running/Ready container candidates; unhealthy/restarting candidates
 retain higher priority. Neither case permits the model to author coordinates.
 
-Each planning round also receives two server-derived views of current state. A bounded evidence
+Each planning round is supported by two server-derived views of current state. A bounded evidence
 relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
 Service-to-EndpointSlice, endpoint-to-Pod, owner, and volume-source relationships. Its frontier
-contains non-executable read hints for observed-but-unread neighbors. A capability ledger separately
+produces safe action cards for observed-but-unread neighbors. A capability ledger separately
 records whether Service specs, endpoints, Pod specs, Pod logs, metrics, and probes are collected,
 attempted unsuccessfully, budget-exhausted, awaiting an exact target, or available but not attempted.
-The ledger is authoritative for answer wording: the last two available states are described as
-"not collected", not "unavailable".
+These structures remain authoritative server state for validation and follow-through; the model sees
+their concise evidence and action projections rather than their schemas or internal vocabulary.
 
 The first accepted goal type is pinned for the collection pass. Later plans may revise hypotheses
 and choose different evidence, but cannot silently change the operator's diagnostic goal. Normalized
@@ -310,13 +311,11 @@ bounded `no_progress` feedback so the model can select a novel candidate or expl
 model twice stops despite a medium/high structured gap with a matching grounded candidate, PodPilot
 selects the highest-priority candidate deterministically and discloses that recovery in limitations.
 
-Final answers may return up to five structured investigation gaps containing a question, typed
-capability, priority, supporting evidence IDs, and reason. Medium/high gaps that the ledger still
-marks actionable initiate one bounded follow-up collection phase, after which the answer is regenerated
-with any new evidence. For compatibility, a model's operator-facing recommended next check may be
-promoted to the same structured planner input only when its text matches a known read capability and
-the ledger says that capability remains actionable. Neither gap nor recommendation text is converted
-to coordinates or executed; only a subsequent schema-valid `ReadPlan` can reach the broker.
+The action-selection prompt softly directs the model to keep investigating while a useful supplied action
+remains and permits `uncertain` when none can resolve the open question. Final recommendations remain
+operator-facing resolution guidance. For compatibility, a recommendation that clearly names a known
+read capability may enter one bounded follow-up planning pass only when the trusted ledger still marks
+that capability actionable; recommendation text never becomes coordinates or executes directly.
 
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
@@ -427,12 +426,15 @@ per-turn budget, are capped and deduplicated, and cannot read Secrets or expand 
 Findings are evidence summaries, not executable instructions, and neither pattern
 matches nor log correlation alone establish causality.
 
-The final-answer boundary is separately compacted from durable evidence. Current-turn
-observations are ordered first; each observation, Pod-log excerpt, structured finding,
-and the total provider observation payload have byte or count ceilings. The constrained-model
-profile receives at most four recent messages, sixteen observations within 48 KB, eight findings,
-six knowledge chunks, and no planning relationship graph. The database
-and evidence drawer retain the complete redacted bounded observations. A schema-valid
+The final-answer boundary is separately compacted from durable evidence. Current-turn observations
+are converted to at most twelve resource-agnostic fact cards within 20 KB. Each card contains an
+allowlisted evidence ID, cluster attribution, summary, concise material facts, and a bounded object
+projection or 1,500-character log excerpt. The final model receives only the question, two recent
+messages, cluster labels, those fact cards, up to six collection issues, and optional correction feedback.
+Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
+no claimed mutation, concise Markdown, and useful resolution recommendations. Domain teaching, graph,
+capability-ledger, findings, knowledge, and raw observation payloads stay server-side. The database and
+evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
 enough, and every current Pod-log observation with a structured finding must be cited. A bounded
 correction attempt receives only an error code and instruction. The same check rejects schema
@@ -441,10 +443,11 @@ string and inline pipe-delimited tables without Markdown row boundaries. If a co
 places evidence recommendations in that malformed prose, normal code may retain only fixed
 capability categories that the ledger marks actionable; coordinates and prose are discarded before
 the normal grounded-candidate pass.
-Before a follow-up answer, structured gaps are partitioned against the final capability ledger into
-resolved and remaining sets. Final validation rejects prose that calls a collected capability “not
-collected,” removes top-level gaps whose capability is already collected, and strips provider-facing
-citation markers after allowlisted citations are recovered. Once an HTTPS probe completes TLS and
+For compatibility with earlier providers, server-side gap state is still reconciled against the final
+capability ledger. Final validation rejects prose that calls a collected capability “not collected,”
+removes stale gaps, and strips provider-facing citation markers after allowlisted citations are
+recovered. Concise final-answer recommendations may be mapped to a fixed safe capability for one
+additional action-selection pass; recommendation prose and coordinates never execute. Once an HTTPS probe completes TLS and
 returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
 reads because they can distinguish application, authentication, and upstream failures.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic

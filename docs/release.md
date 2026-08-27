@@ -206,11 +206,11 @@ result through grounded candidate compilation and the unchanged broker.
 Composition gates must prove that structured log findings remain visible with exact
 Pod/container, category, severity, counts, paths/endpoints, bounded samples, and citations when
 a Route/TLS fallback replaces the provider answer; correlation must not be labeled root cause.
-Provider-context tests must verify current-turn prioritization, bounded Pod-log excerpts,
-per-observation and 48 KB total evidence ceilings, compact findings, and semantic
-deduplication of equivalent operator limitations while leaving persisted evidence intact.
-For constrained final-answer context, tests must enforce four recent messages, sixteen observations
-within 48 KB, eight findings, six knowledge chunks, and no relationship graph. Empty-content gates
+Provider-context tests must verify current-turn prioritization, 1,500-character Pod-log excerpts,
+3-KB per-card and 20-KB aggregate evidence ceilings, and semantic deduplication of equivalent
+operator limitations while leaving persisted evidence intact. For constrained final-answer context,
+tests must enforce two recent messages, twelve fact cards, six collection issues, and exclusion of
+raw observations, findings, knowledge, relationship graph, capability ledger, catalog, and tool policy. Empty-content gates
 must prove one schema-only retry and a cited deterministic fallback after successful collection when
 that retry or a later final call still fails; no-evidence provider failures remain insufficient.
 Chat presentation gates verify that completed Ask conversations open at the newest
@@ -277,10 +277,15 @@ read signatures suppress repeats across the initial and answer-gap passes. Struc
 gaps and capability-matched recommendations may trigger a bounded follow-up collection phase and answer regeneration,
 but recommendation prose, graph hints, and gap text must never execute directly or bypass broker
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
-Candidate-first gates must prove that candidate rounds use the smaller schema without `ReadIntent`,
-candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, graph hints are
-absent from candidate-visible context, and the catalog appears only in discovery mode. Context caps
-for messages, observations, findings, graph, completed reads, and candidates must be asserted. The
+Candidate-first gates must prove that candidate rounds use the universal `ActionSelection` schema
+without `ReadIntent`, candidate IDs compile only to exact server-held intents, and unknown IDs execute
+nothing. Normal Ask planning must not reopen the broad typed planner when no relationship candidate
+exists; bounded catalog matches must use the same action cards. Actual provider payloads must omit graph, ledger, catalog, tool policy, typed Kubernetes
+coordinates, raw observation envelopes, and domain-specific teaching. Tests must assert the two-message,
+twelve-fact-card/20-KB, eight-completed-action, and twelve-action-card caps. The concise final-answer
+contract must preserve exact evidence citations, multi-cluster attribution, uncertainty, readable
+Markdown, and useful remediation recommendations without embedding correction policy or resource-specific
+semantics. The
 provider activation probe must exercise discovery followed by an exact candidate selection. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
