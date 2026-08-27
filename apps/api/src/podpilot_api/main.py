@@ -33,6 +33,7 @@ from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
     AdHocAnswer,
     AdHocLogAnalysis,
+    InquirySemantics,
     InvestigationChatAnswer,
     ModelProfileConfig,
     ModelProvider,
@@ -66,6 +67,7 @@ from podpilot_diagnostics.adhoc import (
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
     normalize_read_intent,
+    plan_catalog_read,
     plan_known_read,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
@@ -1048,7 +1050,8 @@ def _question_requires_object_details(question: str) -> bool:
         r"(?i)\b(?:list|show|display|enumerate|inventory|count|how\s+many)\b",
         question,
     )) or bool(re.search(
-        r"(?i)\b(?:what|which)\b.{0,80}\b(?:available|exist|present|installed)\b",
+        r"(?i)\b(?:what|which)\b.{0,80}\b(?:available|exist|present|installed|"
+        r"have|deployed|running)\b",
         question,
     )) or bool(re.search(
         r"(?i)\b(?:do|does|are|is)\b.{0,80}\b(?:have|exist|present|installed|"
@@ -1716,10 +1719,13 @@ def _deterministic_inventory_answer(
     evidence: list[dict[str, object]],
     activity: list[dict[str, object]],
     question: str = "",
+    inventory_only: bool | None = None,
 ) -> dict[str, object] | None:
     """Render validated list evidence when the model cannot produce a useful answer."""
 
-    if _question_requires_object_details(question):
+    if inventory_only is False or (
+        inventory_only is None and _question_requires_object_details(question)
+    ):
         return None
 
     current_ids = {
@@ -1735,7 +1741,21 @@ def _deterministic_inventory_answer(
         and isinstance(item.get("data"), dict)
         and isinstance(item["data"].get("names"), list)
     ]
-    if not observations:
+    discovery_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") == "discover_resources"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    discovery_misses = [
+        item for item in reversed(evidence)
+        if str(item.get("id")) in discovery_ids
+        and item.get("tool") == "discover_resources"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("inventoryMatch") == "none"
+    ]
+    if not observations and not discovery_misses:
         return None
 
     def inventory_rows(data: dict[str, object]) -> list[tuple[str, str, str]]:
@@ -1769,7 +1789,12 @@ def _deterministic_inventory_answer(
             rows.append((namespace[:253], name, ready))
         return rows
 
-    if len({str(item.get("cluster_id") or "") for item in observations}) > 1:
+    inventory_sources = [*observations, *discovery_misses]
+    source_cluster_ids = {
+        str(item.get("cluster_id") or item.get("cluster_name") or "cluster")
+        for item in inventory_sources
+    }
+    if len(source_cluster_ids) > 1:
         rows: list[str] = []
         citations: list[str] = []
         total_matches = 0
@@ -1789,18 +1814,45 @@ def _deterministic_inventory_answer(
                 rows.append(
                     f"| `{cluster_name}` | `{kind}` | — | _No matching resources_ | — |"
                 )
+        for observation in reversed(discovery_misses):
+            cluster_name = str(
+                observation.get("cluster_name")
+                or observation.get("cluster_id")
+                or "cluster"
+            )
+            citations.append(str(observation["id"]))
+            rows.append(
+                f"| `{cluster_name}` | — | — | "
+                "_No matching readable API resource type_ | Unknown |"
+            )
         return {
             "answer_mode": "evidence_based",
             "content": (
                 "## Multi-cluster inventory\n\n"
                 f"**Collected:** {total_matches} matching resource"
-                f"{'s' if total_matches != 1 else ''} across {len(observations)} "
+                f"{'s' if total_matches != 1 else ''} across {len(source_cluster_ids)} "
                 "OpenShift clusters.\n\n"
                 "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |\n"
                 "|---|---|---|---|---|\n" + "\n".join(rows) +
                 "\n\nEach row comes from an independently bounded read against the named cluster."
             ),
             "citations": citations,
+        }
+    if discovery_misses:
+        observation = discovery_misses[0]
+        cluster_name = str(
+            observation.get("cluster_name")
+            or observation.get("cluster_id")
+            or "cluster"
+        )
+        return {
+            "answer_mode": "evidence_based",
+            "content": (
+                "## Inventory result\n\n"
+                f"No matching readable API resource type was discovered on `{cluster_name}`. "
+                "The API may not be installed, or the configured identity may not be allowed to read it."
+            ),
+            "citations": [str(observation["id"])],
         }
     observation = observations[0]
     data = observation["data"]
@@ -3771,6 +3823,38 @@ def _fallback_pod_log_plan(
     )
 
 
+async def _classify_ad_hoc_inquiry(
+    *,
+    model_provider: ModelProvider,
+    profile: ModelProfileConfig,
+    api_key: str,
+    question: str,
+    conversation: list[dict[str, str]],
+    cluster_names: list[str],
+) -> InquirySemantics | None:
+    """Ask the model for coarse semantics once; deterministic routing is the fallback."""
+
+    classify = getattr(model_provider, "classify_ad_hoc", None)
+    if not callable(classify):
+        return None
+    context = {
+        "question": redact_text(question)[:1000],
+        "recent_context": [
+            {
+                "role": str(item.get("role") or "")[:16],
+                "content": redact_text(str(item.get("content") or ""))[:500],
+            }
+            for item in conversation[-2:]
+        ],
+        "selected_clusters": [str(name)[:120] for name in cluster_names[:10]],
+    }
+    try:
+        return await run_in_threadpool(classify, profile, api_key, context)
+    except ModelProviderError as exc:
+        LOGGER.warning("podpilot.adhoc.classification_failed error=%s", str(exc))
+        return None
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -3791,6 +3875,7 @@ async def _collect_bounded_cluster_reads(
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
     progress: ProgressReporter | None = None,
+    inquiry: InquirySemantics | None = None,
 ) -> _BoundedReadCollection:
     evidence = list(existing_evidence)
     activity: list[dict[str, object]] = []
@@ -3798,7 +3883,9 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set(existing_read_signatures or [])
     units_used = 0
     automatic_tls_retries = 0
-    pinned_goal: str | None = "diagnose" if investigation_gaps else None
+    pinned_goal: str | None = (
+        "diagnose" if investigation_gaps else inquiry.planner_goal if inquiry else None
+    )
     scope_summary = "Bounded read-only cluster investigation."
     known_plan = plan_known_read(
         question,
@@ -3808,7 +3895,17 @@ async def _collect_bounded_cluster_reads(
     )
     # Keep deterministic compilation only for terminal, unambiguous inventory or
     # metric requests. Troubleshooting and object traversal remain model-directed.
-    deterministic_plan = known_plan if known_plan is not None and known_plan[1] else None
+    deterministic_plan = (
+        known_plan
+        if known_plan is not None
+        and known_plan[1]
+        and (
+            inquiry is None
+            or inquiry.mode == "inventory"
+            or known_plan[0].goal_type != "inventory"
+        )
+        else None
+    )
     # A single non-terminal read compiled from an exact operator coordinate (for
     # example, searching Route.spec.host for a supplied URL) is retained only as
     # a recovery anchor. It is never the initial troubleshooting plan and it does
@@ -3821,6 +3918,7 @@ async def _collect_bounded_cluster_reads(
         else None
     )
     catalog_entries: list[dict[str, object]] = []
+    catalog_available = False
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
     if callable(catalog_reader):
         if progress:
@@ -3829,12 +3927,76 @@ async def _collect_bounded_cluster_reads(
             catalog_entries = await run_in_threadpool(
                 catalog_reader, query=question, limit=120
             )
+            catalog_available = True
         except ReadOnlyExplorerError as exc:
             LOGGER.warning(
                 "podpilot.resource_catalog.unavailable actor=%s workflow_id=%s error=%s",
                 actor,
                 workflow_id,
                 str(exc),
+            )
+
+    # Once live discovery resolves an explicit inventory question, normal code owns
+    # the same bounded LIST on every selected cluster. This avoids asking the model
+    # to independently rediscover identical syntax and semantics per cluster. An
+    # available catalog with no matching readable type is itself useful negative
+    # evidence; do not replace it with an unrelated catalog traversal.
+    inventory_only = (
+        inquiry.mode == "inventory" and not inquiry.needs_object_details
+        if inquiry is not None
+        else not _question_requires_object_details(question)
+    )
+    if deterministic_plan is None and inventory_only:
+        catalog_question = (
+            f"list {inquiry.resource_query}"
+            if inquiry is not None and inquiry.resource_query
+            else question
+        )
+        catalog_plan = plan_catalog_read(
+            catalog_question,
+            catalog_entries,
+            inventory_limit=settings.adhoc_inventory_max_objects,
+        )
+        if catalog_plan is not None and catalog_plan[1]:
+            deterministic_plan = catalog_plan
+        elif catalog_available:
+            evidence_id = f"cluster-discovery-{uuid4()}"
+            collected_at = datetime.now(timezone.utc)
+            evidence.append({
+                "id": evidence_id,
+                "tool": "discover_resources",
+                "summary": (
+                    "No readable API resource type matched the operator's inventory question."
+                ),
+                "source": "kubernetes:api-discovery",
+                "collected_at": collected_at,
+                "data": {
+                    "query": redact_text(question)[:253],
+                    "count": 0,
+                    "inventoryMatch": "none",
+                    "policy": (
+                        "live API discovery with sensitive resource types excluded"
+                    ),
+                },
+            })
+            activity.append({
+                "round": 0,
+                "tool": "discover_resources",
+                "status": "succeeded",
+                "target": "readable API catalog inventory match",
+                "observations": 1,
+                "evidence_ids": [evidence_id],
+                "investigation_units": 0,
+            })
+            return _BoundedReadCollection(
+                evidence=evidence[-settings.adhoc_max_evidence :],
+                activity=activity,
+                limitations=limitations,
+                scope_summary=(
+                    "The readable API catalog had no resource type matching this inventory question."
+                ),
+                units_used=units_used,
+                read_signatures=sorted(seen_intents),
             )
     def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
         known_evidence_ids = {str(item.get("id")) for item in evidence}
@@ -3902,6 +4064,7 @@ async def _collect_bounded_cluster_reads(
         context: dict[str, object] = {
             "cluster": settings.cluster_name,
             "question": question,
+            "inquiry": inquiry.model_dump() if inquiry else None,
             "conversation": [
                 {
                     "role": str(item.get("role") or "")[:16],
@@ -5003,6 +5166,18 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
+                inquiry = None
+                if not followup_action:
+                    if progress:
+                        await progress("planning", "Understanding the investigation request.")
+                    inquiry = await _classify_ad_hoc_inquiry(
+                        model_provider=provider,
+                        profile=profile_snapshot,
+                        api_key=api_key,
+                        question=source_question,
+                        conversation=history,
+                        cluster_names=[item.name for item in selected_clusters],
+                    )
                 provider_phase = "bounded_read_collection"
                 if not selected_clusters:
                     limitations.append("The conversation's selected clusters no longer exist.")
@@ -5107,6 +5282,7 @@ def create_app(
                             str(followup_action.get("id")) if followup_action else None
                         ),
                         progress=progress,
+                        inquiry=inquiry,
                     )
                     cluster_runtime["read_signatures"] = (
                         collected.read_signatures or []
@@ -5415,6 +5591,7 @@ def create_app(
                                 runtime.get("read_signatures") or []
                             ),
                             progress=progress,
+                            inquiry=inquiry,
                         )
                         runtime["read_signatures"] = (
                             gap_collection.read_signatures or []
@@ -5590,6 +5767,10 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                     question=message_text,
+                    inventory_only=(
+                        inquiry.mode == "inventory" and not inquiry.needs_object_details
+                        if inquiry is not None else None
+                    ),
                 )
                 resource_detail_answer = _deterministic_resource_detail_answer(
                     evidence=evidence,
@@ -8023,6 +8204,14 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
+                inquiry = await _classify_ad_hoc_inquiry(
+                    model_provider=provider,
+                    profile=profile_snapshot,
+                    api_key=api_key,
+                    question=message_text,
+                    conversation=conversation,
+                    cluster_names=[app_settings.cluster_name],
+                )
                 original_evidence_ids = {
                     str(item.get("id")) for item in analysis_payload.get("observations", [])
                     if item.get("id")
@@ -8041,6 +8230,7 @@ def create_app(
                         existing_evidence=list(analysis_payload.get("observations", [])),
                         alert_name=alert_name,
                         alert_labels=dict(alert_snapshot.get("labels") or {}),
+                        inquiry=inquiry,
                     )
                     read_activity = collected.activity
                     read_limitations = collected.limitations

@@ -21,6 +21,7 @@ from podpilot_api.main import (
     _actionable_investigation_gaps,
     _adhoc_evidence_view,
     _bind_plan_log_intents,
+    _classify_ad_hoc_inquiry,
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
     _compact_answer_evidence,
@@ -53,6 +54,7 @@ from podpilot_api.model_provider import (
     LogAnalysisIssue,
     CapabilityReport,
     InvestigationChatAnswer,
+    InquirySemantics,
     ModelProfileConfig,
     ModelInterpretation,
     ModelProviderError,
@@ -128,6 +130,37 @@ def test_investigation_budget_weights_high_volume_operations() -> None:
     assert _investigation_unit_cost(ReadIntent(
         tool="watch_resources", resource="pods", namespace="payments", watch_seconds=5,
     )) == 3
+
+
+def test_semantic_classification_is_one_small_call_for_all_selected_clusters() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.calls.append(context)
+            return InquirySemantics(
+                mode="inventory", resource_query="Kafka", needs_object_details=False,
+                evidence_goal="Identify Kafka resources by cluster.",
+            )
+
+    provider = Provider()
+    result = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Tell me which environments contain Kafka.",
+        conversation=[],
+        cluster_names=["Central", "East", "West", "DR"],
+    ))
+
+    assert result is not None and result.mode == "inventory"
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["selected_clusters"] == ["Central", "East", "West", "DR"]
 
 
 def test_capability_ledger_distinguishes_available_uncollected_from_unavailable() -> None:
@@ -1997,7 +2030,7 @@ def test_existence_question_renders_identifiable_multi_cluster_inventory() -> No
         },
     ]
     rendered = _deterministic_inventory_answer(
-        question="Do we have Kafka clusters running on either OpenShift cluster?",
+        question="Which OpenShift clusters have Kafka instances running on them?",
         evidence=evidence,
         activity=[
             {"tool": "list_resources", "status": "succeeded", "evidence_ids": [item["id"]]}
@@ -2012,6 +2045,197 @@ def test_existence_question_renders_identifiable_multi_cluster_inventory() -> No
     assert "| `Simplii Central DEV` | `Kafka` | `orders` | `orders-kafka` | — |" in content
     assert "| `Simplii East DEV` | `Kafka` | `events` | `events-kafka` | — |" in content
     assert rendered["citations"] == ["central-kafka", "east-kafka"]
+
+
+def test_inventory_collection_uses_live_catalog_without_model_planning() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("Inventory collection must not call the model planner.")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "Kafka",
+                "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-list", tool="list_resources",
+                summary="Read 1 Kafka resource in cluster.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Kafka", "scope": "cluster",
+                    "names": ["orders-kafka"],
+                    "objects": [{"namespace": "orders", "name": "orders-kafka"}],
+                    "objectListComplete": True,
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(),
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="catalog-kafka-inventory",
+        question="Which OpenShift clusters have Kafka instances running on them?",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].resource == "kafkas.kafka.strimzi.io"
+    assert result.activity[0]["status"] == "succeeded"
+    assert result.evidence[0]["id"] == "cluster-kafka-list"
+
+
+def test_model_semantics_can_route_novel_inventory_wording_through_live_catalog() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("Model-classified inventory must not enter open planning.")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "Kafka",
+                "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-list", tool="list_resources",
+                summary="Read Kafka resources.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Kafka", "scope": "cluster", "names": ["orders"]},
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="semantic-kafka-inventory",
+        question="Tell me where our streaming installations live.",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            mode="inventory", resource_query="Kafka", needs_object_details=False,
+            evidence_goal="Identify Kafka resources by cluster.",
+        ),
+    ))
+
+    assert [call.resource for call in explorer.calls] == ["kafkas.kafka.strimzi.io"]
+    assert result.evidence[0]["id"] == "cluster-kafka-list"
+    rendered = _deterministic_inventory_answer(
+        evidence=result.evidence,
+        activity=result.activity,
+        question="Tell me where our streaming installations live.",
+        inventory_only=True,
+    )
+    assert rendered is not None
+    assert "`orders`" in str(rendered["content"])
+
+
+def test_inventory_catalog_miss_is_evidence_not_unrelated_model_traversal() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("A catalog miss must not call the model planner.")
+
+    class Explorer:
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "namespaces", "apiVersion": "v1",
+                "kind": "Namespace", "namespaced": False,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, _intent):
+            raise AssertionError("A catalog miss must not read an unrelated resource.")
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(),
+        cluster_reader=Explorer(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="catalog-kafka-miss",
+        question="Which OpenShift clusters have Kafka instances running on them?",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert result.activity[0]["tool"] == "discover_resources"
+    assert result.activity[0]["status"] == "succeeded"
+    assert result.evidence[0]["data"]["inventoryMatch"] == "none"
+
+
+def test_multi_cluster_inventory_distinguishes_catalog_miss_from_zero_objects() -> None:
+    evidence = [
+        {
+            "id": "kafka-zero", "cluster_id": "east", "cluster_name": "East DEV",
+            "tool": "list_resources",
+            "data": {
+                "kind": "Kafka", "scope": "cluster", "names": [],
+                "objectListComplete": True,
+            },
+        },
+        {
+            "id": "kafka-api-missing", "cluster_id": "remote",
+            "cluster_name": "Remote DEV", "tool": "discover_resources",
+            "data": {"count": 0, "inventoryMatch": "none"},
+        },
+    ]
+    rendered = _deterministic_inventory_answer(
+        question="Which OpenShift clusters have Kafka instances running on them?",
+        evidence=evidence,
+        activity=[
+            {"tool": item["tool"], "status": "succeeded", "evidence_ids": [item["id"]]}
+            for item in evidence
+        ],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "| `East DEV` | `Kafka` | — | _No matching resources_ | — |" in content
+    assert "| `Remote DEV` | — | — | _No matching readable API resource type_ | Unknown |" in content
+    assert rendered["citations"] == ["kafka-zero", "kafka-api-missing"]
 
 
 def test_verified_inventory_augments_valid_concise_model_answer() -> None:

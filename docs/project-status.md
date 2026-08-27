@@ -124,6 +124,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift, and installed CRD objects. Normal code resolves versions, group
   collisions, scope, and verbs. Lists paginate and persist compact, explicitly
   truncated collection evidence rather than one observation per object.
+- Ask PodPilot now makes one small model semantic-classification call per user turn, shared by
+  every selected cluster. The model identifies coarse inquiry mode, the resource concept, desired
+  evidence, and whether names alone are sufficient. Inventory concepts are validated against each
+  cluster's live safe catalog before normal code issues a bounded LIST; non-inventory modes guide
+  the existing planner. Invalid or unavailable classification falls back to deterministic routing,
+  and never changes broker, RBAC, sensitive-kind, or mutation policy.
 - Model planning now infers natural-language goals while the server derives collection
   decisions from typed intents. Unsupported
   operational no-read answers receive one structured repair attempt. If both
@@ -307,6 +313,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   a verified table containing every collected OpenShift cluster, resource kind, namespace, object name,
   and Ready condition within the bounded list window. This presentation no longer depends on the model
   answer failing quality validation, so a technically valid yes/no response cannot hide collected identities.
+  Live catalog resolution also compiles the requested LIST deterministically on each selected cluster.
+  Clusters where the API is readable but returns zero objects are distinguished from clusters where no
+  matching readable API type is installed or authorized; neither case falls through to unrelated resources.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

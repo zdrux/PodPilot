@@ -198,6 +198,16 @@ apiVersion, Kind, namespaced scope, and advertised read verb. Unambiguous
 inventory questions compile directly from that live catalog so a model cannot
 omit the only required intent. The small built-in canonicalization table remains
 only as a compatibility path for older model output.
+Before per-cluster collection, one compact semantic-classification call interprets the
+operator's wording across the selected cluster set. It returns only a coarse mode
+(`inventory`, `investigate`, `logs`, `metrics`, or `explain`), a short resource concept,
+whether exact object details are needed, and the evidence goal. This lets the model handle
+unfamiliar phrasing without maintaining a growing question-pattern list. For inventory mode,
+normal code resolves the model's resource concept against each cluster's live safe catalog and
+runs the same bounded LIST; for other modes the semantic contract pins the planner's goal but
+does not select tools. Classification cannot authorize a read, supply coordinates, weaken RBAC,
+or bypass sensitivity policy. If it is unavailable or invalid, existing deterministic recognition
+and the ordinary planner remain the fallback.
 The model owns troubleshooting direction, but selects rather than authors each ordinary read.
 Normal code derives up to twelve opaque actions from exact operator coordinates, observed
 relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches
@@ -467,7 +477,11 @@ Persistent incompleteness activates deterministic Route/TLS or generic cited-obs
 rendering. Independently, every current-turn inventory/existence answer with successful list evidence
 is augmented by a deterministic table of OpenShift cluster, kind, namespace, object name, and Ready
 condition. This preserves a concise model interpretation while guaranteeing that verified object
-identities are visible. Normal code then composes a bounded **Backend log
+identities are visible. After live API discovery resolves an explicit inventory request, normal code
+executes the same bounded resource LIST independently on each selected cluster instead of asking the
+model to rediscover that syntax per cluster. A readable catalog with no matching resource type becomes
+explicit cited discovery evidence; it is rendered separately from an installed/readable API that returns
+zero objects and never causes an unrelated catalog resource to be read. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving
 exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
 supporting evidence citations.

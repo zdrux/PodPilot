@@ -8,6 +8,7 @@ from podpilot_api.model_provider import (
     AdHocAnswer,
     AdHocLogAnalysis,
     CapabilityReport,
+    InquirySemantics,
     ModelProfileConfig,
     ModelProviderError,
     OpenAIChatCompletionsProvider,
@@ -169,6 +170,20 @@ class CandidatePlanCompletions:
         self.requests.append(kwargs)
         content = json.dumps({
             "action_ids": ["read-0123456789abcdefabcd"],
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
+class InquiryClassificationCompletions(RecordingCompletions):
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({
+            "mode": "inventory",
+            "resource_query": "Kafka",
+            "needs_object_details": False,
+            "evidence_goal": "Identify Kafka resources by selected cluster.",
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -373,6 +388,32 @@ def test_read_intent_correction_receives_static_cross_field_rules() -> None:
     assert "search_resources requires match_field and match_value" in correction
     assert "capability-ledger labels" in correction
     assert "metadata.name" not in correction
+
+
+def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
+    completions = InquiryClassificationCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    inquiry = provider.classify_ad_hoc(profile(), "secret-token", {
+        "question": "Tell me where our Kafka installations live.",
+        "selected_clusters": ["Central", "East"],
+    })
+
+    assert inquiry == InquirySemantics(
+        mode="inventory",
+        resource_query="Kafka",
+        needs_object_details=False,
+        evidence_goal="Identify Kafka resources by selected cluster.",
+    )
+    request = completions.requests[0]
+    schema = request["response_format"]["json_schema"]["schema"]
+    assert set(schema["properties"]) == {
+        "mode", "resource_query", "needs_object_details", "evidence_goal",
+    }
+    assert request["max_tokens"] == 350
+    assert "Do not choose tools or coordinates" in request["messages"][0]["content"]
 
 
 def test_candidate_mode_uses_compact_hybrid_action_and_object_read_schema() -> None:

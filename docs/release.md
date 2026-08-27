@@ -199,6 +199,9 @@ reject a genuine standalone heading. Final-writer gates must assert that its res
 only narrative and citations. Inventory/existence composition gates must prove that a valid concise
 model answer is augmented with the names, namespaces, kinds, and source OpenShift clusters from every
 successful current-turn list observation, with citations merged and no duplicate inventory section.
+Multi-cluster inventory gates must also prove that live catalog matches bypass per-cluster model syntax,
+that zero returned objects remain distinct from a missing/unreadable API type, and that a catalog miss
+cannot trigger an unrelated Namespace or other resource read.
 Suggested-action gates must derive controls from unread exact
 server-owned candidates without consuming or parsing model recommendations.
 They must also prove that an empty structured citation array can recover an exact
@@ -266,6 +269,11 @@ StorageClass inventory, namespaced built-in lists, and exact failed-Job alert sc
 Natural-language planner gates must cover implied operational intent, unsupported
 no-read answers, one structured repair attempt, valid supporting-evidence reuse,
 and operator-grounded recovery after repeated initial refusal. Tests must prove
+that the compact semantic classifier handles inventory wording not represented by deterministic
+question patterns, emits no tools or coordinates, is invoked once for a multi-cluster turn, and
+routes its resource concept through live catalog validation. Classifier failure must preserve the
+deterministic/planner fallback, and classification must never bypass RBAC, sensitivity, or budgets.
+Tests must also prove
 that recovery is limited to one read compiled from an exact coordinate in the
 operator request, still passes through the normal read broker and RBAC boundary,
 returns subsequent traversal to the model, and does not activate for a plan malformed
