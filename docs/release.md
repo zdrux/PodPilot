@@ -202,8 +202,12 @@ Composition gates must prove that structured log findings remain visible with ex
 Pod/container, category, severity, counts, paths/endpoints, bounded samples, and citations when
 a Route/TLS fallback replaces the provider answer; correlation must not be labeled root cause.
 Provider-context tests must verify current-turn prioritization, bounded Pod-log excerpts,
-per-observation and 96 KB total evidence ceilings, compact findings, and semantic
+per-observation and 48 KB total evidence ceilings, compact findings, and semantic
 deduplication of equivalent operator limitations while leaving persisted evidence intact.
+For constrained final-answer context, tests must enforce four recent messages, sixteen observations
+within 48 KB, eight findings, six knowledge chunks, and no relationship graph. Empty-content gates
+must prove one schema-only retry and a cited deterministic fallback after successful collection when
+that retry or a later final call still fails; no-evidence provider failures remain insufficient.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

@@ -792,12 +792,38 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 max_tokens=limit or profile.max_output_tokens,
             )
             content = response.choices[0].message.content
+            retried_empty_content = False
             if not content:
-                raise ModelProviderError("The provider returned no structured response content.")
+                retried_empty_content = True
+                response = client.chat.completions.create(
+                    model=profile.chat_model,
+                    messages=[
+                        *messages,
+                        {
+                            "role": "system",
+                            "content": (
+                                "The previous response contained no structured content. Return one "
+                                "complete object that satisfies the requested JSON schema."
+                            ),
+                        },
+                    ],
+                    response_format=response_format,
+                    max_tokens=limit or profile.max_output_tokens,
+                )
+                content = response.choices[0].message.content
+                if not content:
+                    raise ModelProviderError(
+                        "The provider returned no structured response content after one correction attempt."
+                    )
             _record_raw_response(content)
             try:
                 return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
+                if retried_empty_content:
+                    raise ModelProviderError(
+                        f"Provider response does not match {schema.__name__}. "
+                        f"{self._schema_correction_detail(schema, first_error)}"
+                    ) from first_error
                 validation_detail = self._schema_correction_detail(schema, first_error)
                 correction = client.chat.completions.create(
                     model=profile.chat_model,

@@ -245,6 +245,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
+- Final-answer context is now separately constrained to four recent messages, sixteen observations
+  within 48 KB, eight findings, and six knowledge chunks; planning graph data is omitted. An empty
+  Chat Completions payload receives one schema-only retry. Any later final-answer failure preserves
+  successful reads in a cited deterministic Route/resource/inventory or observation summary instead
+  of replacing the investigation with an uncited generic error.
 - Ask planning now pins the initial goal, detects duplicate-only no-progress plans across collection
   phases, and supplies an object-specific capability ledger so available-but-uncollected Service,
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured

@@ -258,6 +258,9 @@ modifies the durable observation or expands model exposure. The correction path 
 the same compact context and adds only a fixed validation code and bounded instruction;
 it never includes the rejected model response or additional evidence. Deterministic fallback content is built solely
 from persisted summaries and stable evidence IDs and cannot initiate new reads or actions.
+An empty Chat Completions content field receives one schema-only correction. If the final provider
+call still fails after successful reads, PodPilot returns a cited deterministic answer from those
+persisted observations instead of discarding them; the provider status and failure remain visible.
 Answer-time capability wording is checked against the server ledger. Calling an actionable,
 unattempted check "unavailable" causes one bounded correction; collection failures and RBAC denials
 remain visible and are never rewritten as successful evidence.

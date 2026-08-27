@@ -885,6 +885,7 @@ def _compact_answer_evidence(
     activity: list[dict[str, object]],
     total_byte_limit: int = 96_000,
     per_observation_byte_limit: int = 14_000,
+    max_observations: int | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Prioritize current-turn evidence and enforce a total final-answer context budget."""
 
@@ -900,6 +901,8 @@ def _compact_answer_evidence(
     compacted: list[dict[str, object]] = []
     used_bytes = 0
     for item in prioritized:
+        if max_observations is not None and len(compacted) >= max_observations:
+            break
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
         compact_data = _compact_provider_value(data)
         if item.get("tool") == "pod_logs" and isinstance(compact_data, dict):
@@ -1035,6 +1038,48 @@ def _deterministic_evidence_fallback_answer(
         ),
         "citations": selected_ids,
     }
+
+
+def _deterministic_provider_failure_answer(
+    *,
+    question: str,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object]:
+    """Preserve successful reads when the final provider call has no usable content."""
+
+    evidence_summary = _deterministic_evidence_fallback_answer(
+        evidence=evidence, activity=activity
+    )
+    specialized = (
+        _deterministic_route_tls_answer(
+            question=question, evidence=evidence, activity=activity
+        )
+        or _deterministic_resource_detail_answer(
+            question=question, evidence=evidence, activity=activity
+        )
+        or _deterministic_inventory_answer(
+            question=question, evidence=evidence, activity=activity
+        )
+    )
+    if specialized is None:
+        return evidence_summary
+    specialized_content = str(specialized["content"]).rstrip()
+    evidence_content = str(evidence_summary["content"])
+    observed_marker = "## Observed evidence\n\n"
+    observed_section = (
+        evidence_content.split(observed_marker, 1)[1].split("\n\n## Still unverified", 1)[0]
+        if observed_marker in evidence_content else ""
+    )
+    if observed_section:
+        specialized["content"] = (
+            f"{specialized_content}\n\n## Other collected evidence\n\n{observed_section.strip()}"
+        )
+    specialized["citations"] = list(dict.fromkeys([
+        *[str(item) for item in specialized.get("citations", [])],
+        *[str(item) for item in evidence_summary.get("citations", [])],
+    ]))
+    return specialized
 
 
 def _deterministic_resource_detail_answer(
@@ -3979,11 +4024,12 @@ def create_app(
                         f"{'s' if len(evidence) != 1 else ''}.",
                     )
                 answer_observations, answer_context_metadata = _compact_answer_evidence(
-                    evidence, activity=activity
+                    evidence, activity=activity, total_byte_limit=48_000,
+                    per_observation_byte_limit=8_000, max_observations=16,
                 )
                 answer_findings = _compact_answer_findings(
-                    derive_adhoc_findings(evidence)
-                )
+                    derive_adhoc_findings(evidence), total_byte_limit=12_000
+                )[:8]
                 deterministic_log_section = _deterministic_log_findings_section(
                     evidence=evidence, activity=activity
                 )
@@ -4050,14 +4096,19 @@ def create_app(
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": message_text,
-                    "conversation": history,
-                    "earlier_context_summary": context_summary,
+                    "conversation": [
+                        {
+                            "role": str(item.get("role") or "")[:16],
+                            "content": redact_text(str(item.get("content") or ""))[:1000],
+                        }
+                        for item in history[-4:]
+                    ],
+                    "earlier_context_summary": redact_text(context_summary)[-1500:],
                     "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
-                    "curated_knowledge": knowledge_context[:20],
+                    "curated_knowledge": knowledge_context[:6],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
-                    "relationship_graph": derive_evidence_relationship_graph(evidence),
                     "capability_ledger": _investigation_capability_ledger(
                         evidence=evidence,
                         activity=activity,
@@ -4278,11 +4329,14 @@ def create_app(
                             -app_settings.adhoc_max_evidence:
                         ]
                         answer_observations, answer_context_metadata = (
-                            _compact_answer_evidence(evidence, activity=activity)
+                            _compact_answer_evidence(
+                                evidence, activity=activity, total_byte_limit=48_000,
+                                per_observation_byte_limit=8_000, max_observations=16,
+                            )
                         )
                         answer_findings = _compact_answer_findings(
-                            derive_adhoc_findings(evidence)
-                        )
+                            derive_adhoc_findings(evidence), total_byte_limit=12_000
+                        )[:8]
                         deterministic_log_section = _deterministic_log_findings_section(
                             evidence=evidence, activity=activity
                         )
@@ -4326,16 +4380,19 @@ def create_app(
                                 _cluster_summary(item) for item in selected_clusters
                             ],
                             "question": message_text,
-                            "conversation": history,
-                            "earlier_context_summary": context_summary,
+                            "conversation": [
+                                {
+                                    "role": str(item.get("role") or "")[:16],
+                                    "content": redact_text(str(item.get("content") or ""))[:1000],
+                                }
+                                for item in history[-4:]
+                            ],
+                            "earlier_context_summary": redact_text(context_summary)[-1500:],
                             "scope_summary": collected_scope_summary,
                             "observations": answer_observations,
-                            "curated_knowledge": knowledge_context[:20],
+                            "curated_knowledge": knowledge_context[:6],
                             "evidence_context": answer_context_metadata,
                             "findings": answer_findings,
-                            "relationship_graph": (
-                                derive_evidence_relationship_graph(evidence)
-                            ),
                             "capability_ledger": _investigation_capability_ledger(
                                 evidence=evidence,
                                 activity=activity,
@@ -4494,18 +4551,51 @@ def create_app(
                     for marker in ("schema", "does not match", "structured response")
                 )
                 provider_status = "invalid_response" if contract_failure else "unavailable"
-                validated = {
-                    "answer_mode": "insufficient_evidence",
-                    "content": (
-                        "The model returned an invalid structured response, so PodPilot could not "
-                        "complete this investigation. Any successfully collected evidence remains "
-                        "available. No cluster changes were attempted."
-                        if contract_failure else
-                        "The model provider is currently unavailable. No cluster changes were attempted."
-                    ),
-                    "citations": [],
-                    "limitations": [str(exc)],
-                }
+                if evidence:
+                    validated = _deterministic_provider_failure_answer(
+                        question=message_text, evidence=evidence, activity=activity
+                    )
+                    failure_kind = (
+                        "invalid structured response" if contract_failure
+                        else "provider failure"
+                    )
+                    limitations.append(
+                        f"The final model answer had an {failure_kind}; PodPilot preserved the "
+                        "successfully collected evidence in a deterministic cited answer."
+                    )
+                    limitations.append(str(exc))
+                    validated["limitations"] = _dedupe_limitations(limitations)
+                    validated["conclusion_status"] = "probable"
+                    log_section = _deterministic_log_findings_section(
+                        evidence=evidence, activity=activity
+                    )
+                    if log_section is not None:
+                        content = str(validated["content"]).rstrip()
+                        log_content = str(log_section["content"])
+                        if "## Backend log findings" not in content:
+                            validated["content"] = f"{content}\n\n{log_content}".strip()
+                        validated["citations"] = list(dict.fromkeys([
+                            *[str(item) for item in validated["citations"]],
+                            *[str(item) for item in log_section["citations"]],
+                        ]))
+                    LOGGER.warning(
+                        "podpilot.adhoc.provider_fallback actor=%s conversation_id=%s "
+                        "evidence=%s citations=%s",
+                        username, conversation_id, len(evidence),
+                        len(validated["citations"]),
+                    )
+                else:
+                    validated = {
+                        "answer_mode": "insufficient_evidence",
+                        "content": (
+                            "The model returned an invalid structured response, so PodPilot could not "
+                            "complete this investigation. No cluster changes were attempted."
+                            if contract_failure else
+                            "The model provider is currently unavailable. No cluster changes were attempted."
+                        ),
+                        "citations": [],
+                        "limitations": [str(exc)],
+                    }
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)

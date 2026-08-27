@@ -69,6 +69,27 @@ class LogAnalysisCompletions(RecordingCompletions):
         )
 
 
+class EmptyThenAnswerCompletions(RecordingCompletions):
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        if len(self.requests) == 1:
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
+            )
+        content = json.dumps({
+            "answer_mode": "evidence_based",
+            "conclusion_status": "probable",
+            "answer": "The collected Route evidence supports TLS passthrough.",
+            "cited_evidence_ids": ["cluster-route-1"],
+            "limitations": [],
+            "recommended_next_checks": [],
+            "investigation_gaps": [],
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
 class InvalidPlanCompletions:
     def create(self, **_kwargs):
         return SimpleNamespace(
@@ -275,6 +296,23 @@ def test_chat_completions_schema_failure_names_contract_without_echoing_content(
     assert "string_too_short" in message
     assert '"scope_summary"' not in message
     assert "secret-token" not in message
+
+
+def test_chat_completions_retries_empty_structured_content_once() -> None:
+    completions = EmptyThenAnswerCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    answer = provider.answer_ad_hoc(profile(), "secret-token", {
+        "question": "Interpret the Route.",
+        "observations": [{"id": "cluster-route-1"}],
+    })
+
+    assert answer.cited_evidence_ids == ["cluster-route-1"]
+    assert len(completions.requests) == 2
+    correction = completions.requests[1]["messages"][-1]["content"]
+    assert "contained no structured content" in correction
 
 
 def test_chat_completions_retries_one_schema_correction_without_rejected_content() -> None:

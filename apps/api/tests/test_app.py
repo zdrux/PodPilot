@@ -1879,6 +1879,12 @@ class FailingAdHocProvider(FakeModelProvider):
         )
 
 
+class EmptyFinalAnswerProvider(FakeModelProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        raise ModelProviderError("The provider returned no structured response content.")
+
+
 class HeadingOnlyThenCompleteProvider(FakeModelProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
@@ -3594,6 +3600,52 @@ def test_ask_planner_failure_is_visible_and_does_not_block_answer(
     assert "podpilot.adhoc.provider_failed" not in log_text
     assert "scope_summary: string_too_short" in log_text
     assert secret_question not in log_text
+
+
+def test_final_provider_failure_preserves_collected_evidence_and_compact_context(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = EmptyFinalAnswerProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Check pod api-7d9 in namespace payments."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert "Read Pod payments/api-7d9" in rendered.text
+    assert "PodPilot could not complete this investigation" not in rendered.text
+    assert "provider returned no structured response content" in rendered.text
+    assert "podpilot.adhoc.provider_fallback" in caplog.text
+    context = provider.adhoc_answer_calls[0]
+    assert len(context["conversation"]) <= 4
+    assert len(context["observations"]) <= 16
+    assert len(context["curated_knowledge"]) <= 6
+    assert "relationship_graph" not in context
 
 
 def test_ask_continues_to_answer_when_later_plan_is_invalid(tmp_path: Path) -> None:

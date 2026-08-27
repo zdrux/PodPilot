@@ -682,7 +682,9 @@ contents remain unavailable even when a signal or Pod volume references a Secret
 Before requesting the final model answer, PodPilot compacts a provider-only evidence
 view. Current-turn reads are prioritized, Pod-log tails are capped, large object/list
 values are reduced, at most 12 compact findings are included, and observation context
-is bounded to 96 KB. This does not truncate persisted evidence or the operator's
+is bounded to sixteen observations and 48 KB. Only four recent messages, eight findings,
+six knowledge chunks, and the capability ledger accompany it; the planning graph is omitted.
+This does not truncate persisted evidence or the operator's
 provenance drawer. Grounding and certainty are separate: a cited interpretation can remain
 `unresolved` without being discarded. An uncited refusal or response containing only headings
 is retried once; concise readable answers are accepted. A second incomplete response uses
@@ -697,6 +699,12 @@ Single-line chat-completions answers that begin with a Markdown heading are norm
 real heading, paragraph, and bullet blocks before this quality check. This prevents a substantive
 flattened response from being mistaken for a heading-only answer; a genuine standalone heading
 still receives the bounded correction.
+
+Chat Completions responses with an empty content field receive one minimal schema-only retry. If
+the final answer remains empty, invalid, or unavailable after cluster reads succeeded, PodPilot logs
+`podpilot.adhoc.provider_fallback` and renders the specialized Route/resource/inventory answer when
+available plus a cited collection summary. The message retains `invalid_response` or `unavailable`
+provider status and displays the failure as a limitation; collected evidence is not discarded.
 
 Every turn that successfully collects Pod logs also sends all current bounded, redacted
 log excerpts through a separate structured model request with no conversation history. The

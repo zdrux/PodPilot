@@ -425,7 +425,9 @@ matches nor log correlation alone establish causality.
 
 The final-answer boundary is separately compacted from durable evidence. Current-turn
 observations are ordered first; each observation, Pod-log excerpt, structured finding,
-and the total provider observation payload have byte or count ceilings. The database
+and the total provider observation payload have byte or count ceilings. The constrained-model
+profile receives at most four recent messages, sixteen observations within 48 KB, eight findings,
+six knowledge chunks, and no planning relationship graph. The database
 and evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
 enough, and every current Pod-log observation with a structured finding must be cited. One

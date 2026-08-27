@@ -35,13 +35,17 @@ structured findings repeat their most material samples.
 Decision: The API compacts provider-facing final-answer evidence independently of
 persisted evidence. Current-turn observations are prioritized; log tails, strings,
 lists, individual observations, findings, and the total encoded observation set have
-explicit ceilings. Evidence-backed replies must contain a non-heading body. An answer
+explicit ceilings. Constrained final calls receive four recent messages, sixteen observations
+within 48 KB, eight findings, six knowledge chunks, and no relationship graph. Evidence-backed replies must contain a non-heading body. An answer
 with headings but no readable body receives one correction
 request containing only a bounded reason/message, never the rejected response body.
 If correction remains incomplete, recognized Route/TLS or inventory answers use the
 existing deterministic renderer; other questions receive a cited deterministic
 observation summary. Concise answers are accepted, and inventory-only support is displayed
 as an evidence limitation rather than causing otherwise readable prose to be discarded.
+An empty Chat Completions content field receives one schema-only correction. If any final call
+still fails after successful collection, the same cited deterministic renderers preserve the
+evidence while provider status records the invalid or unavailable response.
 Regardless of model success or fallback, normal code appends a
 bounded operator-facing log-finding section with exact Pod/container, category, severity,
 occurrence count, paths/endpoints, sample, correlated checks, and evidence citations.
