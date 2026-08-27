@@ -121,3 +121,95 @@ def test_range_query_is_authenticated_bounded_and_normalized(tmp_path: Path) -> 
     assert snapshot.is_complete is False
     assert [point.value for point in snapshot.series[0].points] == [0.5, None]
     assert snapshot.series[0].labels["note"] == "token=[REDACTED]"
+
+
+def test_remote_query_discovers_route_and_uses_in_memory_token() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer remote-fixture-token"
+        if request.url.host == "api.remote.example":
+            assert request.url.path == (
+                "/apis/route.openshift.io/v1/namespaces/openshift-monitoring/"
+                "routes/thanos-querier"
+            )
+            return httpx.Response(200, json={
+                "spec": {"host": "thanos.apps.remote.example"},
+            })
+        assert request.url.host == "thanos.apps.remote.example"
+        assert request.url.path == "/api/v1/query_range"
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"resultType": "matrix", "result": []},
+        })
+
+    query_client = ThanosQueryClient.for_remote_cluster(
+        api_url="https://api.remote.example:6443",
+        token="remote-fixture-token",
+        api_tls_verify=False,
+        transport=httpx.MockTransport(handler),
+    )
+    start = datetime.fromtimestamp(1_777_000_000, tz=timezone.utc)
+
+    snapshot = query_client.query_range(
+        "up", start=start, end=start + timedelta(minutes=1), step_seconds=60,
+    )
+
+    assert snapshot.series == ()
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message"),
+    [
+        (401, "Kubernetes API rejected"),
+        (403, "denied access to the Thanos Route"),
+        (404, "does not expose a Thanos Querier Route"),
+    ],
+)
+def test_remote_route_discovery_errors_are_actionable(
+    status_code: int, message: str,
+) -> None:
+    query_client = ThanosQueryClient.for_remote_cluster(
+        api_url="https://api.remote.example:6443",
+        token="remote-fixture-token",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(status_code, json={"message": "sensitive"})
+        ),
+    )
+
+    with pytest.raises(MonitoringQueryError, match=message):
+        query_client.query("up")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message"),
+    [
+        (401, "rejected the configured bearer token"),
+        (403, "cluster-monitoring-view"),
+        (404, "expected Thanos API"),
+    ],
+)
+def test_remote_monitoring_http_errors_are_actionable(
+    status_code: int, message: str,
+) -> None:
+    query_client = ThanosQueryClient(
+        base_url="https://api.remote.example:6443/proxy",
+        token="remote-fixture-token",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(status_code, json={"message": "sensitive"})
+        ),
+    )
+
+    with pytest.raises(MonitoringQueryError, match=message):
+        query_client.query("up")
+
+
+def test_query_requires_exactly_one_token_source(tmp_path: Path) -> None:
+    token_path = tmp_path / "token"
+
+    with pytest.raises(ValueError, match="exactly one"):
+        ThanosQueryClient(base_url="https://thanos.example.test")
+    with pytest.raises(ValueError, match="exactly one"):
+        ThanosQueryClient(
+            base_url="https://thanos.example.test",
+            token_path=token_path,
+            token="duplicate",
+        )

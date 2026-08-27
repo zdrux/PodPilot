@@ -87,7 +87,10 @@ The worker fans a question out across the selected enabled clusters within one s
 and attributes every observation, read record, citation, limitation, and comparison to its
 source cluster. A failed or disabled target becomes a cluster-specific limitation instead
 of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
-health, alert investigations, metrics on remote clusters, or remediation in this release.
+health, alert investigations, or remediation in this release. Typed Ask metrics use each
+remote cluster's registered bearer token: PodPilot discovers the cluster's
+`openshift-monitoring/thanos-querier` Route through its Kubernetes API, then queries that
+authenticated Route through the same bounded metrics adapter used by the runtime cluster.
 
 Cluster memory stores curated Markdown or text as immutable
 versions in SQLite and indexes heading-aware bounded chunks with FTS5. Approvers

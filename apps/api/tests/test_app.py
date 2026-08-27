@@ -94,7 +94,8 @@ from podpilot_diagnostics.adhoc import (
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
 from podpilot_openshift.credentials import CredentialStoreError
-from podpilot_openshift.explorer import ReadOnlyExplorerError
+from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
+from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -4435,6 +4436,60 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
         assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"
     engine.dispose()
+
+
+def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    cluster_credentials = MemoryCredentialStore()
+    captured: dict[str, object] = {}
+
+    class DiscoverableExplorer(FakeReadExplorer):
+        def resource_catalog(self, *, query="", limit=120):
+            return [{"resource": "pods", "kind": "Pod", "api_version": "v1"}]
+
+    def fake_remote_cluster(cls, **kwargs):
+        captured.update(kwargs)
+        return DiscoverableExplorer()
+
+    monkeypatch.setattr(
+        KubernetesReadOnlyExplorer,
+        "for_remote_cluster",
+        classmethod(fake_remote_cluster),
+    )
+    app, _ = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        cluster_credential_store=cluster_credentials,
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        saved = client.post(
+            "/api/v1/clusters",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "name": "remote-metrics",
+                "api_url": "https://api.remote.example:6443",
+                "token": "sha256~remote-monitoring-token",
+                "tags_json": "{}",
+                "tls_verify": "true",
+            },
+        )
+        cluster_id = saved.json()["cluster_id"]
+        tested = client.post(
+            f"/api/v1/clusters/{cluster_id}/test",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+
+    assert tested.status_code == 200
+    assert isinstance(captured["metric_reader"], BoundedMetricTrendReader)
+    assert captured["api_url"] == "https://api.remote.example:6443"
+    assert captured["token"] == "sha256~remote-monitoring-token"
+    assert captured["tls_verify"] is True
 
 
 def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:

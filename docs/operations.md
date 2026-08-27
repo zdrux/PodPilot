@@ -224,7 +224,9 @@ Secret value but keeps metadata for historical conversations.
 
 **Test connection** performs remote Kubernetes API discovery with the stored identity.
 HTTP 401 means the bearer token must be replaced; HTTP 403 means the identity needs API
-discovery and read-only `cluster-reader` access on the remote cluster. PodPilot reduces
+discovery and read-only `cluster-reader` access on the remote cluster. Remote Ask metrics
+also require `cluster-monitoring-view` and permission to get the
+`openshift-monitoring/thanos-querier` Route. PodPilot reduces
 Kubernetes client exceptions to these actionable messages and never returns raw response
 headers or authorization material to the browser. The remote adapter sends tokens through
 the Kubernetes client's `BearerToken` authentication setting, producing an
@@ -244,7 +246,9 @@ operator-visible and audited TLS warning.
 An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
 is pinned when the first question is submitted; **Change** opens a new conversation while
 the prior session remains in history. All selected clusters share the 25-unit weighted turn
-budget. Remote metrics are not available in this phase; alert, investigation, dashboard,
+budget. Typed metric reads are executed independently for every selected cluster by
+discovering its Thanos Querier Route and authenticating with that cluster's registered
+bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
 An Approver can rename the automatically registered runtime cluster from **Manage →

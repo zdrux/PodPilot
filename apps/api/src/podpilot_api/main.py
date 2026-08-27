@@ -5086,6 +5086,18 @@ def create_app(
                 timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
                 max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
             ),
+            metric_reader=BoundedMetricTrendReader(
+                ThanosQueryClient.for_remote_cluster(
+                    api_url=cluster.api_url,
+                    token=token,
+                    api_tls_verify=cluster.tls_verify,
+                    timeout_seconds=app_settings.thanos_timeout_seconds,
+                    max_series=app_settings.thanos_max_series,
+                    max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+                ),
+                max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
+                max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+            ),
         )
 
     @asynccontextmanager
