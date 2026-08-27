@@ -1297,6 +1297,7 @@ def _deterministic_provider_failure_answer(
     question: str,
     evidence: list[dict[str, object]],
     activity: list[dict[str, object]],
+    inventory_only: bool | None = None,
 ) -> dict[str, object]:
     """Preserve successful reads when the final provider call has no usable content."""
 
@@ -1311,7 +1312,10 @@ def _deterministic_provider_failure_answer(
             question=question, evidence=evidence, activity=activity
         )
         or _deterministic_inventory_answer(
-            question=question, evidence=evidence, activity=activity
+            question=question,
+            evidence=evidence,
+            activity=activity,
+            inventory_only=inventory_only,
         )
     )
     if specialized is None:
@@ -3896,7 +3900,14 @@ async def _collect_bounded_cluster_reads(
     # Keep deterministic compilation only for terminal, unambiguous inventory or
     # metric requests. Troubleshooting and object traversal remain model-directed.
     deterministic_plan = (
-        known_plan
+        (
+            known_plan[0],
+            False
+            if inquiry is not None
+            and inquiry.mode == "inventory"
+            and inquiry.needs_object_details
+            else known_plan[1],
+        )
         if known_plan is not None
         and known_plan[1]
         and (
@@ -3941,12 +3952,12 @@ async def _collect_bounded_cluster_reads(
     # to independently rediscover identical syntax and semantics per cluster. An
     # available catalog with no matching readable type is itself useful negative
     # evidence; do not replace it with an unrelated catalog traversal.
-    inventory_only = (
-        inquiry.mode == "inventory" and not inquiry.needs_object_details
+    inventory_request = (
+        inquiry.mode == "inventory"
         if inquiry is not None
         else not _question_requires_object_details(question)
     )
-    if deterministic_plan is None and inventory_only:
+    if deterministic_plan is None and inventory_request:
         catalog_question = (
             f"list {inquiry.resource_query}"
             if inquiry is not None and inquiry.resource_query
@@ -3958,7 +3969,14 @@ async def _collect_bounded_cluster_reads(
             inventory_limit=settings.adhoc_inventory_max_objects,
         )
         if catalog_plan is not None and catalog_plan[1]:
-            deterministic_plan = catalog_plan
+            deterministic_plan = (
+                catalog_plan[0],
+                not (
+                    inquiry is not None
+                    and inquiry.mode == "inventory"
+                    and inquiry.needs_object_details
+                ),
+            )
         elif catalog_available:
             evidence_id = f"cluster-discovery-{uuid4()}"
             collected_at = datetime.now(timezone.utc)
@@ -5768,8 +5786,7 @@ def create_app(
                     activity=activity,
                     question=message_text,
                     inventory_only=(
-                        inquiry.mode == "inventory" and not inquiry.needs_object_details
-                        if inquiry is not None else None
+                        inquiry.mode == "inventory" if inquiry is not None else None
                     ),
                 )
                 resource_detail_answer = _deterministic_resource_detail_answer(
@@ -5873,7 +5890,12 @@ def create_app(
                 provider_status = "invalid_response" if contract_failure else "unavailable"
                 if evidence:
                     validated = _deterministic_provider_failure_answer(
-                        question=message_text, evidence=evidence, activity=activity
+                        question=message_text,
+                        evidence=evidence,
+                        activity=activity,
+                        inventory_only=(
+                            inquiry.mode == "inventory" if inquiry is not None else None
+                        ),
                     )
                     failure_kind = (
                         "invalid structured response" if contract_failure

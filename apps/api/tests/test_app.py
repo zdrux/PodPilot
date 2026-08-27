@@ -32,6 +32,7 @@ from podpilot_api.main import (
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
     _deterministic_log_findings_section,
+    _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
@@ -2165,6 +2166,106 @@ def test_model_semantics_can_route_novel_inventory_wording_through_live_catalog(
     )
     assert rendered is not None
     assert "`orders`" in str(rendered["content"])
+
+
+def test_inventory_details_begin_with_catalog_list_before_optional_planning() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            return ReadPlan(
+                goal_type="inventory",
+                decision="answer_from_evidence",
+                scope_summary="The requested inventory has been collected.",
+                supporting_evidence_ids=["cluster-kafka-list"],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "Kafka",
+                "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-list", tool="list_resources",
+                summary="Read Kafka resources.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Kafka", "scope": "cluster", "names": ["orders"]},
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider, cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="semantic-kafka-detail-inventory",
+        question="Show our streaming installations and inspect their details.",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            mode="inventory", resource_query="Kafka", needs_object_details=True,
+            evidence_goal="List Kafka resources, then inspect useful object details.",
+        ),
+    ))
+
+    assert [call.resource for call in explorer.calls] == ["kafkas.kafka.strimzi.io"]
+    assert provider.contexts
+    assert provider.contexts[0]["completed_reads"][0]["tool"] == "list_resources"
+    assert result.evidence[0]["id"] == "cluster-kafka-list"
+
+
+def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() -> None:
+    collected_at = datetime.now(timezone.utc)
+    evidence = [{
+        "id": "cluster-kafka-list",
+        "tool": "list_resources",
+        "summary": "Read Kafka resources.",
+        "source": "kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+        "collected_at": collected_at,
+        "cluster_id": "cluster-a",
+        "cluster_name": "Central DEV",
+        "data": {
+            "kind": "Kafka", "scope": "cluster", "names": ["orders"],
+            "objects": [{"namespace": "streaming", "name": "orders"}],
+        },
+    }]
+    activity = [{
+        "round": 1, "tool": "list_resources", "status": "succeeded",
+        "target": "Kafka inventory", "observations": 1,
+        "evidence_ids": ["cluster-kafka-list"],
+    }]
+
+    rendered = _deterministic_provider_failure_answer(
+        question="Tell me where our streaming installations live.",
+        evidence=evidence,
+        activity=activity,
+        inventory_only=True,
+    )
+
+    assert "## Kafka inventory" in str(rendered["content"])
+    assert "`streaming`" in str(rendered["content"])
+    assert "`orders`" in str(rendered["content"])
+    assert "cluster-kafka-list" in rendered["citations"]
 
 
 def test_inventory_catalog_miss_is_evidence_not_unrelated_model_traversal() -> None:

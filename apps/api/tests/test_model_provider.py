@@ -514,6 +514,20 @@ def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None
         })
 
 
+def test_action_selection_normalizes_cluster_wide_namespace_placeholder() -> None:
+    selected = ActionSelection.model_validate({
+        "object_reads": [{
+            "tool": "list_resources",
+            "resource": "kafkas.kafka.strimzi.io",
+            "kind": "Kafka",
+            "namespace": "*",
+        }],
+    })
+
+    assert selected.object_reads[0].namespace is None
+    assert selected.to_read_plan().intents[0].namespace is None
+
+
 def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
     context = {
         "question": "Why is this workload failing?",

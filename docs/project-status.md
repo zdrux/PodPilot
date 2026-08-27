@@ -130,6 +130,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   cluster's live safe catalog before normal code issues a bounded LIST; non-inventory modes guide
   the existing planner. Invalid or unavailable classification falls back to deterministic routing,
   and never changes broker, RBAC, sensitive-kind, or mutation policy.
+- Inventory classification now guarantees the base catalog-resolved LIST on every selected cluster.
+  The classifier's detail flag controls only an optional follow-up phase, so it can no longer suppress
+  inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and
+  search reads also normalize the common `namespace: "*"` shorthand to an omitted namespace before
+  broker validation.
 - Model planning now infers natural-language goals while the server derives collection
   decisions from typed intents. Unsupported
   operational no-read answers receive one structured repair attempt. If both

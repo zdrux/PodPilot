@@ -542,6 +542,21 @@ def test_known_resource_coordinates_are_canonicalized() -> None:
     assert normalized.limit == 3
 
 
+def test_cluster_wide_namespace_placeholder_is_omitted_for_list_reads() -> None:
+    proposed = ReadIntent(
+        tool="list_resources",
+        resource="kafkas.kafka.strimzi.io",
+        api_version="kafka.strimzi.io/v1beta2",
+        kind="Kafka",
+        namespace="*",
+    )
+
+    normalized = normalize_read_intent(proposed)
+
+    assert normalized.namespace is None
+    assert normalized.resource == "kafkas.kafka.strimzi.io"
+
+
 def test_custom_resource_coordinates_remain_model_proposed_for_broker_validation() -> None:
     proposed = ReadIntent(
         tool="list_resources",

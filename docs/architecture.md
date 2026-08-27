@@ -203,8 +203,11 @@ operator's wording across the selected cluster set. It returns only a coarse mod
 (`inventory`, `investigate`, `logs`, `metrics`, or `explain`), a short resource concept,
 whether exact object details are needed, and the evidence goal. This lets the model handle
 unfamiliar phrasing without maintaining a growing question-pattern list. For inventory mode,
-normal code resolves the model's resource concept against each cluster's live safe catalog and
-runs the same bounded LIST; for other modes the semantic contract pins the planner's goal but
+normal code always resolves the model's resource concept against each cluster's live safe catalog and
+runs the same bounded LIST. A request for object details may open a subsequent model-directed detail
+phase, but it cannot suppress that base inventory collection. Successful inventory evidence is always
+rendered by server code even if the optional detail phase or final model response fails. For other modes
+the semantic contract pins the planner's goal but
 does not select tools. Classification cannot authorize a read, supply coordinates, weaken RBAC,
 or bypass sensitivity policy. If it is unavailable or invalid, existing deterministic recognition
 and the ordinary planner remain the fallback.
@@ -246,6 +249,8 @@ The inventory object ceiling is deployment-configurable (500 by default, 1,000
 maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
 cannot omit the requested resource list.
+Model-authored cluster-wide LIST and search reads may use `namespace: "*"` as shorthand; normal
+code converts that placeholder to the broker's canonical omitted namespace before validation.
 
 `search_resources` is distinct from inventory. It follows continue tokens up to a
 separate scan ceiling (2,000 by default, 5,000 maximum), compares a model-selected,

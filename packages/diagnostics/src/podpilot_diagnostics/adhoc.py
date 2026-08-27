@@ -861,19 +861,30 @@ _KIND_RESOURCE_NAMES = {
 def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
     """Canonicalize trusted built-in resource coordinates before broker validation."""
 
+    updates: dict[str, object] = {}
+    if (
+        intent.namespace is not None
+        and intent.namespace.strip() == "*"
+        and intent.tool in {"list_resources", "search_resources", "watch_resources"}
+    ):
+        # Models commonly use ``*`` to mean every namespace. Kubernetes does not
+        # accept it as a namespace identifier; the broker represents cluster-wide
+        # collection with an omitted namespace instead.
+        updates["namespace"] = None
     if intent.tool == "pod_logs" or not intent.kind:
-        return intent
+        return intent.model_copy(update=updates) if updates else intent
     coordinates = _BUILTIN_RESOURCE_TYPES.get(intent.kind.lower())
     if not coordinates:
-        return intent
+        return intent.model_copy(update=updates) if updates else intent
     api_version, kind = coordinates
     if (intent.resource and "." in intent.resource) or (
         intent.api_version
         and _VALID_API_VERSION.fullmatch(intent.api_version)
         and intent.api_version != api_version
     ):
-        return intent
+        return intent.model_copy(update=updates) if updates else intent
     return intent.model_copy(update={
+        **updates,
         "resource": _KIND_RESOURCE_NAMES[kind],
         "api_version": api_version,
         "kind": kind,

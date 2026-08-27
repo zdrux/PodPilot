@@ -201,7 +201,10 @@ model answer is augmented with the names, namespaces, kinds, and source OpenShif
 successful current-turn list observation, with citations merged and no duplicate inventory section.
 Multi-cluster inventory gates must also prove that live catalog matches bypass per-cluster model syntax,
 that zero returned objects remain distinct from a missing/unreadable API type, and that a catalog miss
-cannot trigger an unrelated Namespace or other resource read.
+cannot trigger an unrelated Namespace or other resource read. Inventory detail requests must prove that
+the base LIST executes before any optional model-directed detail phase, that its evidence remains
+renderable if the later phase fails, and that a model-authored cluster-wide `namespace: "*"` LIST is
+normalized to an omitted namespace rather than rejected as an invalid Kubernetes identifier.
 Suggested-action gates must derive controls from unread exact
 server-owned candidates without consuming or parsing model recommendations.
 They must also prove that an empty structured citation array can recover an exact

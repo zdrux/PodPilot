@@ -141,6 +141,20 @@ class AuthoredObjectRead(BaseModel):
     match_operator: Literal["exact", "contains"] = "exact"
     limit: int = Field(default=20, ge=1, le=100)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_cluster_wide_namespace(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if (
+            value.get("namespace") == "*"
+            and value.get("tool") in {"list_resources", "search_resources"}
+        ):
+            normalized = dict(value)
+            normalized["namespace"] = None
+            return normalized
+        return value
+
     @model_validator(mode="after")
     def validate_read(self) -> "AuthoredObjectRead":
         ReadIntent.model_validate(self.model_dump(exclude_none=True))
