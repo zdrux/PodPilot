@@ -295,8 +295,10 @@ invoke the separate bounded log-analysis request before regenerating the answer.
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
 They must also prove that exact operator URLs become grounded probe candidates only after Route
-evidence or a structured probe gap, and that normal-priority healthy Pod logs are offered only for a
-structured log gap. Follow-up answer tests must partition resolved/remaining gaps from final ledger
+evidence or a structured probe gap, and that normal-priority healthy Pod logs are offered for either
+a structured log gap or an explicit failure question. EndpointSlice/Endpoints target references must
+ground only the exact observed Pod, and two model stops may recover only one remaining exact log
+candidate through the unchanged broker. Follow-up answer tests must partition resolved/remaining gaps from final ledger
 state, reject collected checks described as uncollected, and remove comma-separated internal citation
 markers while retaining their allowlisted citations.
 Ask-job gates must prove that submission returns before model completion, the

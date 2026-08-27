@@ -293,9 +293,11 @@ for `investigate`, `answer`, or `uncertain`, up to four exact action IDs, and on
 Unknown resource questions use the same contract: top resource-catalog matches become bounded server-owned
 list action cards rather than exposing the catalog and full `ReadIntent` union to the model.
 An exact operator-supplied HTTP/HTTPS URL becomes a grounded GET-probe candidate after Route
-evidence exists, or when a structured probe gap remains. A structured Pod-log gap may similarly
-offer exact normal-priority Running/Ready container candidates; unhealthy/restarting candidates
-retain higher priority. Neither case permits the model to author coordinates.
+evidence exists, or when a structured probe gap remains. A structured Pod-log gap or an explicit
+failure question may similarly offer exact normal-priority Running/Ready container candidates;
+unhealthy/restarting candidates retain higher priority. If the model twice stops while such an
+exact log action remains relevant to a failure question, PodPilot may select one through the normal
+broker and disclose the recovery. Neither case permits the model to author coordinates.
 
 Each planning round is supported by two server-derived views of current state. A bounded evidence
 relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
@@ -331,7 +333,7 @@ server-derived ID. A model may call `pods/log` only by selecting one of those ID
 normal code binds it back to the observed namespace, Pod, and container. Literal
 placeholders fail the evidence contract before planning completes. Named GET targets must
 appear verbatim in the operator question or in collected evidence. Explicit
-`metadata.ownerReferences`, Route backends, endpoint target references, Pod candidates, and
+`metadata.ownerReferences`, Route backends, EndpointSlice/Endpoints target references, Pod candidates, and
 volume-backed object references are grounded targets in the containing object's namespace;
 otherwise the planner must discover them with a bounded LIST first. Fabricated or ambiguous
 targets consume no cluster-read budget and receive one structured repair attempt. Pod logs

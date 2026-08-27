@@ -790,7 +790,12 @@ recovery as a limitation.
 For a Route investigation, an exact URL in the operator question becomes a grounded bounded GET
 probe candidate once Route evidence is present. A structured `pod_logs` gap also admits exact
 Running/Ready containers at normal priority, allowing application-error investigation without
-requiring a restart or readiness failure first.
+requiring a restart or readiness failure first. The same healthy-container eligibility applies to
+explicit failure questions such as HTTP 500, timeout, crash, or unavailable reports. EndpointSlice
+and Endpoints Pod target references are accepted as exact observed coordinates. If the model twice
+stops while one of these exact log reads remains available, PodPilot records
+`podpilot.adhoc.diagnostic_log_candidate_recovery`, performs one broker-validated log read, and
+discloses the recovery in the answer limitations.
 
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a

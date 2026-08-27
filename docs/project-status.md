@@ -283,6 +283,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   Flattened bold answer sections and Unicode bullets are restored
   to readable Markdown headings and lists. Pod logs collected during recommendation follow-up still
   pass through the dedicated bounded model log analysis before answer regeneration.
+- Explicit failure investigations now keep exact healthy workload logs actionable even when the
+  model omits a log recommendation. EndpointSlice/Endpoints target references ground the downstream
+  Pod read, and after two model stops PodPilot can collect one remaining exact log candidate through
+  the unchanged broker; successful logs still receive the separate bounded semantic analysis.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

@@ -1,7 +1,28 @@
 # PodPilot Decisions
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-27
 Update when: a durable architecture or product-engineering decision is made or superseded.
+
+## 2026-08-27 - Failure investigations keep exact workload logs material
+
+Context: The model could traverse Route to Service and EndpointSlice, recommend Pod logs in its
+answer, and still stop without collecting them. Exact EndpointSlice `targetRef` coordinates were
+also absent from target grounding, so a valid downstream Pod read could be rejected. Healthy Pods
+were offered as log candidates only when the model emitted a structured log gap, making behavior
+depend on inconsistent recommendation wording.
+
+Decision: Treat observed EndpointSlice/Endpoints Pod references as exact grounded targets. For an
+operator question that explicitly describes a failure, admit exact observed Running/Ready container
+logs as evidence actions even without a structured log gap. If the model twice stops while one such
+action remains unread, select one highest-priority exact candidate through the existing read broker
+and disclose the recovery. Every collected log continues through the separate bounded semantic log
+analysis before the final answer. This policy is resource-agnostic and does not encode a Route-only
+traversal.
+
+Consequences: Failure investigations consistently inspect a known implicated workload instead of
+merely recommending that the operator do so. The recovery remains bounded by observed coordinates,
+RBAC, read budgets, redaction, and the existing no-mutation policy; arbitrary workloads and model-
+authored Pod names remain non-callable.
 
 ## 2026-08-26 - Every current Pod-log read receives bounded semantic model analysis
 

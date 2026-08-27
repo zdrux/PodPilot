@@ -2663,6 +2663,17 @@ class _GroundedReadCandidate:
         }
 
 
+_FAILURE_DIAGNOSTIC_PATTERN = re.compile(
+    r"\b(?:internal server error|5xx|5\d\d|errors?|fail(?:ed|ing|ure)?|"
+    r"crash(?:ed|ing|loop)?|timeout|unavailable)\b",
+    re.IGNORECASE,
+)
+
+
+def _failure_logs_are_relevant(question: str) -> bool:
+    return bool(_FAILURE_DIAGNOSTIC_PATTERN.search(question))
+
+
 def _grounded_read_candidates(
     *,
     question: str,
@@ -2682,6 +2693,7 @@ def _grounded_read_candidates(
         gap.capability for gap in (investigation_gaps or [])
         if gap.priority in {"high", "medium"}
     }
+    failure_logs_relevant = _failure_logs_are_relevant(question)
 
     def add(
         intent: ReadIntent,
@@ -2740,6 +2752,7 @@ def _grounded_read_candidates(
         if (
             log_candidate.investigation_priority not in {"high", "elevated"}
             and "pod_logs" not in gap_capabilities
+            and not failure_logs_relevant
         ):
             continue
         add(
@@ -2751,6 +2764,11 @@ def _grounded_read_candidates(
             ),
             reason=(
                 ", ".join(log_candidate.trigger_reasons)
+                or (
+                    "The operator is diagnosing a failure and this exact workload container "
+                    "may contain the corresponding error evidence."
+                    if failure_logs_relevant else ""
+                )
                 or "A structured diagnostic gap makes this exact healthy-Pod log read relevant."
             ),
             evidence_ids=[log_candidate.evidence_id],
@@ -3163,6 +3181,35 @@ def _bind_plan_log_intents(
                 if isinstance(mount, dict):
                     add_target(mount.get("sourceName"), namespace)
 
+        for target_key in ("targetRef", "target_ref"):
+            target_ref = value.get(target_key)
+            if isinstance(target_ref, dict):
+                add_target(
+                    target_ref.get("name"),
+                    target_ref.get("namespace") or namespace,
+                )
+        pod_targets = value.get("podTargets") or value.get("pod_targets")
+        if isinstance(pod_targets, list):
+            for target in pod_targets:
+                if isinstance(target, dict):
+                    add_target(
+                        target.get("name") or target.get("pod"),
+                        target.get("namespace") or namespace,
+                    )
+                else:
+                    add_target(target, namespace)
+        endpoints = value.get("endpoints")
+        if isinstance(endpoints, list):
+            for endpoint in endpoints:
+                if not isinstance(endpoint, dict):
+                    continue
+                add_object_targets(endpoint, namespace)
+                addresses = endpoint.get("addresses")
+                if isinstance(addresses, list):
+                    for address in addresses:
+                        if isinstance(address, dict):
+                            add_object_targets(address, namespace)
+
         spec = value.get("spec")
         if not isinstance(spec, dict):
             return
@@ -3535,6 +3582,7 @@ async def _collect_bounded_cluster_reads(
             binding_errors: list[str] = []
             candidate_stop_requires_repair = False
             actionable_gap_candidates: list[_GroundedReadCandidate] = []
+            diagnostic_log_candidates: list[_GroundedReadCandidate] = []
             for planning_attempt in range(1, 3):
                 relationship_graph = derive_evidence_relationship_graph(evidence)
                 read_candidates = _grounded_read_candidates(
@@ -3555,6 +3603,11 @@ async def _collect_bounded_cluster_reads(
                     if candidate.capability in gap_capabilities
                     or "resource_read" in gap_capabilities
                     or "other" in gap_capabilities
+                ]
+                diagnostic_log_candidates = [
+                    candidate for candidate in read_candidates
+                    if candidate.capability == "pod_logs"
+                    and _failure_logs_are_relevant(question)
                 ]
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -3623,7 +3676,7 @@ async def _collect_bounded_cluster_reads(
                 )
                 no_progress_plan = bool(bound_plan.intents) and novel_intents == 0
                 candidate_stop_requires_repair = bool(
-                    actionable_gap_candidates
+                    (actionable_gap_candidates or diagnostic_log_candidates)
                     and bound_plan.decision == "answer_from_evidence"
                 ) or bool(getattr(bound_plan, "_selection_incomplete", False))
                 evidence_repair_needed = plan_requires_repair(
@@ -3759,6 +3812,32 @@ async def _collect_bounded_cluster_reads(
                     "podpilot.adhoc.gap_candidate_recovery actor=%s workflow_id=%s "
                     "candidate_id=%s capability=%s",
                     actor, workflow_id, selected_candidate.id, selected_candidate.capability,
+                )
+            elif (
+                needs_fallback
+                and diagnostic_log_candidates
+                and planner_error is None
+                and not binding_errors
+            ):
+                selected_candidate = diagnostic_log_candidates[0]
+                plan = ReadPlan(
+                    goal_type=pinned_goal or "diagnose",
+                    scope_summary=(
+                        "Collect one exact workload log after the model twice stopped during "
+                        "an operator-requested failure investigation."
+                    ),
+                    intents=[selected_candidate.intent],
+                )
+                target_errors = []
+                candidate_errors = []
+                limitations.append(
+                    "The model twice stopped while an exact workload log remained available for "
+                    "the reported failure; PodPilot collected that bounded read-only log evidence."
+                )
+                LOGGER.warning(
+                    "podpilot.adhoc.diagnostic_log_candidate_recovery actor=%s workflow_id=%s "
+                    "candidate_id=%s reason=failure_question",
+                    actor, workflow_id, selected_candidate.id,
                 )
             elif (
                 needs_fallback

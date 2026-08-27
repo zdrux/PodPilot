@@ -969,6 +969,54 @@ def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence()
     ) is None
 
 
+def test_endpoint_slice_target_ref_grounds_exact_pod_read() -> None:
+    plan = ReadPlan(
+        goal_type="diagnose",
+        scope_summary="Inspect the exact Pod referenced by the EndpointSlice.",
+        intents=[ReadIntent(
+            tool="get_resource",
+            resource="pods",
+            api_version="v1",
+            kind="Pod",
+            namespace="openshift-ingress",
+            name="gateway-abc",
+        )],
+    )
+
+    bound, errors, rejected = _bind_plan_log_intents(
+        plan,
+        [],
+        question="Why is this Route returning an Internal Server Error?",
+        evidence=[{
+            "id": "cluster-gateway-slice",
+            "tool": "list_resources",
+            "data": {
+                "kind": "EndpointSlice",
+                "items": [{
+                    "kind": "EndpointSlice",
+                    "metadata": {
+                        "name": "gateway-slice",
+                        "namespace": "openshift-ingress",
+                    },
+                    "endpoints": [{
+                        "addresses": ["10.0.0.8"],
+                        "targetRef": {
+                            "kind": "Pod",
+                            "namespace": "openshift-ingress",
+                            "name": "gateway-abc",
+                        },
+                    }],
+                }],
+            },
+        }],
+    )
+
+    assert errors == []
+    assert rejected == []
+    assert bound.intents[0].name == "gateway-abc"
+    assert bound.intents[0].namespace == "openshift-ingress"
+
+
 def test_model_can_traverse_evidence_grounded_owner_references() -> None:
     pod_name = "gateway-7d9f"
 
@@ -4449,6 +4497,105 @@ def test_structured_log_gap_offers_healthy_pod_log_candidate() -> None:
     assert any(
         item["capability"] == "pod_logs"
         for item in first_context["read_candidates"]
+    )
+
+
+def test_failure_question_offers_healthy_exact_pod_log_candidate() -> None:
+    pod_evidence = [{
+        "id": "cluster-healthy-pod",
+        "tool": "get_resource",
+        "summary": "Read the healthy backend Pod.",
+        "data": {
+            "kind": "Pod",
+            "metadata": {"namespace": "maas", "name": "model-server-abc"},
+            "spec": {"containers": [{"name": "server"}]},
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{
+                    "name": "server", "ready": True, "restartCount": 0,
+                }],
+            },
+        },
+    }]
+
+    failure_candidates = _grounded_read_candidates(
+        question="Why is this endpoint returning an Internal Server Error?",
+        evidence=pod_evidence,
+        relationship_graph={"frontier": []},
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+    )
+    neutral_candidates = _grounded_read_candidates(
+        question="Describe the configuration of this Pod.",
+        evidence=pod_evidence,
+        relationship_graph={"frontier": []},
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+    )
+
+    assert any(candidate.capability == "pod_logs" for candidate in failure_candidates)
+    assert all(candidate.capability != "pod_logs" for candidate in neutral_candidates)
+
+
+def test_failure_investigation_collects_exact_logs_when_model_stops() -> None:
+    class StopBeforeLogsProvider:
+        def __init__(self) -> None:
+            self.contexts: list[dict[str, object]] = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                stop_reason="no_material_read",
+                scope_summary="Stop without selecting the available backend log action.",
+                supporting_evidence_ids=["cluster-healthy-pod"],
+            )
+
+    provider = StopBeforeLogsProvider()
+    explorer = RouteBackendExplorer()
+    existing_pod = {
+        "id": "cluster-healthy-pod",
+        "tool": "get_resource",
+        "summary": "Read the healthy backend Pod.",
+        "data": {
+            "kind": "Pod",
+            "metadata": {"namespace": "maas", "name": "model-server-abc"},
+            "spec": {"containers": [{"name": "server"}]},
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{
+                    "name": "server", "ready": True, "restartCount": 0,
+                }],
+            },
+        },
+    }
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy",
+        workflow_id="failure-log-recovery",
+        question="Why is this backend returning HTTP 500 errors?",
+        conversation=[],
+        existing_evidence=[existing_pod],
+    ))
+
+    assert [call.tool for call in explorer.calls] == ["pod_logs"]
+    assert any(item["id"] == "cluster-backend-logs" for item in result.evidence)
+    assert any(
+        "exact workload log remained available" in limitation
+        for limitation in result.limitations
     )
 
 
