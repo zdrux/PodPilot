@@ -712,7 +712,10 @@ request and replaced by the validated structured analysis; persisted evidence re
 Failure of this optional analysis does not fail the investigation.
 
 The planner infers a goal and collection decision from natural language; users do
-not need to use exact command-like phrases. An operational no-read response is
+not need to use exact command-like phrases. When grounded reads exist, the provider receives a
+compact candidate-selection context and small schema rather than the full tool-intent union. It may
+select up to six exact opaque IDs from twelve server-derived choices. The resource catalog and
+curated knowledge are sent only when no grounded candidate exists and discovery is required. An operational no-read response is
 retried once with structured feedback. If both attempts stop before any evidence, or the first
 valid response stops and its correction fails schema validation,
 and the operator supplied one exact coordinate that normal code can compile into a
@@ -740,6 +743,13 @@ The ledger distinguishes `collected`, `attempted_failed`, `budget_exhausted`, `r
 `available_not_attempted`. Operator answers must say **not collected** for the latter two states;
 **unavailable** is reserved for an explicit failure, denial, unsupported operation, or exhausted
 budget.
+
+Candidate planning keeps at most four recent messages, a 1,500-character earlier-context summary,
+sixteen compact observations, eight findings, sixty graph nodes, eighty graph edges, twelve completed
+reads, and twelve grounded candidates. Candidate-visible graph edges omit executable read hints.
+If the model twice stops while a structured medium/high gap has a matching candidate, PodPilot logs
+`podpilot.adhoc.gap_candidate_recovery`, performs that one broker-validated read, and states the
+recovery as a limitation.
 
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a

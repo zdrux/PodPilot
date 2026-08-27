@@ -2398,6 +2398,74 @@ class StructuredGapRouteProvider(RouteBackendProvider):
         )
 
 
+class CandidateSelectingRouteProvider(RouteBackendProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        candidates = context["read_candidates"]
+        completed = context["completed_reads"]
+        if not completed:
+            candidate = next(
+                item for item in candidates if item["capability"] == "initial_discovery"
+            )
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Select the exact Route discovery candidate.",
+                candidate_ids=[candidate["id"]],
+            )
+        has_service = any(
+            item.get("data", {}).get("kind") == "Service"
+            for item in context["observations"]
+        )
+        if not has_service:
+            candidate = next(
+                item for item in candidates if item["capability"] == "service_spec"
+            )
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Select the grounded backend Service candidate.",
+                candidate_ids=[candidate["id"]],
+            )
+        return ReadPlan(
+            goal_type="diagnose",
+            decision="answer_from_evidence",
+            stop_reason="evidence_sufficient",
+            scope_summary="The Route and backend Service evidence answer the protocol question.",
+            supporting_evidence_ids=["cluster-route-1", "cluster-service-1"],
+        )
+
+
+class UnknownCandidateRouteProvider(RouteBackendProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        return ReadPlan(
+            goal_type="diagnose",
+            scope_summary="Select a candidate that was not supplied.",
+            candidate_ids=["read-ffffffffffffffffffff"],
+        )
+
+
+class GapStoppingCandidateProvider(StructuredGapRouteProvider):
+    def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+        self.adhoc_plan_calls.append(context)
+        if not context["completed_reads"] and not context["observations"]:
+            candidate = next(
+                item for item in context["read_candidates"]
+                if item["capability"] == "initial_discovery"
+            )
+            return ReadPlan(
+                goal_type="diagnose",
+                scope_summary="Select the exact Route discovery candidate.",
+                candidate_ids=[candidate["id"]],
+            )
+        return ReadPlan(
+            goal_type="diagnose",
+            decision="answer_from_evidence",
+            stop_reason="no_material_read",
+            scope_summary="Stop despite the remaining grounded evidence gap.",
+            supporting_evidence_ids=["cluster-route-1"],
+        )
+
+
 class RouteOnlyAnswerProvider(RouteBackendProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
@@ -3776,6 +3844,126 @@ def test_structured_answer_gap_is_replanned_into_typed_read_and_answer_regenerat
     assert "podpilot.adhoc.gap_followup_complete" in caplog.text
 
 
+def test_candidate_first_planner_selects_route_then_service_with_compact_context() -> None:
+    provider = CandidateSelectingRouteProvider()
+    explorer = RouteBackendExplorer()
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="candidate-first-route",
+        question=(
+            "Validate the backend protocol for Route "
+            "https://maas.apps.example.test/v1/models"
+        ),
+        conversation=[
+            {"role": "user", "content": f"historical context {index}"}
+            for index in range(10)
+        ],
+        existing_evidence=[],
+    ))
+
+    assert [call.tool for call in explorer.calls] == [
+        "search_resources", "get_resource",
+    ]
+    assert [item["id"] for item in result.evidence] == [
+        "cluster-route-1", "cluster-service-1",
+    ]
+    first_context, second_context = provider.adhoc_plan_calls[:2]
+    assert first_context["tool_policy"]["mode"] == "candidate_selection"
+    assert "resource_catalog" not in first_context["tool_policy"]
+    assert len(first_context["conversation"]) == 4
+    assert len(first_context["read_candidates"]) <= 12
+    assert all(
+        "read_hint" not in edge
+        for edge in second_context["relationship_graph"]["edges"]
+    )
+    assert any(
+        item["capability"] == "service_spec"
+        for item in second_context["read_candidates"]
+    )
+
+
+def test_unknown_candidate_id_executes_no_cluster_read() -> None:
+    provider = UnknownCandidateRouteProvider()
+    explorer = RouteBackendExplorer()
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="unknown-candidate",
+        question="Validate https://maas.apps.example.test/v1/models",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert explorer.calls == []
+    assert result.evidence == []
+    assert len(provider.adhoc_plan_calls) == 2
+
+
+def test_structured_gap_recovery_executes_matching_grounded_candidate(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = GapStoppingCandidateProvider()
+    explorer = RouteBackendExplorer(route_termination="passthrough")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": (
+                "Validate this Route backend: https://maas.apps.example.test/v1/models"
+            )},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
+    assert "collected Service maps its" in rendered.text
+    assert "podpilot.adhoc.gap_candidate_recovery" in caplog.text
+
+
 def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(
     tmp_path: Path,
 ) -> None:
@@ -4478,7 +4666,7 @@ def test_unlimited_conversation_uses_rolling_context_summary(tmp_path: Path) -> 
         )
         assert continued.status_code == 303
 
-    assert len(provider.adhoc_plan_calls[0]["conversation"]) == 10
+    assert len(provider.adhoc_plan_calls[0]["conversation"]) == 4
     assert "historical message 0" in provider.adhoc_plan_calls[0]["earlier_context_summary"]
     engine = build_engine(settings)
     with Session(engine) as db_session:

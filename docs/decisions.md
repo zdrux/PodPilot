@@ -821,3 +821,24 @@ its own evidence needs without a hard-coded scenario graph. Operators can distin
 was unavailable from evidence PodPilot simply had not collected. Additional model calls and reads
 remain bounded by the existing round, unit, evidence, redaction, discovery, sensitivity, verb, and
 RBAC controls.
+
+## 2026-08-26 - Grounded candidate selection reduces planner context and schema load
+
+Context: The available 31B instruct model could interpret collected Route evidence well but often
+stopped instead of expressing the next Service, endpoint, Pod, log, metric, or probe read through the
+large `ReadIntent` union. Repeating graph hints, capability state, catalogs, prompt rules, and full
+conversation context increased schema and instruction load without improving diagnostic judgment.
+
+Decision: Split planning into two modes. When trusted server state can derive exact safe reads, expose
+at most twelve redacted choices with opaque stable IDs and require the smaller `CandidateReadPlan`.
+Keep the corresponding typed intents server-side and compile selected IDs only after exact membership
+validation. Send the full `ReadPlan`, discovery catalog, and curated knowledge only when no grounded
+candidate exists. Candidate rounds retain four recent messages and compact capped evidence, findings,
+graph, ledger, gaps, and read summaries. After two model stops, a medium/high structured gap may select
+one highest-priority capability-matched candidate through the existing broker.
+
+Consequences: The model spends its limited capacity choosing diagnostic direction instead of
+constructing Kubernetes coordinates and satisfying an unrelated schema union. Object traversal stays
+dynamic and evidence-driven; PodPilot does not encode a mandatory Route-to-Service-to-Pod workflow.
+Opaque IDs, gap recovery, and compact prompts do not grant authority: unknown IDs fail closed and all
+compiled reads retain grounding, sensitivity, budget, discovery, verb, RBAC, redaction, and audit checks.

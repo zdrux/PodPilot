@@ -250,6 +250,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured
   answer gaps—and capability-matched suggested checks—can trigger one bounded typed collection phase
   and answer regeneration. Gap, graph, and recommendation prose remains non-executable.
+- Grounded traversal now uses a compact candidate-first planner contract. Normal code offers at most
+  twelve opaque reads derived from exact operator anchors, observed relationships, structured gaps,
+  and implicated logs; the model selects IDs and never receives their executable intent payloads.
+  Candidate rounds omit the discovery catalog and curated knowledge, retain only four recent messages
+  plus bounded summaries, and use a schema without the `ReadIntent` union. Full typed planning remains
+  available only as the initial/discovery escape hatch. Unknown IDs fail closed, and a repeated stop on
+  a matching high/medium structured gap can recover one highest-priority candidate through the normal broker.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

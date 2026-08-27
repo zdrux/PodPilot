@@ -134,6 +134,26 @@ class CorrectingIntentCompletions:
         )
 
 
+class CandidatePlanCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({
+            "goal_type": "diagnose",
+            "decision": "collect",
+            "scope_summary": "Inspect the exact grounded backend Service.",
+            "candidate_ids": ["read-0123456789abcdefabcd"],
+            "supporting_evidence_ids": ["cluster-route-1"],
+            "working_hypothesis": "The Service port mapping may explain the protocol behavior.",
+            "next_step_summary": "Inspecting the backend Service port mapping.",
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
 class MissingSummaryPlanCompletions:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
@@ -272,20 +292,15 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
         schema["properties"]
     )
     planner_instructions = completions.requests[0]["messages"][0]["content"]
-    assert "Infer goal_type" in planner_instructions
-    assert "Do not return an empty actionable plan" in planner_instructions
-    assert "HTTPS SNI" in planner_instructions
-    assert "connect_host" in planner_instructions
+    assert "candidate selection mode" in planner_instructions
+    assert "candidate_ids" in planner_instructions
+    assert "Discovery results must be followed" in planner_instructions
+    assert "absolute HTTP/HTTPS URL" in planner_instructions
     assert "query_metrics" in planner_instructions
-    assert "Namespace, Deployment, or node" in planner_instructions
     assert "edge sends HTTP" in planner_instructions
-    assert "spec.to.name is an observed backend Service name" in planner_instructions
-    assert "never author PromQL" in planner_instructions
-    assert "findings array contains deterministic evidence summaries" in planner_instructions
-    assert "verified and insecure observations" in planner_instructions
-    assert "NetworkPolicies in both endpoint namespaces" in planner_instructions
-    assert "ingress and egress isolation are additive" in planner_instructions
-    assert "investigation_priority and trigger_reasons" in planner_instructions
+    assert "Never request Secrets" in planner_instructions
+    assert "stop_reason" in planner_instructions
+    assert len(planner_instructions) < 3000
     correction_messages = completions.requests[1]["messages"]
     assert "scope_summary: string_too_short" in correction_messages[-1]["content"]
     assert '"scope_summary": ""' not in correction_messages[-1]["content"]
@@ -305,6 +320,33 @@ def test_read_intent_correction_receives_static_cross_field_rules() -> None:
     assert "search_resources requires match_field and match_value" in correction
     assert "capability-ledger labels" in correction
     assert "metadata.name" not in correction
+
+
+def test_candidate_mode_uses_smaller_schema_without_read_intents() -> None:
+    completions = CandidatePlanCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    plan = provider.plan_ad_hoc(profile(), "secret-token", {
+        "question": "Inspect the backend protocol.",
+        "read_candidates": [{
+            "id": "read-0123456789abcdefabcd",
+            "capability": "service_spec",
+            "target": "Service openshift-ingress/gateway",
+            "reason": "The observed Route targets this Service.",
+        }],
+    })
+
+    assert plan.candidate_ids == ["read-0123456789abcdefabcd"]
+    schema = completions.requests[0]["response_format"]["json_schema"]["schema"]
+    assert "candidate_ids" in schema["properties"]
+    assert "intents" not in schema["properties"]
+    instructions = completions.requests[0]["messages"][0]["content"]
+    assert "exact opaque" in instructions
+    assert "PodPilot owns the executable read" in instructions
+    assert "discover_resources" not in instructions
+    assert len(instructions) < 1300
 
 
 def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:
@@ -417,9 +459,7 @@ def test_ask_schema_probe_identifies_answer_phase() -> None:
             )
         return ReadPlan(
             scope_summary="Read the exact observed Pod logs.",
-            intents=[ReadIntent(
-                tool="pod_logs", candidate_id="podlog-probe-candidate",
-            )],
+            candidate_ids=["read-0123456789abcdefabcd"],
         )
 
     provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
@@ -467,7 +507,7 @@ def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
             )
         return ReadPlan(
             scope_summary="Read the exact observed Pod logs.",
-            intents=[ReadIntent(tool="pod_logs", candidate_id="podlog-probe-candidate")],
+            candidate_ids=["read-0123456789abcdefabcd"],
         )
 
     provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]

@@ -2141,6 +2141,174 @@ def _read_intent_signature(intent: ReadIntent) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
+@dataclass(frozen=True)
+class _GroundedReadCandidate:
+    id: str
+    capability: str
+    target: str
+    reason: str
+    intent: ReadIntent
+    supporting_evidence_ids: tuple[str, ...] = ()
+    relation: str | None = None
+
+    def planner_view(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "capability": self.capability,
+            "target": self.target,
+            "reason": self.reason,
+            "relation": self.relation,
+            "supporting_evidence_ids": list(self.supporting_evidence_ids),
+            "investigation_units": _investigation_unit_cost(self.intent),
+        }
+
+
+def _grounded_read_candidates(
+    *,
+    evidence: list[dict[str, object]],
+    relationship_graph: dict[str, object],
+    recovery_anchor_plan: ReadPlan | None,
+    seen_intents: set[str],
+    investigation_gaps: list[InvestigationGap] | None = None,
+    limit: int = 12,
+) -> list[_GroundedReadCandidate]:
+    """Build compact non-executable choices backed only by trusted server state."""
+
+    candidates: list[_GroundedReadCandidate] = []
+    signatures: set[str] = set()
+    gap_capabilities = {
+        gap.capability for gap in (investigation_gaps or [])
+        if gap.priority in {"high", "medium"}
+    }
+
+    def add(
+        intent: ReadIntent,
+        *,
+        capability: str,
+        target: str,
+        reason: str,
+        evidence_ids: list[str] | tuple[str, ...] = (),
+        relation: str | None = None,
+    ) -> None:
+        prepared = normalize_read_intent(intent)
+        signature = _read_intent_signature(prepared)
+        if (
+            signature in seen_intents
+            or signature in signatures
+            or len(candidates) >= max(40, limit * 4)
+        ):
+            return
+        signatures.add(signature)
+        digest = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:20]
+        candidates.append(_GroundedReadCandidate(
+            id=f"read-{digest}", capability=capability,
+            target=redact_text(target)[:500], reason=redact_text(reason)[:500],
+            intent=prepared,
+            supporting_evidence_ids=tuple(str(item)[:128] for item in evidence_ids),
+            relation=relation,
+        ))
+
+    relation_capabilities = {
+        "routes_to": "service_spec",
+        "has_endpoints": "endpoints",
+        "selects": "pod_spec",
+        "targets": "pod_spec",
+        "owned_by": "resource_read",
+        "mounts_from": "resource_read",
+    }
+    for edge in relationship_graph.get("frontier") or []:
+        if not isinstance(edge, dict) or not isinstance(edge.get("read_hint"), dict):
+            continue
+        try:
+            intent = ReadIntent.model_validate(edge["read_hint"])
+        except (TypeError, ValueError):
+            continue
+        relation = str(edge.get("relation") or "related_to")[:64]
+        capability = relation_capabilities.get(relation, "resource_read")
+        add(
+            intent,
+            capability=capability,
+            target=str(edge.get("target") or "related resource"),
+            reason=f"Observed evidence relation {relation} points to an unread target.",
+            evidence_ids=[str(item) for item in edge.get("evidence_ids") or []],
+            relation=relation,
+        )
+
+    for log_candidate in pod_log_candidates_from_evidence(evidence):
+        if log_candidate.investigation_priority not in {"high", "elevated"}:
+            continue
+        add(
+            ReadIntent(tool="pod_logs", candidate_id=log_candidate.id),
+            capability="pod_logs",
+            target=(
+                f"Pod {log_candidate.namespace}/{log_candidate.pod}"
+                + (f" container {log_candidate.container}" if log_candidate.container else "")
+            ),
+            reason=(
+                ", ".join(log_candidate.trigger_reasons)
+                or "Collected Pod state makes this bounded log read relevant."
+            ),
+            evidence_ids=[log_candidate.evidence_id],
+            relation="has_logs",
+        )
+
+    if recovery_anchor_plan is not None:
+        for intent in recovery_anchor_plan.intents:
+            add(
+                intent,
+                capability="initial_discovery",
+                target=_read_progress_message(intent),
+                reason="Exact coordinate compiled from the operator request.",
+                relation="operator_anchor",
+            )
+
+    candidates.sort(key=lambda item: (
+        0 if item.capability in gap_capabilities else 1,
+        0 if item.capability == "initial_discovery" and not evidence else 1,
+        item.capability,
+        item.id,
+    ))
+    return candidates[:limit]
+
+
+def _compile_grounded_candidate_plan(
+    plan: ReadPlan,
+    candidates: list[_GroundedReadCandidate],
+) -> tuple[ReadPlan, list[str]]:
+    """Compile model-selected opaque IDs; never derive coordinates from model prose."""
+
+    if not plan.candidate_ids:
+        if not candidates:
+            return plan, []
+        if plan.intents:
+            candidate_signatures = {
+                _read_intent_signature(candidate.intent): candidate
+                for candidate in candidates
+            }
+            matched = []
+            for intent in plan.intents:
+                candidate = candidate_signatures.get(
+                    _read_intent_signature(normalize_read_intent(intent))
+                )
+                if candidate is None:
+                    # Compatibility escape hatch: older providers may still return a fully typed
+                    # intent. It receives the unchanged grounding, deny-policy, budget, discovery,
+                    # verb, and RBAC checks below; no candidate prose supplies its coordinates.
+                    return plan, []
+                matched.append(candidate.intent)
+            return plan.model_copy(update={"intents": matched}), []
+        return plan, []
+
+    by_id = {candidate.id: candidate for candidate in candidates}
+    unknown = [candidate_id for candidate_id in plan.candidate_ids if candidate_id not in by_id]
+    if unknown:
+        return plan.model_copy(update={"candidate_ids": [], "intents": []}), [
+            "One or more selected read candidate IDs were not present in the supplied candidate list."
+        ]
+    intents = [by_id[candidate_id].intent for candidate_id in plan.candidate_ids]
+    return plan.model_copy(update={"candidate_ids": [], "intents": intents}), []
+
+
 def _read_progress_message(intent) -> str:
     if intent.tool == "discover_resources":
         return f"Looking for readable OpenShift APIs related to {intent.discovery_query}."
@@ -2661,59 +2829,104 @@ async def _collect_bounded_cluster_reads(
         )
 
     def planner_context(
-        *, round_number: int, remaining_reads: int, feedback: dict[str, object] | None = None
+        *,
+        round_number: int,
+        remaining_reads: int,
+        read_candidates: list[_GroundedReadCandidate],
+        feedback: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        log_candidates = pod_log_candidates_from_evidence(evidence)
         relationship_graph = derive_evidence_relationship_graph(evidence)
         capability_ledger = _investigation_capability_ledger(
             evidence=evidence,
             activity=activity,
             remaining_units=remaining_reads,
         )
+        compact_observations, _metadata = _compact_answer_evidence(
+            evidence, activity=activity
+        )
+        compact_graph = {
+            "nodes": [
+                {
+                    key: node.get(key)
+                    for key in ("id", "kind", "namespace", "name", "selector", "observed")
+                }
+                for node in (relationship_graph.get("nodes") or [])[-60:]
+                if isinstance(node, dict)
+            ],
+            "edges": [
+                {
+                    key: edge.get(key)
+                    for key in (
+                        "source", "target", "relation", "target_observed", "evidence_ids"
+                    )
+                }
+                for edge in (relationship_graph.get("edges") or [])[-80:]
+                if isinstance(edge, dict)
+            ],
+            "truncated": bool(relationship_graph.get("truncated")),
+        }
+        candidate_mode = bool(read_candidates)
         context: dict[str, object] = {
             "cluster": settings.cluster_name,
             "question": question,
-            "conversation": conversation,
-            "earlier_context_summary": earlier_context_summary,
+            "conversation": [
+                {
+                    "role": str(item.get("role") or "")[:16],
+                    "content": redact_text(str(item.get("content") or ""))[:1000],
+                }
+                for item in conversation[-4:]
+            ],
+            "earlier_context_summary": redact_text(earlier_context_summary)[-1500:],
             "alert_scope": (
                 {"alert_name": alert_name, "labels": alert_labels or {}}
                 if alert_name else None
             ),
-            "observations": evidence[-settings.adhoc_max_evidence :],
-            "curated_knowledge": knowledge or [],
-            "findings": derive_adhoc_findings(evidence),
-            "relationship_graph": relationship_graph,
-            "capability_ledger": capability_ledger,
+            "observations": compact_observations[-16:],
+            "findings": _compact_answer_findings(derive_adhoc_findings(evidence))[-8:],
+            "relationship_graph": compact_graph,
+            "capability_ledger": {
+                "remaining_investigation_units": capability_ledger.get(
+                    "remaining_investigation_units"
+                ),
+                "checks": capability_ledger.get("checks") or [],
+            },
             "pinned_goal_type": pinned_goal,
             "investigation_gaps": [
                 gap.model_dump() for gap in (investigation_gaps or [])
             ],
-            "completed_reads": activity,
+            "read_candidates": [candidate.planner_view() for candidate in read_candidates],
+            "completed_reads": [
+                {
+                    key: item.get(key)
+                    for key in ("round", "tool", "status", "target", "evidence_ids")
+                }
+                for item in activity[-12:]
+            ],
             "investigation_round": round_number,
             "tool_policy": {
-                "available": [
-                    "discover_resources", "get_resource", "list_resources", "search_resources",
-                    "watch_resources", "pod_logs", "http_probe", "query_metrics",
-                ],
-                "resource_catalog": catalog_entries,
-                "pod_log_candidates": [
-                    candidate.model_dump() for candidate in log_candidates[:100]
-                ],
-                "max_rounds": settings.adhoc_max_rounds,
-                "max_reads_total": settings.adhoc_max_reads_per_turn,
+                "mode": "candidate_selection" if candidate_mode else "discovery_escape_hatch",
+                "direct_intents_allowed": not candidate_mode,
                 "remaining_reads": remaining_reads,
-                "max_investigation_units": settings.adhoc_max_reads_per_turn,
                 "remaining_investigation_units": remaining_reads,
-                "reserved_followup_units": settings.adhoc_followup_reserve_units,
-                "unit_costs": {
-                    "discover_resources": 1, "get_resource": 1, "list_resources": 1,
-                    "search_resources": 1, "watch_resources": 3, "pod_logs": 2,
-                    "http_probe": 2, "query_metrics": 2,
-                },
+                "logs_and_configmaps_allowed": True,
+                "secrets_and_mutations_allowed": False,
+                "pod_log_candidates": [
+                    candidate.model_dump()
+                    for candidate in pod_log_candidates_from_evidence(evidence)[:12]
+                ],
+            },
+        }
+        if not candidate_mode:
+            context["curated_knowledge"] = (knowledge or [])[:6]
+            context["tool_policy"].update({
+                "available": [
+                    "discover_resources", "get_resource", "list_resources",
+                    "search_resources", "watch_resources", "pod_logs",
+                    "http_probe", "query_metrics",
+                ],
+                "resource_catalog": catalog_entries[:40],
                 "max_list_objects": settings.adhoc_inventory_max_objects,
                 "max_search_scan_objects": settings.adhoc_search_max_scan_objects,
-                "max_metric_range_seconds": settings.adhoc_metrics_max_range_seconds,
-                "max_metric_points_per_series": settings.adhoc_metrics_max_points_per_series,
                 "metric_catalog": [
                     "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
                     "memory_working_set", "memory_requests", "memory_limits",
@@ -2721,20 +2934,8 @@ async def _collect_bounded_cluster_reads(
                     "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
                     "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
                 ],
-                "metric_scope_rules": {
-                    "top_cpu_consumers": ["namespace", "deployment", "node"],
-                    "top_memory_consumers": ["namespace", "deployment", "node"],
-                    "node_cpu_utilization": ["node"],
-                    "node_memory_utilization": ["node"],
-                    "persistent_volume_usage": ["persistent_volume_claim"],
-                },
-                "cluster_wide_inventory_allowed": True,
-                "logs_and_configmaps_allowed": True,
-                "secrets_and_mutations_allowed": False,
-                "adaptive_discovery_allowed": True,
                 "bounded_watch": {"max_seconds": 15, "max_events": 50},
-            },
-        }
+            })
         if feedback:
             context["planner_feedback"] = feedback
         return context
@@ -2760,7 +2961,30 @@ async def _collect_bounded_cluster_reads(
             rejected_log_intents: list[ReadIntent] = []
             no_progress_plan = False
             had_actionable_no_read_plan = False
+            read_candidates: list[_GroundedReadCandidate] = []
+            candidate_errors: list[str] = []
+            binding_errors: list[str] = []
+            candidate_stop_requires_repair = False
+            actionable_gap_candidates: list[_GroundedReadCandidate] = []
             for planning_attempt in range(1, 3):
+                relationship_graph = derive_evidence_relationship_graph(evidence)
+                read_candidates = _grounded_read_candidates(
+                    evidence=evidence,
+                    relationship_graph=relationship_graph,
+                    recovery_anchor_plan=recovery_anchor_plan,
+                    seen_intents=seen_intents,
+                    investigation_gaps=investigation_gaps,
+                )
+                gap_capabilities = {
+                    gap.capability for gap in (investigation_gaps or [])
+                    if gap.priority in {"high", "medium"}
+                }
+                actionable_gap_candidates = [
+                    candidate for candidate in read_candidates
+                    if candidate.capability in gap_capabilities
+                    or "resource_read" in gap_capabilities
+                    or "other" in gap_capabilities
+                ]
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
                 try:
@@ -2771,6 +2995,7 @@ async def _collect_bounded_cluster_reads(
                         planner_context(
                             round_number=round_number,
                             remaining_reads=remaining_reads,
+                            read_candidates=read_candidates,
                             feedback=feedback,
                         ),
                     )
@@ -2788,13 +3013,16 @@ async def _collect_bounded_cluster_reads(
                         pinned_goal,
                     )
                     plan = plan.model_copy(update={"goal_type": pinned_goal})
-                candidates = pod_log_candidates_from_evidence(evidence)
-                bound_plan, target_errors, rejected = _bind_plan_log_intents(
-                    plan,
-                    candidates,
+                plan, candidate_errors = _compile_grounded_candidate_plan(
+                    plan, read_candidates
+                )
+                log_candidates = pod_log_candidates_from_evidence(evidence)
+                bound_plan, binding_errors, rejected = _bind_plan_log_intents(
+                    plan, log_candidates,
                     question=question,
                     evidence=evidence,
                 )
+                target_errors = [*candidate_errors, *binding_errors]
                 rejected_log_intents.extend(rejected)
                 prepared_signatures: list[str] = []
                 for proposed_intent in bound_plan.intents:
@@ -2811,9 +3039,13 @@ async def _collect_bounded_cluster_reads(
                     1 for signature in prepared_signatures if signature not in seen_intents
                 )
                 no_progress_plan = bool(bound_plan.intents) and novel_intents == 0
+                candidate_stop_requires_repair = bool(
+                    actionable_gap_candidates
+                    and bound_plan.decision == "answer_from_evidence"
+                )
                 evidence_repair_needed = plan_requires_repair(
                     plan, round_number=round_number
-                )
+                ) or candidate_stop_requires_repair
                 had_actionable_no_read_plan = (
                     had_actionable_no_read_plan or evidence_repair_needed
                 )
@@ -2838,6 +3070,7 @@ async def _collect_bounded_cluster_reads(
                     )
                     break
                 repair_reason = (
+                    "candidate_selection" if candidate_errors else
                     "ungrounded_target" if target_errors else
                     "unsupported_answer" if evidence_repair_needed else
                     "no_progress" if no_progress_plan else
@@ -2855,6 +3088,14 @@ async def _collect_bounded_cluster_reads(
                     repair_reason,
                 )
                 feedback = ({
+                    "code": "select_grounded_candidate",
+                    "message": (
+                        "Grounded read candidates are available. Return one or more exact IDs from "
+                        "read_candidates in candidate_ids and leave intents empty. Candidate text is "
+                        "descriptive only; the server compiles the selected IDs."
+                    ),
+                    "errors": candidate_errors,
+                } if candidate_errors else {
                     "code": "model_target_not_grounded",
                     "message": (
                         "One or more named targets were not grounded in the operator question or "
@@ -2866,10 +3107,13 @@ async def _collect_bounded_cluster_reads(
                 } if target_errors else {
                     "code": "actionable_goal_requires_evidence",
                     "message": (
-                        "The operational question has no valid supporting evidence, and the live "
-                        "resource catalog contains a safe matching target. Return decision=collect "
-                        "with safe read intents from the catalog. Only request clarification if no "
-                        "catalog target can answer the question."
+                        "The operational question still has an actionable grounded read candidate. "
+                        "Select one or more exact IDs from read_candidates in candidate_ids and leave "
+                        "intents empty."
+                        if read_candidates else
+                        "The operational question has no valid supporting evidence. Use the compact "
+                        "resource catalog to return one safe discovery intent. Only request "
+                        "clarification if no catalog target can answer the question."
                     ),
                 } if evidence_repair_needed else {
                     "code": "no_progress",
@@ -2898,14 +3142,42 @@ async def _collect_bounded_cluster_reads(
                 })
             needs_fallback = plan is None or plan_requires_repair(
                 plan, round_number=round_number
-            ) or bool(target_errors)
+            ) or candidate_stop_requires_repair or bool(target_errors)
             log_fallback = _fallback_pod_log_plan(
                 question=question,
                 candidates=pod_log_candidates_from_evidence(evidence),
                 rejected=rejected_log_intents,
                 limit=remaining_reads,
             ) if target_errors else None
-            if needs_fallback and log_fallback is not None:
+            if (
+                needs_fallback
+                and investigation_gaps
+                and actionable_gap_candidates
+                and planner_error is None
+                and not binding_errors
+            ):
+                selected_candidate = actionable_gap_candidates[0]
+                plan = ReadPlan(
+                    goal_type=pinned_goal or "diagnose",
+                    scope_summary=(
+                        "Collect the highest-priority grounded read candidate for an unresolved "
+                        "structured evidence gap."
+                    ),
+                    intents=[selected_candidate.intent],
+                )
+                target_errors = []
+                candidate_errors = []
+                limitations.append(
+                    "The model twice stopped despite an actionable structured evidence gap; "
+                    "PodPilot selected the highest-priority grounded read candidate identified "
+                    "from that gap and current evidence."
+                )
+                LOGGER.warning(
+                    "podpilot.adhoc.gap_candidate_recovery actor=%s workflow_id=%s "
+                    "candidate_id=%s capability=%s",
+                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
+                )
+            elif needs_fallback and log_fallback is not None:
                 plan = log_fallback
                 target_errors = []
                 limitations.append(

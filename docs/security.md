@@ -207,8 +207,8 @@ Normalized alert and workload evidence is framed as untrusted JSON for every
 model call. Responses must pass PodPilot's Pydantic schema and remain advisory;
 they cannot register or execute actions. `store=false`, bounded timeouts, disabled
 SDK retries, and output-token limits apply to both probes and investigations.
-Capability readiness also requires the provider to return schema-valid
-`ReadPlan` and `AdHocAnswer` objects, rather than relying on a simpler structured
+Capability readiness also requires the provider to return schema-valid discovery
+`ReadPlan`, candidate-selection `CandidateReadPlan`, and `AdHocAnswer` objects, rather than relying on a simpler structured
 output probe as a proxy for the live Ask workflow. A Chat Completions validation
 failure receives at most one explicit correction attempt containing only bounded
 field/type diagnostics and static cross-field `ReadIntent` rules, not the rejected response body.
@@ -230,8 +230,11 @@ Evidence relationship graphs and capability ledgers are deterministic, bounded p
 already-redacted observations and server-known broker state. Graph frontier hints, structured
 investigation gaps, and model-authored recommended checks are untrusted planning context, not tool
 calls. Recommendation promotion recognizes only a fixed diagnostic capability label and never
-extracts executable resource coordinates from prose. The model must return a new schema-valid typed
-intent, which is independently checked for grounding, duplicate suppression, budget, resource
+extracts executable resource coordinates from prose. For ordinary traversal, server code holds each
+typed intent and exposes only an opaque candidate ID plus a redacted description. Unknown, modified,
+or stale IDs are rejected; candidate prose is never parsed for coordinates. The model must return a
+schema-valid candidate selection, or a typed discovery intent when no candidates exist. The compiled
+intent is independently checked for grounding, duplicate suppression, budget, resource
 sensitivity, read-only verb, live discovery, and ServiceAccount RBAC before execution. Goal pinning
 and no-progress repair do not widen that authority.
 

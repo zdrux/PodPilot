@@ -201,10 +201,15 @@ only as a compatibility path for older model output.
 The planner classifies natural-language intent as inventory, health, diagnosis,
 logs, comparison, or explanation. Normal code derives the collection decision
 from typed intents or clarification content instead of rejecting a useful plan
-because a redundant discriminator disagreed. The model owns troubleshooting direction:
-each round forms or revises an evidence-backed hypothesis and proposes the next typed reads
-that can reduce uncertainty. The catalog, deterministic findings, ownership, selectors,
-endpoints, and mount relationships are candidates rather than a server-prescribed path.
+because a redundant discriminator disagreed. The model owns troubleshooting direction, but it
+normally selects rather than authors the next read. Normal code derives up to twelve opaque
+candidates from exact operator coordinates, observed relationship frontiers, structured gaps, and
+implicated Pod-log targets. Candidate-mode planning uses a small `CandidateReadPlan` contract with
+IDs and short summaries; the server compiles selected IDs back to the typed intents it retained
+privately. If no grounded candidate exists, the full `ReadPlan` remains a discovery escape hatch so
+the model can find an unfamiliar API or first object. The catalog, deterministic findings,
+ownership, selectors, endpoints, and mount relationships are candidates rather than a
+server-prescribed path.
 Invalid or empty plans receive one structured repair attempt; the API does not silently
 replace a diagnostic direction with a generic catalog traversal.
 ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
@@ -220,7 +225,7 @@ observations, and cluster-specific answers are withheld unless they cite persist
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
 The only automatic continuation is a mechanical trust-only retry of the same HTTPS probe.
 Object traversal, log selection, Events, metrics, and configuration reads require a
-schema-valid model plan and return through the same broker on the next round.
+schema-valid model selection or discovery plan and return through the same broker on the next round.
 List reads follow Kubernetes continue tokens within the per-turn budget and emit
 one compact collection observation. Kind-aware projections retain operational
 status, conditions, ownership, and selected scheduling/routing/storage fields.
@@ -280,6 +285,11 @@ one material read now when that read would otherwise appear as an unperformed fi
 otherwise the model may confirm its stop with exact supporting IDs. Recommendation prose is never
 executed, and normal broker validation remains unchanged.
 
+Candidate rounds receive only four recent conversation messages, a short earlier-context summary,
+the sixteen most relevant compact observations, eight findings, a graph without executable hints,
+twelve completed-read summaries, the capability ledger, gaps, and up to twelve candidates. Resource
+catalog and curated knowledge payloads are omitted until the discovery escape hatch is needed.
+
 Each planning round also receives two server-derived views of current state. A bounded evidence
 relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
 Service-to-EndpointSlice, endpoint-to-Pod, owner, and volume-source relationships. Its frontier
@@ -292,8 +302,9 @@ The ledger is authoritative for answer wording: the last two available states ar
 The first accepted goal type is pinned for the collection pass. Later plans may revise hypotheses
 and choose different evidence, but cannot silently change the operator's diagnostic goal. Normalized
 intent signatures are retained across rounds and the answer-gap pass; a duplicate-only plan receives
-bounded `no_progress` feedback that includes the graph frontier, ledger, and current findings so the
-model can select a novel typed read or explicitly stop.
+bounded `no_progress` feedback so the model can select a novel candidate or explicitly stop. When a
+model twice stops despite a medium/high structured gap with a matching grounded candidate, PodPilot
+selects the highest-priority candidate deterministically and discloses that recovery in limitations.
 
 Final answers may return up to five structured investigation gaps containing a question, typed
 capability, priority, supporting evidence IDs, and reason. Medium/high gaps that the ledger still

@@ -268,25 +268,78 @@ class ReadPlan(BaseModel):
         "collect", "answer_from_evidence", "needs_clarification"
     ] | None = None
     scope_summary: str = Field(min_length=1, max_length=500)
+    candidate_ids: list[str] = Field(default_factory=list, max_length=6)
     intents: list[ReadIntent] = Field(default_factory=list, max_length=6)
     limitations: list[str] = Field(default_factory=list, max_length=5)
     clarification: str | None = Field(default=None, max_length=500)
     supporting_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
     working_hypothesis: str | None = Field(default=None, max_length=500)
     next_step_summary: str | None = Field(default=None, max_length=500)
+    stop_reason: Literal[
+        "evidence_sufficient", "no_material_read", "budget_exhausted", "blocked"
+    ] | None = None
+
+    @field_validator("candidate_ids")
+    @classmethod
+    def require_exact_candidate_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(r"read-[a-f0-9]{20}", value):
+                raise ValueError("candidate_ids must contain exact supplied read candidate IDs")
+        return list(dict.fromkeys(values))
 
     @model_validator(mode="after")
     def normalize_decision(self) -> "ReadPlan":
         # Intents and clarification are the authoritative output. Deriving this
         # redundant discriminator server-side avoids rejecting otherwise usable
         # plans from smaller structured-output models.
-        if self.intents:
+        if self.candidate_ids or self.intents:
             self.decision = "collect"
         elif self.clarification:
             self.decision = "needs_clarification"
         elif self.decision in {None, "collect"}:
             self.decision = "answer_from_evidence"
         return self
+
+
+class CandidateReadPlan(BaseModel):
+    """Small model contract for selecting server-grounded reads without tool synthesis."""
+
+    goal_type: Literal[
+        "inventory", "health", "diagnose", "logs", "compare", "explain"
+    ] = "diagnose"
+    decision: Literal[
+        "collect", "answer_from_evidence", "needs_clarification"
+    ] | None = None
+    scope_summary: str = Field(min_length=1, max_length=500)
+    candidate_ids: list[str] = Field(default_factory=list, max_length=6)
+    clarification: str | None = Field(default=None, max_length=500)
+    supporting_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    working_hypothesis: str | None = Field(default=None, max_length=500)
+    next_step_summary: str | None = Field(default=None, max_length=500)
+    stop_reason: Literal[
+        "evidence_sufficient", "no_material_read", "budget_exhausted", "blocked"
+    ] | None = None
+
+    @field_validator("candidate_ids")
+    @classmethod
+    def require_exact_candidate_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(r"read-[a-f0-9]{20}", value):
+                raise ValueError("candidate_ids must contain exact supplied read candidate IDs")
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def normalize_decision(self) -> "CandidateReadPlan":
+        if self.candidate_ids:
+            self.decision = "collect"
+        elif self.clarification:
+            self.decision = "needs_clarification"
+        elif self.decision in {None, "collect"}:
+            self.decision = "answer_from_evidence"
+        return self
+
+    def to_read_plan(self) -> ReadPlan:
+        return ReadPlan.model_validate(self.model_dump())
 
 
 class InvestigationGap(BaseModel):

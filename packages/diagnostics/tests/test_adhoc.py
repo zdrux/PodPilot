@@ -52,6 +52,16 @@ def test_relationship_graph_exposes_typed_route_service_endpoint_pod_frontier() 
     assert frontier_relations == {"selects", "has_endpoints"}
 
 
+def test_candidate_selection_normalizes_plan_to_collect() -> None:
+    plan = ReadPlan(
+        scope_summary="Select the grounded backend Service read.",
+        candidate_ids=["read-0123456789abcdefabcd"],
+    )
+
+    assert plan.decision == "collect"
+    assert plan.intents == []
+
+
 def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
     intent = ReadIntent(
         tool="http_probe", url="https://route.apps.example.test/v1/models",

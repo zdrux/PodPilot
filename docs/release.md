@@ -268,6 +268,13 @@ read signatures suppress repeats across the initial and answer-gap passes. Struc
 gaps and capability-matched recommendations may trigger a bounded follow-up collection phase and answer regeneration,
 but recommendation prose, graph hints, and gap text must never execute directly or bypass broker
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
+Candidate-first gates must prove that candidate rounds use the smaller schema without `ReadIntent`,
+candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, graph hints are
+absent from candidate-visible context, and the catalog appears only in discovery mode. Context caps
+for messages, observations, findings, graph, completed reads, and candidates must be asserted. The
+provider activation probe must exercise discovery followed by an exact candidate selection. A model
+that twice stops on an actionable structured gap may trigger only the highest-priority matching
+candidate through the unchanged broker.
 Ask-job gates must prove that submission returns before model completion, the
 question and job are durable before execution, progress phases reflect actual
 server actions, and the final assistant message is atomically linked to terminal
