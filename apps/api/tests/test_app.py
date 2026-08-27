@@ -23,6 +23,7 @@ from podpilot_api.main import (
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
     _compact_answer_evidence,
+    _compile_remaining_candidate_followups,
     _compile_suggested_followups,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
@@ -306,6 +307,37 @@ def test_suggested_followup_compiles_only_unread_grounded_read_actions() -> None
 
     assert visible == ["Change the Route TLS termination to edge."]
     assert actions == []
+
+
+def test_remaining_candidates_become_clickable_actions_without_model_recommendations() -> None:
+    cluster = Cluster(id=SYSTEM_CLUSTER_ID, name="Runtime cluster")
+    route_evidence = {
+        "id": "cluster-route-1",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "tool": "search_resources",
+        "data": {
+            "kind": "Route",
+            "items": [{
+                "kind": "Route",
+                "metadata": {"namespace": "maas", "name": "maas"},
+                "spec": {"to": {"kind": "Service", "name": "model-server"}},
+            }],
+        },
+    }
+
+    visible, actions = _compile_remaining_candidate_followups(
+        question="Why does the Route return HTTP 500?",
+        evidence=[route_evidence],
+        cluster_runtimes=[{"cluster": cluster, "read_signatures": []}],
+        remaining_units=5,
+    )
+
+    assert visible
+    assert actions
+    assert actions[0]["id"].startswith("read-")
+    assert actions[0]["cluster_id"] == SYSTEM_CLUSTER_ID
+    assert actions[0]["label"] in visible
+    assert actions[0]["capability"] == "service_spec"
 
 
 def test_embedded_gap_prose_promotes_only_fixed_available_capabilities() -> None:
@@ -858,7 +890,7 @@ def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths()
     assert "observations.0" not in str(validated["content"])
 
 
-def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
+def test_adhoc_answer_removes_provider_recommendations_from_narrative() -> None:
     answer = AdHocAnswer(
         answer_mode="evidence_based",
         answer=(
@@ -874,7 +906,7 @@ def test_adhoc_answer_preserves_markdown_paragraphs() -> None:
         known_evidence_ids={"cluster-pod-1"},
     )
 
-    assert validated["content"] == answer.answer
+    assert validated["content"] == "### Summary\n\nThe collector is restarting."
 
 
 def test_cited_unresolved_answer_remains_grounded_without_being_rejected() -> None:
@@ -914,7 +946,7 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     ) is None
 
 
-def test_final_answer_quality_rejects_embedded_schema_and_flattened_table() -> None:
+def test_final_answer_quality_rejects_embedded_schema_but_not_markdown_style() -> None:
     assert _adhoc_answer_quality_issue(
         content=(
             "## Investigation gaps ```json [{\"investigation_gaps\": []}] ```"
@@ -925,7 +957,7 @@ def test_final_answer_quality_rejects_embedded_schema_and_flattened_table() -> N
             "## Recommended next evidence | Priority | Evidence needed | Why it matters | "
             "| High | service_spec | Verify targetPort |"
         ),
-    ) == "malformed_markdown_structure"
+    ) == "heading_only_response"
     assert _adhoc_answer_quality_issue(
         content="There is not enough information to answer.",
         answer_mode="insufficient_evidence",
@@ -967,17 +999,20 @@ def test_unicode_bullets_do_not_leave_later_markdown_headings_inline() -> None:
     assert "\n\n### Recommended next steps\n\n- Inspect" in cleaned
 
 
-def test_recommendation_heading_requires_structured_recommendations() -> None:
+def test_recommendation_heading_is_not_a_quality_contract() -> None:
     content = "## Recommended next steps\n\n- Inspect the exact Pod mounts."
 
-    assert _adhoc_answer_quality_issue(
-        content=content,
-        has_recommendations=False,
-    ) == "recommendations_not_structured"
-    assert _adhoc_answer_quality_issue(
-        content=content,
-        has_recommendations=True,
-    ) is None
+    assert _adhoc_answer_quality_issue(content=content) is None
+
+
+def test_provider_recommendation_schema_tail_is_removed_before_markdown_rendering() -> None:
+    cleaned = _clean_adhoc_markdown(
+        "## Observation\n\nThe Pod is restarting.\n\n"
+        'recommended_actions: [{"label": "Inspect logs"}]'
+    )
+
+    assert cleaned == "## Observation\n\nThe Pod is restarting."
+    assert "recommended_actions" not in cleaned
 
 
 def test_answer_correction_preserves_earlier_structured_recommendations() -> None:

@@ -286,10 +286,9 @@ executed, and normal broker validation remains unchanged.
 
 The server derives relationships, capability state, findings, and executable intents internally, but
 candidate-mode model calls do not receive those implementation structures. Every model-directed
-resource investigation receives only the question, two recent conversation messages, up to twelve
-normalized fact cards, up to twelve action cards, eight completed-action summaries, remaining budget,
-and short unresolved questions or correction feedback. The universal `ActionSelection` contract asks
-for `investigate`, `answer`, or `uncertain`, up to four exact action IDs, and one short reason.
+resource investigation receives only the question, up to six normalized fact cards within a 5 KB
+aggregate target, and up to twelve opaque action ID/label pairs. The universal `ActionSelection`
+contract contains only zero to four exact action IDs: non-empty continues collection and empty stops.
 Unknown resource questions use the same contract: top resource-catalog matches become bounded server-owned
 list action cards rather than exposing the catalog and full `ReadIntent` union to the model.
 An exact operator-supplied HTTP/HTTPS URL becomes a grounded GET-probe candidate after Route
@@ -315,18 +314,13 @@ bounded `no_progress` feedback so the model can select a novel candidate or expl
 model twice stops despite a medium/high structured gap with a matching grounded candidate, PodPilot
 selects the highest-priority candidate deterministically and discloses that recovery in limitations.
 
-The action-selection prompt softly directs the model to keep investigating while a useful supplied action
-remains and permits `uncertain` when none can resolve the open question. Final recommendations remain
-operator-facing resolution guidance. For compatibility, a recommendation that clearly names a known
-read capability may enter one bounded follow-up planning pass only when the trusted ledger still marks
-that capability actionable; recommendation text never becomes coordinates or executes directly.
-After the final answer, normal code removes recommendations whose capability is already collected and
-may render a **Run check** control only when an unread server-owned candidate exactly matches the
-remaining recommendation. The browser posts the source message and opaque candidate ID; it cannot
+The action-selection prompt asks the model to select useful supplied reads and return an empty list
+when none remains. The final writer is not asked to produce next steps. After the final answer, normal
+code independently derives up to three **Run check** controls from unread server-owned candidates.
+The browser posts the source message and opaque candidate ID; it cannot
 provide coordinates or an intent. The resulting `AdHocRun` stores the validated descriptor, starts with
 no conversation messages or summary in model context, executes that exact candidate through the normal
-broker, and appends the evidence extension to the same conversation. Mutation-language recommendations
-remain guidance only and never receive this control.
+broker, and appends the evidence extension to the same conversation.
 
 For cross-namespace connectivity, the planner can select both Pods, Namespace label sets, and
 NetworkPolicies when those reads discriminate a policy hypothesis. Compact policy evidence
@@ -438,16 +432,15 @@ Findings are evidence summaries, not executable instructions, and neither patter
 matches nor log correlation alone establish causality.
 
 The final-answer boundary is separately compacted from durable evidence. Current-turn observations
-are converted to at most twelve resource-agnostic fact cards within 20 KB. Each card contains an
+are converted to at most eight resource-agnostic fact cards within a 7.5 KB aggregate target. Each card contains an
 allowlisted evidence ID, cluster attribution, summary, concise material facts, and a bounded object
-projection or 1,500-character log excerpt. The final model receives only the question, two recent
-messages, cluster labels, those fact cards, up to six collection issues, and optional correction feedback.
+projection or 500-character log sample. The final model receives only the question, cluster ID/name
+pairs, those fact cards, up to three collection issues, and an optional 500-character prior answer or
+short retry code.
 Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
-no claimed mutation, concise sectioned Markdown, and useful resolution recommendations. The concise
-schema requires `recommended_actions` on every response, even when empty; a recommendation section in
-prose without matching structured actions receives one bounded correction. Structured actions from an
-earlier valid attempt survive a prose-only correction or evidence-follow-up rewrite and are still reconciled
-against final capability state. Single-line bold labels, Unicode bullets, and recognized section headings
+no claimed mutation, and optional simple Markdown. The concise schema contains only `answer` and
+`citations`; recommendation generation and formatting are not part of this call. Single-line bold labels,
+Unicode bullets, and recognized section headings
 flattened later in a line are normalized into headings and lists before rendering. Domain teaching, graph,
 capability-ledger, findings, knowledge, and raw observation payloads stay server-side. The database and
 evidence drawer retain the complete redacted bounded observations. A schema-valid
@@ -455,15 +448,12 @@ answer must also pass semantic substance checks: citations plus headings alone a
 enough, and every current Pod-log observation with a structured finding must be cited. A bounded
 correction attempt receives only an error code and instruction. The same check rejects schema
 fields or fenced `investigation_gaps` serialized inside the answer
-string and inline pipe-delimited tables without Markdown row boundaries. If a constrained model
-places evidence recommendations in that malformed prose, normal code may retain only fixed
-capability categories that the ledger marks actionable; coordinates and prose are discarded before
-the normal grounded-candidate pass.
+string. Provider attempts to append a recommendation heading or `recommended_actions` serialization
+are removed before Markdown rendering because suggested controls are composed independently.
 For compatibility with earlier providers, server-side gap state is still reconciled against the final
 capability ledger. Final validation rejects prose that calls a collected capability “not collected,”
 removes stale gaps, and strips provider-facing citation markers after allowlisted citations are
-recovered. Concise final-answer recommendations may be mapped to a fixed safe capability for one
-additional action-selection pass; recommendation prose and coordinates never execute. Once an HTTPS probe completes TLS and
+recovered. Once an HTTPS probe completes TLS and
 returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
 reads because they can distinguish application, authentication, and upstream failures.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic

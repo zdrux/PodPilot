@@ -245,8 +245,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
-- Final-answer context is now separately constrained to two recent messages and twelve evidence fact
-  cards within 20 KB, plus cluster attribution and bounded collection issues. Graph, ledger, catalog,
+- Final-answer context is now separately constrained to eight evidence fact cards within a 7.5 KB
+  aggregate target, cluster ID/name attribution, three collection issues, and an optional bounded
+  prior answer or retry code. Graph, ledger, catalog,
   tool-policy, raw observation envelopes, and domain teaching text are omitted. An empty
   Chat Completions payload receives one schema-only retry. Any later final-answer failure preserves
   successful reads in a cited deterministic Route/resource/inventory or observation summary instead
@@ -271,10 +272,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Grounded traversal now uses one compact resource-agnostic action-selection contract. Normal code
   offers at most twelve opaque reads derived from exact operator anchors, observed relationships,
   unresolved evidence needs, implicated logs, and bounded catalog matches; the model selects up to
-  four IDs and never receives their executable intent payloads. Candidate rounds retain only two
-  recent messages, twelve fact cards within 20 KB, eight completed actions, unresolved questions, and
-  the remaining budget. The response is only `investigate`, `answer`, or `uncertain`, with a short
-  reason. Live-catalog matches for unfamiliar resources become the same bounded action cards rather
+  four IDs and never receives their executable intent payloads. Candidate rounds retain only the
+  current question and six fact cards within a 5 KB aggregate target. The response contains only
+  `action_ids`; empty means stop. Live-catalog matches for unfamiliar resources become the same bounded action cards rather
   than reopening the broad typed planner. Unknown IDs fail closed, and a repeated stop on
   a matching high/medium structured gap can recover one highest-priority candidate through the normal broker.
 - Action selection now tolerates the constrained model's inconsistent decision label when it also
@@ -287,13 +287,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   model omits a log recommendation. EndpointSlice/Endpoints target references ground the downstream
   Pod read, and after two model stops PodPilot can collect one remaining exact log candidate through
   the unchanged broker; successful logs still receive the separate bounded semantic analysis.
-- Final recommendations now reconcile against completed capability state and may expose a **Run check**
-  button only for an unread exact server-owned candidate. The CSRF-protected click creates a linked
+- Up to three remaining unread server-owned candidates may expose a **Run check** button independently
+  of model recommendation wording. The CSRF-protected click creates a linked
   same-conversation run with fresh model context, revalidates the opaque candidate, and executes it
   through the unchanged read broker; mutation guidance remains display-only.
-- The concise answer contract now always requires `recommended_actions`. Prose next-step sections with
-  no structured counterpart receive a bounded correction, valid actions survive later answer rewrites,
-  and recognized headings flattened after Unicode bullets are repaired before Markdown rendering.
+- The concise answer contract now contains only `answer` and `citations`. It does not request
+  certainty, gaps, capability names, coordinates, or recommendations. Provider attempts to append a
+  recommendation schema are removed before Markdown rendering; suggested controls come from normal code.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

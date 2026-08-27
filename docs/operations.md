@@ -679,11 +679,12 @@ with Pod state, Events, owner/configuration, metrics, or probes, and keep root c
 unconfirmed when that support is absent. Log text remains untrusted data. Secret
 contents remain unavailable even when a signal or Pod volume references a Secret.
 
-Before requesting the final model answer, PodPilot converts current evidence to at most twelve
-resource-agnostic fact cards within 20 KB. Current-turn reads are prioritized, Pod-log excerpts are
-capped at 1,500 characters, and material object fields are projected rather than sending raw
-observation envelopes. Only the question, two recent messages, cluster labels, fact cards, up to six
-collection issues, and optional correction feedback accompany the concise final-answer contract.
+Before requesting the final model answer, PodPilot converts current evidence to at most eight
+resource-agnostic fact cards within a 7.5 KB aggregate target. Current-turn reads are prioritized,
+Pod-log samples are capped at 500 characters, and material object fields are projected rather than
+sending raw observation envelopes. Only the question, cluster ID/name pairs, fact cards, up to three
+collection issues, and an optional bounded prior answer or retry code accompany the concise
+`answer`/`citations` contract.
 The planning graph, capability ledger, catalog, tool policy, findings, knowledge chunks, and domain
 tutorials remain server-side.
 This does not truncate persisted evidence or the operator's
@@ -703,12 +704,11 @@ headings flattened after Unicode bullets are also moved onto physical lines outs
 This prevents a substantive flattened response from being mistaken for a heading-only answer;
 a genuine standalone heading still receives the bounded correction.
 
-Answers that serialize top-level fields such as `investigation_gaps` inside visible prose, or flatten
-a Markdown table into one pipe-delimited line, receive `podpilot.adhoc.answer_quality_rejected` with
-`reason=structured_fields_embedded_in_answer` or `reason=malformed_markdown_structure`. The bounded
-correction asks for clean prose in the concise answer contract. For compatibility, PodPilot may promote only
-fixed capability labels found under an explicit recommendation/gap heading when the capability ledger
-still marks them actionable; it discards all coordinates and returns the category to candidate planning.
+Answers that serialize top-level fields such as `investigation_gaps` inside visible prose receive
+`podpilot.adhoc.answer_quality_rejected` with `reason=structured_fields_embedded_in_answer`; the
+bounded correction asks only for clean prose. A trailing recommendation heading or
+`recommended_actions` serialization is removed before rendering. Markdown style is otherwise not a
+quality contract, and recommendation prose is not parsed into actions.
 
 Chat Completions responses with an empty content field receive one minimal schema-only retry. If
 the final answer remains empty, invalid, or unavailable after cluster reads succeeded, PodPilot logs
@@ -776,15 +776,13 @@ fallback answers combine current Route, Service, endpoint, Pod, and probe eviden
 reverting to a Route-only summary. Repeated model-stop, duplicate-read, and fallback notices collapse
 into one orchestration limitation; TLS bypass, certificate trust, RBAC, and read failures remain visible.
 
-Candidate planning keeps at most two recent messages, twelve compact fact cards within a 20 KB
-aggregate limit, eight completed action summaries, twelve grounded action cards, four unresolved
-questions, and the remaining read budget. Unknown but listable resource types discovered in the
+Candidate planning keeps only the current question, at most six compact fact cards within a 5 KB
+aggregate target, and twelve grounded action ID/label pairs. It omits conversation history, completed
+action summaries, unresolved-question schemas, budgets, graphs, ledgers, catalogs, and tool policy.
+Unknown but listable resource types discovered in the
 cluster catalog are converted to the same bounded action-card format; the catalog itself is not sent.
-When a constrained model returns valid supplied action IDs with an inconsistent decision label,
-PodPilot treats the IDs as the safe continuation signal. An empty `investigate` selection becomes
-an incomplete selection; after the bounded retry, PodPilot may use the highest-priority action it
-already supplied because the model explicitly requested further investigation. Unknown or malformed
-IDs still execute nothing.
+The response contract is only `action_ids`: any valid non-empty list continues, while an empty or
+omitted list stops. Unknown or malformed IDs still execute nothing.
 If the model twice stops while a structured medium/high gap has a matching candidate, PodPilot logs
 `podpilot.adhoc.gap_candidate_recovery`, performs that one broker-validated read, and states the
 recovery as a limitation.
@@ -801,21 +799,12 @@ discloses the recovery in the answer limitations.
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
 duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. The final answer
-uses a separate concise contract containing answer Markdown, exact citations, certainty, and a required
-operator-recommendation array that may be empty. A prose recommendation section without structured
-recommendations receives one bounded correction, and valid recommendations survive later prose-only
-answer rewrites. Recommendations remain useful resolution guidance; when normal code can map
-one to a known safe evidence capability, budget remains, and it would materially improve the answer,
-PodPilot may run one additional bounded collection phase and regenerate the answer. Completion is
-logged as `podpilot.adhoc.gap_followup_complete`. These records contain
-workflow metadata, not operator questions, recommendation bodies, prompts, or evidence payloads.
-Recommendation text is never executed; any follow-up must select a server-owned action ID and pass
-the unchanged broker checks.
+uses a separate concise contract containing only answer Markdown and exact citations. Suggested
+checks are derived afterward from remaining unread server-owned candidates, never from model prose.
 Collected Pod logs are always eligible for the dedicated bounded log-analysis request, including logs
 obtained during this recommendation-driven follow-up, before the regenerated final answer.
 
-Eligible final recommendations may also display **Run check**. The server shows this control only when
-the recommendation maps to an unread exact action already derived from collected evidence. Clicking it
+Up to three remaining exact candidates may display **Run check**. Clicking one
 creates a linked run in the same conversation, but sends no previous chat messages or context summary to
 the model. The selected cluster, capability, opaque candidate ID, and supporting evidence IDs are stored
 on the run and revalidated against current persisted evidence before collection. Unknown, stale,

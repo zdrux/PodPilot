@@ -3,6 +3,29 @@
 Last reviewed: 2026-08-27
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
+## 2026-08-27 - Model calls use separate minimal selection and narrative contracts
+
+Context: Asking one constrained model to understand orchestration state, select typed reads, produce
+Markdown, cite evidence, classify certainty, and serialize recommendations made otherwise useful
+answers inconsistent. Recommendation JSON also leaked into visible Markdown and prevented reliable
+action controls.
+
+Decision: Split Ask into three modules. Normal code owns investigation state, relationship traversal,
+capability state, exact typed intents, enforcement, and suggested controls. The planner receives only
+the current question, at most six small evidence cards, and at most twelve opaque action ID/label
+pairs; it returns only zero to four action IDs. The final writer receives only the question, cluster
+ID/name attribution, at most eight small evidence cards, three collection issues, and an optional
+bounded prior answer/retry code; it returns only narrative and evidence citations. It is explicitly
+not asked for recommendations. Afterward, normal code derives up to three **Run check** controls from
+remaining unread server-owned candidates. Provider recommendation-schema tails are removed before
+Markdown rendering rather than repaired through another formatting contract.
+
+Consequences: The same resource-agnostic loop applies to Pods, Nodes, Routes, operators, and unknown
+discoverable resources while provider context and response schemas remain small. Suggested actions no
+longer depend on model wording, and their exact coordinates remain private and broker-enforced. The
+model still directs collection by selecting available actions until it returns an empty selection;
+operators can continue through server-owned buttons without granting prose execution authority.
+
 ## 2026-08-27 - Suggested checks become user-triggered linked evidence extensions
 
 Context: Final model recommendations are often useful, but automatically feeding their prose back

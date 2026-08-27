@@ -195,24 +195,23 @@ one bounded correction without the rejected body, and activate
 the deterministic Route/TLS or cited-observation fallback after a second failure.
 They must accept and structurally normalize a substantive single-line response that begins with a
 Markdown heading, including recognized headings flattened after Unicode bullets, while continuing to
-reject a genuine standalone heading. Recommendation gates must require the structured array on every
-provider response, correct a prose recommendation section with an empty array, and preserve earlier
-valid structured recommendations through a prose-only correction before grounded candidate compilation.
+reject a genuine standalone heading. Final-writer gates must assert that its response schema contains
+only narrative and citations. Suggested-action gates must derive controls from unread exact
+server-owned candidates without consuming or parsing model recommendations.
 They must also prove that an empty structured citation array can recover an exact
 allowlisted observation ID from answer prose, removes that internal marker before
 display, and never accepts an unknown or partial ID.
-Malformed-answer gates must reject embedded `investigation_gaps`, fenced schema JSON, and inline
-pipe-delimited tables; send one bounded correction; and prevent serialized fields from reaching the
-UI. Compatibility tests may promote only fixed ledger-actionable capability categories from an
-explicit recommendation/gap section, must discard coordinates and mutation prose, and must route the
-result through grounded candidate compilation and the unchanged broker.
+Malformed-answer gates must reject embedded `investigation_gaps` or fenced schema JSON, send one
+bounded correction, and prevent serialized fields from reaching the UI. They must also strip a
+trailing recommendation heading or `recommended_actions` serialization without turning its prose
+into an intent.
 Composition gates must prove that structured log findings remain visible with exact
 Pod/container, category, severity, counts, paths/endpoints, bounded samples, and citations when
 a Route/TLS fallback replaces the provider answer; correlation must not be labeled root cause.
-Provider-context tests must verify current-turn prioritization, 1,500-character Pod-log excerpts,
-3-KB per-card and 20-KB aggregate evidence ceilings, and semantic deduplication of equivalent
+Provider-context tests must verify current-turn prioritization, 500-character final-writer Pod-log
+samples, eight cards within a 7.5 KB aggregate target, and semantic deduplication of equivalent
 operator limitations while leaving persisted evidence intact. For constrained final-answer context,
-tests must enforce two recent messages, twelve fact cards, six collection issues, and exclusion of
+tests must enforce three collection issues, cluster ID/name-only attribution, and exclusion of
 raw observations, findings, knowledge, relationship graph, capability ledger, catalog, and tool policy. Empty-content gates
 must prove one schema-only retry and a cited deterministic fallback after successful collection when
 that retry or a later final call still fails; no-evidence provider failures remain insufficient.
@@ -284,15 +283,13 @@ Candidate-first gates must prove that candidate rounds use the universal `Action
 without `ReadIntent`, candidate IDs compile only to exact server-held intents, and unknown IDs execute
 nothing. Normal Ask planning must not reopen the broad typed planner when no relationship candidate
 exists; bounded catalog matches must use the same action cards. Actual provider payloads must omit graph, ledger, catalog, tool policy, typed Kubernetes
-coordinates, raw observation envelopes, and domain-specific teaching. Tests must assert the two-message,
-twelve-fact-card/20-KB, eight-completed-action, and twelve-action-card caps. The concise final-answer
-contract must preserve exact evidence citations, multi-cluster attribution, uncertainty, readable
-Markdown, and useful remediation recommendations without embedding correction policy or resource-specific
-semantics. The
+coordinates, raw observation envelopes, and domain-specific teaching. Tests must assert planner caps
+of six fact cards/5 KB and twelve action ID/label pairs. The concise final-answer payload must assert
+eight fact cards/7.5 KB, three collection issues, cluster ID/name-only attribution, and a schema with
+only narrative plus citations. Tests must prove provider recommendation-schema tails do not leak into
+Markdown and that remaining exact server candidates produce action controls without model wording. The
 provider activation probe must exercise discovery followed by an exact candidate selection. A model
-that pairs exact supplied IDs with `answer` must continue safely without a correction round; an empty
-`investigate` may recover only after the bounded retry and only with an exact action already supplied
-to the model. Presentation tests must turn flattened bold
+that returns exact supplied IDs must continue safely; an empty or omitted list stops. Presentation tests must turn flattened bold
 section labels and Unicode bullets into valid headings and lists. Follow-up Pod-log collection must
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching

@@ -227,8 +227,9 @@ limitations; model-authored planning caveats are not represented as observed
 collection failures.
 
 Evidence relationship graphs and capability ledgers are deterministic, bounded projections of
-already-redacted observations and server-known broker state. Graph frontier hints, structured
-investigation gaps, model-authored recommendations, and cluster content remain non-executable.
+already-redacted observations and server-known broker state. They remain server-side; the planner
+receives only compact evidence and opaque action labels. Graph frontier hints, structured
+investigation gaps, model-authored prose, and cluster content remain non-executable.
 Suggested-check buttons are
 compiled only from unread server-owned candidates and are scoped to the source assistant message and
 conversation owner. Their CSRF-protected endpoint reloads the persisted descriptor, verifies the
@@ -236,21 +237,17 @@ conversation cluster and read-only capability, rejects mutation language, and le
 broker rederive and authorize the exact action. The browser cannot submit a target, namespace, tool
 payload, Secret read, or mutation. A linked evidence-extension run excludes prior chat history and
 summary from model context while retaining bounded, redacted supporting evidence.
-Recommendation promotion recognizes only a fixed diagnostic capability label and never
-extracts executable resource coordinates from prose. For ordinary traversal, server code holds each
+For ordinary traversal, server code holds each
 typed intent and exposes only an opaque candidate ID plus a redacted description. Unknown, modified,
 or stale IDs are rejected; candidate prose is never parsed for coordinates. The model must return a
 schema-valid candidate selection, or a typed discovery intent when no candidates exist. The compiled
 intent is independently checked for grounding, duplicate suppression, budget, resource
 sensitivity, read-only verb, live discovery, and ServiceAccount RBAC before execution. Goal pinning
 and no-progress repair do not widen that authority.
-The final-answer schema requires a structured recommendation array even when it is empty. A visible
-recommendation heading with no structured counterpart is corrected rather than converted into an
-action. Earlier structured recommendations may be preserved across answer rewrites, but they still
-produce a control only after fixed-capability matching and exact server-owned candidate compilation.
-Malformed answer strings that embed `investigation_gaps` or recommended evidence receive the same
-treatment: only a fixed capability whose server ledger is still actionable may be promoted. Names,
-namespaces, URLs, JSON fields, mutations, and other prose are never retained as an intent.
+The final-answer schema contains only narrative and citations. It cannot authorize or describe a
+clickable action. Normal code independently selects remaining unread server-owned candidates for
+display, and strips provider recommendation-schema tails from narrative Markdown. Names, namespaces,
+URLs, JSON fields, mutations, and other model prose are never retained as an intent.
 The sole URL-probe exception is an absolute HTTP/HTTPS URL copied exactly from the operator request;
 normal code validates it and retains the typed intent server-side. Healthy Pod-log candidates are
 exact namespace/Pod/container tuples derived from collected Pod evidence and are exposed only when a

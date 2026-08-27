@@ -12,6 +12,8 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
+    _minimal_action_payload,
+    _minimal_answer_payload,
     capture_raw_model_responses,
     validate_model_endpoint,
 )
@@ -43,8 +45,6 @@ class RecordingCompletions:
             {
                 "answer": "The supplied Pod is pending.",
                 "citations": ["cluster-pod-1"],
-                "certainty": "probable",
-                "recommended_actions": ["Review the application configuration that produced the error."],
             }
             if schema_name == "conciseadhocanswer" else
             {
@@ -90,8 +90,6 @@ class EmptyThenAnswerCompletions(RecordingCompletions):
         content = json.dumps({
             "answer": "The collected Route evidence supports TLS passthrough.",
             "citations": ["cluster-route-1"],
-            "certainty": "probable",
-            "recommended_actions": [],
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -170,10 +168,7 @@ class CandidatePlanCompletions:
     def create(self, **kwargs):
         self.requests.append(kwargs)
         content = json.dumps({
-            "decision": "investigate",
             "action_ids": ["read-0123456789abcdefabcd"],
-            "reason": "Inspect the backend Service port mapping.",
-            "remaining_question": "Does the Service expose the expected protocol?",
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -187,12 +182,7 @@ class NoActionPlanCompletions:
     def create(self, **kwargs):
         self.requests.append(kwargs)
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
-            content=json.dumps({
-                "decision": "uncertain",
-                "action_ids": [],
-                "reason": "No supplied action can resolve the remaining question.",
-                "remaining_question": "Which cluster object is implicated?",
-            })
+            content=json.dumps({"action_ids": []})
         ))])
 
 
@@ -220,16 +210,14 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
 
     assert isinstance(answer, AdHocAnswer)
     assert answer.cited_evidence_ids == ["cluster-pod-1"]
-    assert answer.recommended_next_checks == [
-        "Review the application configuration that produced the error."
-    ]
+    assert answer.recommended_next_checks == []
     request = completions.requests[0]
     assert request["model"] == "gemma-4-31b-it"
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["strict"] is True
     schema = request["response_format"]["json_schema"]["schema"]
-    assert "recommended_actions" in schema["required"]
-    assert "Duplicate every follow-up check" in request["messages"][0]["content"]
+    assert set(schema["properties"]) == {"answer", "citations"}
+    assert "PodPilot handles checks separately" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
 
 
@@ -408,19 +396,16 @@ def test_candidate_mode_uses_smaller_schema_without_read_intents() -> None:
     assert "action_ids" in schema["properties"]
     assert "intents" not in schema["properties"]
     instructions = completions.requests[0]["messages"][0]["content"]
-    assert "exact supplied action IDs" in instructions
-    assert "Continue investigating while a useful action remains" in instructions
+    assert "exact supplied read-only action IDs" in instructions
+    assert "empty action_ids list" in instructions
     assert "discover_resources" not in instructions
     assert len(instructions) < 1300
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
-    assert set(payload) == {
-        "available_actions", "completed_actions", "conversation_context", "correction",
-        "evidence", "question", "remaining_actions", "unresolved_questions",
-    }
+    assert set(payload) == {"actions", "facts", "question"}
     assert "relationship_graph" not in payload
     assert "capability_ledger" not in payload
     assert "tool_policy" not in payload
-    assert payload["available_actions"][0]["id"] == "read-0123456789abcdefabcd"
+    assert payload["actions"][0]["id"] == "read-0123456789abcdefabcd"
 
 
 def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
@@ -440,29 +425,69 @@ def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
     assert "action_ids" in schema["properties"]
     assert "intents" not in schema["properties"]
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
-    assert payload["available_actions"] == []
+    assert payload["actions"] == []
     assert "tool_policy" not in payload
 
 
 def test_action_selection_uses_exact_ids_as_the_safe_continuation_signal() -> None:
     selected = ActionSelection.model_validate({
-        "decision": "answer",
         "action_ids": ["read-0123456789abcdefabcd"],
-        "reason": "Inspect the suggested Pod logs.",
     })
-    empty = ActionSelection.model_validate({
-        "decision": "investigate",
-        "action_ids": [],
-        "reason": "No action was selected.",
-    })
+    empty = ActionSelection.model_validate({})
 
-    assert selected.decision == "investigate"
     assert selected.to_read_plan().candidate_ids == ["read-0123456789abcdefabcd"]
-    assert empty.decision == "investigate"
     empty_plan = empty.to_read_plan()
     assert empty_plan.decision == "answer_from_evidence"
     assert empty_plan.candidate_ids == []
-    assert empty_plan._selection_incomplete is True
+    assert empty_plan.stop_reason == "no_material_read"
+
+
+def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
+    context = {
+        "question": "Why is this workload failing?",
+        "conversation": [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "Earlier evidence summary."},
+        ],
+        "clusters": [{
+            "id": "cluster-a", "name": "Production", "api_url": "https://secret.invalid",
+            "token_present": True,
+        }],
+        "facts": [{
+            "id": f"evidence-{index}",
+            "cluster": "Production",
+            "summary": "x" * 800,
+            "facts": [{"label": "Field", "value": "y" * 800}] * 10,
+            "log_excerpt": "z" * 3000,
+        } for index in range(20)],
+        "read_candidates": [{
+            "id": "read-0123456789abcdefabcd",
+            "target": "Pod production/api",
+            "reason": "Inspect runtime errors.",
+            "supporting_evidence_ids": ["evidence-1"],
+        }],
+        "capability_ledger": {"pod_logs": "available"},
+        "relationship_graph": {"nodes": ["many"]},
+        "tool_policy": {"remaining_reads": 10},
+    }
+
+    planner = _minimal_action_payload(context)
+    final = _minimal_answer_payload(context)
+
+    assert set(planner) == {"question", "facts", "actions"}
+    assert len(planner["facts"]) <= 6
+    assert planner["actions"] == [{
+        "id": "read-0123456789abcdefabcd",
+        "label": "Pod production/api — Inspect runtime errors.",
+    }]
+    assert set(final) == {
+        "question", "clusters", "facts", "collection_issues", "prior_answer",
+    }
+    assert final["clusters"] == [{"id": "cluster-a", "name": "Production"}]
+    assert len(final["facts"]) <= 8
+    assert len(json.dumps(planner)) < 7_000
+    assert len(json.dumps(final)) < 10_000
+    assert "capability_ledger" not in json.dumps(final)
 
 
 def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:
@@ -491,16 +516,12 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
 
     request = completions.requests[0]
     assert request["max_tokens"] == 1400
-    assert "Do not tell the operator to run kubectl" in request["messages"][0]["content"]
-    assert "Cite exact supplied evidence IDs" in request["messages"][0]["content"]
-    assert "For multiple clusters" in request["messages"][0]["content"]
-    assert "Separate observed facts from interpretation" in request["messages"][0]["content"]
+    assert "Do not include JSON" in request["messages"][0]["content"]
+    assert "Cite supplied evidence IDs" in request["messages"][0]["content"]
+    assert "more than one" in request["messages"][0]["content"]
     assert len(request["messages"][0]["content"]) < 1000
     payload = json.loads(request["messages"][1]["content"])
-    assert set(payload) == {
-        "clusters", "collection_issues", "conversation_context", "correction",
-        "evidence", "question",
-    }
+    assert set(payload) == {"clusters", "collection_issues", "facts", "question"}
     assert "observations" not in payload
     assert "capability_ledger" not in payload
 

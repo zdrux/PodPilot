@@ -663,6 +663,14 @@ def _clean_adhoc_markdown(
     """Preserve readable Markdown while removing provider-facing citation syntax."""
 
     cleaned = _INTERNAL_EVIDENCE_PATH.sub("", value)
+    # Suggested checks are composed independently from exact server candidates.
+    # Remove provider attempts to serialize that separate contract into prose.
+    cleaned = re.sub(
+        r"(?is)\s*(?:---+\s*)?(?:#{1,6}\s+recommended actions?[^\n]*|"
+        r"(?:\*\*)?[\"'`]?recommended_actions[\"'`]?(?:\*\*)?\s*:)\s*.*$",
+        "",
+        cleaned,
+    )
     evidence_ids = sorted(known_evidence_ids or set(), key=len, reverse=True)
     if evidence_ids:
         inline_citations = re.compile(
@@ -754,16 +762,11 @@ def _clean_adhoc_markdown(
 
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
-_MARKDOWN_RECOMMENDATION_HEADING = re.compile(
-    r"^\s{0,3}#{1,6}\s+(?:recommended(?: next)? (?:steps?|actions?)|"
-    r"next (?:steps?|checks?)|what (?:you )?can check next)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
 
 
 def _adhoc_answer_quality_issue(
     *, content: str, answer_mode: str | None = None, has_evidence: bool = False,
-    has_citations: bool = False, has_recommendations: bool = False,
+    has_citations: bool = False,
 ) -> str | None:
     """Retry only structurally empty answers; trust checks happen during validation."""
 
@@ -777,14 +780,6 @@ def _adhoc_answer_quality_issue(
         re.IGNORECASE,
     ):
         return "structured_fields_embedded_in_answer"
-    if re.search(
-        r"[^\n]\s+\|\s*(?:priority|evidence needed)\s*\|",
-        content,
-        re.IGNORECASE,
-    ):
-        return "malformed_markdown_structure"
-    if not has_recommendations and _MARKDOWN_RECOMMENDATION_HEADING.search(content):
-        return "recommendations_not_structured"
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -2582,8 +2577,8 @@ def _model_fact_cards(
     evidence: list[dict[str, object]],
     *,
     activity: list[dict[str, object]],
-    max_cards: int = 12,
-    total_byte_limit: int = 20_000,
+    max_cards: int = 8,
+    total_byte_limit: int = 8_000,
 ) -> list[dict[str, object]]:
     """Normalize observations into small, resource-agnostic model evidence cards."""
 
@@ -3085,6 +3080,68 @@ def _compile_suggested_followups(
         if len(actions) >= 4:
             break
     return visible[:5], actions[:4]
+
+
+def _compile_remaining_candidate_followups(
+    *,
+    question: str,
+    evidence: list[dict[str, object]],
+    cluster_runtimes: list[dict[str, object]],
+    remaining_units: int,
+    limit: int = 3,
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Expose remaining exact server candidates without asking the answer model for prose."""
+
+    if remaining_units <= 0 or limit <= 0:
+        return [], []
+    labels = {
+        "pod_logs": "Read logs for",
+        "pod_spec": "Inspect",
+        "service_spec": "Inspect",
+        "endpoints": "Inspect",
+        "http_probe": "Probe",
+        "metrics": "Read metrics for",
+        "resource_read": "Inspect",
+        "initial_discovery": "Inspect",
+    }
+    visible: list[str] = []
+    actions: list[dict[str, object]] = []
+    used_ids: set[str] = set()
+    for runtime in cluster_runtimes:
+        cluster = runtime["cluster"]
+        cluster_id = str(cluster.id)
+        cluster_evidence = [
+            dict(item) for item in evidence
+            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
+        ]
+        candidates = _grounded_read_candidates(
+            question=question,
+            evidence=cluster_evidence,
+            relationship_graph=derive_evidence_relationship_graph(cluster_evidence),
+            recovery_anchor_plan=None,
+            seen_intents=set(runtime.get("read_signatures") or []),
+            investigation_gaps=None,
+            limit=max(8, limit * 2),
+        )
+        for candidate in candidates:
+            if candidate.id in used_ids:
+                continue
+            used_ids.add(candidate.id)
+            prefix = labels.get(candidate.capability, "Inspect")
+            label = f"{prefix} {candidate.target}"[:500]
+            visible.append(label)
+            actions.append({
+                "id": candidate.id,
+                "cluster_id": cluster_id,
+                "cluster_name": str(cluster.name),
+                "capability": candidate.capability,
+                "label": label,
+                "target": candidate.target,
+                "supporting_evidence_ids": list(candidate.supporting_evidence_ids),
+            })
+            if len(actions) >= limit:
+                return visible, actions
+    return visible, actions
 
 
 def _compile_grounded_candidate_plan(
@@ -5056,10 +5113,6 @@ def create_app(
                     answer_mode=str(validated["answer_mode"]),
                     has_evidence=bool(evidence),
                     has_citations=bool(validated["citations"]),
-                    has_recommendations=bool(validated["recommended_next_checks"]),
-                ) or _adhoc_capability_wording_issue(
-                    content=str(validated["content"]),
-                    capability_ledger=answer_context.get("capability_ledger"),
                 )
                 if answer_quality_issue:
                     LOGGER.warning(
@@ -5076,39 +5129,13 @@ def create_app(
                         )
                     retry_context = dict(answer_context)
                     feedback_message = (
-                        "Keep operator-facing prose in the answer field. Do not embed JSON, schema "
-                        "fields, or fenced serialized objects inside the answer. Put any useful "
-                        "resolution guidance in recommended_actions."
+                        "Return only a short operator-facing answer. Do not embed JSON or schema fields."
                         if answer_quality_issue == "structured_fields_embedded_in_answer"
                         else
-                        "Return readable Markdown with headings, paragraphs, bullets, and tables on "
-                        "separate physical lines. Do not flatten a table into an inline pipe-delimited sentence."
-                        if answer_quality_issue == "malformed_markdown_structure"
-                        else
-                        "The answer proposed follow-up checks in prose but did not return them in "
-                        "recommended_actions. Return the same concise answer and duplicate every proposed "
-                        "check in recommended_actions so PodPilot can validate it."
-                        if answer_quality_issue == "recommendations_not_structured"
-                        else
-                        "The prior response listed a capability as not collected even though the final "
-                        "evidence shows it was collected. Describe that observation and remove the stale "
-                        "claim or recommendation."
-                        if answer_quality_issue == "collected_check_described_as_uncollected"
-                        else
-                        "The prior response declined to interpret available evidence. Explain the "
-                        "confirmed observations, the strongest evidence-supported hypothesis, what "
-                        "remains unverified, and precise recommended_actions for PodPilot. Do not "
-                        "tell the operator to collect evidence or run commands."
+                        "Briefly interpret the supplied evidence and state what remains uncertain."
                         if answer_quality_issue == "insufficient_interpretation_with_available_evidence"
                         else
-                        "The prior response described a typed check as unavailable even though the "
-                        "investigation state says it is merely not collected. Use 'not collected' language "
-                        "and put useful resolution guidance in recommended_actions."
-                        if answer_quality_issue == "available_check_described_as_unavailable"
-                        else
-                        "The prior response contained headings but no readable body. Return a direct "
-                        "operator-facing answer with substantive prose or bullets beneath any useful "
-                        "headings. Do not return headings alone."
+                        "Return a short answer with substantive prose, not a heading alone."
                     )
                     retry_context["answer_feedback"] = {
                         "code": "incomplete_final_answer",
@@ -5156,12 +5183,6 @@ def create_app(
                             answer_mode=str(retry_validated["answer_mode"]),
                             has_evidence=bool(evidence),
                             has_citations=bool(retry_validated["citations"]),
-                            has_recommendations=bool(
-                                retry_validated["recommended_next_checks"]
-                            ),
-                        ) or _adhoc_capability_wording_issue(
-                            content=str(retry_validated["content"]),
-                            capability_ledger=retry_context.get("capability_ledger"),
                         )
                         validated = retry_validated
                         answer_quality_issue = retry_issue
@@ -5399,12 +5420,6 @@ def create_app(
                             answer_mode=str(validated["answer_mode"]),
                             has_evidence=bool(evidence),
                             has_citations=bool(validated["citations"]),
-                            has_recommendations=bool(
-                                validated["recommended_next_checks"]
-                            ),
-                        ) or _adhoc_capability_wording_issue(
-                            content=str(validated["content"]),
-                            capability_ledger=answer_context.get("capability_ledger"),
                         )
                         LOGGER.info(
                             "podpilot.adhoc.gap_followup_complete actor=%s "
@@ -5562,13 +5577,12 @@ def create_app(
                         "citations": [],
                         "limitations": [str(exc)],
                     }
-        suggested_checks, suggested_followup_actions = _compile_suggested_followups(
-            validated_answer=validated,
+        suggested_checks, suggested_followup_actions = _compile_remaining_candidate_followups(
             question=message_text,
             evidence=evidence,
-            activity=activity,
             cluster_runtimes=cluster_runtimes,
             remaining_units=app_settings.adhoc_max_reads_per_turn,
+            limit=3,
         )
         validated["recommended_next_checks"] = suggested_checks
         validated["suggested_followup_actions"] = suggested_followup_actions
