@@ -427,6 +427,26 @@ def _validated_adhoc_answer(
     }
 
 
+def _merge_validated_recommendations(
+    earlier: dict[str, object],
+    latest: dict[str, object],
+) -> dict[str, object]:
+    """Preserve structured checks when a later answer only rewrites prose."""
+
+    merged: list[str] = []
+    for source in (latest, earlier):
+        for item in source.get("recommended_next_checks") or []:
+            recommendation = redact_text(str(item))[:500]
+            if recommendation.strip() and recommendation not in merged:
+                merged.append(recommendation)
+            if len(merged) >= 5:
+                break
+        if len(merged) >= 5:
+            break
+    latest["recommended_next_checks"] = merged
+    return latest
+
+
 _NO_TLS_CLAIM = re.compile(
     r"\b(?:not\s+(?:terminating|serving|speaking|using)\s+(?:https|tls)|"
     r"(?:serving|using|speaking)\s+(?:only\s+)?(?:plain[- ]?)?http(?:\s+only)?|"
@@ -593,6 +613,46 @@ _ADHOC_SECTION_TITLES = {
     "recommended next step": "Recommended next steps",
     "recommended next steps": "Recommended next steps",
 }
+_ADHOC_INLINE_MARKDOWN_HEADING = re.compile(
+    r"[ \t]+(?=#{2,4}[ \t]+(?:observed|runtime|interpretation|recommended|"
+    r"next|uncertainty|limitations?|summary|findings?|evidence|root cause|impact|"
+    r"remediation|conclusion|bottom line|what)\b)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_adhoc_heading_boundaries(value: str) -> str:
+    """Put known operator-facing headings on their own lines outside code fences."""
+
+    normalized: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in value.splitlines():
+        stripped = line.lstrip()
+        marker = stripped[:3]
+        if marker in {"```", "~~~"}:
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif marker == fence_marker:
+                in_fence = False
+                fence_marker = ""
+            normalized.append(line)
+            continue
+        if not in_fence:
+            line = _ADHOC_INLINE_MARKDOWN_HEADING.sub("\n\n", line)
+            line = re.sub(
+                r"(?m)^(#{1,4}[^\n]*?)\s+---+\s+",
+                r"\1\n\n",
+                line,
+            )
+            line = re.sub(
+                r"\s+-\s+(?=(?:\*\*|`|[A-Z]))",
+                "\n- ",
+                line,
+            )
+        normalized.append(line)
+    return "\n".join(normalized)
 
 
 def _clean_adhoc_markdown(
@@ -646,6 +706,18 @@ def _clean_adhoc_markdown(
         cleaned = re.sub(r"[ \t]*•[ \t]*", "\n- ", cleaned)
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
+    # Unicode-bullet recovery above can introduce the first newlines before we
+    # encounter later inline headings. Normalize known section headings after
+    # that pass as well, while leaving code fences and arbitrary prose intact.
+    cleaned = _normalize_adhoc_heading_boundaries(cleaned)
+    cleaned = re.sub(
+        r"(?im)^(#{2,4}[ \t]+(?:observed|runtime|interpretation|recommended|next|"
+        r"uncertainty|limitations?|summary|findings?|evidence|root cause|impact|"
+        r"remediation|conclusion|bottom line|what)[^\n]*)\n(?=[-*+]\s)",
+        r"\1\n\n",
+        cleaned,
+    )
+
     # Some chat-completions providers flatten an otherwise substantive Markdown
     # answer onto one physical line beginning with a heading. Without restoring
     # block boundaries, the quality check correctly recognizes the leading `###`
@@ -682,11 +754,16 @@ def _clean_adhoc_markdown(
 
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
+_MARKDOWN_RECOMMENDATION_HEADING = re.compile(
+    r"^\s{0,3}#{1,6}\s+(?:recommended(?: next)? (?:steps?|actions?)|"
+    r"next (?:steps?|checks?)|what (?:you )?can check next)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _adhoc_answer_quality_issue(
     *, content: str, answer_mode: str | None = None, has_evidence: bool = False,
-    has_citations: bool = False,
+    has_citations: bool = False, has_recommendations: bool = False,
 ) -> str | None:
     """Retry only structurally empty answers; trust checks happen during validation."""
 
@@ -706,6 +783,8 @@ def _adhoc_answer_quality_issue(
         re.IGNORECASE,
     ):
         return "malformed_markdown_structure"
+    if not has_recommendations and _MARKDOWN_RECOMMENDATION_HEADING.search(content):
+        return "recommendations_not_structured"
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -4977,6 +5056,7 @@ def create_app(
                     answer_mode=str(validated["answer_mode"]),
                     has_evidence=bool(evidence),
                     has_citations=bool(validated["citations"]),
+                    has_recommendations=bool(validated["recommended_next_checks"]),
                 ) or _adhoc_capability_wording_issue(
                     content=str(validated["content"]),
                     capability_ledger=answer_context.get("capability_ledger"),
@@ -5004,6 +5084,11 @@ def create_app(
                         "Return readable Markdown with headings, paragraphs, bullets, and tables on "
                         "separate physical lines. Do not flatten a table into an inline pipe-delimited sentence."
                         if answer_quality_issue == "malformed_markdown_structure"
+                        else
+                        "The answer proposed follow-up checks in prose but did not return them in "
+                        "recommended_actions. Return the same concise answer and duplicate every proposed "
+                        "check in recommended_actions so PodPilot can validate it."
+                        if answer_quality_issue == "recommendations_not_structured"
                         else
                         "The prior response listed a capability as not collected even though the final "
                         "evidence shows it was collected. Describe that observation and remove the stale "
@@ -5059,6 +5144,9 @@ def create_app(
                             collection_limitations=limitations,
                             observations=evidence,
                         )
+                        retry_validated = _merge_validated_recommendations(
+                            validated, retry_validated
+                        )
                         _reconcile_validated_answer_gaps(
                             retry_validated,
                             capability_ledger=retry_context["capability_ledger"],
@@ -5068,6 +5156,9 @@ def create_app(
                             answer_mode=str(retry_validated["answer_mode"]),
                             has_evidence=bool(evidence),
                             has_citations=bool(retry_validated["citations"]),
+                            has_recommendations=bool(
+                                retry_validated["recommended_next_checks"]
+                            ),
                         ) or _adhoc_capability_wording_issue(
                             content=str(retry_validated["content"]),
                             capability_ledger=retry_context.get("capability_ledger"),
@@ -5288,13 +5379,16 @@ def create_app(
                                 ],
                                 stage="evidence follow-up answer",
                             )
-                        validated = _validated_adhoc_answer(
+                        followup_validated = _validated_adhoc_answer(
                             answer,
                             known_evidence_ids={
                                 str(item.get("id")) for item in evidence
                             },
                             collection_limitations=limitations,
                             observations=evidence,
+                        )
+                        validated = _merge_validated_recommendations(
+                            validated, followup_validated
                         )
                         _reconcile_validated_answer_gaps(
                             validated,
@@ -5305,6 +5399,9 @@ def create_app(
                             answer_mode=str(validated["answer_mode"]),
                             has_evidence=bool(evidence),
                             has_citations=bool(validated["citations"]),
+                            has_recommendations=bool(
+                                validated["recommended_next_checks"]
+                            ),
                         ) or _adhoc_capability_wording_issue(
                             content=str(validated["content"]),
                             capability_ledger=answer_context.get("capability_ledger"),

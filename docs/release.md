@@ -194,7 +194,10 @@ responses and evidence-based replies that omit current material Pod-log citation
 one bounded correction without the rejected body, and activate
 the deterministic Route/TLS or cited-observation fallback after a second failure.
 They must accept and structurally normalize a substantive single-line response that begins with a
-Markdown heading while continuing to reject a genuine standalone heading.
+Markdown heading, including recognized headings flattened after Unicode bullets, while continuing to
+reject a genuine standalone heading. Recommendation gates must require the structured array on every
+provider response, correct a prose recommendation section with an empty array, and preserve earlier
+valid structured recommendations through a prose-only correction before grounded candidate compilation.
 They must also prove that an empty structured citation array can recover an exact
 allowlisted observation ID from answer prose, removes that internal marker before
 display, and never accepts an unknown or partial ID.

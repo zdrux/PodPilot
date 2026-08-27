@@ -291,6 +291,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   button only for an unread exact server-owned candidate. The CSRF-protected click creates a linked
   same-conversation run with fresh model context, revalidates the opaque candidate, and executes it
   through the unchanged read broker; mutation guidance remains display-only.
+- The concise answer contract now always requires `recommended_actions`. Prose next-step sections with
+  no structured counterpart receive a bounded correction, valid actions survive later answer rewrites,
+  and recognized headings flattened after Unicode bullets are repaired before Markdown rendering.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed

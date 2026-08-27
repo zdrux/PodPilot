@@ -698,9 +698,10 @@ paths/endpoints, one sample, completed correlation checks, and citations. This s
 composed with—not replaced by—the Route/TLS fallback. Equivalent TLS trust/bypass and
 empty-Event limitations are shown once rather than repeated.
 Single-line chat-completions answers that begin with a Markdown heading are normalized into
-real heading, paragraph, and bullet blocks before this quality check. This prevents a substantive
-flattened response from being mistaken for a heading-only answer; a genuine standalone heading
-still receives the bounded correction.
+real heading, paragraph, and bullet blocks before this quality check. Recognized operator-facing
+headings flattened after Unicode bullets are also moved onto physical lines outside fenced code.
+This prevents a substantive flattened response from being mistaken for a heading-only answer;
+a genuine standalone heading still receives the bounded correction.
 
 Answers that serialize top-level fields such as `investigation_gaps` inside visible prose, or flatten
 a Markdown table into one pipe-delimited line, receive `podpilot.adhoc.answer_quality_rejected` with
@@ -800,8 +801,10 @@ discloses the recovery in the answer limitations.
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
 as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
 duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. The final answer
-uses a separate concise contract containing answer Markdown, exact citations, certainty, and optional
-operator recommendations. Recommendations remain useful resolution guidance; when normal code can map
+uses a separate concise contract containing answer Markdown, exact citations, certainty, and a required
+operator-recommendation array that may be empty. A prose recommendation section without structured
+recommendations receives one bounded correction, and valid recommendations survive later prose-only
+answer rewrites. Recommendations remain useful resolution guidance; when normal code can map
 one to a known safe evidence capability, budget remains, and it would materially improve the answer,
 PodPilot may run one additional bounded collection phase and regenerate the answer. Completion is
 logged as `podpilot.adhoc.gap_followup_complete`. These records contain

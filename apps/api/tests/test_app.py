@@ -34,6 +34,7 @@ from podpilot_api.main import (
     _grounded_read_candidates,
     _investigation_capability_ledger,
     _investigation_unit_cost,
+    _merge_validated_recommendations,
     _model_fact_cards,
     _parse_tags,
     _partition_investigation_gaps,
@@ -951,6 +952,47 @@ def test_inline_bold_sections_and_unicode_bullets_become_readable_markdown() -> 
     assert cleaned.startswith("### Observed evidence\n\n- The Route")
     assert "\n\n### Interpretation\n\n- The backend" in cleaned
     assert "\n\n### Recommended next steps\n\n- Inspect Pod logs" in cleaned
+
+
+def test_unicode_bullets_do_not_leave_later_markdown_headings_inline() -> None:
+    cleaned = _clean_adhoc_markdown(
+        "### Observed configuration • The Route uses passthrough TLS. "
+        "### Runtime observations • Pod logs show a missing certificate. "
+        "### Interpretation • The sidecar cannot load its TLS material. "
+        "### Recommended next steps • Inspect the exact Pod mounts."
+    )
+
+    assert "\n\n### Runtime observations\n\n- Pod logs" in cleaned
+    assert "\n\n### Interpretation\n\n- The sidecar" in cleaned
+    assert "\n\n### Recommended next steps\n\n- Inspect" in cleaned
+
+
+def test_recommendation_heading_requires_structured_recommendations() -> None:
+    content = "## Recommended next steps\n\n- Inspect the exact Pod mounts."
+
+    assert _adhoc_answer_quality_issue(
+        content=content,
+        has_recommendations=False,
+    ) == "recommendations_not_structured"
+    assert _adhoc_answer_quality_issue(
+        content=content,
+        has_recommendations=True,
+    ) is None
+
+
+def test_answer_correction_preserves_earlier_structured_recommendations() -> None:
+    corrected = _merge_validated_recommendations(
+        {"recommended_next_checks": ["Inspect the exact Pod mounts."]},
+        {
+            "content": "Corrected Markdown answer.",
+            "recommended_next_checks": [],
+        },
+    )
+
+    assert corrected["content"] == "Corrected Markdown answer."
+    assert corrected["recommended_next_checks"] == [
+        "Inspect the exact Pod mounts."
+    ]
 
 
 def test_flattened_heading_answer_is_normalized_before_quality_validation() -> None:

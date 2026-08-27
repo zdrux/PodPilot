@@ -227,6 +227,9 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["model"] == "gemma-4-31b-it"
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["strict"] is True
+    schema = request["response_format"]["json_schema"]["schema"]
+    assert "recommended_actions" in schema["required"]
+    assert "Duplicate every follow-up check" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
 
 

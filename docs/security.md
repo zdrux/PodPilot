@@ -244,6 +244,10 @@ schema-valid candidate selection, or a typed discovery intent when no candidates
 intent is independently checked for grounding, duplicate suppression, budget, resource
 sensitivity, read-only verb, live discovery, and ServiceAccount RBAC before execution. Goal pinning
 and no-progress repair do not widen that authority.
+The final-answer schema requires a structured recommendation array even when it is empty. A visible
+recommendation heading with no structured counterpart is corrected rather than converted into an
+action. Earlier structured recommendations may be preserved across answer rewrites, but they still
+produce a control only after fixed-capability matching and exact server-owned candidate compilation.
 Malformed answer strings that embed `investigation_gaps` or recommended evidence receive the same
 treatment: only a fixed capability whose server ledger is still actionable may be promoted. Names,
 namespaces, URLs, JSON fields, mutations, and other prose are never retained as an intent.

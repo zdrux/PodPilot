@@ -443,8 +443,12 @@ allowlisted evidence ID, cluster attribution, summary, concise material facts, a
 projection or 1,500-character log excerpt. The final model receives only the question, two recent
 messages, cluster labels, those fact cards, up to six collection issues, and optional correction feedback.
 Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
-no claimed mutation, concise sectioned Markdown, and useful resolution recommendations. Single-line
-bold labels and Unicode bullets are normalized into headings and lists before rendering. Domain teaching, graph,
+no claimed mutation, concise sectioned Markdown, and useful resolution recommendations. The concise
+schema requires `recommended_actions` on every response, even when empty; a recommendation section in
+prose without matching structured actions receives one bounded correction. Structured actions from an
+earlier valid attempt survive a prose-only correction or evidence-follow-up rewrite and are still reconciled
+against final capability state. Single-line bold labels, Unicode bullets, and recognized section headings
+flattened later in a line are normalized into headings and lists before rendering. Domain teaching, graph,
 capability-ledger, findings, knowledge, and raw observation payloads stay server-side. The database and
 evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
