@@ -196,7 +196,10 @@ the deterministic Route/TLS or cited-observation fallback after a second failure
 They must accept and structurally normalize a substantive single-line response that begins with a
 Markdown heading, including recognized headings flattened after Unicode bullets, while continuing to
 reject a genuine standalone heading. Final-writer gates must assert that its response schema contains
-only narrative and citations. Suggested-action gates must derive controls from unread exact
+only narrative and citations. Inventory/existence composition gates must prove that a valid concise
+model answer is augmented with the names, namespaces, kinds, and source OpenShift clusters from every
+successful current-turn list observation, with citations merged and no duplicate inventory section.
+Suggested-action gates must derive controls from unread exact
 server-owned candidates without consuming or parsing model recommendations.
 They must also prove that an empty structured citation array can recover an exact
 allowlisted observation ID from answer prose, removes that internal marker before

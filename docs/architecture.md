@@ -444,7 +444,8 @@ projection or 500-character log sample. The final model receives only the questi
 pairs, those fact cards, up to three collection issues, and an optional 500-character prior answer or
 short retry code.
 Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
-no claimed mutation, and optional simple Markdown. The concise schema contains only `answer` and
+no claimed mutation, and optional simple Markdown. For inventory/existence questions it also asks for
+counts and identifiable matches rather than a bare yes/no conclusion. The concise schema contains only `answer` and
 `citations`; recommendation generation and formatting are not part of this call. Single-line bold labels,
 Unicode bullets, and recognized section headings
 flattened later in a line are normalized into headings and lists before rendering. Domain teaching, graph,
@@ -462,8 +463,11 @@ removes stale gaps, and strips provider-facing citation markers after allowliste
 recovered. Once an HTTPS probe completes TLS and
 returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
 reads because they can distinguish application, authentication, and upstream failures.
-Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
-cited-observation fallback rendering. Normal code then composes a bounded **Backend log
+Persistent incompleteness activates deterministic Route/TLS or generic cited-observation fallback
+rendering. Independently, every current-turn inventory/existence answer with successful list evidence
+is augmented by a deterministic table of OpenShift cluster, kind, namespace, object name, and Ready
+condition. This preserves a concise model interpretation while guaranteeing that verified object
+identities are visible. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving
 exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
 supporting evidence citations.

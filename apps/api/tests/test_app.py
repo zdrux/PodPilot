@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
+    _append_deterministic_inventory,
     _adhoc_answer_quality_issue,
     _adhoc_answer_advisories,
     _adhoc_capability_wording_issue,
@@ -1970,6 +1971,67 @@ def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None
     assert "| 2 | `openshift-logging` | `collector-b` | — |" in str(rendered["content"])
     assert "complete for this snapshot" in str(rendered["content"])
     assert rendered["citations"] == ["cluster-pods-1"]
+
+
+def test_existence_question_renders_identifiable_multi_cluster_inventory() -> None:
+    evidence = [
+        {
+            "id": "central-kafka", "cluster_id": "central",
+            "cluster_name": "Simplii Central DEV", "tool": "list_resources",
+            "data": {
+                "kind": "Kafka", "scope": "cluster",
+                "names": ["orders-kafka"],
+                "objects": [{"namespace": "orders", "name": "orders-kafka"}],
+                "objectListComplete": True,
+            },
+        },
+        {
+            "id": "east-kafka", "cluster_id": "east",
+            "cluster_name": "Simplii East DEV", "tool": "list_resources",
+            "data": {
+                "kind": "Kafka", "scope": "cluster",
+                "names": ["events-kafka"],
+                "objects": [{"namespace": "events", "name": "events-kafka"}],
+                "objectListComplete": True,
+            },
+        },
+    ]
+    rendered = _deterministic_inventory_answer(
+        question="Do we have Kafka clusters running on either OpenShift cluster?",
+        evidence=evidence,
+        activity=[
+            {"tool": "list_resources", "status": "succeeded", "evidence_ids": [item["id"]]}
+            for item in evidence
+        ],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "**Collected:** 2 matching resources across 2 OpenShift clusters." in content
+    assert "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |" in content
+    assert "| `Simplii Central DEV` | `Kafka` | `orders` | `orders-kafka` | — |" in content
+    assert "| `Simplii East DEV` | `Kafka` | `events` | `events-kafka` | — |" in content
+    assert rendered["citations"] == ["central-kafka", "east-kafka"]
+
+
+def test_verified_inventory_augments_valid_concise_model_answer() -> None:
+    validated: dict[str, object] = {
+        "answer_mode": "evidence_based",
+        "content": "Yes, Kafka resources exist on both selected clusters.",
+        "citations": ["central-kafka"],
+        "limitations": [],
+    }
+    inventory = {
+        "answer_mode": "evidence_based",
+        "content": "## Multi-cluster inventory\n\n| OpenShift cluster | Kind |",
+        "citations": ["central-kafka", "east-kafka"],
+    }
+
+    result = _append_deterministic_inventory(validated, inventory)
+
+    assert str(result["content"]).startswith("Yes, Kafka resources exist")
+    assert "## Multi-cluster inventory" in str(result["content"])
+    assert result["citations"] == ["central-kafka", "east-kafka"]
 
 
 def test_configuration_question_does_not_fall_back_to_names_only_inventory() -> None:

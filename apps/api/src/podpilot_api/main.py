@@ -1050,6 +1050,10 @@ def _question_requires_object_details(question: str) -> bool:
     )) or bool(re.search(
         r"(?i)\b(?:what|which)\b.{0,80}\b(?:available|exist|present|installed)\b",
         question,
+    )) or bool(re.search(
+        r"(?i)\b(?:do|does|are|is)\b.{0,80}\b(?:have|exist|present|installed|"
+        r"deployed|running)\b",
+        question,
     ))
     return not explicit_inventory
 
@@ -1768,24 +1772,32 @@ def _deterministic_inventory_answer(
     if len({str(item.get("cluster_id") or "") for item in observations}) > 1:
         rows: list[str] = []
         citations: list[str] = []
+        total_matches = 0
         for observation in reversed(observations):
             data = observation["data"]
             cluster_name = str(observation.get("cluster_name") or observation.get("cluster_id") or "cluster")
+            kind = str(data.get("kind") or "Resource")
             objects = inventory_rows(data)
             citations.append(str(observation["id"]))
             if objects:
+                total_matches += len(objects)
                 rows.extend(
-                    f"| `{cluster_name}` | `{namespace}` | `{name}` | {ready} |"
+                    f"| `{cluster_name}` | `{kind}` | `{namespace}` | `{name}` | {ready} |"
                     for namespace, name, ready in objects
                 )
             else:
-                rows.append(f"| `{cluster_name}` | — | _No matching resources_ | — |")
+                rows.append(
+                    f"| `{cluster_name}` | `{kind}` | — | _No matching resources_ | — |"
+                )
         return {
             "answer_mode": "evidence_based",
             "content": (
                 "## Multi-cluster inventory\n\n"
-                "| Cluster | Namespace | Matching resource | Ready |\n"
-                "|---|---|---|---|\n" + "\n".join(rows) +
+                f"**Collected:** {total_matches} matching resource"
+                f"{'s' if total_matches != 1 else ''} across {len(observations)} "
+                "OpenShift clusters.\n\n"
+                "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |\n"
+                "|---|---|---|---|---|\n" + "\n".join(rows) +
                 "\n\nEach row comes from an independently bounded read against the named cluster."
             ),
             "citations": citations,
@@ -1825,6 +1837,26 @@ def _deterministic_inventory_answer(
         "content": "\n".join(lines),
         "citations": [str(observation["id"])],
     }
+
+
+def _append_deterministic_inventory(
+    validated: dict[str, object], inventory_answer: dict[str, object] | None,
+) -> dict[str, object]:
+    """Augment a concise model conclusion with verified object identities."""
+
+    if inventory_answer is None:
+        return validated
+    inventory_content = str(inventory_answer.get("content") or "").strip()
+    if not inventory_content or inventory_content in str(validated.get("content") or ""):
+        return validated
+    validated["content"] = (
+        f"{str(validated.get('content') or '').rstrip()}\n\n{inventory_content}"
+    ).strip()
+    validated["citations"] = list(dict.fromkeys([
+        *[str(item) for item in (validated.get("citations") or [])],
+        *[str(item) for item in (inventory_answer.get("citations") or [])],
+    ]))
+    return validated
 
 
 def _deterministic_route_tls_answer(
@@ -5597,6 +5629,8 @@ def create_app(
                     validated["limitations"] = _dedupe_limitations(
                         [*limitations, *list(validated["limitations"])]
                     )
+                if deterministic_answer is not inventory_answer:
+                    _append_deterministic_inventory(validated, inventory_answer)
                 if deterministic_log_section is not None:
                     content = str(validated["content"]).rstrip()
                     log_content = str(deterministic_log_section["content"])

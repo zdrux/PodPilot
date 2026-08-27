@@ -303,6 +303,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 - The concise answer contract now contains only `answer` and `citations`. It does not request
   certainty, gaps, capability names, coordinates, or recommendations. Provider attempts to append a
   recommendation schema are removed before Markdown rendering; suggested controls come from normal code.
+- Inventory and existence questions now retain the model's concise conclusion while normal code appends
+  a verified table containing every collected OpenShift cluster, resource kind, namespace, object name,
+  and Ready condition within the bounded list window. This presentation no longer depends on the model
+  answer failing quality validation, so a technically valid yes/no response cannot hide collected identities.
 - Pod discovery now emits bounded exact log candidates. Planner-selected opaque
   IDs are bound to observed namespace/Pod/container coordinates before execution;
   invented targets receive one budget-free repair, followed by a disclosed
