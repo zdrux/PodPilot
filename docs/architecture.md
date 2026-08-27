@@ -443,12 +443,19 @@ capability categories that the ledger marks actionable; coordinates and prose ar
 the normal grounded-candidate pass.
 Before a follow-up answer, structured gaps are partitioned against the final capability ledger into
 resolved and remaining sets. Final validation rejects prose that calls a collected capability “not
-collected,” and provider-facing citation markers are removed after allowlisted citations are recovered.
+collected,” removes top-level gaps whose capability is already collected, and strips provider-facing
+citation markers after allowlisted citations are recovered. Once an HTTPS probe completes TLS and
+returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
+reads because they can distinguish application, authentication, and upstream failures.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
 cited-observation fallback rendering. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving
 exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
 supporting evidence citations.
+Route/TLS fallback also composes relevant current-turn Service, endpoint, Pod, and probe observations.
+A completed TLS probe with an HTTP response proves the tested path has a TLS-capable termination point,
+but does not by itself identify that component, exclude later plain-HTTP forwarding, or explain the
+returned application status.
 
 ## Investigation Flow
 

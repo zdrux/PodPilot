@@ -856,3 +856,7 @@ constructing Kubernetes coordinates and satisfying an unrelated schema union. Ob
 dynamic and evidence-driven; PodPilot does not encode a mandatory Route-to-Service-to-Pod workflow.
 Opaque IDs, gap recovery, and compact prompts do not grant authority: unknown IDs fail closed and all
 compiled reads retain grounding, sensitivity, budget, discovery, verb, RBAC, redaction, and audit checks.
+Final server reconciliation removes gaps already satisfied by the trusted ledger. When a live TLS
+probe returns an HTTP status, candidate ordering favors workload configuration and logs over redundant
+topology. Deterministic Route fallback composes all relevant collected topology and probe evidence while
+distinguishing proof about the tested path from inference about a particular container.

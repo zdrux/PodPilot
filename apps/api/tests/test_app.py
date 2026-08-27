@@ -29,10 +29,12 @@ from podpilot_api.main import (
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
     _format_est_time,
+    _grounded_read_candidates,
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _parse_tags,
     _partition_investigation_gaps,
+    _reconcile_validated_answer_gaps,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -189,6 +191,27 @@ def test_final_gap_partition_uses_trusted_collected_states() -> None:
 
     assert [gap.capability for gap in resolved] == ["service_spec"]
     assert [gap.capability for gap in remaining] == ["pod_logs"]
+
+
+def test_validated_answer_drops_structured_gaps_already_collected() -> None:
+    validated = {
+        "investigation_gaps": [
+            InvestigationGap(question="Read Service", capability="service_spec"),
+            InvestigationGap(question="Read logs", capability="pod_logs"),
+        ]
+    }
+
+    _reconcile_validated_answer_gaps(
+        validated,
+        capability_ledger={"checks": [
+            {"capability": "service_spec", "state": "collected"},
+            {"capability": "pod_logs", "state": "available_not_attempted"},
+        ]},
+    )
+
+    assert [
+        gap.capability for gap in validated["investigation_gaps"]
+    ] == ["pod_logs"]
 
 
 def test_recommended_next_check_is_promoted_only_to_typed_planner_input() -> None:
@@ -1119,6 +1142,20 @@ def test_limitations_are_semantically_deduplicated() -> None:
     assert len(limitations) == 2
 
 
+def test_model_recovery_limitations_collapse_without_hiding_tls_warnings() -> None:
+    limitations = _dedupe_limitations([
+        "The model planner twice stopped before collecting evidence; PodPilot used one read.",
+        "The model twice stopped despite an actionable structured evidence gap; PodPilot selected the highest-priority grounded read candidate.",
+        "The model returned an incomplete final answer after one correction attempt; PodPilot used a deterministic evidence summary.",
+        "TLS certificate verification was explicitly bypassed for this troubleshooting probe.",
+    ])
+
+    assert limitations == [
+        "The model stopped early or repeated reads; PodPilot used grounded read candidates and deterministic evidence where needed.",
+        "TLS certificate verification was explicitly bypassed for this troubleshooting probe.",
+    ]
+
+
 def test_deterministic_evidence_fallback_never_returns_an_empty_answer() -> None:
     fallback = _deterministic_evidence_fallback_answer(
         evidence=[{
@@ -1523,6 +1560,78 @@ def test_route_tls_fallback_includes_verified_failure_and_insecure_retry() -> No
     assert "retry without certificate verification returned HTTP `500`" in answer["content"]
     assert answer["citations"] == [
         "cluster-route-1", "network-verified", "network-insecure",
+    ]
+
+
+def test_route_tls_fallback_composes_backend_topology_and_application_response() -> None:
+    evidence = [
+        {
+            "id": "route-1", "tool": "search_resources", "cluster_id": "cluster-a",
+            "data": {"kind": "Route", "items": [{
+                "metadata": {"name": "gateway", "namespace": "ingress"},
+                "spec": {
+                    "host": "gateway.example.test",
+                    "to": {"kind": "Service", "name": "gateway"},
+                    "port": {"targetPort": "https"},
+                    "tls": {"termination": "passthrough"},
+                },
+            }]},
+        },
+        {
+            "id": "service-1", "tool": "get_resource", "cluster_id": "cluster-a",
+            "data": {
+                "kind": "Service",
+                "metadata": {"name": "gateway", "namespace": "ingress"},
+                "spec": {"ports": [
+                    {"name": "http", "port": 80, "targetPort": 8080},
+                    {"name": "https", "port": 443, "targetPort": 8443},
+                ]},
+            },
+        },
+        {
+            "id": "endpoints-1", "tool": "list_resources", "cluster_id": "cluster-a",
+            "data": {"kind": "EndpointSlice", "items": [{
+                "metadata": {"labels": {"kubernetes.io/service-name": "gateway"}},
+                "ports": [{"name": "https", "port": 8443}],
+                "endpoints": [{"targetRef": {"kind": "Pod", "name": "gateway-abc"}}],
+            }]},
+        },
+        {
+            "id": "pod-1", "tool": "get_resource", "cluster_id": "cluster-a",
+            "data": {
+                "kind": "Pod", "metadata": {"name": "gateway-abc", "namespace": "ingress"},
+                "spec": {"containers": [{
+                    "name": "proxy", "ports": [{"containerPort": 8443}],
+                }]},
+            },
+        },
+        {
+            "id": "probe-1", "tool": "http_probe", "cluster_id": "cluster-a",
+            "data": {
+                "logicalHost": "gateway.example.test", "statusCode": 401,
+                "tlsVerificationRequested": False, "tls": {"verified": False},
+            },
+        },
+    ]
+    activity = [
+        {"tool": item["tool"], "status": "succeeded", "evidence_ids": [item["id"]]}
+        for item in evidence
+    ]
+
+    answer = _deterministic_route_tls_answer(
+        question="Does this Route send HTTPS to a plain HTTP backend?",
+        evidence=evidence,
+        activity=activity,
+    )
+
+    assert answer is not None
+    assert "Backend topology observed" in answer["content"]
+    assert "`https:443 -> 8443`" in answer["content"]
+    assert "`https:8443`" in answer["content"]
+    assert "Pod `gateway-abc` contains `proxy` (declared ports 8443)" in answer["content"]
+    assert "no TLS-capable termination point" in answer["content"]
+    assert answer["citations"] == [
+        "route-1", "probe-1", "service-1", "endpoints-1", "pod-1",
     ]
 
 
@@ -4247,6 +4356,51 @@ def test_structured_log_gap_offers_healthy_pod_log_candidate() -> None:
     )
 
 
+def test_grounded_candidates_prioritize_workload_evidence_after_tls_response() -> None:
+    candidates = _grounded_read_candidates(
+        question="Why does https://gateway.example.test/models return HTTP 500?",
+        evidence=[
+            {
+                "id": "pod-1", "tool": "get_resource",
+                "data": {
+                    "kind": "Pod",
+                    "metadata": {"namespace": "ingress", "name": "gateway-abc"},
+                    "spec": {"containers": [{"name": "gateway"}]},
+                    "status": {"phase": "Running", "containerStatuses": [{
+                        "name": "gateway", "ready": True, "restartCount": 0,
+                    }]},
+                },
+            },
+            {
+                "id": "probe-1", "tool": "http_probe",
+                "data": {
+                    "logicalHost": "gateway.example.test", "statusCode": 500,
+                    "tlsVerificationRequested": False, "tls": {"verified": False},
+                },
+            },
+        ],
+        relationship_graph={"frontier": [{
+            "relation": "has_endpoints", "target": "Service ingress/gateway endpoints",
+            "evidence_ids": ["service-1"],
+            "read_hint": {
+                "tool": "list_resources", "resource": "endpointslices",
+                "api_version": "discovery.k8s.io/v1", "kind": "EndpointSlice",
+                "namespace": "ingress", "label_selector": "kubernetes.io/service-name=gateway",
+                "limit": 20,
+            },
+        }]},
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+        investigation_gaps=[
+            InvestigationGap(question="Read application logs", capability="pod_logs", priority="high"),
+            InvestigationGap(question="Read endpoints", capability="endpoints", priority="high"),
+        ],
+    )
+
+    assert candidates[0].capability == "pod_logs"
+    assert any(item.capability == "endpoints" for item in candidates)
+
+
 def test_structured_gap_recovery_executes_matching_grounded_candidate(
     tmp_path: Path, caplog,
 ) -> None:
@@ -4389,7 +4543,7 @@ def test_heading_only_route_answer_retries_then_uses_deterministic_tls_answer(
     assert "no such file or directory" in rendered.text.lower()
     assert "cluster-backend-logs" in rendered.text
     assert "Observed objects — what the cluster is actually doing" not in rendered.text
-    assert "used a deterministic evidence summary" in rendered.text
+    assert "used grounded read candidates and deterministic evidence" in rendered.text
 
 
 def test_repeated_no_read_plan_uses_operator_grounded_anchor_then_returns_to_model(

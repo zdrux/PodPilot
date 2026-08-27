@@ -258,6 +258,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   “not collected” wording for completed checks is rejected. Internal multi-ID citation markers are
   removed from prose. Exact operator URLs can become grounded Route-probe candidates, while structured
   log gaps can admit exact healthy Running/Ready Pod containers without weakening log target binding.
+- Deterministic Route fallback now composes current Service, endpoint, Pod, and live-probe evidence;
+  completed structured gaps are removed server-side. Once a TLS probe returns an HTTP response,
+  workload logs and Pod configuration outrank more topology checks, and internal model-recovery
+  warnings collapse into one concise limitation without hiding security or collection failures.
 - Ask planning now pins the initial goal, detects duplicate-only no-progress plans across collection
   phases, and supplies an object-specific capability ledger so available-but-uncollected Service,
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured

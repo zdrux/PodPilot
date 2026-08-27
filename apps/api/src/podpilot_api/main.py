@@ -862,6 +862,24 @@ def _partition_investigation_gaps(
     return resolved, unresolved
 
 
+def _reconcile_validated_answer_gaps(
+    validated_answer: dict[str, object],
+    *,
+    capability_ledger: dict[str, object],
+) -> dict[str, object]:
+    """Remove model-authored gaps that trusted collection state already resolved."""
+
+    gaps = [
+        gap for gap in (validated_answer.get("investigation_gaps") or [])
+        if isinstance(gap, InvestigationGap)
+    ]
+    _, unresolved = _partition_investigation_gaps(
+        gaps, capability_ledger=capability_ledger
+    )
+    validated_answer["investigation_gaps"] = unresolved
+    return validated_answer
+
+
 def _adhoc_answer_advisories(
     *, citations: list[str], question: str,
     observations: list[dict[str, object]],
@@ -1061,6 +1079,13 @@ def _compact_answer_findings(
 
 def _limitation_signature(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    if any(marker in normalized for marker in (
+        "model planner", "model twice stopped", "model returned an incomplete final answer",
+        "model provider could not correct", "model planner repeated only reads",
+        "podpilot selected the highest priority grounded read candidate",
+        "podpilot requested a novel evidence step",
+    )):
+        return "model_orchestration_recovery"
     if "tls" in normalized and any(
         marker in normalized for marker in ("bypass", "disabled", "without verification")
     ):
@@ -1085,7 +1110,11 @@ def _dedupe_limitations(values: list[str], *, limit: int = 8) -> list[str]:
         if not bounded or signature in seen:
             continue
         seen.add(signature)
-        result.append(bounded)
+        result.append(
+            "The model stopped early or repeated reads; PodPilot used grounded read "
+            "candidates and deterministic evidence where needed."
+            if signature == "model_orchestration_recovery" else bounded
+        )
         if len(result) >= limit:
             break
     return result
@@ -1702,6 +1731,12 @@ def _deterministic_route_tls_answer(
         if entry.get("tool") == "http_probe"
         for evidence_id in (entry.get("evidence_ids") or [])
     }
+    current_success_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
     for observation in reversed(evidence):
         if str(observation.get("id")) not in current_ids:
             continue
@@ -1756,6 +1791,7 @@ def _deterministic_route_tls_answer(
         ]
         probe_lines: list[str] = []
         probe_citations: list[str] = []
+        application_response_observed = False
         for probe in probe_observations:
             probe_data = probe["data"]
             probe_id = str(probe.get("id"))
@@ -1785,6 +1821,191 @@ def _deterministic_route_tls_answer(
                     "tests endpoint behavior but does not authenticate server identity."
                 )
                 probe_citations.append(probe_id)
+                application_response_observed = (
+                    application_response_observed
+                    or probe_data.get("statusCode") is not None
+                )
+        backend_lines: list[str] = []
+        backend_citations: list[str] = []
+        route_cluster_id = str(observation.get("cluster_id") or "")
+        service_selector: dict[str, object] = {}
+        endpoint_target_names: set[str] = set()
+        for related in evidence:
+            if (
+                str(related.get("id") or "") not in current_success_ids
+                or not isinstance(related.get("data"), dict)
+                or (
+                    route_cluster_id
+                    and str(related.get("cluster_id") or "") != route_cluster_id
+                )
+            ):
+                continue
+            related_data = related["data"]
+            related_metadata = (
+                related_data.get("metadata")
+                if isinstance(related_data.get("metadata"), dict) else {}
+            )
+            if (
+                related_data.get("kind") == "Service"
+                and related_metadata.get("name") == service
+                and isinstance(related_data.get("spec"), dict)
+                and isinstance(related_data["spec"].get("selector"), dict)
+            ):
+                service_selector = related_data["spec"]["selector"]
+            if related_data.get("kind") not in {"EndpointSlice", "Endpoints"}:
+                continue
+            for endpoint_object in related_data.get("items") or [related_data]:
+                if not isinstance(endpoint_object, dict):
+                    continue
+                related_endpoint_metadata = (
+                    endpoint_object.get("metadata")
+                    if isinstance(endpoint_object.get("metadata"), dict) else {}
+                )
+                related_endpoint_labels = (
+                    related_endpoint_metadata.get("labels")
+                    if isinstance(related_endpoint_metadata.get("labels"), dict) else {}
+                )
+                related_endpoint_service = str(
+                    related_endpoint_labels.get("kubernetes.io/service-name")
+                    or related_endpoint_metadata.get("name")
+                    or related_metadata.get("name")
+                )
+                if service and related_endpoint_service and not (
+                    related_endpoint_service == service
+                    or related_endpoint_service.startswith(f"{service}-")
+                ):
+                    continue
+                for endpoint in endpoint_object.get("endpoints") or []:
+                    if not isinstance(endpoint, dict):
+                        continue
+                    target_ref = endpoint.get("targetRef")
+                    if isinstance(target_ref, dict) and target_ref.get("name"):
+                        endpoint_target_names.add(str(target_ref["name"]))
+        for backend in evidence:
+            backend_id = str(backend.get("id") or "")
+            if (
+                backend_id not in current_success_ids
+                or not isinstance(backend.get("data"), dict)
+                or (
+                    route_cluster_id
+                    and str(backend.get("cluster_id") or "") != route_cluster_id
+                )
+            ):
+                continue
+            backend_data = backend["data"]
+            kind = str(backend_data.get("kind") or "")
+            metadata = (
+                backend_data.get("metadata")
+                if isinstance(backend_data.get("metadata"), dict) else {}
+            )
+            backend_namespace = str(metadata.get("namespace") or backend_data.get("scope") or "")
+            backend_name = str(metadata.get("name") or "")
+            if kind == "Service" and backend_name == service and (
+                not namespace or not backend_namespace or backend_namespace == namespace
+            ):
+                service_spec = (
+                    backend_data.get("spec")
+                    if isinstance(backend_data.get("spec"), dict) else {}
+                )
+                mappings = []
+                for item in service_spec.get("ports") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    label = item.get("name") or item.get("port") or "unnamed"
+                    mappings.append(
+                        f"`{label}:{item.get('port')} -> {item.get('targetPort', item.get('port'))}`"
+                    )
+                if mappings:
+                    backend_lines.append(
+                        f"- The collected Service `{backend_namespace}/{backend_name}` exposes "
+                        f"{', '.join(mappings)}."
+                    )
+                    backend_citations.append(backend_id)
+            elif kind in {"EndpointSlice", "Endpoints"}:
+                ports: list[str] = []
+                targets: list[str] = []
+                objects = backend_data.get("items") or [backend_data]
+                for endpoint_object in objects:
+                    if not isinstance(endpoint_object, dict):
+                        continue
+                    endpoint_metadata = (
+                        endpoint_object.get("metadata")
+                        if isinstance(endpoint_object.get("metadata"), dict) else {}
+                    )
+                    endpoint_labels = (
+                        endpoint_metadata.get("labels")
+                        if isinstance(endpoint_metadata.get("labels"), dict) else {}
+                    )
+                    endpoint_service = str(
+                        endpoint_labels.get("kubernetes.io/service-name")
+                        or endpoint_metadata.get("name") or backend_name
+                    )
+                    if service and endpoint_service and not (
+                        endpoint_service == service or endpoint_service.startswith(f"{service}-")
+                    ):
+                        continue
+                    for endpoint_port in endpoint_object.get("ports") or []:
+                        if isinstance(endpoint_port, dict):
+                            ports.append(str(
+                                endpoint_port.get("name") or endpoint_port.get("port") or "unknown"
+                            ) + f":{endpoint_port.get('port', 'unknown')}")
+                    for endpoint in endpoint_object.get("endpoints") or []:
+                        if not isinstance(endpoint, dict):
+                            continue
+                        target_ref = endpoint.get("targetRef")
+                        if isinstance(target_ref, dict) and target_ref.get("name"):
+                            targets.append(str(target_ref["name"]))
+                if ports or targets or backend_data.get("podTargets"):
+                    target_text = sorted(set(targets)) or [
+                        str(item) for item in backend_data.get("podTargets") or []
+                    ]
+                    details = []
+                    if ports:
+                        details.append("ports " + ", ".join(f"`{item}`" for item in sorted(set(ports))))
+                    if target_text:
+                        details.append("targets " + ", ".join(f"`{item}`" for item in target_text[:6]))
+                    backend_lines.append(
+                        f"- The collected {kind} " + " and ".join(details) + "."
+                    )
+                    backend_citations.append(backend_id)
+            elif kind == "Pod":
+                pod_labels = (
+                    metadata.get("labels")
+                    if isinstance(metadata.get("labels"), dict) else {}
+                )
+                selector_matches = bool(service_selector) and all(
+                    pod_labels.get(key) == value
+                    for key, value in service_selector.items()
+                )
+                if not (
+                    backend_name in endpoint_target_names
+                    or selector_matches
+                ):
+                    continue
+                pod_spec = (
+                    backend_data.get("spec")
+                    if isinstance(backend_data.get("spec"), dict) else {}
+                )
+                containers = []
+                for container in pod_spec.get("containers") or []:
+                    if not isinstance(container, dict):
+                        continue
+                    ports = [
+                        str(item.get("containerPort"))
+                        for item in container.get("ports") or []
+                        if isinstance(item, dict) and item.get("containerPort") is not None
+                    ]
+                    containers.append(
+                        f"`{container.get('name') or 'unnamed'}`"
+                        + (f" (declared ports {', '.join(ports)})" if ports else "")
+                    )
+                if containers:
+                    pod_name = backend_name or "observed backend Pod"
+                    backend_lines.append(
+                        f"- Pod `{pod_name}` contains {', '.join(containers)}. "
+                        "Declared container ports describe configuration, not proof of TLS termination."
+                    )
+                    backend_citations.append(backend_id)
         content = (
             "## Route TLS behavior\n\n"
             f"**Configured termination:** {configured}\n\n"
@@ -1794,11 +2015,22 @@ def _deterministic_route_tls_answer(
         )
         if probe_lines:
             content += "\n\n## Live probe results\n\n" + "\n".join(probe_lines)
+        if backend_lines:
+            content += "\n\n## Backend topology observed\n\n" + "\n".join(backend_lines)
+        if application_response_observed and termination in {"passthrough", "reencrypt"}:
+            content += (
+                "\n\nThe HTTPS probe completed TLS and received an HTTP response from the tested "
+                "Route path. That rules out a failure caused solely by sending passthrough TLS to a "
+                "backend path with no TLS-capable termination point; "
+                "the returned status must be investigated at the gateway, application, authentication, "
+                "or an upstream dependency."
+            )
         return {
             "answer_mode": "evidence_based",
             "content": content,
             "citations": list(dict.fromkeys([
                 str(observation["id"]), *probe_citations,
+                *backend_citations,
             ])),
         }
     return None
@@ -2437,9 +2669,29 @@ def _grounded_read_candidates(
                 relation="operator_anchor",
             )
 
+    protocol_proven = any(
+        item.get("tool") == "http_probe"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("statusCode") is not None
+        and (
+            str(item["data"].get("logicalHost") or "").lower().startswith("http")
+            or item["data"].get("tlsVerificationRequested") is False
+            or isinstance(item["data"].get("tls"), dict)
+        )
+        for item in evidence
+    )
+    post_protocol_priority = {
+        "pod_logs": 0,
+        "pod_spec": 1,
+        "service_spec": 2,
+        "endpoints": 3,
+        "resource_read": 4,
+        "http_probe": 5,
+    }
     candidates.sort(key=lambda item: (
         0 if item.capability in gap_capabilities else 1,
         0 if item.capability == "initial_discovery" and not evidence else 1,
+        post_protocol_priority.get(item.capability, 10) if protocol_proven else 0,
         item.capability,
         item.id,
     ))
@@ -4272,6 +4524,10 @@ def create_app(
                     collection_limitations=limitations,
                     observations=evidence,
                 )
+                _reconcile_validated_answer_gaps(
+                    validated,
+                    capability_ledger=answer_context["capability_ledger"],
+                )
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
                     answer_mode=str(validated["answer_mode"]),
@@ -4359,6 +4615,10 @@ def create_app(
                             known_evidence_ids={str(item.get("id")) for item in evidence},
                             collection_limitations=limitations,
                             observations=evidence,
+                        )
+                        _reconcile_validated_answer_gaps(
+                            retry_validated,
+                            capability_ledger=retry_context["capability_ledger"],
                         )
                         retry_issue = _adhoc_answer_quality_issue(
                             content=str(retry_validated["content"]),
@@ -4592,6 +4852,10 @@ def create_app(
                             collection_limitations=limitations,
                             observations=evidence,
                         )
+                        _reconcile_validated_answer_gaps(
+                            validated,
+                            capability_ledger=final_capability_ledger,
+                        )
                         answer_quality_issue = _adhoc_answer_quality_issue(
                             content=str(validated["content"]),
                             answer_mode=str(validated["answer_mode"]),
@@ -4680,6 +4944,14 @@ def create_app(
                         observations=evidence,
                     ),
                 ])
+                _reconcile_validated_answer_gaps(
+                    validated,
+                    capability_ledger=_investigation_capability_ledger(
+                        evidence=evidence,
+                        activity=activity,
+                        remaining_units=remaining_budget,
+                    ),
+                )
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",

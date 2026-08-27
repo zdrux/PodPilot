@@ -763,6 +763,11 @@ Before the evidence-follow-up answer, PodPilot recomputes that ledger and suppli
 endpoint, Pod, log, metric, or probe is still not collected is rejected with
 `reason=collected_check_described_as_uncollected`. Internal single- or multi-ID
 `cited_evidence_ids` markers are removed from displayed prose after citation allowlisting.
+Saved structured gaps are also filtered against the final trusted ledger. After a TLS-capable endpoint
+returns an HTTP status, Pod/log evidence is prioritized over repeated topology collection. Route
+fallback answers combine current Route, Service, endpoint, Pod, and probe evidence rather than
+reverting to a Route-only summary. Repeated model-stop, duplicate-read, and fallback notices collapse
+into one orchestration limitation; TLS bypass, certificate trust, RBAC, and read failures remain visible.
 
 Candidate planning keeps at most four recent messages, a 1,500-character earlier-context summary,
 sixteen compact observations, eight findings, sixty graph nodes, eighty graph edges, twelve completed
