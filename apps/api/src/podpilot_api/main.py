@@ -2770,6 +2770,37 @@ _FAILURE_DIAGNOSTIC_PATTERN = re.compile(
 )
 
 
+def _resource_query_terms(value: object) -> set[str]:
+    expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value or ""))
+    terms: set[str] = set()
+    for raw in re.findall(r"[a-z0-9]+", expanded.lower()):
+        if len(raw) < 3:
+            continue
+        if raw.startswith("config"):
+            terms.add("config")
+        elif raw.startswith("auth"):
+            terms.add("auth")
+        else:
+            terms.add(raw[:-1] if raw.endswith("s") and len(raw) > 4 else raw)
+    return terms
+
+
+def _catalog_relevance(question: str, entry: dict[str, object]) -> int:
+    """Score only explicit lexical matches; unrelated catalog APIs stay out of context."""
+
+    question_terms = _resource_query_terms(question)
+    resource_terms = _resource_query_terms(
+        f"{entry.get('resource') or ''} {entry.get('kind') or ''}"
+    )
+    overlap = question_terms.intersection(resource_terms)
+    if not overlap:
+        return 0
+    normalized_question = re.sub(r"[^a-z0-9]", "", question.lower())
+    normalized_kind = re.sub(r"[^a-z0-9]", "", str(entry.get("kind") or "").lower())
+    exact_kind = bool(normalized_kind and normalized_kind in normalized_question)
+    return len(overlap) * 10 + (20 if exact_kind else 0)
+
+
 def _failure_logs_are_relevant(question: str) -> bool:
     return bool(_FAILURE_DIAGNOSTIC_PATTERN.search(question))
 
@@ -2829,6 +2860,7 @@ def _grounded_read_candidates(
         "targets": "pod_spec",
         "owned_by": "resource_read",
         "mounts_from": "resource_read",
+        "configures_from": "resource_read",
     }
     for edge in relationship_graph.get("frontier") or []:
         if not isinstance(edge, dict) or not isinstance(edge.get("read_hint"), dict):
@@ -2875,6 +2907,39 @@ def _grounded_read_candidates(
             relation="has_logs",
         )
 
+    # A bounded list/search is discovery. Its server-normalized object references
+    # authorize exact GET candidates on the next round without trusting model prose.
+    for observation in evidence:
+        if observation.get("tool") not in {"list_resources", "search_resources"}:
+            continue
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            continue
+        kind = str(data.get("kind") or "")
+        if not kind or kind == "Secret":
+            continue
+        api_version = str(data.get("apiVersion") or "") or None
+        resource = str(data.get("resource") or "") or None
+        evidence_id = str(observation.get("id") or "")
+        for ref in (data.get("objects") or [])[:8]:
+            if not isinstance(ref, dict) or not ref.get("name"):
+                continue
+            namespace = ref.get("namespace")
+            if not namespace and data.get("scope") not in {None, "cluster"}:
+                namespace = data.get("scope")
+            add(
+                ReadIntent(
+                    tool="get_resource", resource=resource, api_version=api_version,
+                    kind=kind, namespace=str(namespace) if namespace else None,
+                    name=str(ref["name"]),
+                ),
+                capability="resource_read",
+                target=f"{kind}:{namespace or 'cluster'}/{ref['name']}",
+                reason="A bounded discovery read returned this exact object coordinate.",
+                evidence_ids=[evidence_id] if evidence_id else [],
+                relation="discovery_result",
+            )
+
     route_evidence_ids = [
         str(item.get("id"))
         for item in evidence
@@ -2916,37 +2981,59 @@ def _grounded_read_candidates(
                 relation="operator_anchor",
             )
 
-    # Keep the same action-selection contract for unfamiliar resources. Discovery
-    # supplies bounded server-owned list actions; the model still chooses direction
-    # but never constructs Kubernetes coordinates or receives the full tool schema.
-    if not candidates:
-        for entry in (catalog_entries or [])[:6]:
-            if not isinstance(entry, dict):
-                continue
-            verbs = entry.get("verbs")
-            if isinstance(verbs, list) and "list" not in verbs:
-                continue
-            resource = str(entry.get("resource") or "")
-            kind = str(entry.get("kind") or "")
-            if not resource or not kind:
-                continue
-            try:
-                intent = ReadIntent(
-                    tool="list_resources",
-                    resource=resource,
-                    api_version=str(entry.get("apiVersion") or "") or None,
-                    kind=kind,
-                    limit=20,
-                )
-            except ValueError:
-                continue
-            add(
-                intent,
-                capability="resource_read",
-                target=f"List a bounded sample of {kind} resources",
-                reason="The cluster discovery catalog matched this resource type to the operator request.",
-                relation="catalog_match",
+    # Keep a small query-relevant API frontier even when graph candidates exist.
+    # This prevents a generic owner edge from hiding a configuration CRD or ConfigMap
+    # that the operator explicitly asked about.
+    ranked_catalog = sorted(
+        (
+            (_catalog_relevance(question, entry), entry)
+            for entry in (catalog_entries or [])
+            if isinstance(entry, dict)
+        ),
+        key=lambda item: (-item[0], str(item[1].get("resource") or "")),
+    )
+    selected_catalog = [entry for score, entry in ranked_catalog if score > 0][:4]
+    if not selected_catalog and not candidates:
+        selected_catalog = [entry for _score, entry in ranked_catalog[:6]]
+    observed_namespaces = {
+        str(node.get("namespace"))
+        for node in relationship_graph.get("nodes") or []
+        if isinstance(node, dict)
+        and node.get("observed")
+        and node.get("namespace") not in {None, "cluster"}
+    }
+    namespace_hint = next(iter(observed_namespaces)) if len(observed_namespaces) == 1 else None
+    for entry in selected_catalog:
+        if not isinstance(entry, dict):
+            continue
+        verbs = entry.get("verbs")
+        if isinstance(verbs, list) and "list" not in verbs:
+            continue
+        resource = str(entry.get("resource") or "")
+        kind = str(entry.get("kind") or "")
+        if not resource or not kind:
+            continue
+        try:
+            intent = ReadIntent(
+                tool="list_resources",
+                resource=resource,
+                api_version=str(entry.get("apiVersion") or "") or None,
+                kind=kind,
+                namespace=(namespace_hint if entry.get("namespaced") else None),
+                limit=20,
             )
+        except ValueError:
+            continue
+        add(
+            intent,
+            capability="resource_read",
+            target=(
+                f"List a bounded sample of {kind} resources"
+                + (f" in {namespace_hint}" if namespace_hint and entry.get("namespaced") else "")
+            ),
+            reason="The readable API catalog lexically matches the operator's current question.",
+            relation="catalog_match",
+        )
 
     protocol_proven = any(
         item.get("tool") == "http_probe"
@@ -2971,6 +3058,13 @@ def _grounded_read_candidates(
         0 if item.capability in gap_capabilities else 1,
         0 if item.capability == "initial_discovery" and not evidence else 1,
         post_protocol_priority.get(item.capability, 10) if protocol_proven else 0,
+        {
+            "discovery_result": 0,
+            "catalog_match": 1,
+            "mounts_from": 2,
+            "configures_from": 2,
+            "owned_by": 3,
+        }.get(item.relation or "", 4),
         item.capability,
         item.id,
     ))
@@ -3171,25 +3265,8 @@ def _compile_grounded_candidate_plan(
     """Compile model-selected opaque IDs; never derive coordinates from model prose."""
 
     if not plan.candidate_ids:
-        if not candidates:
-            return plan, []
-        if plan.intents:
-            candidate_signatures = {
-                _read_intent_signature(candidate.intent): candidate
-                for candidate in candidates
-            }
-            matched = []
-            for intent in plan.intents:
-                candidate = candidate_signatures.get(
-                    _read_intent_signature(normalize_read_intent(intent))
-                )
-                if candidate is None:
-                    # Compatibility escape hatch: older providers may still return a fully typed
-                    # intent. It receives the unchanged grounding, deny-policy, budget, discovery,
-                    # verb, and RBAC checks below; no candidate prose supplies its coordinates.
-                    return plan, []
-                matched.append(candidate.intent)
-            return plan.model_copy(update={"intents": matched}), []
+        # Model-authored object discovery and reads are allowed, but still pass through
+        # normalization, API discovery, deny policy, scope/RBAC preflight, and budgets.
         return plan, []
 
     by_id = {candidate.id: candidate for candidate in candidates}
@@ -3199,6 +3276,7 @@ def _compile_grounded_candidate_plan(
             "One or more selected read candidate IDs were not present in the supplied candidate list."
         ]
     intents = [by_id[candidate_id].intent for candidate_id in plan.candidate_ids]
+    intents.extend(plan.intents)
     return plan.model_copy(update={"candidate_ids": [], "intents": intents}), []
 
 
@@ -3819,6 +3897,7 @@ async def _collect_bounded_cluster_reads(
                 gap.model_dump() for gap in (investigation_gaps or [])
             ],
             "read_candidates": [candidate.planner_view() for candidate in read_candidates],
+            "resource_catalog": catalog_entries[:12],
             "completed_reads": [
                 {
                     key: item.get(key)
@@ -3829,7 +3908,10 @@ async def _collect_bounded_cluster_reads(
             "investigation_round": round_number,
             "tool_policy": {
                 "mode": "candidate_selection",
-                "direct_intents_allowed": False,
+                "direct_intents_allowed": True,
+                "direct_intent_tools": [
+                    "discover_resources", "get_resource", "list_resources", "search_resources",
+                ],
                 "remaining_reads": remaining_reads,
                 "remaining_investigation_units": remaining_reads,
                 "logs_and_configmaps_allowed": True,

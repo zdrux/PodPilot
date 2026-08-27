@@ -52,6 +52,31 @@ def test_relationship_graph_exposes_typed_route_service_endpoint_pod_frontier() 
     assert frontier_relations == {"selects", "has_endpoints"}
 
 
+def test_relationship_graph_exposes_configmap_reference_but_not_secret_read() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "deployment-1",
+        "tool": "get_resource",
+        "data": {
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"namespace": "kuadrant-system", "name": "authorino"},
+            "podpilotConfigReferences": [
+                {"sourceType": "ConfigMap", "sourceName": "authorino-config"},
+                {"sourceType": "Secret", "sourceName": "authorino-credentials"},
+            ],
+        },
+    }])
+
+    edges = {edge["target"]: edge for edge in graph["edges"]}
+    assert edges["ConfigMap:kuadrant-system/authorino-config"]["read_hint"] == {
+        "tool": "get_resource", "resource": "configmaps", "api_version": "v1",
+        "kind": "ConfigMap", "namespace": "kuadrant-system", "name": "authorino-config",
+    }
+    assert edges["Secret:kuadrant-system/authorino-credentials"]["read_hint"] is None
+    assert {edge["target"] for edge in graph["frontier"]} == {
+        "ConfigMap:kuadrant-system/authorino-config",
+    }
+
+
 def test_candidate_selection_normalizes_plan_to_collect() -> None:
     plan = ReadPlan(
         scope_summary="Select the grounded backend Service read.",

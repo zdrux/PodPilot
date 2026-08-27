@@ -328,6 +328,49 @@ def test_get_pod_exposes_mount_wiring_without_secret_contents():
     }]
 
 
+def test_get_deployment_projects_config_references_without_values():
+    deployment = FakeObject(name="authorino", namespace="kuadrant-system", payload={
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "authorino", "namespace": "kuadrant-system"},
+        "spec": {"template": {"spec": {"containers": [{
+            "name": "authorino",
+            "envFrom": [
+                {"configMapRef": {"name": "authorino-config"}},
+                {"secretRef": {"name": "authorino-credentials"}},
+            ],
+            "env": [{
+                "name": "ISSUER",
+                "valueFrom": {"configMapKeyRef": {
+                    "name": "authorino-realms", "key": "issuer",
+                }},
+            }],
+        }]}}},
+    })
+    target, _, _ = explorer(FakeResource([deployment]))
+
+    result = target.execute(ReadIntent(
+        tool="get_resource", api_version="apps/v1", kind="Deployment",
+        namespace="kuadrant-system", name="authorino",
+    ))
+
+    assert result.observations[0].data["podpilotConfigReferences"] == [
+        {
+            "sourceType": "ConfigMap", "sourceName": "authorino-config",
+            "container": "authorino", "mechanism": "container.envFrom",
+        },
+        {
+            "sourceType": "Secret", "sourceName": "authorino-credentials",
+            "container": "authorino", "mechanism": "container.envFrom",
+        },
+        {
+            "sourceType": "ConfigMap", "sourceName": "authorino-realms",
+            "container": "authorino", "mechanism": "container.env",
+        },
+    ]
+    assert "issuer" not in str(result.observations[0].data["podpilotConfigReferences"])
+
+
 def test_list_supports_grouped_api_versions_and_enforces_limit():
     target, resource, _ = explorer(FakeResource([FakeObject(name="a"), FakeObject(name="b")]))
     result = target.execute(ReadIntent(

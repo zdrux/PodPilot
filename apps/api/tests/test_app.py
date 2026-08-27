@@ -23,6 +23,7 @@ from podpilot_api.main import (
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
     _compact_answer_evidence,
+    _compile_grounded_candidate_plan,
     _compile_remaining_candidate_followups,
     _compile_suggested_followups,
     _dedupe_limitations,
@@ -4877,6 +4878,120 @@ def test_failure_question_offers_healthy_exact_pod_log_candidate() -> None:
 
     assert any(candidate.capability == "pod_logs" for candidate in failure_candidates)
     assert all(candidate.capability != "pod_logs" for candidate in neutral_candidates)
+
+
+def test_grounded_candidates_keep_query_relevant_catalog_reads_with_owner_edges() -> None:
+    candidates = _grounded_read_candidates(
+        question="Is there Authorino configuration that defines the token format?",
+        evidence=[],
+        relationship_graph={
+            "nodes": [{
+                "kind": "Pod", "namespace": "kuadrant-system", "name": "authorino-abc",
+                "observed": True,
+            }],
+            "frontier": [{
+                "relation": "owned_by",
+                "target": "ReplicaSet:kuadrant-system/authorino-54b888dfb9",
+                "evidence_ids": ["cluster-pod"],
+                "read_hint": {
+                    "tool": "get_resource", "resource": "replicasets",
+                    "api_version": "apps/v1", "kind": "ReplicaSet",
+                    "namespace": "kuadrant-system", "name": "authorino-54b888dfb9",
+                },
+            }],
+        },
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+        catalog_entries=[
+            {
+                "resource": "authconfigs.authorino.kuadrant.io",
+                "apiVersion": "authorino.kuadrant.io/v1beta2", "kind": "AuthConfig",
+                "namespaced": True, "verbs": ["get", "list"],
+            },
+            {
+                "resource": "configmaps", "apiVersion": "v1", "kind": "ConfigMap",
+                "namespaced": True, "verbs": ["get", "list"],
+            },
+            {
+                "resource": "nodes", "apiVersion": "v1", "kind": "Node",
+                "namespaced": False, "verbs": ["get", "list"],
+            },
+        ],
+    )
+
+    assert candidates[0].relation == "catalog_match"
+    catalog_targets = [item for item in candidates if item.relation == "catalog_match"]
+    assert {item.intent.kind for item in catalog_targets} == {"AuthConfig", "ConfigMap"}
+    assert all(item.intent.namespace == "kuadrant-system" for item in catalog_targets)
+    assert any(item.relation == "owned_by" for item in candidates)
+    assert all(item.intent.kind != "Node" for item in candidates)
+
+
+def test_bounded_discovery_results_become_exact_get_candidates() -> None:
+    candidates = _grounded_read_candidates(
+        question="Inspect the Authorino configuration.",
+        evidence=[{
+            "id": "cluster-authconfigs", "tool": "list_resources",
+            "data": {
+                "apiVersion": "authorino.kuadrant.io/v1beta2",
+                "kind": "AuthConfig",
+                "resource": "authconfigs.authorino.kuadrant.io",
+                "scope": "kuadrant-system",
+                "objects": [{"namespace": "kuadrant-system", "name": "authorino-protection"}],
+                "items": [{
+                    "kind": "AuthConfig",
+                    "metadata": {"namespace": "kuadrant-system", "name": "authorino-protection"},
+                }],
+            },
+        }],
+        relationship_graph={"nodes": [], "frontier": []},
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].relation == "discovery_result"
+    assert candidates[0].intent == ReadIntent(
+        tool="get_resource", resource="authconfigs.authorino.kuadrant.io",
+        api_version="authorino.kuadrant.io/v1beta2", kind="AuthConfig",
+        namespace="kuadrant-system", name="authorino-protection",
+    )
+
+
+def test_candidate_plan_combines_selected_and_model_authored_object_reads() -> None:
+    candidates = _grounded_read_candidates(
+        question="Inspect Authorino configuration.",
+        evidence=[],
+        relationship_graph={
+            "nodes": [],
+            "frontier": [{
+                "relation": "owned_by", "target": "ReplicaSet:kuadrant-system/authorino-rs",
+                "evidence_ids": ["cluster-pod"],
+                "read_hint": {
+                    "tool": "get_resource", "resource": "replicasets",
+                    "api_version": "apps/v1", "kind": "ReplicaSet",
+                    "namespace": "kuadrant-system", "name": "authorino-rs",
+                },
+            }],
+        },
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+    )
+    authored = ReadIntent(
+        tool="list_resources", resource="authconfigs.authorino.kuadrant.io",
+        kind="AuthConfig", namespace="kuadrant-system", limit=20,
+    )
+    compiled, errors = _compile_grounded_candidate_plan(
+        ReadPlan(
+            scope_summary="Inspect the owner and Authorino configuration.",
+            candidate_ids=[candidates[0].id], intents=[authored],
+        ),
+        candidates,
+    )
+
+    assert errors == []
+    assert compiled.candidate_ids == []
+    assert compiled.intents == [candidates[0].intent, authored]
 
 
 def test_failure_investigation_collects_exact_logs_when_model_stops() -> None:

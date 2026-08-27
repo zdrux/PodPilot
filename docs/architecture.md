@@ -287,16 +287,18 @@ executed, and normal broker validation remains unchanged.
 The server derives relationships, capability state, findings, and executable intents internally, but
 candidate-mode model calls do not receive those implementation structures. Every model-directed
 resource investigation receives only the question, up to six normalized fact cards within a 5 KB
-aggregate target, and up to twelve opaque action ID/label pairs. The universal `ActionSelection`
-contract contains only zero to four exact action IDs: non-empty continues collection and empty stops.
-Unknown resource questions use the same contract: top resource-catalog matches become bounded server-owned
-list action cards rather than exposing the catalog and full `ReadIntent` union to the model.
+aggregate target, up to twelve opaque action ID/label pairs, and up to twelve compact readable API
+catalog entries. The universal `ActionSelection` contract permits zero to four exact action IDs plus
+up to three small object reads using only discovery, GET, LIST, or bounded field search. This lets the
+model pursue a relevant ConfigMap, workload, or configuration CRD without receiving the full tool
+union. Normal code still resolves API coordinates and enforces sensitivity, namespace, verb, RBAC,
+duplicate, and budget policy before every read.
 An exact operator-supplied HTTP/HTTPS URL becomes a grounded GET-probe candidate after Route
 evidence exists, or when a structured probe gap remains. A structured Pod-log gap or an explicit
 failure question may similarly offer exact normal-priority Running/Ready container candidates;
 unhealthy/restarting candidates retain higher priority. If the model twice stops while such an
 exact log action remains relevant to a failure question, PodPilot may select one through the normal
-broker and disclose the recovery. Neither case permits the model to author coordinates.
+broker and disclose the recovery. Pod logs still never accept model-authored coordinates.
 
 Each planning round is supported by two server-derived views of current state. A bounded evidence
 relationship graph exposes typed nodes and edges such as Route-to-Service, Service selector-to-Pod,
@@ -314,8 +316,10 @@ bounded `no_progress` feedback so the model can select a novel candidate or expl
 model twice stops despite a medium/high structured gap with a matching grounded candidate, PodPilot
 selects the highest-priority candidate deterministically and discloses that recovery in limitations.
 
-The action-selection prompt asks the model to select useful supplied reads and return an empty list
-when none remains. The final writer is not asked to produce next steps. After the final answer, normal
+The action-selection prompt asks the model to select useful supplied reads or author a bounded object
+discovery/read when the supplied actions omit a material path. Query-relevant catalog actions remain
+available even when a generic relationship candidate exists. LIST/search results become exact GET
+candidates on the following round. The final writer is not asked to produce next steps. After the final answer, normal
 code independently derives up to three **Run check** controls from unread server-owned candidates.
 The browser posts the source message and opaque candidate ID; it cannot
 provide coordinates or an intent. The resulting `AdHocRun` stores the validated descriptor, starts with
@@ -332,8 +336,10 @@ Pod LIST and named Pod observations also retain a separately bounded registry of
 exact Pod and container log candidates. Each candidate receives an opaque
 server-derived ID. A model may call `pods/log` only by selecting one of those IDs;
 normal code binds it back to the observed namespace, Pod, and container. Literal
-placeholders fail the evidence contract before planning completes. Named GET targets must
-appear verbatim in the operator question or in collected evidence. Explicit
+placeholders fail the evidence contract before planning completes. A model-authored named GET is
+resolved through live API discovery and must pass namespace, sensitivity, verb, and RBAC checks.
+When the exact name is not known, the planner must use bounded discovery/LIST/search first; only the
+server-normalized result becomes an exact GET candidate on the next round. Explicit
 `metadata.ownerReferences`, Route backends, EndpointSlice/Endpoints target references, Pod candidates, and
 volume-backed object references are grounded targets in the containing object's namespace;
 otherwise the planner must discover them with a bounded LIST first. Fabricated or ambiguous

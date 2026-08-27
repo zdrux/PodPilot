@@ -228,7 +228,8 @@ collection failures.
 
 Evidence relationship graphs and capability ledgers are deterministic, bounded projections of
 already-redacted observations and server-known broker state. They remain server-side; the planner
-receives only compact evidence and opaque action labels. Graph frontier hints, structured
+receives only compact evidence, opaque action labels, and a bounded policy-filtered readable API
+catalog. Graph frontier hints, structured
 investigation gaps, model-authored prose, and cluster content remain non-executable.
 Suggested-check buttons are
 compiled only from unread server-owned candidates and are scoped to the source assistant message and
@@ -239,15 +240,18 @@ payload, Secret read, or mutation. A linked evidence-extension run excludes prio
 summary from model context while retaining bounded, redacted supporting evidence.
 For ordinary traversal, server code holds each
 typed intent and exposes only an opaque candidate ID plus a redacted description. Unknown, modified,
-or stale IDs are rejected; candidate prose is never parsed for coordinates. The model must return a
-schema-valid candidate selection, or a typed discovery intent when no candidates exist. The compiled
-intent is independently checked for grounding, duplicate suppression, budget, resource
-sensitivity, read-only verb, live discovery, and ServiceAccount RBAC before execution. Goal pinning
+or stale IDs are rejected; candidate prose is never parsed for coordinates. The model may return a
+schema-valid candidate selection or author up to three object-only discovery, GET, LIST, or field-search
+reads. Model-authored Pod-log, Secret, identity/token/access-review, subresource, probe, metric, watch,
+command, and mutation requests are outside this compact schema. Every authored object read is
+independently checked for normalization, duplicate suppression, budget, resource sensitivity,
+read-only verb, live discovery, scope, and ServiceAccount RBAC before execution. Goal pinning
 and no-progress repair do not widen that authority.
 The final-answer schema contains only narrative and citations. It cannot authorize or describe a
 clickable action. Normal code independently selects remaining unread server-owned candidates for
 display, and strips provider recommendation-schema tails from narrative Markdown. Names, namespaces,
-URLs, JSON fields, mutations, and other model prose are never retained as an intent.
+URLs, JSON fields, mutations, and other final-answer prose are never retained as an intent; only the
+planner's schema-valid object-read fields can enter broker validation.
 The sole URL-probe exception is an absolute HTTP/HTTPS URL copied exactly from the operator request;
 normal code validates it and retains the typed intent server-side. Healthy Pod-log candidates are
 exact namespace/Pod/container tuples derived from collected Pod evidence and are exposed only when a

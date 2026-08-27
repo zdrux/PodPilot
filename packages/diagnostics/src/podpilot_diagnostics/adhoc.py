@@ -768,6 +768,22 @@ def derive_evidence_relationship_graph(
                     }
                     add_edge(source, target, "mounts_from", evidence_id, read_hint)
 
+            config_references = obj.get("podpilotConfigReferences")
+            if isinstance(config_references, list):
+                for reference in config_references:
+                    if not isinstance(reference, dict) or not reference.get("sourceName"):
+                        continue
+                    source_type = str(reference.get("sourceType") or "Resource")
+                    target = add_node(source_type, namespace, reference.get("sourceName"))
+                    read_hint = None
+                    if source_type == "ConfigMap":
+                        read_hint = {
+                            "tool": "get_resource", "resource": "configmaps",
+                            "api_version": "v1", "kind": "ConfigMap",
+                            "namespace": namespace, "name": reference.get("sourceName"),
+                        }
+                    add_edge(source, target, "configures_from", evidence_id, read_hint)
+
     bounded_nodes = list(nodes.values())[:max_nodes]
     bounded_ids = {str(node["id"]) for node in bounded_nodes}
     bounded_edges = []

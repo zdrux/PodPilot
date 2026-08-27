@@ -246,6 +246,68 @@ def _pod_mount_projection(raw: dict[str, Any]) -> list[dict[str, Any]]:
     return result[:100]
 
 
+def _workload_config_reference_projection(
+    kind: str, raw: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Expose referenced object names without including configuration or Secret values."""
+
+    spec = raw.get("spec") or {}
+    if kind == "CronJob":
+        spec = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get(
+            "spec"
+        ) or {}
+    elif kind in {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"}:
+        spec = ((spec.get("template") or {}).get("spec") or {})
+    references: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+
+    def add(source_type: str, name: object, container: object, mechanism: str) -> None:
+        name_text = str(name or "")[:253]
+        if not name_text:
+            return
+        key = (source_type, name_text, str(container or "")[:253], mechanism)
+        if key in seen:
+            return
+        seen.add(key)
+        references.append({
+            "sourceType": source_type,
+            "sourceName": name_text,
+            "container": key[2],
+            "mechanism": mechanism,
+        })
+
+    for container_type, configured in (
+        ("container", spec.get("containers") or []),
+        ("initContainer", spec.get("initContainers") or spec.get("init_containers") or []),
+    ):
+        for container in configured if isinstance(configured, list) else []:
+            if not isinstance(container, dict):
+                continue
+            container_name = container.get("name")
+            for source in container.get("envFrom") or container.get("env_from") or []:
+                if not isinstance(source, dict):
+                    continue
+                config_ref = source.get("configMapRef") or source.get("config_map_ref")
+                secret_ref = source.get("secretRef") or source.get("secret_ref")
+                if isinstance(config_ref, dict):
+                    add("ConfigMap", config_ref.get("name"), container_name, f"{container_type}.envFrom")
+                if isinstance(secret_ref, dict):
+                    add("Secret", secret_ref.get("name"), container_name, f"{container_type}.envFrom")
+            for env in container.get("env") or []:
+                if not isinstance(env, dict):
+                    continue
+                value_from = env.get("valueFrom") or env.get("value_from") or {}
+                if not isinstance(value_from, dict):
+                    continue
+                config_ref = value_from.get("configMapKeyRef") or value_from.get("config_map_key_ref")
+                secret_ref = value_from.get("secretKeyRef") or value_from.get("secret_key_ref")
+                if isinstance(config_ref, dict):
+                    add("ConfigMap", config_ref.get("name"), container_name, f"{container_type}.env")
+                if isinstance(secret_ref, dict):
+                    add("Secret", secret_ref.get("name"), container_name, f"{container_type}.env")
+    return references[:100]
+
+
 def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_projection(raw)
     spec = raw.get("spec") or {}
@@ -901,8 +963,14 @@ class KubernetesReadOnlyExplorer:
         for obj in items:
             raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
             payload = _sanitize(raw)
-            if kind == "Pod" and isinstance(payload, dict):
-                payload["podpilotMounts"] = _pod_mount_projection(raw)
+            if isinstance(payload, dict) and kind in {
+                "Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob",
+            }:
+                if kind == "Pod":
+                    payload["podpilotMounts"] = _pod_mount_projection(raw)
+                payload["podpilotConfigReferences"] = _workload_config_reference_projection(
+                    kind, raw
+                )
             encoded = json.dumps(payload, sort_keys=True, default=str)
             truncated = len(encoded.encode("utf-8")) > self._max_payload_bytes
             if truncated:

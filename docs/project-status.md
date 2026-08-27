@@ -271,11 +271,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   and answer regeneration. Gap, graph, and recommendation prose remains non-executable.
 - Grounded traversal now uses one compact resource-agnostic action-selection contract. Normal code
   offers at most twelve opaque reads derived from exact operator anchors, observed relationships,
-  unresolved evidence needs, implicated logs, and bounded catalog matches; the model selects up to
-  four IDs and never receives their executable intent payloads. Candidate rounds retain only the
-  current question and six fact cards within a 5 KB aggregate target. The response contains only
-  `action_ids`; empty means stop. Live-catalog matches for unfamiliar resources become the same bounded action cards rather
-  than reopening the broad typed planner. Unknown IDs fail closed, and a repeated stop on
+  unresolved evidence needs, implicated logs, and bounded catalog matches. The model may select up to
+  four IDs or author up to three object-only discovery/GET/LIST/search reads; Pod logs and all other
+  tool classes still require server-owned candidates. Candidate rounds retain only the current
+  question, six fact cards within a 5 KB aggregate target, action labels, and twelve policy-filtered
+  catalog entries. Query-relevant ConfigMap/workload/CRD candidates remain visible beside generic
+  owner edges, and normalized LIST/search results become exact GET candidates on the next round.
+  Unknown IDs and denied/scope-invalid authored reads fail closed, and a repeated stop on
   a matching high/medium structured gap can recover one highest-priority candidate through the normal broker.
 - Action selection now tolerates the constrained model's inconsistent decision label when it also
   returns exact supplied action IDs: the IDs continue the investigation, while an empty investigate
@@ -307,8 +309,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   server-owned fallback across at most three relevant candidates. This improves
   discover-then-log autonomy without expanding the investigator ServiceAccount.
   Direct unobserved Pod-log targets and literal future-value placeholders are now
-  rejected before cluster collection. Named GET targets must originate in the
-  operator question or collected evidence, and model activation probes verify a
+  rejected before cluster collection. Model-authored object GETs are now permitted only through the
+  compact planner schema and must pass live API resolution, namespace, sensitivity, verb, and RBAC
+  validation; discovery is preferred when an exact name is not known. Model activation probes verify a
   synthetic discovery-to-exact-log-candidate sequence.
 - Ask PodPilot opens the bounded conversation viewport at the newest response.
   Chat messages render safe CommonMark with readable system prose typography,

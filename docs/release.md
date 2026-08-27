@@ -279,17 +279,20 @@ read signatures suppress repeats across the initial and answer-gap passes. Struc
 gaps and capability-matched recommendations may trigger a bounded follow-up collection phase and answer regeneration,
 but recommendation prose, graph hints, and gap text must never execute directly or bypass broker
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
-Candidate-first gates must prove that candidate rounds use the universal `ActionSelection` schema
-without `ReadIntent`, candidate IDs compile only to exact server-held intents, and unknown IDs execute
-nothing. Normal Ask planning must not reopen the broad typed planner when no relationship candidate
-exists; bounded catalog matches must use the same action cards. Actual provider payloads must omit graph, ledger, catalog, tool policy, typed Kubernetes
-coordinates, raw observation envelopes, and domain-specific teaching. Tests must assert planner caps
-of six fact cards/5 KB and twelve action ID/label pairs. The concise final-answer payload must assert
+Candidate-first gates must prove that candidate rounds use the compact `ActionSelection` schema,
+candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, and model-authored
+reads are limited to discovery, GET, LIST, and bounded field search. Tests must prove authored reads
+still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight, duplicate suppression,
+and budgets. Query-relevant catalog matches must remain available beside relationship candidates, and
+bounded LIST/search results must become exact GET candidates on the next round. Actual provider payloads
+must omit graph, ledger, tool policy, executable candidate intents, raw observation envelopes, and
+domain-specific teaching; only a bounded policy-filtered catalog projection may be included. Tests must
+assert planner caps of six fact cards/5 KB, twelve action ID/label pairs, and twelve catalog entries. The concise final-answer payload must assert
 eight fact cards/7.5 KB, three collection issues, cluster ID/name-only attribution, and a schema with
 only narrative plus citations. Tests must prove provider recommendation-schema tails do not leak into
 Markdown and that remaining exact server candidates produce action controls without model wording. The
 provider activation probe must exercise discovery followed by an exact candidate selection. A model
-that returns exact supplied IDs must continue safely; an empty or omitted list stops. Presentation tests must turn flattened bold
+that returns exact supplied IDs or a valid object read must continue safely; empty actions and reads stop. Presentation tests must turn flattened bold
 section labels and Unicode bullets into valid headings and lists. Follow-up Pod-log collection must
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching

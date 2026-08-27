@@ -375,7 +375,7 @@ def test_read_intent_correction_receives_static_cross_field_rules() -> None:
     assert "metadata.name" not in correction
 
 
-def test_candidate_mode_uses_smaller_schema_without_read_intents() -> None:
+def test_candidate_mode_uses_compact_hybrid_action_and_object_read_schema() -> None:
     completions = CandidatePlanCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()
@@ -394,14 +394,17 @@ def test_candidate_mode_uses_smaller_schema_without_read_intents() -> None:
     assert plan.candidate_ids == ["read-0123456789abcdefabcd"]
     schema = completions.requests[0]["response_format"]["json_schema"]["schema"]
     assert "action_ids" in schema["properties"]
+    assert "object_reads" in schema["properties"]
     assert "intents" not in schema["properties"]
     instructions = completions.requests[0]["messages"][0]["content"]
-    assert "exact supplied read-only action IDs" in instructions
-    assert "empty action_ids list" in instructions
-    assert "discover_resources" not in instructions
-    assert len(instructions) < 1300
+    assert "Prefer exact supplied action IDs" in instructions
+    assert "discover_resources" in instructions
+    assert "Never request Secrets" in instructions
+    assert len(instructions) < 1800
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
-    assert set(payload) == {"actions", "facts", "question"}
+    assert set(payload) == {
+        "actions", "facts", "object_read_policy", "question", "resource_catalog",
+    }
     assert "relationship_graph" not in payload
     assert "capability_ledger" not in payload
     assert "tool_policy" not in payload
@@ -442,6 +445,34 @@ def test_action_selection_uses_exact_ids_as_the_safe_continuation_signal() -> No
     assert empty_plan.stop_reason == "no_material_read"
 
 
+def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None:
+    selected = ActionSelection.model_validate({
+        "object_reads": [
+            {
+                "tool": "list_resources", "resource": "authconfigs.authorino.kuadrant.io",
+                "kind": "AuthConfig", "namespace": "kuadrant-system", "limit": 20,
+            },
+            {
+                "tool": "get_resource", "resource": "configmaps", "kind": "ConfigMap",
+                "namespace": "kuadrant-system", "name": "authorino-config",
+            },
+        ],
+    })
+
+    plan = selected.to_read_plan()
+    assert [intent.tool for intent in plan.intents] == ["list_resources", "get_resource"]
+    assert plan.intents[0].resource == "authconfigs.authorino.kuadrant.io"
+    assert plan.intents[1].name == "authorino-config"
+
+    with pytest.raises(ValueError):
+        ActionSelection.model_validate({
+            "object_reads": [{
+                "tool": "search_resources", "resource": "configmaps",
+                "namespace": "kuadrant-system",
+            }],
+        })
+
+
 def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
     context = {
         "question": "Why is this workload failing?",
@@ -474,7 +505,9 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
     planner = _minimal_action_payload(context)
     final = _minimal_answer_payload(context)
 
-    assert set(planner) == {"question", "facts", "actions"}
+    assert set(planner) == {
+        "question", "facts", "actions", "resource_catalog", "object_read_policy",
+    }
     assert len(planner["facts"]) <= 6
     assert planner["actions"] == [{
         "id": "read-0123456789abcdefabcd",
