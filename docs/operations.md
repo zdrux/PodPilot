@@ -700,6 +700,13 @@ real heading, paragraph, and bullet blocks before this quality check. This preve
 flattened response from being mistaken for a heading-only answer; a genuine standalone heading
 still receives the bounded correction.
 
+Answers that serialize top-level fields such as `investigation_gaps` inside visible prose, or flatten
+a Markdown table into one pipe-delimited line, receive `podpilot.adhoc.answer_quality_rejected` with
+`reason=structured_fields_embedded_in_answer` or `reason=malformed_markdown_structure`. The bounded
+correction asks for clean prose and real structured gaps. For compatibility, PodPilot may promote only
+fixed capability labels found under an explicit recommendation/gap heading when the capability ledger
+still marks them actionable; it discards all coordinates and returns the category to candidate planning.
+
 Chat Completions responses with an empty content field receive one minimal schema-only retry. If
 the final answer remains empty, invalid, or unavailable after cluster reads succeeded, PodPilot logs
 `podpilot.adhoc.provider_fallback` and renders the specialized Route/resource/inventory answer when

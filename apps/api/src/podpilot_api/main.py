@@ -658,6 +658,19 @@ def _adhoc_answer_quality_issue(
     # Citation allowlisting and unsupported-claim guards are enforced by
     # _validated_adhoc_answer. Log findings are appended deterministically, and
     # inventory-only evidence is an advisory rather than grounds to discard prose.
+    if re.search(
+        r"(?:#{1,6}\s*investigation gaps\s*```(?:json)?|"
+        r"[\"']investigation_gaps[\"']\s*:)",
+        content,
+        re.IGNORECASE,
+    ):
+        return "structured_fields_embedded_in_answer"
+    if re.search(
+        r"[^\n]\s+\|\s*(?:priority|evidence needed)\s*\|",
+        content,
+        re.IGNORECASE,
+    ):
+        return "malformed_markdown_structure"
     body_lines = [
         line.strip()
         for line in content.splitlines()
@@ -764,6 +777,30 @@ def _actionable_investigation_gaps(
                     "the text itself is not executable."
                 ),
             ))
+
+    # Compatibility for constrained models that serialize structured fields into the
+    # operator-facing answer. Promote only fixed capability categories that the trusted
+    # ledger still marks actionable; never extract names, namespaces, URLs, or tool payloads.
+    content = str(validated_answer.get("content") or "")
+    if re.search(
+        r"\b(?:recommended next (?:evidence|checks?|collections?)|investigation gaps?)\b",
+        content,
+        re.IGNORECASE,
+    ):
+        for capability, pattern in capability_patterns:
+            if (
+                check_states.get(capability) in available_states
+                and re.search(pattern, content, re.IGNORECASE)
+            ):
+                add(InvestigationGap(
+                    question=f"Collect the unverified {capability.replace('_', ' ')} evidence.",
+                    capability=capability,
+                    priority="medium",
+                    reason=(
+                        "Promoted from a malformed operator-facing evidence recommendation; "
+                        "only the fixed capability category is retained and the prose is not executable."
+                    ),
+                ))
     return result
 
 
@@ -4165,6 +4202,15 @@ def create_app(
                         )
                     retry_context = dict(answer_context)
                     feedback_message = (
+                        "Keep operator-facing answer prose in the answer field. Populate the top-level "
+                        "investigation_gaps array with structured gaps and do not embed JSON, schema "
+                        "fields, or fenced serialized objects inside answer."
+                        if answer_quality_issue == "structured_fields_embedded_in_answer"
+                        else
+                        "Return readable Markdown with headings, paragraphs, bullets, and tables on "
+                        "separate physical lines. Do not flatten a table into an inline pipe-delimited sentence."
+                        if answer_quality_issue == "malformed_markdown_structure"
+                        else
                         "The prior response declined to interpret available evidence. Explain the "
                         "confirmed observations, the strongest evidence-supported hypothesis, what "
                         "remains unverified, and precise recommended_next_checks for PodPilot. Do not "

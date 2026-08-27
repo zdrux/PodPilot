@@ -430,8 +430,13 @@ profile receives at most four recent messages, sixteen observations within 48 KB
 six knowledge chunks, and no planning relationship graph. The database
 and evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
-enough, and every current Pod-log observation with a structured finding must be cited. One
-bounded correction attempt receives only an error code and instruction.
+enough, and every current Pod-log observation with a structured finding must be cited. A bounded
+correction attempt receives only an error code and instruction. The same check rejects schema
+fields or fenced `investigation_gaps` serialized inside the answer
+string and inline pipe-delimited tables without Markdown row boundaries. If a constrained model
+places evidence recommendations in that malformed prose, normal code may retain only fixed
+capability categories that the ledger marks actionable; coordinates and prose are discarded before
+the normal grounded-candidate pass.
 Persistent incompleteness activates deterministic Route/TLS, inventory, or generic
 cited-observation fallback rendering. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving

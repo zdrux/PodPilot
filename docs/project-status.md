@@ -250,6 +250,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   Chat Completions payload receives one schema-only retry. Any later final-answer failure preserves
   successful reads in a cited deterministic Route/resource/inventory or observation summary instead
   of replacing the investigation with an uncited generic error.
+- Final-answer validation now detects structured gap JSON embedded in prose and flattened inline
+  Markdown tables. It requests clean operator prose plus real top-level gaps, and can recover only
+  fixed ledger-actionable capability labels from an explicit recommendation section. Those labels
+  return to grounded candidate planning; model-authored coordinates and mutation text are discarded.
 - Ask planning now pins the initial goal, detects duplicate-only no-progress plans across collection
   phases, and supplies an object-specific capability ledger so available-but-uncollected Service,
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured

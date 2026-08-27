@@ -198,6 +198,11 @@ Markdown heading while continuing to reject a genuine standalone heading.
 They must also prove that an empty structured citation array can recover an exact
 allowlisted observation ID from answer prose, removes that internal marker before
 display, and never accepts an unknown or partial ID.
+Malformed-answer gates must reject embedded `investigation_gaps`, fenced schema JSON, and inline
+pipe-delimited tables; send one bounded correction; and prevent serialized fields from reaching the
+UI. Compatibility tests may promote only fixed ledger-actionable capability categories from an
+explicit recommendation/gap section, must discard coordinates and mutation prose, and must route the
+result through grounded candidate compilation and the unchanged broker.
 Composition gates must prove that structured log findings remain visible with exact
 Pod/container, category, severity, counts, paths/endpoints, bounded samples, and citations when
 a Route/TLS fallback replaces the provider answer; correlation must not be labeled root cause.

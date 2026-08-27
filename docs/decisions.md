@@ -46,6 +46,11 @@ as an evidence limitation rather than causing otherwise readable prose to be dis
 An empty Chat Completions content field receives one schema-only correction. If any final call
 still fails after successful collection, the same cited deterministic renderers preserve the
 evidence while provider status records the invalid or unavailable response.
+Schema fields embedded inside answer prose and flattened inline tables also receive one bounded
+correction. When explicit recommendation/gap prose is the only surviving expression of evidence
+need, compatibility recovery retains only fixed capability categories that the trusted ledger marks
+actionable; it never extracts targets or operations, and candidate compilation plus broker policy
+remain mandatory.
 Regardless of model success or fallback, normal code appends a
 bounded operator-facing log-finding section with exact Pod/container, category, severity,
 occurrence count, paths/endpoints, sample, correlated checks, and evidence citations.

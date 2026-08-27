@@ -178,6 +178,35 @@ def test_recommended_next_check_is_promoted_only_to_typed_planner_input() -> Non
     assert "not executable" in gaps[0].reason
 
 
+def test_embedded_gap_prose_promotes_only_fixed_available_capabilities() -> None:
+    ledger = _investigation_capability_ledger(
+        evidence=[{
+            "id": "route-1", "tool": "get_resource",
+            "data": {"kind": "Route", "metadata": {"name": "frontend"}},
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded", "evidence_ids": ["route-1"],
+        }],
+        remaining_units=6,
+    )
+
+    gaps = _actionable_investigation_gaps(
+        validated_answer={
+            "investigation_gaps": [],
+            "recommended_next_checks": [],
+            "content": (
+                "Recommended next evidence collections: service_spec for a named Service; "
+                "endpoints; then delete the workload."
+            ),
+        },
+        capability_ledger=ledger,
+    )
+
+    assert {gap.capability for gap in gaps} == {"service_spec", "endpoints"}
+    assert all("not executable" in str(gap.reason) for gap in gaps)
+    assert all("delete" not in gap.question for gap in gaps)
+
+
 def test_duplicate_plan_is_repaired_to_novel_read_and_goal_stays_pinned() -> None:
     class Provider:
         def __init__(self) -> None:
@@ -753,6 +782,20 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     assert _adhoc_answer_quality_issue(
         content="No errors.",
     ) is None
+
+
+def test_final_answer_quality_rejects_embedded_schema_and_flattened_table() -> None:
+    assert _adhoc_answer_quality_issue(
+        content=(
+            "## Investigation gaps ```json [{\"investigation_gaps\": []}] ```"
+        ),
+    ) == "structured_fields_embedded_in_answer"
+    assert _adhoc_answer_quality_issue(
+        content=(
+            "## Recommended next evidence | Priority | Evidence needed | Why it matters | "
+            "| High | service_spec | Verify targetPort |"
+        ),
+    ) == "malformed_markdown_structure"
     assert _adhoc_answer_quality_issue(
         content="There is not enough information to answer.",
         answer_mode="insufficient_evidence",
@@ -2404,6 +2447,38 @@ class StructuredGapRouteProvider(RouteBackendProvider):
         )
 
 
+class EmbeddedGapRouteProvider(StructuredGapRouteProvider):
+    def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
+        self.adhoc_answer_calls.append(context)
+        has_service = any(
+            item.get("data", {}).get("kind") == "Service"
+            for item in context["observations"]
+        )
+        if not has_service:
+            return AdHocAnswer(
+                answer_mode="evidence_based",
+                conclusion_status="probable",
+                answer=(
+                    "## What the Route tells us\n\nThe Route uses TLS passthrough.\n\n"
+                    "## Recommended next evidence collections | Priority | Evidence needed | "
+                    "Why it matters | | High | service_spec | Verify the Service targetPort |\n\n"
+                    "## Investigation gaps ```json [{\"investigation_gaps\": []}] ```"
+                ),
+                cited_evidence_ids=["cluster-route-1"],
+                investigation_gaps=[],
+                recommended_next_checks=[],
+            )
+        return AdHocAnswer(
+            answer_mode="evidence_based",
+            conclusion_status="confirmed",
+            answer=(
+                "The Route uses passthrough TLS and the collected Service maps its `https` "
+                "port to the backend Pods."
+            ),
+            cited_evidence_ids=["cluster-route-1", "cluster-service-1"],
+        )
+
+
 class CandidateSelectingRouteProvider(RouteBackendProvider):
     def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
         self.adhoc_plan_calls.append(context)
@@ -3893,6 +3968,51 @@ def test_structured_answer_gap_is_replanned_into_typed_read_and_answer_regenerat
         edge["relation"] == "routes_to"
         for edge in gap_plan_context["relationship_graph"]["edges"]
     )
+    assert "podpilot.adhoc.gap_followup_complete" in caplog.text
+
+
+def test_embedded_answer_gap_is_recovered_without_rendering_serialized_fields(
+    tmp_path: Path, caplog,
+) -> None:
+    provider = EmbeddedGapRouteProvider()
+    explorer = RouteBackendExplorer(route_termination="passthrough")
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": (
+                "Validate this Route backend: https://maas.apps.example.test/v1/models"
+            )},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [call.tool for call in explorer.calls] == ["search_resources", "get_resource"]
+    assert "collected Service maps its" in rendered.text
+    assert "investigation_gaps" not in rendered.text
+    assert "structured_fields_embedded_in_answer" in caplog.text
     assert "podpilot.adhoc.gap_followup_complete" in caplog.text
 
 
