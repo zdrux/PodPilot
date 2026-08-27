@@ -287,6 +287,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   model omits a log recommendation. EndpointSlice/Endpoints target references ground the downstream
   Pod read, and after two model stops PodPilot can collect one remaining exact log candidate through
   the unchanged broker; successful logs still receive the separate bounded semantic analysis.
+- Natural requests such as “check the Authorino Pod logs in the kuadrant-system namespace” now
+  compile to a bounded namespace-scoped Pod-name search. Search evidence emits exact container-log
+  candidates, enabling the unchanged broker and isolated log analyzer without model-authored Pod
+  coordinates.
 - Up to three remaining unread server-owned candidates may expose a **Run check** button independently
   of model recommendation wording. The CSRF-protected click creates a linked
   same-conversation run with fresh model context, revalidates the opaque candidate, and executes

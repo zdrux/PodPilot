@@ -5232,6 +5232,150 @@ def test_repeated_no_read_plan_uses_operator_grounded_anchor_then_returns_to_mod
     assert "podpilot.adhoc.operator_anchor_recovery" in caplog.text
 
 
+def test_natural_pod_log_request_discovers_exact_pod_then_analyzes_logs(
+    tmp_path: Path,
+) -> None:
+    question = (
+        "There is an authorino pod in kuadrant-system namespace, check its logs "
+        "for errors that could generate 401 error code for the user"
+    )
+
+    class Provider(FakeModelProvider):
+        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+            self.adhoc_plan_calls.append(context)
+            log_ids = [
+                item["id"] for item in context["observations"]
+                if item.get("tool") == "pod_logs"
+            ]
+            supporting_ids = log_ids or [item["id"] for item in context["observations"]]
+            return ReadPlan(
+                goal_type="logs",
+                decision="answer_from_evidence",
+                scope_summary="Stop so server recovery can prove the requested log path.",
+                supporting_evidence_ids=supporting_ids,
+            )
+
+        def answer_ad_hoc(
+            self, profile, api_key: str, context: dict[str, object]
+        ) -> AdHocAnswer:
+            self.adhoc_answer_calls.append(context)
+            return AdHocAnswer(
+                answer_mode="evidence_based",
+                answer=(
+                    "The discovered Authorino container log contains a 401 authentication "
+                    "failure associated with an invalid token audience."
+                ),
+                cited_evidence_ids=["cluster-authorino-log"],
+            )
+
+        def analyze_logs(
+            self, profile, api_key: str, context: dict[str, object]
+        ) -> AdHocLogAnalysis:
+            self.log_analysis_calls.append(context)
+            return AdHocLogAnalysis(
+                overview="The Authorino log contains a user-facing authentication failure.",
+                issues=[LogAnalysisIssue(
+                    evidence_ids=["cluster-authorino-log"],
+                    severity="error",
+                    category="authentication",
+                    summary="Authorino rejected a token because its audience was invalid.",
+                    potential_impact="Affected requests receive HTTP 401 Unauthorized.",
+                    supporting_excerpt="401 unauthorized: token audience invalid",
+                    confidence="high",
+                )],
+                limitations=["Only the bounded current log tail was analyzed."],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.tool == "search_resources":
+                assert intent.kind == "Pod"
+                assert intent.namespace == "kuadrant-system"
+                assert intent.match_field == "metadata.name"
+                assert intent.match_value == "authorino"
+                assert intent.match_operator == "contains"
+                return ReadResult((AdHocObservation(
+                    id="cluster-authorino-pods",
+                    tool="search_resources",
+                    summary="Found one matching Authorino Pod.",
+                    source="kubernetes:v1:Pod:kuadrant-system/*",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "kind": "Pod",
+                        "scope": "kuadrant-system",
+                        "logCandidates": [{
+                            "namespace": "kuadrant-system",
+                            "pod": "authorino-7fbbd96d8b-z2x9k",
+                            "containers": ["authorino"],
+                            "phase": "Running",
+                            "ready": True,
+                            "restartCount": 0,
+                        }],
+                    },
+                ),))
+            assert intent.tool == "pod_logs"
+            assert intent.namespace == "kuadrant-system"
+            assert intent.name == "authorino-7fbbd96d8b-z2x9k"
+            assert intent.container == "authorino"
+            return ReadResult((AdHocObservation(
+                id="cluster-authorino-log",
+                tool="pod_logs",
+                summary="Collected bounded current Authorino logs.",
+                source=(
+                    "kubernetes:v1:Pod/log:kuadrant-system/"
+                    "authorino-7fbbd96d8b-z2x9k?current"
+                ),
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "container": "authorino", "previous": False,
+                    "tail": "401 unauthorized: token audience invalid",
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}",
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": question},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [call.tool for call in explorer.calls] == ["search_resources", "pod_logs"]
+    assert provider.log_analysis_calls
+    assert "token audience invalid" in rendered.text
+    assert "Model-assisted log analysis" in rendered.text
+
+
 def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
     caplog,
 ) -> None:

@@ -604,6 +604,62 @@ def test_namespace_pod_inventory_is_deterministic_and_terminal() -> None:
 
 @pytest.mark.parametrize("question", [
     (
+        "There is an authorino pod in kuadrant-system namespace, check its logs "
+        "for errors that could generate a 401."
+    ),
+    "Check logs for pod authorino in namespace kuadrant-system.",
+    "Inspect the authorino pod logs from the kuadrant-system namespace.",
+])
+def test_pod_log_request_compiles_bounded_name_discovery(question: str) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is False
+    assert plan.goal_type == "logs"
+    assert plan.intents == [ReadIntent(
+        tool="search_resources",
+        resource="pods",
+        api_version="v1",
+        kind="Pod",
+        namespace="kuadrant-system",
+        match_field="metadata.name",
+        match_value="authorino",
+        match_operator="contains",
+        limit=20,
+    )]
+
+
+def test_pod_log_request_requires_explicit_namespace_and_name_hint() -> None:
+    assert plan_known_read("Check the pod logs for errors") is None
+    assert plan_known_read("Check authorino pod logs") is None
+
+
+def test_pod_search_evidence_exposes_exact_container_log_candidates() -> None:
+    candidates = pod_log_candidates_from_evidence([{
+        "id": "cluster-authorino-pods",
+        "tool": "search_resources",
+        "data": {
+            "kind": "Pod",
+            "scope": "kuadrant-system",
+            "logCandidates": [{
+                "namespace": "kuadrant-system",
+                "pod": "authorino-7fbbd96d8b-z2x9k",
+                "containers": ["authorino"],
+                "phase": "Running",
+                "ready": True,
+                "restartCount": 0,
+            }],
+        },
+    }])
+
+    assert [(item.namespace, item.pod, item.container) for item in candidates] == [
+        ("kuadrant-system", "authorino-7fbbd96d8b-z2x9k", "authorino"),
+    ]
+
+
+@pytest.mark.parametrize("question", [
+    (
         "Investigate TCP timeouts from pod client-7d9 in namespace frontend "
         "to pod database-0 in namespace data on port 5432."
     ),

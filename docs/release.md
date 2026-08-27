@@ -301,6 +301,10 @@ ground only the exact observed Pod, and two model stops may recover only one rem
 candidate through the unchanged broker. Follow-up answer tests must partition resolved/remaining gaps from final ledger
 state, reject collected checks described as uncollected, and remove comma-separated internal citation
 markers while retaining their allowlisted citations.
+Natural Pod-log request gates must prove that an explicit namespace and Pod-name hint compile to a
+bounded `metadata.name contains` Pod search, that ambiguous or namespace-free wording does not, and
+that only exact Pod/container candidates emitted by the search can authorize the subsequent bounded
+log read and isolated semantic analysis.
 Suggested-action gates must remove already-collected recommendations, render controls only for exact
 unread server candidates, and prove that a valid owner/CSRF click persists a linked run, sends no prior
 chat messages or summary to the provider, retains a bounded original question, executes only the exact

@@ -488,6 +488,12 @@ question, the selected-check label, and bounded evidence; prior chat prose, summ
 payloads, and another planning cycle are excluded. Already-collected capability classes are not
 offered again as buttons in the same evidence state.
 
+Natural-language Pod log requests with both an explicit namespace and a Pod-name hint receive a
+generic deterministic discovery anchor. PodPilot performs a bounded `metadata.name contains` Pod
+search in that namespace; only exact Pod/container candidates returned by cluster evidence can then
+authorize `pod_logs`. Bounded Pod searches and lists use the same candidate extraction path, so the
+model never supplies or invents log coordinates.
+
 ## Source Of Truth Boundaries
 
 - The cluster API is authoritative for Kubernetes and OpenShift resource state.

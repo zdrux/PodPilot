@@ -433,7 +433,9 @@ def pod_log_candidates_from_evidence(
         ))
 
     for observation in evidence:
-        if observation.get("tool") not in {"list_resources", "get_resource"}:
+        if observation.get("tool") not in {
+            "list_resources", "search_resources", "get_resource",
+        }:
             continue
         evidence_id = str(observation.get("id") or "")[:128]
         data = observation.get("data")
@@ -509,6 +511,15 @@ def pod_log_candidates_from_evidence(
                 )
             continue
 
+        source = str(observation.get("source") or "")
+        legacy_pod_list = (
+            observation.get("tool") == "list_resources"
+            and ":Pod:" in source
+            and bool(data.get("namespace") or data.get("scope"))
+            and bool(data.get("pod") or data.get("name"))
+        )
+        if str(data.get("kind") or "") != "Pod" and not legacy_pod_list:
+            continue
         items = data.get("items")
         if isinstance(items, list):
             for item in items:
@@ -886,6 +897,72 @@ _CROSS_NAMESPACE_CONNECTIVITY_QUERY = re.compile(
     r"\b(?:tcp|connect(?:ion|ivity|ing)?|timeout|timed\s+out|unreachable|refused)\b",
     re.IGNORECASE,
 )
+_POD_LOG_WORD_QUERY = re.compile(r"\b(?:logs?|logging)\b", re.IGNORECASE)
+_EXPLICIT_NAMESPACE_QUERY = re.compile(
+    rf"\b(?:in|from)\s+(?:the\s+)?(?:"
+    rf"namespace\s+(?P<prefix>{_KUBERNETES_NAME_PATTERN})|"
+    rf"(?P<suffix>{_KUBERNETES_NAME_PATTERN})\s+namespace"
+    rf")\b",
+    re.IGNORECASE,
+)
+_POD_HINT_BEFORE_KIND_QUERY = re.compile(
+    rf"\b(?:an?\s+|the\s+)?(?P<hint>{_KUBERNETES_NAME_PATTERN})\s+pods?\b",
+    re.IGNORECASE,
+)
+_POD_HINT_AFTER_KIND_QUERY = re.compile(
+    rf"\bpods?\s+(?:named\s+|called\s+)?(?P<hint>{_KUBERNETES_NAME_PATTERN})\b",
+    re.IGNORECASE,
+)
+
+
+def _pod_log_discovery_plan(question: str) -> ReadPlan | None:
+    """Compile a bounded Pod-name search before any exact container-log read."""
+
+    if not re.search(r"\bpods?\b", question, re.IGNORECASE):
+        return None
+    namespace_match = _EXPLICIT_NAMESPACE_QUERY.search(question)
+    if namespace_match is None:
+        return None
+    question_without_namespace = (
+        question[:namespace_match.start()] + " " + question[namespace_match.end():]
+    )
+    if not _POD_LOG_WORD_QUERY.search(question_without_namespace):
+        return None
+    ignored_hints = {
+        "a", "an", "any", "for", "from", "in", "of", "on", "some", "that",
+        "the", "this", "to",
+    }
+    hint = None
+    for pattern in (_POD_HINT_BEFORE_KIND_QUERY, _POD_HINT_AFTER_KIND_QUERY):
+        for hint_match in pattern.finditer(question):
+            candidate = hint_match.group("hint").lower()
+            if candidate not in ignored_hints:
+                hint = candidate
+                break
+        if hint is not None:
+            break
+    if hint is None:
+        return None
+    namespace = (
+        namespace_match.group("prefix") or namespace_match.group("suffix")
+    ).lower()
+    return ReadPlan(
+        goal_type="logs",
+        scope_summary=(
+            f"Find Pods containing {hint} in namespace {namespace} before reading exact logs."
+        ),
+        intents=[ReadIntent(
+            tool="search_resources",
+            resource="pods",
+            api_version="v1",
+            kind="Pod",
+            namespace=namespace,
+            match_field="metadata.name",
+            match_value=hint,
+            match_operator="contains",
+            limit=20,
+        )],
+    )
 
 
 def _cross_namespace_network_policy_plan(question: str) -> ReadPlan | None:
@@ -948,6 +1025,9 @@ def plan_known_read(
     network_policy_plan = _cross_namespace_network_policy_plan(question)
     if network_policy_plan is not None:
         return network_policy_plan, False
+    pod_log_plan = _pod_log_discovery_plan(question)
+    if pod_log_plan is not None:
+        return pod_log_plan, False
     top_consumers = _NAMESPACE_TOP_CONSUMERS_QUERY.search(question)
     if top_consumers:
         metric_name = top_consumers.group("metric") or top_consumers.group("metric_first")
