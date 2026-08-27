@@ -1782,7 +1782,7 @@ def _deterministic_inventory_answer(
                 status.get("conditions")
                 if isinstance(status.get("conditions"), list) else []
             )
-            ready = "—"
+            ready = "Unknown"
             for condition in conditions:
                 if (
                     isinstance(condition, dict)
@@ -1802,21 +1802,24 @@ def _deterministic_inventory_answer(
         rows: list[str] = []
         citations: list[str] = []
         total_matches = 0
+        matching_cluster_ids: set[str] = set()
         for observation in reversed(observations):
             data = observation["data"]
             cluster_name = str(observation.get("cluster_name") or observation.get("cluster_id") or "cluster")
+            cluster_id = str(observation.get("cluster_id") or cluster_name)
             kind = str(data.get("kind") or "Resource")
             objects = inventory_rows(data)
             citations.append(str(observation["id"]))
             if objects:
                 total_matches += len(objects)
+                matching_cluster_ids.add(cluster_id)
                 rows.extend(
                     f"| `{cluster_name}` | `{kind}` | `{namespace}` | `{name}` | {ready} |"
                     for namespace, name, ready in objects
                 )
             else:
                 rows.append(
-                    f"| `{cluster_name}` | `{kind}` | — | _No matching resources_ | — |"
+                    f"| `{cluster_name}` | `{kind}` | — | _No matching resources_ | Not applicable |"
                 )
         for observation in reversed(discovery_misses):
             cluster_name = str(
@@ -1827,18 +1830,20 @@ def _deterministic_inventory_answer(
             citations.append(str(observation["id"]))
             rows.append(
                 f"| `{cluster_name}` | — | — | "
-                "_No matching readable API resource type_ | Unknown |"
+                "_No matching readable API resource type_ | Not applicable |"
             )
         return {
             "answer_mode": "evidence_based",
             "content": (
                 "## Multi-cluster inventory\n\n"
-                f"**Collected:** {total_matches} matching resource"
-                f"{'s' if total_matches != 1 else ''} across {len(source_cluster_ids)} "
-                "OpenShift clusters.\n\n"
+                f"**Found:** {total_matches} matching resource"
+                f"{'s' if total_matches != 1 else ''} on {len(matching_cluster_ids)} of "
+                f"{len(source_cluster_ids)} queried OpenShift clusters.\n\n"
                 "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |\n"
                 "|---|---|---|---|---|\n" + "\n".join(rows) +
-                "\n\nEach row comes from an independently bounded read against the named cluster."
+                "\n\nEach row comes from an independently bounded read against the named cluster. "
+                "`Unknown` means the resource was found but its projected status did not include "
+                "a Ready condition; it must not be interpreted as healthy or unhealthy."
             ),
             "citations": citations,
         }
@@ -5164,6 +5169,7 @@ def create_app(
         cluster_runtimes: list[dict[str, object]] = []
         remaining_budget = app_settings.adhoc_max_reads_per_turn
         raw_responses: list[dict[str, str]] = []
+        inventory_fast_path = False
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
@@ -5425,30 +5431,62 @@ def create_app(
                     "model_log_analysis": model_log_analysis,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
-                with capture_raw_model_responses(include_raw_response) as captured:
-                    try:
-                        answer = await run_in_threadpool(
-                            provider.answer_ad_hoc,
-                            profile_snapshot,
-                            api_key,
-                            answer_context,
-                        )
-                    finally:
-                        _bounded_raw_response_attempts(
-                            raw_responses, captured, stage="initial answer"
-                        )
-                if include_raw_response and not captured:
-                    _bounded_raw_response_attempts(
-                        raw_responses,
-                        [answer.model_dump_json() if hasattr(answer, "model_dump_json") else str(answer)],
-                        stage="initial answer",
+                fast_inventory_answer = (
+                    _deterministic_inventory_answer(
+                        evidence=evidence,
+                        activity=activity,
+                        question=message_text,
+                        inventory_only=(
+                            inquiry.mode == "inventory" if inquiry is not None else None
+                        ),
                     )
-                validated = _validated_adhoc_answer(
-                    answer,
-                    known_evidence_ids={str(item.get("id")) for item in evidence},
-                    collection_limitations=limitations,
-                    observations=evidence,
+                    if not followup_action
+                    and (
+                        inquiry is None
+                        or (
+                            inquiry.mode == "inventory"
+                            and not inquiry.needs_object_details
+                        )
+                    )
+                    else None
                 )
+                if fast_inventory_answer is not None:
+                    inventory_fast_path = True
+                    validated = {
+                        **fast_inventory_answer,
+                        "conclusion_status": "confirmed",
+                        "limitations": _dedupe_limitations(limitations),
+                        "recommended_next_checks": [],
+                        "investigation_gaps": [],
+                    }
+                else:
+                    with capture_raw_model_responses(include_raw_response) as captured:
+                        try:
+                            answer = await run_in_threadpool(
+                                provider.answer_ad_hoc,
+                                profile_snapshot,
+                                api_key,
+                                answer_context,
+                            )
+                        finally:
+                            _bounded_raw_response_attempts(
+                                raw_responses, captured, stage="initial answer"
+                            )
+                    if include_raw_response and not captured:
+                        _bounded_raw_response_attempts(
+                            raw_responses,
+                            [
+                                answer.model_dump_json()
+                                if hasattr(answer, "model_dump_json") else str(answer)
+                            ],
+                            stage="initial answer",
+                        )
+                    validated = _validated_adhoc_answer(
+                        answer,
+                        known_evidence_ids={str(item.get("id")) for item in evidence},
+                        collection_limitations=limitations,
+                        observations=evidence,
+                    )
                 _reconcile_validated_answer_gaps(
                     validated,
                     capability_ledger=answer_context["capability_ledger"],
@@ -5938,13 +5976,17 @@ def create_app(
                         "citations": [],
                         "limitations": [str(exc)],
                     }
-        suggested_checks, suggested_followup_actions = _compile_remaining_candidate_followups(
-            question=source_question,
-            evidence=evidence,
-            activity=activity,
-            cluster_runtimes=cluster_runtimes,
-            remaining_units=remaining_budget,
-            limit=3,
+        suggested_checks, suggested_followup_actions = (
+            ([], [])
+            if inventory_fast_path
+            else _compile_remaining_candidate_followups(
+                question=source_question,
+                evidence=evidence,
+                activity=activity,
+                cluster_runtimes=cluster_runtimes,
+                remaining_units=remaining_budget,
+                limit=3,
+            )
         )
         validated["recommended_next_checks"] = suggested_checks
         validated["suggested_followup_actions"] = suggested_followup_actions

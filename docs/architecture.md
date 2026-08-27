@@ -248,7 +248,12 @@ not be presented as proof that more objects exist.
 The inventory object ceiling is deployment-configurable (500 by default, 1,000
 maximum). Explicit list/inventory requests are rendered by normal server code as
 an evidence-cited Markdown table from the collected `names` array, so model prose
-cannot omit the requested resource list.
+cannot omit the requested resource list. When the semantic classifier says names are
+sufficient, that deterministic table is the final answer: PodPilot skips the general
+final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
+completed inventory request. Multi-cluster totals distinguish clusters queried from
+clusters with matches. A missing projected Ready condition is displayed as `Unknown`,
+never as proof that the object is running or unhealthy.
 Model-authored cluster-wide LIST and search reads may use `namespace: "*"` as shorthand; normal
 code converts that placeholder to the broker's canonical omitted namespace before validation.
 

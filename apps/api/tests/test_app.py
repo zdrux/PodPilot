@@ -2001,8 +2001,8 @@ def test_explicit_inventory_is_rendered_from_evidence_as_a_cited_table() -> None
     )
 
     assert rendered is not None
-    assert "| 1 | `openshift-logging` | `collector-a` | — |" in str(rendered["content"])
-    assert "| 2 | `openshift-logging` | `collector-b` | — |" in str(rendered["content"])
+    assert "| 1 | `openshift-logging` | `collector-a` | Unknown |" in str(rendered["content"])
+    assert "| 2 | `openshift-logging` | `collector-b` | Unknown |" in str(rendered["content"])
     assert "complete for this snapshot" in str(rendered["content"])
     assert rendered["citations"] == ["cluster-pods-1"]
 
@@ -2041,10 +2041,11 @@ def test_existence_question_renders_identifiable_multi_cluster_inventory() -> No
 
     assert rendered is not None
     content = str(rendered["content"])
-    assert "**Collected:** 2 matching resources across 2 OpenShift clusters." in content
+    assert "**Found:** 2 matching resources on 2 of 2 queried OpenShift clusters." in content
     assert "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |" in content
-    assert "| `Simplii Central DEV` | `Kafka` | `orders` | `orders-kafka` | — |" in content
-    assert "| `Simplii East DEV` | `Kafka` | `events` | `events-kafka` | — |" in content
+    assert "| `Simplii Central DEV` | `Kafka` | `orders` | `orders-kafka` | Unknown |" in content
+    assert "| `Simplii East DEV` | `Kafka` | `events` | `events-kafka` | Unknown |" in content
+    assert "must not be interpreted as healthy or unhealthy" in content
     assert rendered["citations"] == ["central-kafka", "east-kafka"]
 
 
@@ -2334,8 +2335,9 @@ def test_multi_cluster_inventory_distinguishes_catalog_miss_from_zero_objects() 
 
     assert rendered is not None
     content = str(rendered["content"])
-    assert "| `East DEV` | `Kafka` | — | _No matching resources_ | — |" in content
-    assert "| `Remote DEV` | — | — | _No matching readable API resource type_ | Unknown |" in content
+    assert "**Found:** 0 matching resources on 0 of 2 queried OpenShift clusters." in content
+    assert "| `East DEV` | `Kafka` | — | _No matching resources_ | Not applicable |" in content
+    assert "| `Remote DEV` | — | — | _No matching readable API resource type_ | Not applicable |" in content
     assert rendered["citations"] == ["kafka-zero", "kafka-api-missing"]
 
 
@@ -3126,7 +3128,16 @@ class StorageClassExplorer:
             summary="Read StorageClass cluster/managed-premium.",
             source="kubernetes:storage.k8s.io/v1:StorageClass:cluster/managed-premium",
             collected_at=datetime.now(timezone.utc),
-            data={"metadata": {"name": "managed-premium"}, "provisioner": "disk.csi.azure.com"},
+            data={
+                "kind": "StorageClass", "scope": "cluster",
+                "names": ["managed-premium"],
+                "objects": [{"name": "managed-premium"}],
+                "items": [{
+                    "metadata": {"name": "managed-premium"},
+                    "provisioner": "disk.csi.azure.com",
+                }],
+                "objectListComplete": True,
+            },
         ),))
 
 
@@ -4840,11 +4851,14 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
             follow_redirects=False,
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "managed-premium StorageClass" in rendered.text
+        assert "StorageClass inventory" in rendered.text
+        assert "managed-premium" in rendered.text
         assert "cluster-sc-1" in rendered.text
         assert "No observations were provided" not in rendered.text
+        assert "Suggested next checks" not in rendered.text
 
     assert provider.adhoc_plan_calls == []
+    assert provider.adhoc_answer_calls == []
     assert len(explorer.calls) == 1
     assert explorer.calls[0].api_version == "storage.k8s.io/v1"
     assert explorer.calls[0].kind == "StorageClass"

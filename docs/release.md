@@ -205,6 +205,9 @@ cannot trigger an unrelated Namespace or other resource read. Inventory detail r
 the base LIST executes before any optional model-directed detail phase, that its evidence remains
 renderable if the later phase fails, and that a model-authored cluster-wide `namespace: "*"` LIST is
 normalized to an omitted namespace rather than rejected as an invalid Kubernetes identifier.
+Simple inventory gates must also prove that the general final writer is not called, no suggested
+troubleshooting checks are emitted, the summary distinguishes matching from queried clusters, and
+an absent projected Ready condition is rendered as `Unknown` rather than a health claim.
 Suggested-action gates must derive controls from unread exact
 server-owned candidates without consuming or parsing model recommendations.
 They must also prove that an empty structured citation array can recover an exact
