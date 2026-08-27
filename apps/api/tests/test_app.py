@@ -769,6 +769,35 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     ) is None
 
 
+def test_flattened_heading_answer_is_normalized_before_quality_validation() -> None:
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        conclusion_status="probable",
+        answer=(
+            "### What the Route tells us today --- The Route uses TLS passthrough and "
+            "forwards encrypted traffic to the backend Service. - The Service specification "
+            "has not been collected, so its target port remains unverified. "
+            "### Next evidence --- Read the referenced Service and its endpoints."
+        ),
+        cited_evidence_ids=["route-1"],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={"route-1"},
+    )
+
+    assert "### What the Route tells us today\n\nThe Route uses" in validated["content"]
+    assert "\n- The Service specification" in validated["content"]
+    assert "\n\n### Next evidence\n\nRead the referenced Service" in validated["content"]
+    assert _adhoc_answer_quality_issue(
+        content=str(validated["content"]),
+        answer_mode=str(validated["answer_mode"]),
+        has_evidence=True,
+        has_citations=True,
+    ) is None
+
+
 def test_exact_resource_read_inherits_unique_namespace_from_inventory_evidence() -> None:
     plan = ReadPlan(
         goal_type="explain",

@@ -693,6 +693,10 @@ section for current signals, including exact Pod/container, category, severity, 
 paths/endpoints, one sample, completed correlation checks, and citations. This section is
 composed with—not replaced by—the Route/TLS fallback. Equivalent TLS trust/bypass and
 empty-Event limitations are shown once rather than repeated.
+Single-line chat-completions answers that begin with a Markdown heading are normalized into
+real heading, paragraph, and bullet blocks before this quality check. This prevents a substantive
+flattened response from being mistaken for a heading-only answer; a genuine standalone heading
+still receives the bounded correction.
 
 Every turn that successfully collects Pod logs also sends all current bounded, redacted
 log excerpts through a separate structured model request with no conversation history. The

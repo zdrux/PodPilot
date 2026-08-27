@@ -611,6 +611,20 @@ def _clean_adhoc_markdown(
     cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
+    # Some chat-completions providers flatten an otherwise substantive Markdown
+    # answer onto one physical line beginning with a heading. Without restoring
+    # block boundaries, the quality check correctly recognizes the leading `###`
+    # but then mistakes the entire answer for a heading. Normalize only this
+    # compact shape; authored multi-line Markdown is left unchanged.
+    if "\n" not in cleaned and re.match(r"^\s*#{1,4}\s+", cleaned):
+        cleaned = re.sub(r"\s+---+\s+", "\n\n", cleaned)
+        cleaned = re.sub(r"\s+(?=#{1,4}\s+)", "\n\n", cleaned)
+        cleaned = re.sub(
+            r"\s+-\s+(?=(?:\*\*|`|[A-Z]))",
+            "\n- ",
+            cleaned,
+        )
+
     # Smaller chat-completions models sometimes return an otherwise useful answer as
     # one paragraph with inline labels. Convert only that unstructured shape; leave
     # authored Markdown headings, lists, tables, and paragraphs untouched.

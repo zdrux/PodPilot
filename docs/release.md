@@ -193,6 +193,8 @@ Final-answer gates must reject citation-bearing heading-only or extremely brief 
 responses and evidence-based replies that omit current material Pod-log citations, send exactly
 one bounded correction without the rejected body, and activate
 the deterministic Route/TLS or cited-observation fallback after a second failure.
+They must accept and structurally normalize a substantive single-line response that begins with a
+Markdown heading while continuing to reject a genuine standalone heading.
 They must also prove that an empty structured citation array can recover an exact
 allowlisted observation ID from answer prose, removes that internal marker before
 display, and never accepts an unknown or partial ID.
