@@ -776,7 +776,9 @@ The only automatic continuation is an identical trust-only HTTPS retry. After tw
 plans, normal code may also recover with one safe read compiled from a single exact coordinate in
 the operator request, such as searching Route `spec.host` for a supplied URL; subsequent traversal
 returns to the model. This is an availability recovery anchor, not a generic catalog fallback or a
-server-authored diagnostic graph. Set the default reserved follow-up units to zero. Treat answer
+server-authored diagnostic graph. The same anchor is allowed when the first plan is a valid no-read
+stop and its requested schema correction is invalid; a plan malformed from its first response still
+executes nothing, and malformed intent fields never supply coordinates. Set the default reserved follow-up units to zero. Treat answer
 grounding separately from certainty: a cited interpretation is evidence-based and may carry an
 unresolved conclusion, while uncited refusals and structurally empty answers still receive one
 correction attempt.

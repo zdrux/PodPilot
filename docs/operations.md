@@ -713,13 +713,15 @@ Failure of this optional analysis does not fail the investigation.
 
 The planner infers a goal and collection decision from natural language; users do
 not need to use exact command-like phrases. An operational no-read response is
-retried once with structured feedback. If both attempts stop before any evidence
+retried once with structured feedback. If both attempts stop before any evidence, or the first
+valid response stops and its correction fails schema validation,
 and the operator supplied one exact coordinate that normal code can compile into a
 single safe read (for example, a Route hostname in a URL), PodPilot uses that read
 as a discovery anchor. All later troubleshooting direction returns to the model;
 there is no generic catalog fallback or server-authored traversal. Application logs
 record `podpilot.adhoc.plan_repair` and
 `podpilot.adhoc.operator_anchor_recovery` without the question or evidence payload.
+The recovery event records `reason=repeated_stop` or `reason=invalid_correction`.
 A later `403` is an RBAC limitation, not a planner failure, and the UI names the
 denied ServiceAccount, resource, verb, and scope.
 

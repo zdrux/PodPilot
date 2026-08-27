@@ -3936,6 +3936,61 @@ def test_repeated_no_read_plan_uses_operator_grounded_anchor_then_returns_to_mod
     assert "podpilot.adhoc.operator_anchor_recovery" in caplog.text
 
 
+def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
+    caplog,
+) -> None:
+    class Provider(RouteBackendProvider):
+        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+            self.adhoc_plan_calls.append(context)
+            if not context["completed_reads"]:
+                if context.get("planner_feedback"):
+                    raise ModelProviderError(
+                        "Provider response does not match ReadPlan. Provider returned content "
+                        "that failed schema validation (intents.0: value_error)."
+                    )
+                return ReadPlan(
+                    goal_type="diagnose",
+                    decision="answer_from_evidence",
+                    scope_summary="Stop before collecting Route evidence.",
+                )
+            return ReadPlan(
+                goal_type="diagnose",
+                decision="answer_from_evidence",
+                scope_summary="The Route evidence is sufficient.",
+                supporting_evidence_ids=["cluster-route-1"],
+            )
+
+    provider = Provider()
+    explorer = RouteBackendExplorer()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider,
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="invalid-correction-anchor",
+        question=(
+            "Why does the Route https://maas.apps.example.test/v1/models return an "
+            "Internal Server Error?"
+        ),
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [call.tool for call in explorer.calls] == ["search_resources"]
+    assert [item["id"] for item in result.evidence] == ["cluster-route-1"]
+    assert "correction was not schema-valid" in " ".join(result.limitations)
+    assert "reason=invalid_correction" in caplog.text
+
+
 def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
     tmp_path: Path,
 ) -> None:

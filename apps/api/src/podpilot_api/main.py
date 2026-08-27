@@ -2759,6 +2759,7 @@ async def _collect_bounded_cluster_reads(
             target_errors: list[str] = []
             rejected_log_intents: list[ReadIntent] = []
             no_progress_plan = False
+            had_actionable_no_read_plan = False
             for planning_attempt in range(1, 3):
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -2812,6 +2813,9 @@ async def _collect_bounded_cluster_reads(
                 no_progress_plan = bool(bound_plan.intents) and novel_intents == 0
                 evidence_repair_needed = plan_requires_repair(
                     plan, round_number=round_number
+                )
+                had_actionable_no_read_plan = (
+                    had_actionable_no_read_plan or evidence_repair_needed
                 )
                 sufficiency_review_needed = (
                     planning_attempt == 1
@@ -2922,16 +2926,22 @@ async def _collect_bounded_cluster_reads(
                 )
             elif (
                 needs_fallback
-                and planner_error is None
                 and not target_errors
                 and not activity
                 and recovery_anchor_plan is not None
+                and (planner_error is None or had_actionable_no_read_plan)
             ):
                 plan = recovery_anchor_plan
                 limitations.append(
-                    "The model planner twice stopped before collecting evidence; PodPilot used one "
-                    "read grounded directly in the operator's request, then returned diagnostic "
-                    "direction to the model."
+                    (
+                        "The model planner's correction was not schema-valid after it first stopped "
+                        "without evidence; PodPilot used one read grounded directly in the operator's "
+                        "request, then returned diagnostic direction to the model."
+                        if planner_error is not None else
+                        "The model planner twice stopped before collecting evidence; PodPilot used one "
+                        "read grounded directly in the operator's request, then returned diagnostic "
+                        "direction to the model."
+                    )
                 )
                 if progress:
                     await progress(
@@ -2939,10 +2949,12 @@ async def _collect_bounded_cluster_reads(
                         "Using the exact target in your question as the first discovery anchor.",
                     )
                 LOGGER.warning(
-                    "podpilot.adhoc.operator_anchor_recovery actor=%s workflow_id=%s tool=%s",
+                    "podpilot.adhoc.operator_anchor_recovery actor=%s workflow_id=%s tool=%s "
+                    "reason=%s",
                     actor,
                     workflow_id,
                     plan.intents[0].tool,
+                    "invalid_correction" if planner_error is not None else "repeated_stop",
                 )
             elif needs_fallback and planner_error is not None:
                 LOGGER.warning(

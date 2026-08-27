@@ -68,7 +68,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   Service DNS endpoints. Capability probing now separately validates the live Ask
   PodPilot planning and answer schemas, shows an explicit result notification,
   emits sanitized phase/outcome events for provider troubleshooting, and gives
-  Chat Completions models one bounded field/type-only schema correction attempt.
+  Chat Completions models one bounded field/type plus static cross-field schema correction attempt.
+  A schema-invalid correction after a valid premature stop may fall back to one exact
+  operator-grounded discovery anchor; a plan malformed from its first response still executes nothing.
   The compatibility boundary safely defaults a missing descriptive plan summary,
   uses a smaller synthetic answer budget during probes, canonicalizes known
   Kubernetes/OpenShift Kind and apiVersion pairs, and keeps model-authored plan

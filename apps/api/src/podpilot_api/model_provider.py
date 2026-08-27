@@ -734,7 +734,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             try:
                 return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
-                validation_detail = self._safe_error(first_error)
+                validation_detail = self._schema_correction_detail(schema, first_error)
                 correction = client.chat.completions.create(
                     model=profile.chat_model,
                     messages=[
@@ -775,6 +775,27 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         if schema is ReadPlan and isinstance(payload, dict) and "scope_summary" not in payload:
             payload["scope_summary"] = "Bounded read-only cluster investigation."
         return schema.model_validate(payload)
+
+    @classmethod
+    def _schema_correction_detail(cls, schema, error: ValidationError) -> str:
+        """Return bounded schema guidance without echoing rejected provider content."""
+
+        detail = cls._safe_error(error)
+        has_intent_error = any(
+            item.get("loc", ()) and item.get("loc", ())[0] == "intents"
+            for item in error.errors(include_url=False, include_input=False)
+        )
+        if schema is not ReadPlan or not has_intent_error:
+            return detail
+        return (
+            f"{detail} ReadIntent cross-field rules: use only fields belonging to the selected "
+            "tool; search_resources requires match_field and match_value; discover_resources "
+            "requires discovery_query and no resource coordinates; http_probe requires an "
+            "absolute http/https url; query_metrics requires a catalog metric, metric_scope, "
+            "and exact scope coordinates; pod_logs uses a supplied candidate_id when candidates "
+            "exist. Do not put capability-ledger labels such as service_spec or endpoints into "
+            "tool or coordinate fields."
+        )
 
     def probe(self, profile: ModelProfileConfig, api_key: str) -> CapabilityReport:
         probe = self._parse(

@@ -99,6 +99,41 @@ class CorrectingPlanCompletions:
         )
 
 
+class CorrectingIntentCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        if len(self.requests) == 1:
+            content = json.dumps({
+                "scope_summary": "Read the backend Service.",
+                "intents": [{
+                    "tool": "get_resource",
+                    "resource": "services",
+                    "namespace": "openshift-ingress",
+                    "name": "gateway",
+                    "match_field": "metadata.name",
+                    "match_value": "gateway",
+                }],
+            })
+        else:
+            content = json.dumps({
+                "scope_summary": "Read the exact backend Service.",
+                "intents": [{
+                    "tool": "get_resource",
+                    "resource": "services",
+                    "api_version": "v1",
+                    "kind": "Service",
+                    "namespace": "openshift-ingress",
+                    "name": "gateway",
+                }],
+            })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
 class MissingSummaryPlanCompletions:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
@@ -254,6 +289,22 @@ def test_chat_completions_retries_one_schema_correction_without_rejected_content
     correction_messages = completions.requests[1]["messages"]
     assert "scope_summary: string_too_short" in correction_messages[-1]["content"]
     assert '"scope_summary": ""' not in correction_messages[-1]["content"]
+
+
+def test_read_intent_correction_receives_static_cross_field_rules() -> None:
+    completions = CorrectingIntentCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    plan = provider.plan_ad_hoc(profile(), "secret-token", {"question": "Inspect Route"})
+
+    assert plan.intents[0].tool == "get_resource"
+    correction = completions.requests[1]["messages"][-1]["content"]
+    assert "ReadIntent cross-field rules" in correction
+    assert "search_resources requires match_field and match_value" in correction
+    assert "capability-ledger labels" in correction
+    assert "metadata.name" not in correction
 
 
 def test_missing_descriptive_plan_summary_gets_safe_default_without_retry() -> None:

@@ -266,7 +266,8 @@ two units; discovery and ordinary resource reads cost one. The default follow-up
 so all 25 units are available to the model-directed loop; deployments may reserve units for the
 mechanical TLS trust retry if required.
 
-If the first plan and its structured repair both stop before collecting any evidence, normal code
+If the first plan and its structured repair both stop before collecting any evidence, or the first
+plan is a valid premature stop and the requested correction is not schema-valid, normal code
 may use one non-terminal read compiled from a single exact coordinate in the operator request as a
 recovery anchor. A Route URL, for example, can seed one exact `spec.host` search. This does not
 activate a generic catalog fallback or a deterministic troubleshooting graph: the resulting

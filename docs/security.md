@@ -211,7 +211,10 @@ Capability readiness also requires the provider to return schema-valid
 `ReadPlan` and `AdHocAnswer` objects, rather than relying on a simpler structured
 output probe as a proxy for the live Ask workflow. A Chat Completions validation
 failure receives at most one explicit correction attempt containing only bounded
-field/type diagnostics, not the rejected response body.
+field/type diagnostics and static cross-field `ReadIntent` rules, not the rejected response body.
+If that correction remains invalid after an initial valid no-read stop, only an independently
+compiled exact coordinate from the operator request may seed the existing recovery anchor; no
+field from the malformed intent is executed or used as a target.
 The API supplies a fixed descriptive default when only `ReadPlan.scope_summary`
 is absent; this field never controls a cluster read. Before execution, well-known
 Kubernetes and OpenShift Kind/apiVersion pairs may be canonicalized, while all resources,

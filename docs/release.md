@@ -254,8 +254,9 @@ no-read answers, one structured repair attempt, valid supporting-evidence reuse,
 and operator-grounded recovery after repeated initial refusal. Tests must prove
 that recovery is limited to one read compiled from an exact coordinate in the
 operator request, still passes through the normal read broker and RBAC boundary,
-returns subsequent traversal to the model, and does not activate for malformed
-plans or generic catalog matches.
+returns subsequent traversal to the model, and does not activate for a plan malformed
+from its first response or for generic catalog matches. A valid premature stop followed by a
+schema-invalid correction may use the same anchor without executing either malformed intent.
 Dynamic-traversal gates must also prove that the first evidence-supported stop for
 a diagnostic goal receives one bounded sufficiency review, that the model can turn
 that feedback into broker-validated typed reads, and that repeating the stop is
