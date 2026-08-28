@@ -1134,6 +1134,11 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         metric_scope="node", name="worker-2",
     )
     assert node.namespace is None
+    worker_role = ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="node_role", name="worker",
+    )
+    assert worker_role.name == "worker"
     namespace = ReadIntent(
         tool="query_metrics", metric="top_memory_consumers",
         metric_scope="namespace", namespace="payments",
@@ -1144,7 +1149,7 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         metric_scope="cluster", limit=5,
     )
     assert cluster.namespace is None and cluster.name is None and cluster.limit == 5
-    with pytest.raises(ValidationError, match="requires cluster, namespace, deployment, or node scope"):
+    with pytest.raises(ValidationError, match="requires cluster, namespace, workload, or node scope"):
         ReadIntent(
             tool="query_metrics", metric="top_memory_consumers",
             metric_scope="pod", namespace="payments", name="api-1",
@@ -1179,6 +1184,27 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: st
         range_seconds=3600,
         limit=10,
     )]
+
+
+def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:
+    planned = plan_known_read(
+        "show me the current cpu/mem utilization for worker nodes in the cluster"
+    )
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "compare"
+    assert plan.intents == [
+        ReadIntent(
+            tool="query_metrics", metric="node_cpu_utilization",
+            metric_scope="node_role", name="worker",
+        ),
+        ReadIntent(
+            tool="query_metrics", metric="node_memory_utilization",
+            metric_scope="node_role", name="worker",
+        ),
+    ]
 
 
 @pytest.mark.parametrize(

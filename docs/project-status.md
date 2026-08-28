@@ -621,6 +621,31 @@ current repository and cluster state.
 - Last-N searches still expand the bounded time window only when too few matching records exist.
   This local change has not yet been rolled out to the SNO workload.
 
+## 2026-08-28 Worker-node utilization routing
+
+- Ask recognizes explicit CPU-and-memory utilization requests for worker/compute Nodes as
+  node-level monitoring questions rather than pod top-consumer rankings.
+- Normal code compiles the request into separate bounded CPU and memory queries, joins the
+  trusted `kube_node_role{role="worker"}` membership metric, and groups results by Node.
+- A deterministic guard owns this unambiguous request even if model classification returns a
+  different schema-valid metric route; model-authored PromQL remains prohibited.
+- The model-free suite passes locally with 509 tests and 83% aggregate coverage; this change
+  has not yet been rolled out to the SNO workload.
+
+## 2026-08-28 Composable metric requests
+
+- Ask metric classification now has a backward-compatible typed request with up to four signals,
+  exact target semantics, show/trend/rank/compare/threshold operations, requested statistic,
+  grouping, threshold, period, and result limit.
+- Normal code compiles registered CPU, memory, allocation, throttling, network, restart, readiness,
+  PVC, ranking, and node-utilization signals for cluster, Namespace, Pod/container, Deployment,
+  StatefulSet, DaemonSet, Job, Node, Node-role, and PVC targets. The model cannot author PromQL.
+- Controller metrics use trusted owner joins, supported groupings become bounded PromQL aggregation,
+  and metric-only results receive a deterministic current/average/peak table.
+- Machine, Service/Route, OpenShift control-plane, Kafka, and arbitrary CRD telemetry remain future
+  capability packs because Kubernetes API discovery does not prove that their metrics exist.
+- This local change has not yet been rolled out to the SNO workload.
+
 ## Known Limitations
 
 - Single-cluster, single-replica PoC with SNO-local storage and no production

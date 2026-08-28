@@ -41,21 +41,31 @@ def _selector(intent: ReadIntent, *, container: bool = False) -> str:
         labels.append(f"namespace={json.dumps(intent.namespace)}")
     if intent.metric_scope == "pod":
         labels.append(f"pod={json.dumps(intent.name)}")
+    if intent.container:
+        labels.append(f"container={json.dumps(intent.container)}")
     if container:
         labels.extend(['container!=""', 'container!="POD"', 'image!=""'])
     return ",".join(labels)
 
 
 def _membership(intent: ReadIntent) -> str | None:
-    if intent.metric_scope == "deployment":
+    if intent.metric_scope in {"deployment", "workload"}:
         namespace = json.dumps(intent.namespace)
-        deployment = json.dumps(intent.name)
+        kind = "Deployment" if intent.metric_scope == "deployment" else intent.kind
+        owner = json.dumps(intent.name)
+        if kind == "Deployment":
+            return (
+                "max by (namespace, pod) ("
+                f'label_replace(kube_pod_owner{{namespace={namespace},owner_kind="ReplicaSet"}}, '
+                '"replicaset", "$1", "owner_name", "(.*)") '
+                "* on(namespace, replicaset) group_left "
+                f'kube_replicaset_owner{{namespace={namespace},owner_kind="Deployment",owner_name={owner}}}'
+                ")"
+            )
         return (
             "max by (namespace, pod) ("
-            f'label_replace(kube_pod_owner{{namespace={namespace},owner_kind="ReplicaSet"}}, '
-            '"replicaset", "$1", "owner_name", "(.*)") '
-            "* on(namespace, replicaset) group_left "
-            f'kube_replicaset_owner{{namespace={namespace},owner_kind="Deployment",owner_name={deployment}}}'
+            f"kube_pod_owner{{namespace={namespace},owner_kind={json.dumps(kind)},"
+            f"owner_name={owner}}}"
             ")"
         )
     if intent.metric_scope == "node":
@@ -77,6 +87,28 @@ def _with_labels(selector: str, *labels: str) -> str:
     return ",".join(value for value in (selector, *labels) if value)
 
 
+def _aggregate(
+    expression: str,
+    intent: ReadIntent,
+    *,
+    function: str = "sum",
+    supported: set[str] | None = None,
+) -> str:
+    label_map = {
+        "namespace": "namespace",
+        "pod": "pod",
+        "container": "container",
+    }
+    selected = [
+        label_map[grouping]
+        for grouping in intent.metric_group_by
+        if grouping in label_map and (supported is None or grouping in supported)
+    ]
+    if selected:
+        return f"{function} by ({', '.join(selected)}) ({expression})"
+    return f"{function}({expression})"
+
+
 def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
     metric = intent.metric
     container = _selector(intent, container=True)
@@ -84,15 +116,15 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
     window = f"{rate_window_seconds}s"
     if metric == "cpu_usage":
         expression = f"rate(container_cpu_usage_seconds_total{{{container}}}[{window}])"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(_scoped(expression, intent), intent)
     if metric == "cpu_requests":
         labels = _with_labels(workload, 'resource="cpu"', 'unit="core"')
         expression = f"kube_pod_container_resource_requests{{{labels}}}"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(_scoped(expression, intent), intent)
     if metric == "cpu_limits":
         labels = _with_labels(workload, 'resource="cpu"', 'unit="core"')
         expression = f"kube_pod_container_resource_limits{{{labels}}}"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(_scoped(expression, intent), intent)
     if metric == "cpu_throttling":
         throttled = _scoped(
             f"rate(container_cpu_cfs_throttled_periods_total{{{container}}}[{window}])", intent,
@@ -101,31 +133,43 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             f"rate(container_cpu_cfs_periods_total{{{container}}}[{window}])", intent,
         )
         return (
-            f"100 * sum({throttled}) / clamp_min(sum({periods}), 0.000000001)"
+            f"100 * {_aggregate(throttled, intent)} / "
+            f"clamp_min({_aggregate(periods, intent)}, 0.000000001)"
         )
     if metric == "memory_working_set":
-        return f"sum({_scoped(f'container_memory_working_set_bytes{{{container}}}', intent)})"
+        return _aggregate(
+            _scoped(f"container_memory_working_set_bytes{{{container}}}", intent), intent,
+        )
     if metric == "memory_requests":
         labels = _with_labels(workload, 'resource="memory"', 'unit="byte"')
         expression = f"kube_pod_container_resource_requests{{{labels}}}"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(_scoped(expression, intent), intent)
     if metric == "memory_limits":
         labels = _with_labels(workload, 'resource="memory"', 'unit="byte"')
         expression = f"kube_pod_container_resource_limits{{{labels}}}"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(_scoped(expression, intent), intent)
     if metric == "network_receive":
         expression = f"rate(container_network_receive_bytes_total{{{workload}}}[{window}])"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(
+            _scoped(expression, intent), intent, supported={"namespace", "pod"},
+        )
     if metric == "network_transmit":
         expression = f"rate(container_network_transmit_bytes_total{{{workload}}}[{window}])"
-        return f"sum({_scoped(expression, intent)})"
+        return _aggregate(
+            _scoped(expression, intent), intent, supported={"namespace", "pod"},
+        )
     if metric == "container_restarts":
-        return f"sum({_scoped(f'kube_pod_container_status_restarts_total{{{workload}}}', intent)})"
+        return _aggregate(
+            _scoped(f"kube_pod_container_status_restarts_total{{{workload}}}", intent), intent,
+        )
     if metric == "pod_readiness":
         aggregation = "max" if intent.metric_scope == "pod" else "avg"
         labels = _with_labels(workload, 'condition="true"')
         expression = f"kube_pod_status_ready{{{labels}}}"
-        return f"{aggregation}({_scoped(expression, intent)})"
+        return _aggregate(
+            _scoped(expression, intent), intent, function=aggregation,
+            supported={"namespace", "pod"},
+        )
     if metric == "persistent_volume_usage":
         selector = (
             f"namespace={json.dumps(intent.namespace)},"
@@ -144,6 +188,20 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         expression = _scoped(f"container_memory_working_set_bytes{{{container}}}", intent)
         return f"topk({intent.limit}, sum by (namespace, pod) ({expression}))"
     if metric == "node_cpu_utilization":
+        if intent.metric_scope == "node_role":
+            role = json.dumps(intent.name)
+            membership = (
+                "on(nodename) group_left label_replace("
+                f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
+                ")"
+            )
+            return (
+                "100 * (1 - avg by (nodename) ("
+                f'rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) '
+                "* on(instance) group_left(nodename) node_uname_info "
+                f"* {membership}"
+                "))"
+            )
         node = json.dumps(intent.name)
         return (
             "100 * (1 - avg("
@@ -152,6 +210,27 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             "))"
         )
     if metric == "node_memory_utilization":
+        if intent.metric_scope == "node_role":
+            role = json.dumps(intent.name)
+            membership = (
+                "on(nodename) group_left label_replace("
+                f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
+                ")"
+            )
+            available = (
+                "node_memory_MemAvailable_bytes "
+                "* on(instance) group_left(nodename) node_uname_info "
+                f"* {membership}"
+            )
+            total = (
+                "node_memory_MemTotal_bytes "
+                "* on(instance) group_left(nodename) node_uname_info "
+                f"* {membership}"
+            )
+            return (
+                f"100 * (1 - sum by (nodename) ({available}) / "
+                f"clamp_min(sum by (nodename) ({total}), 1))"
+            )
         node = json.dumps(intent.name)
         membership = f'on(instance) group_left(nodename) node_uname_info{{nodename={node}}}'
         return (
@@ -215,6 +294,7 @@ class BoundedMetricTrendReader:
             ranking.append({
                 "labels": series.labels,
                 "current": series_stats["current"],
+                "minimum": series_stats["minimum"],
                 "average": series_stats["average"],
                 "maximum": series_stats["maximum"],
             })
@@ -246,7 +326,7 @@ class BoundedMetricTrendReader:
         target = (
             "cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
-            intent.name if intent.metric_scope == "node" else
+            intent.name if intent.metric_scope in {"node", "node_role"} else
             f"{intent.namespace}/{intent.name}"
         )
         return ReadResult(observations=(AdHocObservation(
@@ -260,7 +340,14 @@ class BoundedMetricTrendReader:
                 "scope": intent.metric_scope,
                 "namespace": intent.namespace,
                 "name": intent.name,
+                "kind": intent.kind,
+                "container": intent.container,
                 "unit": _UNITS[intent.metric],
+                "operation": intent.metric_operation,
+                "statistic": intent.metric_statistic,
+                "groupBy": intent.metric_group_by,
+                "thresholdOperator": intent.threshold_operator,
+                "thresholdValue": intent.threshold_value,
                 "rangeSeconds": range_seconds,
                 "stepSeconds": step_seconds,
                 "start": start.isoformat(),

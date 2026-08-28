@@ -13,6 +13,8 @@ from podpilot_api.model_provider import (
     CapabilitySelection,
     ConciseAdHocAnswer,
     InquirySemantics,
+    MetricRequestSemantics,
+    MetricTargetSemantics,
     ModelInterpretation,
     ModelProfileConfig,
     ModelProviderError,
@@ -779,7 +781,8 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
         "scope_reference_id", "relationship_selector_key", "object_name",
         "namespace", "requested_fields", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
-        "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
+            "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
+            "metric_request",
         "audit_username", "audit_operation_scope", "audit_outcome", "audit_range_seconds",
         "continues_prior_audit_query",
     }
@@ -806,6 +809,31 @@ def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:
     assert inquiry.resource_query == "KafkaTopic"
     assert inquiry.scope_reference_id == "ref-0123456789abcdefabcd"
     assert inquiry.relationship_selector_key == "strimzi.io/cluster"
+
+
+def test_metric_capability_preserves_composable_multi_signal_contract() -> None:
+    selected = CapabilitySelection(
+        capability="cluster_metrics",
+        evidence_goal="Compare CPU and memory for the supplied StatefulSet.",
+        metric_request=MetricRequestSemantics(
+            signals=["cpu_usage", "memory_working_set"],
+            target=MetricTargetSemantics(
+                scope="workload", kind="StatefulSet",
+                namespace="kafka", name="broker",
+            ),
+            operation="compare",
+            statistic="maximum",
+            range_seconds=1800,
+        ),
+    )
+
+    inquiry = selected.to_inquiry_semantics()
+
+    assert inquiry.mode == "metrics"
+    assert inquiry.operation == "metrics"
+    assert inquiry.metric_request is not None
+    assert inquiry.metric_request.signals == ["cpu_usage", "memory_working_set"]
+    assert inquiry.metric_request.target.kind == "StatefulSet"
 
 
 def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> None:

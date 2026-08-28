@@ -971,3 +971,44 @@ investigation protocol. Prompt and schema load is substantially smaller, while t
 diagnostic direction and can pursue its ideas until the evidence is sufficient or it is unsure.
 Unknown action IDs fail closed, multi-cluster attribution remains mandatory, and grounding,
 sensitivity, budget, discovery, verb, RBAC, redaction, and audit controls remain server-enforced.
+
+## 2026-08-28 - Live progress journals are append-only
+
+Context: The active Ask placeholder displayed only the latest six progress entries. Removing the
+oldest row whenever another update arrived shifted every remaining phase heading, making an active
+investigation difficult to follow.
+
+Decision: Render every progress event retained by the run in ascending sequence order. During a
+live run, append newer sequence IDs without removing or repositioning existing rows. Continue using
+sequence IDs to reject duplicate delivery across the event stream and status reconciliation.
+
+Consequences: Phase headings remain spatially stable while an investigation runs, and reloads show
+the same retained journal. The journal remains transient, bounded by the server's progress-event
+retention, and is replaced by the final answer when the run completes. This supersedes the six-item
+display window from the model-directed traversal decision; its safety and reasoning boundaries are
+unchanged.
+
+## 2026-08-28 - Metric questions use a composable typed request
+
+Context: A single `metric_query` plus coarse scope could represent pod rankings but not ordinary
+multi-signal, grouped, threshold, controller, or node-role questions. Adding one classifier enum
+value per operator phrase would couple language variation to PromQL templates and would not scale
+to installed operators or domain-specific telemetry.
+
+Decision: Add a backward-compatible `metric_request` semantic containing one to four registered
+signals, a typed target, operation, statistic, grouping, threshold, period, and result limit. Normal
+code validates exact coordinates and supported combinations, expands multi-signal requests into
+bounded `ReadIntent` values, and retains exclusive ownership of PromQL. The first target matrix
+covers cluster, Namespace, exact Pod/container, Deployment, StatefulSet, DaemonSet, Job, exact
+Node, registered Node role, and PVC. Controller aggregation follows trusted owner metrics;
+Node-role utilization follows trusted role membership. Grouping is limited to labels exposed by
+the registered metric, and unsupported combinations fail closed rather than silently changing the
+question. The legacy metric fields remain accepted during model/profile transition.
+
+Consequences: CPU, memory, allocation, throttling, network, restart, readiness, PVC, node
+utilization, ranking, comparison, trend, and threshold wording can share one semantic compiler.
+Metric-only answers render deterministic current/average/peak tables without asking the model to
+copy numeric values. Machine, Service/Route traffic, OpenShift control-plane, Kafka, and other CRD
+metrics still require explicit capability packs that declare their source series, object
+relationships, cardinality limits, and availability checks; API discovery alone is never treated
+as proof that corresponding telemetry exists.

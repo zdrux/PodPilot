@@ -2060,6 +2060,146 @@ def _deterministic_metric_ranking_answer(
     }
 
 
+def _deterministic_metric_summary_answer(
+    *,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render registered non-ranking metric results without model value transcription."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "query_metrics"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id")) in current_ids
+        and item.get("tool") == "query_metrics"
+        and isinstance(item.get("data"), dict)
+        and item["data"].get("metric") not in {
+            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        }
+    ]
+    if not observations:
+        return None
+
+    metric_titles = {
+        "cpu_usage": "CPU usage",
+        "cpu_requests": "CPU requests",
+        "cpu_limits": "CPU limits",
+        "cpu_throttling": "CPU throttling",
+        "memory_working_set": "Memory working set",
+        "memory_requests": "Memory requests",
+        "memory_limits": "Memory limits",
+        "network_receive": "Network receive rate",
+        "network_transmit": "Network transmit rate",
+        "container_restarts": "Container restarts",
+        "pod_readiness": "Pod readiness",
+        "persistent_volume_usage": "PVC utilization",
+        "node_cpu_utilization": "Node CPU utilization",
+        "node_memory_utilization": "Node memory utilization",
+    }
+    operator_functions = {
+        "gt": lambda value, threshold: value > threshold,
+        "gte": lambda value, threshold: value >= threshold,
+        "lt": lambda value, threshold: value < threshold,
+        "lte": lambda value, threshold: value <= threshold,
+    }
+    rows: list[str] = []
+    citations: list[str] = []
+    incomplete = False
+    threshold_applied = False
+    for observation in observations:
+        data = observation["data"]
+        citations.append(str(observation["id"]))
+        incomplete = incomplete or data.get("complete") is not True
+        cluster_name = str(
+            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+        )
+        metric = str(data.get("metric") or "metric")
+        unit = str(data.get("unit") or "")
+        statistic = str(data.get("statistic") or "current")
+        threshold_operator = data.get("thresholdOperator")
+        threshold_value = data.get("thresholdValue")
+        threshold_fn = operator_functions.get(str(threshold_operator))
+        threshold_applied = threshold_applied or threshold_fn is not None
+        ranking = data.get("ranking") if isinstance(data.get("ranking"), list) else []
+        ranked = [item for item in ranking if isinstance(item, dict)]
+        if not ranked:
+            ranked = [{
+                "labels": {},
+                **(
+                    data.get("statistics")
+                    if isinstance(data.get("statistics"), dict) else {}
+                ),
+            }]
+        emitted = False
+        for item in ranked:
+            selected_value = item.get(statistic)
+            if threshold_fn is not None and isinstance(threshold_value, (int, float)):
+                if not isinstance(selected_value, (int, float)) or not threshold_fn(
+                    selected_value, float(threshold_value)
+                ):
+                    continue
+            labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+            node = labels.get("nodename") or labels.get("node")
+            namespace = labels.get("namespace") or data.get("namespace")
+            scope = str(data.get("scope") or "")
+            pod = labels.get("pod") or (
+                data.get("name") if scope in {"pod", "deployment", "workload"} else None
+            )
+            container = labels.get("container") or data.get("container")
+            storage_target = (
+                data.get("name") if scope == "persistent_volume_claim" else None
+            )
+            target_parts = [
+                str(value)
+                for value in (node, namespace, pod, container, storage_target)
+                if value
+            ]
+            if not target_parts:
+                target_parts = [str(data.get("name") or data.get("scope") or "target")]
+            rows.append(
+                f"| `{cluster_name}` | {metric_titles.get(metric, metric.replace('_', ' ').title())} "
+                f"| `{'/'.join(target_parts)}` | {_format_metric_value(item.get('current'), unit)} "
+                f"| {_format_metric_value(item.get('average'), unit)} "
+                f"| {_format_metric_value(item.get('maximum'), unit)} |"
+            )
+            emitted = True
+        if not emitted and not threshold_applied:
+            rows.append(
+                f"| `{cluster_name}` | {metric_titles.get(metric, metric)} | — "
+                "| _No finite samples returned_ | — | — |"
+            )
+
+    title = "Metric threshold matches" if threshold_applied else "Observed metric values"
+    content = (
+        f"## {title}\n\n"
+        "| OpenShift cluster | Metric | Target | Current | Average | Peak |\n"
+        "|---|---|---|---:|---:|---:|\n"
+    )
+    if rows:
+        content += "\n".join(rows)
+    else:
+        content += "| — | — | — | _No returned series matched the requested threshold_ | — | — |"
+    content += (
+        "\n\nCurrent, average, and peak values come from the same bounded monitoring window; "
+        "each selected cluster was queried independently."
+    )
+    if incomplete:
+        content += (
+            " One or more monitoring responses reached a configured series or point ceiling, "
+            "so the result may be incomplete."
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": content,
+        "citations": citations,
+    }
+
+
 def _current_reads_are_metric_rankings(
     activity: list[dict[str, object]],
 ) -> bool:
@@ -2986,6 +3126,7 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
     elif tool == "query_metrics":
         add("Metric", data.get("metric"))
         add("Scope", data.get("scope"))
+        add("Kind", data.get("kind"))
         add("Target", (
             f"{data.get('namespace')}/{data.get('name')}"
             if data.get("namespace") and data.get("name")
@@ -2993,6 +3134,9 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         ))
         add("Period", f"{data.get('rangeSeconds')} seconds" if data.get("rangeSeconds") else None)
         add("Resolution", f"{data.get('stepSeconds')} seconds" if data.get("stepSeconds") else None)
+        add("Operation", data.get("operation"))
+        add("Statistic", data.get("statistic"))
+        add("Group by", data.get("groupBy"))
         add("Unit", data.get("unit"))
         add("Statistics", data.get("statistics"))
         add("Complete", data.get("complete"))
@@ -3853,7 +3997,7 @@ def _read_progress_message(intent) -> str:
         target = (
             "the cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
-            intent.name if intent.metric_scope == "node" else
+            intent.name if intent.metric_scope in {"node", "node_role"} else
             f"{intent.namespace}/{intent.name}"
         )
         return f"Reading {intent.metric} trend for {intent.metric_scope} {target}."
@@ -4565,6 +4709,24 @@ def _validate_inquiry_grounding(
         raise ModelProviderError(
             "Capability selection invented an ungrounded audit_username."
         )
+    if inquiry.metric_request is not None:
+        target = inquiry.metric_request.target
+        for field_name in ("namespace", "name", "container"):
+            value = getattr(target, field_name)
+            if value and value.casefold() not in grounding_text:
+                raise ModelProviderError(
+                    f"Capability selection invented an ungrounded metric target {field_name}."
+                )
+        if target.role:
+            role_grounded = target.role.casefold() in grounding_text
+            if target.role == "worker":
+                role_grounded = role_grounded or bool(
+                    re.search(r"\bcompute\s+nodes?\b", grounding_text)
+                )
+            if not role_grounded:
+                raise ModelProviderError(
+                    "Capability selection invented an ungrounded metric target role."
+                )
 
 
 def _recent_object_references(
@@ -4744,15 +4906,114 @@ async def _classify_ad_hoc_inquiry(
 def _semantic_metric_read_plan(
     inquiry: InquirySemantics | None,
 ) -> tuple[ReadPlan, bool] | None:
-    """Compile a small model-owned metric semantic into one registered safe query."""
+    """Compile a small model-owned metric semantic into registered safe queries."""
+
+    if inquiry is not None and inquiry.mode == "metrics" and inquiry.metric_request is not None:
+        request = inquiry.metric_request
+        target = request.target
+        scope = target.scope
+        name = target.role if scope == "node_role" else target.name
+        signals = list(request.signals)
+        if scope in {"node", "node_role"}:
+            signals = [
+                "node_cpu_utilization" if signal == "cpu_usage" else
+                "node_memory_utilization" if signal == "memory_working_set" else signal
+                for signal in signals
+            ]
+        if request.operation == "rank":
+            rank_signals = {
+                "cpu_usage": "top_cpu_consumers",
+                "memory_working_set": "top_memory_consumers",
+                "application_log_volume": "top_log_volume_by_namespace",
+            }
+            if any(signal not in rank_signals for signal in signals):
+                return None
+            signals = [rank_signals[signal] for signal in signals]
+        elif "application_log_volume" in signals:
+            return None
+        if len(signals) != len(set(signals)):
+            signals = list(dict.fromkeys(signals))
+        if scope == "persistent_volume_claim" and signals != ["persistent_volume_usage"]:
+            return None
+        if "persistent_volume_usage" in signals and scope != "persistent_volume_claim":
+            return None
+        if scope == "node_role" and any(
+            signal not in {"node_cpu_utilization", "node_memory_utilization"}
+            for signal in signals
+        ):
+            return None
+        if any(
+            signal in {"node_cpu_utilization", "node_memory_utilization"}
+            for signal in signals
+        ) and scope not in {"node", "node_role"}:
+            return None
+        if "top_log_volume_by_namespace" in signals and (
+            scope != "cluster" or len(signals) != 1
+        ):
+            return None
+        if scope in {"node", "node_role"} and any(
+            grouping not in {"cluster", "node"} for grouping in request.group_by
+        ):
+            return None
+        if scope == "persistent_volume_claim" and request.group_by:
+            return None
+        if "pod_readiness" in signals and "container" in request.group_by:
+            return None
+        if any(
+            signal in {"network_receive", "network_transmit"} for signal in signals
+        ) and "container" in request.group_by:
+            return None
+        if target.container and any(
+            signal in {"network_receive", "network_transmit", "pod_readiness"}
+            for signal in signals
+        ):
+            return None
+        if "node" in request.group_by and scope not in {"node", "node_role"}:
+            return None
+        metric_scope = "workload" if scope == "workload" else scope
+        range_seconds = request.range_seconds or inquiry.metric_range_seconds or 3600
+        limit = request.result_limit or inquiry.result_limit or 10
+        intents = [ReadIntent(
+            tool="query_metrics",
+            metric=signal,
+            metric_scope=metric_scope,
+            kind=target.kind if scope == "workload" else None,
+            namespace=target.namespace,
+            name=name,
+            container=target.container,
+            range_seconds=range_seconds,
+            limit=limit,
+            metric_operation=request.operation,
+            metric_statistic=request.statistic,
+            metric_group_by=request.group_by,
+            threshold_operator=request.threshold_operator,
+            threshold_value=request.threshold_value,
+        ) for signal in signals]
+        return (
+            ReadPlan(
+                goal_type="compare" if (
+                    request.operation in {"rank", "compare", "threshold"}
+                    or len(intents) > 1
+                ) else "health",
+                scope_summary=(
+                    f"Read {', '.join(signals)} for the requested {scope.replace('_', ' ')} "
+                    f"target over {range_seconds} seconds."
+                ),
+                intents=intents,
+            ),
+            True,
+        )
 
     if (
         inquiry is None
         or inquiry.mode != "metrics"
         or inquiry.metric_query not in {
-            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace"
+            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+            "node_cpu_memory_utilization",
         }
-        or inquiry.metric_scope not in {"cluster", "namespace", "deployment", "node"}
+        or inquiry.metric_scope not in {
+            "cluster", "namespace", "deployment", "node", "node_role"
+        }
     ):
         return None
     if inquiry.metric_scope == "namespace" and not inquiry.namespace:
@@ -4761,7 +5022,7 @@ def _semantic_metric_read_plan(
         inquiry.namespace and inquiry.object_name
     ):
         return None
-    if inquiry.metric_scope == "node" and not inquiry.object_name:
+    if inquiry.metric_scope in {"node", "node_role"} and not inquiry.object_name:
         return None
     limit = inquiry.result_limit or 10
     range_seconds = inquiry.metric_range_seconds or 3600
@@ -4769,7 +5030,33 @@ def _semantic_metric_read_plan(
         "top_cpu_consumers": "pod CPU consumers",
         "top_memory_consumers": "pod memory consumers",
         "top_log_volume_by_namespace": "namespaces by application-log volume",
+        "node_cpu_memory_utilization": "CPU and memory utilization by node",
     }[inquiry.metric_query]
+    if inquiry.metric_query == "node_cpu_memory_utilization":
+        if inquiry.metric_scope not in {"node", "node_role"}:
+            return None
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    f"Compare CPU and memory utilization for the requested "
+                    f"{inquiry.metric_scope.replace('_', ' ')}."
+                ),
+                intents=[
+                    ReadIntent(
+                        tool="query_metrics", metric="node_cpu_utilization",
+                        metric_scope=inquiry.metric_scope, name=inquiry.object_name,
+                        range_seconds=range_seconds,
+                    ),
+                    ReadIntent(
+                        tool="query_metrics", metric="node_memory_utilization",
+                        metric_scope=inquiry.metric_scope, name=inquiry.object_name,
+                        range_seconds=range_seconds,
+                    ),
+                ],
+            ),
+            True,
+        )
     return (
         ReadPlan(
             goal_type="compare",
@@ -5063,20 +5350,30 @@ async def _collect_bounded_cluster_reads(
         default_limit=settings.adhoc_audit_default_limit,
         initial_range_seconds=settings.adhoc_audit_initial_range_seconds,
     )
-    # A valid model selection owns semantic routing; normal code owns its fixed,
-    # bounded compilation. The older known-read path remains only when capability
-    # selection is unavailable, preserving reduced operation during model failure.
-    legacy_fallback = (
-        plan_known_read(
-            question,
-            inventory_limit=settings.adhoc_inventory_max_objects,
-            alert_name=alert_name,
-            alert_labels=alert_labels,
-        )
-        if inquiry is None else None
+    # A valid model selection normally owns semantic routing; normal code owns its
+    # fixed, bounded compilation. The exact worker-node CPU+memory request is a
+    # deterministic exception so a schema-valid pod-ranking misclassification cannot
+    # discard either the Node scope or the requested memory signal. Other known reads
+    # remain a fallback only when capability selection is unavailable.
+    known_read = plan_known_read(
+        question,
+        inventory_limit=settings.adhoc_inventory_max_objects,
+        alert_name=alert_name,
+        alert_labels=alert_labels,
     )
+    node_role_metric_override = (
+        known_read
+        if known_read is not None
+        and {intent.metric for intent in known_read[0].intents} == {
+            "node_cpu_utilization", "node_memory_utilization"
+        }
+        and all(intent.metric_scope == "node_role" for intent in known_read[0].intents)
+        else None
+    )
+    legacy_fallback = known_read if inquiry is None else None
     deterministic_plan = (
-        semantic_audit_plan
+        node_role_metric_override
+        or semantic_audit_plan
         or semantic_metric_plan
         or (
             legacy_fallback
@@ -6802,10 +7099,15 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                 )
+                metric_summary_candidate = _deterministic_metric_summary_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
+                metric_candidate = metric_ranking_candidate or metric_summary_candidate
                 fast_metric_answer = (
-                    metric_ranking_candidate
+                    metric_candidate
                     if not followup_action
-                    and metric_ranking_candidate is not None
+                    and metric_candidate is not None
                     and (
                         (inquiry is not None and inquiry.mode == "metrics")
                         or _current_reads_are_metric_rankings(activity)
@@ -6824,7 +7126,7 @@ def create_app(
                 )
                 if fast_deterministic_answer is not None:
                     inventory_fast_path = True
-                    prefer_metric_card = fast_metric_answer is not None
+                    prefer_metric_card = fast_metric_answer is metric_ranking_candidate
                     validated = {
                         **fast_deterministic_answer,
                         "conclusion_status": "confirmed",
@@ -7212,6 +7514,10 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                 )
+                metric_summary_answer = _deterministic_metric_summary_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 audit_answer = _deterministic_audit_answer(
                     evidence=evidence,
                     activity=activity,
@@ -7239,7 +7545,8 @@ def create_app(
                     if _requested_metadata_fields(message_text) or route_fallback_needed
                     else None
                 ) or (
-                    metric_ranking_answer if route_fallback_needed else None
+                    (metric_ranking_answer or metric_summary_answer)
+                    if route_fallback_needed else None
                 ) or (
                     inventory_answer if route_fallback_needed else None
                 ) or (

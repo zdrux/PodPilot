@@ -251,6 +251,102 @@ class ConciseAdHocAnswer(BaseModel):
         )
 
 
+class MetricTargetSemantics(BaseModel):
+    """Model-described metric target; normal code validates every supported binding."""
+
+    scope: Literal[
+        "cluster", "namespace", "pod", "workload", "node", "node_role",
+        "persistent_volume_claim",
+    ]
+    kind: Literal[
+        "Cluster", "Namespace", "Pod", "Deployment", "StatefulSet", "DaemonSet",
+        "Job", "Node", "PersistentVolumeClaim",
+    ]
+    namespace: str | None = Field(default=None, max_length=253)
+    name: str | None = Field(default=None, max_length=253)
+    role: Literal["worker", "master", "infra"] | None = None
+    container: str | None = Field(default=None, max_length=253)
+
+    @field_validator("namespace", "name", "container")
+    @classmethod
+    def normalize_target_string(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+            raise ValueError("metric target coordinates must not contain control characters")
+        return normalized or None
+
+    @model_validator(mode="after")
+    def require_target_coordinates(self) -> "MetricTargetSemantics":
+        if self.scope in {"namespace", "pod", "workload", "persistent_volume_claim"}:
+            if not self.namespace:
+                raise ValueError("the selected metric target requires a namespace")
+        if self.scope in {"pod", "workload", "node", "persistent_volume_claim"}:
+            if not self.name:
+                raise ValueError("the selected metric target requires an exact name")
+        if self.scope == "node_role" and not self.role:
+            raise ValueError("a node-role metric target requires an exact registered role")
+        if self.scope != "node_role" and self.role:
+            raise ValueError("role is valid only for a node-role metric target")
+        if self.scope in {"cluster", "node", "node_role"} and self.namespace:
+            raise ValueError("the selected metric target does not accept a namespace")
+        if self.scope in {"cluster", "namespace", "node_role"} and self.name:
+            raise ValueError("the selected metric target does not accept a name")
+        if self.container and self.scope != "pod":
+            raise ValueError("an exact container is valid only for a Pod metric target")
+        expected_kinds = {
+            "cluster": {"Cluster"},
+            "namespace": {"Namespace"},
+            "pod": {"Pod"},
+            "workload": {"Deployment", "StatefulSet", "DaemonSet", "Job"},
+            "node": {"Node"},
+            "node_role": {"Node"},
+            "persistent_volume_claim": {"PersistentVolumeClaim"},
+        }[self.scope]
+        if self.kind not in expected_kinds:
+            raise ValueError("metric target kind is incompatible with its scope")
+        return self
+
+
+class MetricRequestSemantics(BaseModel):
+    """A composable metric question independent of any PromQL representation."""
+
+    signals: list[Literal[
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "network_receive", "network_transmit", "container_restarts",
+        "pod_readiness", "persistent_volume_usage", "node_cpu_utilization",
+        "node_memory_utilization", "application_log_volume",
+    ]] = Field(min_length=1, max_length=4)
+    target: MetricTargetSemantics
+    operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
+    statistic: Literal["current", "average", "maximum", "minimum"] = "current"
+    group_by: list[Literal[
+        "cluster", "namespace", "pod", "container", "node"
+    ]] = Field(default_factory=list, max_length=3)
+    threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
+    threshold_value: float | None = None
+    range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
+    result_limit: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator("signals", "group_by")
+    @classmethod
+    def deduplicate_metric_lists(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def validate_metric_operation(self) -> "MetricRequestSemantics":
+        has_threshold = self.threshold_operator is not None or self.threshold_value is not None
+        if self.operation == "threshold" and (
+            self.threshold_operator is None or self.threshold_value is None
+        ):
+            raise ValueError("threshold metrics require both an operator and value")
+        if self.operation != "threshold" and has_threshold:
+            raise ValueError("threshold arguments are valid only for threshold metrics")
+        if self.operation == "rank" and self.result_limit is None:
+            self.result_limit = 10
+        return self
+
+
 class InquirySemantics(BaseModel):
     """Model-owned semantic IR; normal code resolves and validates every read."""
 
@@ -279,11 +375,15 @@ class InquirySemantics(BaseModel):
     needs_object_details: bool = False
     evidence_goal: str = Field(min_length=1, max_length=300)
     metric_query: Literal[
-        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace"
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "node_cpu_memory_utilization",
     ] | None = None
-    metric_scope: Literal["cluster", "namespace", "deployment", "node"] | None = None
+    metric_scope: Literal[
+        "cluster", "namespace", "deployment", "node", "node_role"
+    ] | None = None
     result_limit: int | None = Field(default=None, ge=1, le=100)
     metric_range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
+    metric_request: MetricRequestSemantics | None = None
     audit_username: str | None = Field(default=None, max_length=512)
     audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
@@ -401,6 +501,8 @@ class InquirySemantics(BaseModel):
             self.container, self.previous_logs, self.log_range_seconds,
         )):
             raise ValueError("container and log bounds are valid only for the logs operation")
+        if self.mode != "metrics" and self.metric_request is not None:
+            raise ValueError("metric_request is valid only for metrics inquiries")
         return self
 
     @property
@@ -445,11 +547,15 @@ class CapabilitySelection(BaseModel):
     needs_object_details: bool = False
     evidence_goal: str = Field(min_length=1, max_length=300)
     metric_query: Literal[
-        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace"
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "node_cpu_memory_utilization",
     ] | None = None
-    metric_scope: Literal["cluster", "namespace", "deployment", "node"] | None = None
+    metric_scope: Literal[
+        "cluster", "namespace", "deployment", "node", "node_role"
+    ] | None = None
     result_limit: int | None = Field(default=None, ge=1, le=100)
     metric_range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
+    metric_request: MetricRequestSemantics | None = None
     audit_username: str | None = Field(default=None, max_length=512)
     audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
@@ -503,6 +609,7 @@ class CapabilitySelection(BaseModel):
             raise ValueError("log arguments are valid only for workload_logs")
         if self.capability != "cluster_metrics" and any((
             self.metric_query, self.metric_scope, self.metric_range_seconds,
+            self.metric_request,
         )):
             raise ValueError("metric arguments are valid only for cluster_metrics")
         return self
@@ -1687,9 +1794,22 @@ class OpenAIResponsesProvider:
                     "omitted coordinate. Set needs_object_details when names alone "
                     "cannot answer. Requests for a resource's labels, annotations, spec, status, taints, "
                     "or other object fields require object details even when phrased with list, show, "
-                    "or display. For a request to rank the largest pod CPU or memory consumers, set "
+                    "or display. For metric questions, prefer metric_request: select one to four "
+                    "registered signals, an exact typed target, show/trend/rank/compare/threshold operation, "
+                    "current/average/maximum/minimum statistic, requested grouping, threshold, period, and "
+                    "result limit. Use workload scope for an exact Deployment, StatefulSet, DaemonSet, or Job; "
+                    "use node_role only when the operator explicitly names worker, master, or infra Nodes. "
+                    "For node CPU or memory utilization select node_cpu_utilization or "
+                    "node_memory_utilization, not container usage. For ranking use cpu_usage, "
+                    "memory_working_set, or application_log_volume with operation=rank; normal code maps it "
+                    "to a registered bounded ranking. Never invent omitted target coordinates. The legacy "
+                    "metric_query fields remain a compatibility fallback; leave them null when metric_request "
+                    "fully describes the question. For a request to rank the largest pod CPU or memory consumers, set "
                     "metric_query to the matching top-consumer metric, metric_scope=cluster when the "
                     "operator asks for each selected cluster, and result_limit to the requested top N. "
+                    "For overall CPU and memory utilization of worker/compute nodes, set "
+                    "metric_query=node_cpu_memory_utilization, metric_scope=node_role, and "
+                    "object_name=worker. This is node utilization, not a pod-consumer ranking. "
                     "For namespace application-log volume or logging-throughput rankings, set "
                     "metric_query=top_log_volume_by_namespace and metric_scope=cluster. "
                     "When the operator supplies a metric period, convert it exactly to "
@@ -2269,9 +2389,19 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "omitted coordinate. Set needs_object_details when names alone cannot "
                 "answer. Requests for a "
                 "resource's labels, annotations, spec, status, taints, or other object fields require "
-                "object details even when phrased with list, show, or display. For pod CPU or "
+                "object details even when phrased with list, show, or display. For metric questions, prefer "
+                "metric_request with one to four registered signals, a typed exact target, operation, statistic, "
+                "grouping, threshold, period, and result limit. Workload targets may be Deployment, StatefulSet, "
+                "DaemonSet, or Job. Node-role targets require an explicitly requested worker, master, or infra "
+                "role. Use node_cpu_utilization/node_memory_utilization for Node pressure and use cpu_usage/"
+                "memory_working_set for container-backed workload use. Ranking uses operation=rank and normal "
+                "code selects the registered ranking template. Never invent omitted coordinates. Leave the "
+                "legacy metric fields null when metric_request is complete. For pod CPU or "
                 "memory ranking requests, return metric_query, metric_scope, and result_limit; use cluster "
                 "scope for each selected cluster. Leave those fields null otherwise. "
+                "For overall CPU and memory utilization of worker/compute nodes, return "
+                "metric_query=node_cpu_memory_utilization, metric_scope=node_role, and "
+                "object_name=worker; do not classify it as a pod ranking. "
                 "For namespace application-log volume rankings, return "
                 "metric_query=top_log_volume_by_namespace with cluster scope. "
                 "Convert an explicitly requested metric period to metric_range_seconds. "

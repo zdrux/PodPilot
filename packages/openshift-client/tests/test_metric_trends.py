@@ -277,3 +277,79 @@ def test_overall_node_utilization_uses_node_exporter_metrics(metric, needles) ->
 
     query = source.calls[0]["promql"]
     assert all(needle in query for needle in needles)
+
+
+@pytest.mark.parametrize(("metric", "needle"), [
+    ("node_cpu_utilization", "avg by (nodename)"),
+    ("node_memory_utilization", "sum by (nodename)"),
+])
+def test_node_role_utilization_joins_worker_role_and_groups_by_node(metric, needle) -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric=metric,
+        metric_scope="node_role",
+        name="worker",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert needle in query
+    assert 'kube_node_role{role="worker"}' in query
+    assert "label_replace(" in query
+
+
+@pytest.mark.parametrize("kind", ["StatefulSet", "DaemonSet", "Job"])
+def test_workload_scope_joins_direct_controller_owned_pods(kind) -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric="cpu_usage",
+        metric_scope="workload",
+        kind=kind,
+        namespace="payments",
+        name="worker",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert "kube_pod_owner" in query
+    assert f'owner_kind="{kind}"' in query
+    assert 'owner_name="worker"' in query
+
+
+def test_namespace_cpu_can_be_grouped_by_pod_and_container() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric="cpu_usage",
+        metric_scope="namespace",
+        namespace="payments",
+        metric_group_by=["pod", "container"],
+    ))
+
+    query = source.calls[0]["promql"]
+    assert "sum by (pod, container)" in query
+    assert 'namespace="payments"' in query
+
+
+def test_exact_pod_container_metric_adds_server_owned_container_selector() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics",
+        metric="memory_working_set",
+        metric_scope="pod",
+        namespace="payments",
+        name="api-1",
+        container="server",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert 'pod="api-1"' in query
+    assert 'container="server"' in query

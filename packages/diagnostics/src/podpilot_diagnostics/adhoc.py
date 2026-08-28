@@ -164,8 +164,16 @@ class ReadIntent(BaseModel):
         "node_cpu_utilization", "node_memory_utilization",
     ] | None = None
     metric_scope: Literal[
-        "cluster", "pod", "namespace", "deployment", "node", "persistent_volume_claim"
+        "cluster", "pod", "namespace", "deployment", "workload", "node", "node_role",
+        "persistent_volume_claim"
     ] | None = None
+    metric_operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
+    metric_statistic: Literal["current", "average", "maximum", "minimum"] = "current"
+    metric_group_by: list[Literal[
+        "cluster", "namespace", "pod", "container", "node"
+    ]] = Field(default_factory=list, max_length=3)
+    threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
+    threshold_value: float | None = None
     audit_username: str | None = Field(default=None, max_length=512)
     audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
@@ -228,12 +236,17 @@ class ReadIntent(BaseModel):
         if self.tool == "query_metrics":
             if not self.metric or not self.metric_scope:
                 raise ValueError("query_metrics requires metric and metric_scope")
-            if self.metric_scope not in {"cluster", "node"} and not self.namespace:
+            if self.metric_scope not in {"cluster", "node", "node_role"} and not self.namespace:
                 raise ValueError("the selected metric scope requires an exact namespace")
             if self.metric_scope in {
-                "pod", "deployment", "node", "persistent_volume_claim"
+                "pod", "deployment", "workload", "node", "node_role",
+                "persistent_volume_claim"
             } and not self.name:
                 raise ValueError("the selected metric scope requires an exact name")
+            if self.metric_scope == "workload" and self.kind not in {
+                "Deployment", "StatefulSet", "DaemonSet", "Job"
+            }:
+                raise ValueError("workload metric scope requires a registered controller kind")
             if (self.namespace and not _METRIC_IDENTIFIER.fullmatch(self.namespace)) or (
                 self.name and not _METRIC_IDENTIFIER.fullmatch(self.name)
             ):
@@ -241,24 +254,51 @@ class ReadIntent(BaseModel):
             if self.metric in {
                 "top_cpu_consumers", "top_memory_consumers",
             }:
-                if self.metric_scope not in {"cluster", "namespace", "deployment", "node"}:
+                if self.metric_scope not in {
+                    "cluster", "namespace", "deployment", "workload", "node"
+                }:
                     raise ValueError(
-                        "the selected top-consumer metric requires cluster, namespace, deployment, or node scope"
+                        "the selected top-consumer metric requires cluster, namespace, workload, or node scope"
                     )
             if self.metric == "top_log_volume_by_namespace" and self.metric_scope != "cluster":
                 raise ValueError(
                     "top_log_volume_by_namespace requires cluster scope"
                 )
             if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
-                if self.metric_scope != "node":
-                    raise ValueError("the selected node utilization metric requires node scope")
+                if self.metric_scope not in {"node", "node_role"}:
+                    raise ValueError(
+                        "the selected node utilization metric requires node or node-role scope"
+                    )
             if self.metric == "persistent_volume_usage":
                 if self.metric_scope != "persistent_volume_claim":
                     raise ValueError("persistent_volume_usage requires persistent_volume_claim scope")
             elif self.metric_scope == "persistent_volume_claim":
                 raise ValueError("persistent_volume_claim scope supports only persistent_volume_usage")
-        elif self.metric or self.metric_scope:
-            raise ValueError("metric and metric_scope are valid only for query_metrics")
+            if self.metric_scope in {"node", "node_role"} and any(
+                grouping not in {"cluster", "node"} for grouping in self.metric_group_by
+            ):
+                raise ValueError("node metrics can group only by node")
+            if "node" in self.metric_group_by and self.metric_scope not in {"node", "node_role"}:
+                raise ValueError("node grouping requires node or node-role scope")
+            if self.metric_scope == "persistent_volume_claim" and self.metric_group_by:
+                raise ValueError("PVC utilization does not support grouping")
+            if self.metric in {"network_receive", "network_transmit", "pod_readiness"}:
+                if "container" in self.metric_group_by or self.container:
+                    raise ValueError("the selected metric does not expose container-level series")
+            has_threshold = self.threshold_operator is not None or self.threshold_value is not None
+            if self.metric_operation == "threshold" and (
+                self.threshold_operator is None or self.threshold_value is None
+            ):
+                raise ValueError("threshold metrics require both an operator and value")
+            if self.metric_operation != "threshold" and has_threshold:
+                raise ValueError("threshold arguments are valid only for threshold metrics")
+        elif (
+            self.metric or self.metric_scope or self.metric_operation != "show"
+            or self.metric_statistic != "current" or self.metric_group_by
+            or self.threshold_operator is not None
+            or self.threshold_value is not None
+        ):
+            raise ValueError("metric fields are valid only for query_metrics")
         if self.tool == "query_audit_events":
             if self.namespace and not _METRIC_IDENTIFIER.fullmatch(self.namespace):
                 raise ValueError(
@@ -946,7 +986,7 @@ def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
         # accept it as a namespace identifier; the broker represents cluster-wide
         # collection with an omitted namespace instead.
         updates["namespace"] = None
-    if intent.tool == "pod_logs" or not intent.kind:
+    if intent.tool in {"pod_logs", "query_metrics"} or not intent.kind:
         return intent.model_copy(update=updates) if updates else intent
     coordinates = _BUILTIN_RESOURCE_TYPES.get(intent.kind.lower())
     if not coordinates:
@@ -989,6 +1029,12 @@ _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\bby\s+(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b|"
     r"\b(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b.*?"
     r"\bby\s+(?:namespaces?|projects?)\b",
+    re.IGNORECASE,
+)
+_WORKER_NODE_UTILIZATION_QUERY = re.compile(
+    r"(?=.*\b(?:worker|compute)\s+nodes?\b)"
+    r"(?=.*\bcpu\b)(?=.*\b(?:mem|memory)\b)"
+    r"(?=.*\b(?:utilization|utilisation|usage|used|current)\b)",
     re.IGNORECASE,
 )
 _METRIC_DURATION_QUERY = re.compile(
@@ -1204,6 +1250,33 @@ def plan_known_read(
     metric_result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    if _WORKER_NODE_UTILIZATION_QUERY.search(question):
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    "Compare CPU and memory utilization for Nodes with the worker role "
+                    f"over {metric_range_seconds} seconds."
+                ),
+                intents=[
+                    ReadIntent(
+                        tool="query_metrics",
+                        metric="node_cpu_utilization",
+                        metric_scope="node_role",
+                        name="worker",
+                        range_seconds=metric_range_seconds,
+                    ),
+                    ReadIntent(
+                        tool="query_metrics",
+                        metric="node_memory_utilization",
+                        metric_scope="node_role",
+                        name="worker",
+                        range_seconds=metric_range_seconds,
+                    ),
+                ],
+            ),
+            True,
+        )
     if _CLUSTER_LOG_VOLUME_QUERY.search(question):
         return (
             ReadPlan(

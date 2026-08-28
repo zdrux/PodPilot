@@ -34,6 +34,7 @@ from podpilot_api.main import (
     _deterministic_audit_answer,
     _deterministic_inventory_answer,
     _deterministic_metric_ranking_answer,
+    _deterministic_metric_summary_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
@@ -65,6 +66,8 @@ from podpilot_api.model_provider import (
     CapabilityReport,
     InvestigationChatAnswer,
     InquirySemantics,
+    MetricRequestSemantics,
+    MetricTargetSemantics,
     ModelProfileConfig,
     ModelInterpretation,
     ModelProviderError,
@@ -2202,6 +2205,281 @@ def test_semantic_cluster_metric_plan_preserves_requested_top_n() -> None:
     assert plan.intents[0].tool == "query_metrics"
     assert plan.intents[0].metric_scope == "cluster"
     assert plan.intents[0].limit == 5
+
+
+def test_semantic_worker_node_utilization_expands_to_cpu_and_memory_queries() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        resource_query="Node",
+        object_name="worker",
+        needs_object_details=True,
+        evidence_goal="Compare worker node CPU and memory utilization.",
+        metric_query="node_cpu_memory_utilization",
+        metric_scope="node_role",
+    ))
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [
+        ReadIntent(
+            tool="query_metrics", metric="node_cpu_utilization",
+            metric_scope="node_role", name="worker",
+        ),
+        ReadIntent(
+            tool="query_metrics", metric="node_memory_utilization",
+            metric_scope="node_role", name="worker",
+        ),
+    ]
+
+
+def test_typed_metric_request_compiles_multi_signal_pod_comparison() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Compare CPU and memory for the supplied Pod.",
+        metric_request=MetricRequestSemantics(
+            signals=["cpu_usage", "memory_working_set"],
+            target=MetricTargetSemantics(
+                scope="pod", kind="Pod", namespace="payments", name="api-7d9",
+            ),
+            operation="compare",
+            statistic="current",
+            range_seconds=900,
+        ),
+    ))
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.goal_type == "compare"
+    assert [(intent.metric, intent.metric_scope) for intent in plan.intents] == [
+        ("cpu_usage", "pod"), ("memory_working_set", "pod"),
+    ]
+    assert all(intent.namespace == "payments" for intent in plan.intents)
+    assert all(intent.name == "api-7d9" for intent in plan.intents)
+    assert all(intent.range_seconds == 900 for intent in plan.intents)
+
+
+def test_typed_metric_request_compiles_statefulset_metrics_through_workload_scope() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Show Kafka StatefulSet traffic and restarts.",
+        metric_request=MetricRequestSemantics(
+            signals=["network_receive", "network_transmit", "container_restarts"],
+            target=MetricTargetSemantics(
+                scope="workload", kind="StatefulSet", namespace="kafka", name="broker",
+            ),
+            operation="show",
+            statistic="maximum",
+        ),
+    ))
+
+    assert compiled is not None
+    plan, _ = compiled
+    assert [intent.kind for intent in plan.intents] == ["StatefulSet"] * 3
+    assert all(intent.metric_scope == "workload" for intent in plan.intents)
+    assert all(intent.metric_statistic == "maximum" for intent in plan.intents)
+
+
+def test_typed_metric_rank_maps_signal_to_registered_bounded_ranking() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Rank memory consumers in payments.",
+        metric_request=MetricRequestSemantics(
+            signals=["memory_working_set"],
+            target=MetricTargetSemantics(
+                scope="namespace", kind="Namespace", namespace="payments",
+            ),
+            operation="rank",
+            group_by=["pod"],
+            result_limit=5,
+        ),
+    ))
+
+    assert compiled is not None
+    intent = compiled[0].intents[0]
+    assert intent.metric == "top_memory_consumers"
+    assert intent.metric_scope == "namespace"
+    assert intent.limit == 5
+    assert intent.metric_operation == "rank"
+
+
+def test_typed_metric_threshold_preserves_grouping_statistic_and_comparator() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Find Pods whose peak CPU exceeded 0.8 cores.",
+        metric_request=MetricRequestSemantics(
+            signals=["cpu_usage"],
+            target=MetricTargetSemantics(
+                scope="namespace", kind="Namespace", namespace="payments",
+            ),
+            operation="threshold",
+            statistic="maximum",
+            group_by=["pod"],
+            threshold_operator="gt",
+            threshold_value=0.8,
+        ),
+    ))
+
+    assert compiled is not None
+    intent = compiled[0].intents[0]
+    assert intent.metric_operation == "threshold"
+    assert intent.metric_statistic == "maximum"
+    assert intent.metric_group_by == ["pod"]
+    assert intent.threshold_operator == "gt"
+    assert intent.threshold_value == 0.8
+
+
+def test_typed_node_target_maps_generic_cpu_and_memory_to_node_utilization() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Show node utilization.",
+        metric_request=MetricRequestSemantics(
+            signals=["cpu_usage", "memory_working_set"],
+            target=MetricTargetSemantics(
+                scope="node", kind="Node", name="worker-2",
+            ),
+        ),
+    ))
+
+    assert compiled is not None
+    assert [intent.metric for intent in compiled[0].intents] == [
+        "node_cpu_utilization", "node_memory_utilization",
+    ]
+
+
+def test_deterministic_metric_summary_combines_signals_and_node_rows() -> None:
+    evidence = [
+        {
+            "id": "metric-cpu", "tool": "query_metrics", "cluster_name": "Central",
+            "data": {
+                "metric": "node_cpu_utilization", "unit": "percent", "complete": True,
+                "ranking": [{
+                    "labels": {"nodename": "worker-1"},
+                    "current": 41.0, "average": 35.0, "maximum": 62.0,
+                }],
+            },
+        },
+        {
+            "id": "metric-memory", "tool": "query_metrics", "cluster_name": "Central",
+            "data": {
+                "metric": "node_memory_utilization", "unit": "percent", "complete": True,
+                "ranking": [{
+                    "labels": {"nodename": "worker-1"},
+                    "current": 73.0, "average": 70.0, "maximum": 75.0,
+                }],
+            },
+        },
+    ]
+    activity = [{
+        "tool": "query_metrics", "status": "succeeded",
+        "evidence_ids": ["metric-cpu", "metric-memory"],
+    }]
+
+    answer = _deterministic_metric_summary_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert "Node CPU utilization" in answer["content"]
+    assert "Node memory utilization" in answer["content"]
+    assert "`worker-1`" in answer["content"]
+    assert "41.00%" in answer["content"]
+    assert answer["citations"] == ["metric-cpu", "metric-memory"]
+
+
+def test_deterministic_metric_summary_filters_threshold_rows() -> None:
+    evidence = [{
+        "id": "metric-threshold", "tool": "query_metrics", "cluster_name": "Central",
+        "data": {
+            "metric": "cpu_usage", "unit": "cores", "complete": True,
+            "operation": "threshold", "statistic": "maximum",
+            "thresholdOperator": "gt", "thresholdValue": 0.8,
+            "ranking": [
+                {
+                    "labels": {"namespace": "payments", "pod": "hot"},
+                    "current": 0.7, "average": 0.6, "maximum": 0.9,
+                },
+                {
+                    "labels": {"namespace": "payments", "pod": "cool"},
+                    "current": 0.4, "average": 0.3, "maximum": 0.5,
+                },
+            ],
+        },
+    }]
+    activity = [{
+        "tool": "query_metrics", "status": "succeeded",
+        "evidence_ids": ["metric-threshold"],
+    }]
+
+    answer = _deterministic_metric_summary_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert "Metric threshold matches" in answer["content"]
+    assert "payments/hot" in answer["content"]
+    assert "payments/cool" not in answer["content"]
+
+
+def test_worker_node_utilization_guard_overrides_wrong_pod_ranking_semantics() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("the deterministic worker-node plan must be terminal")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id=f"metric-{intent.metric}",
+                tool="query_metrics",
+                summary=f"Read {intent.metric} for worker nodes.",
+                source=f"thanos:query_range/{intent.metric}",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": intent.metric,
+                    "scope": intent.metric_scope,
+                    "name": intent.name,
+                    "unit": "percent",
+                    "ranking": [],
+                    "series": [],
+                    "complete": True,
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(),
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy",
+        workflow_id="worker-node-utilization",
+        question="show me the current cpu/mem utilization for worker nodes in the cluster",
+        conversation=[],
+        existing_evidence=[],
+        # Reproduce the original bad but schema-valid classification.
+        inquiry=InquirySemantics(
+            mode="metrics", resource_query="Pod", needs_object_details=True,
+            evidence_goal="Rank CPU-consuming pods.",
+            metric_query="top_cpu_consumers", metric_scope="cluster",
+        ),
+    ))
+
+    assert [(call.metric, call.metric_scope, call.name) for call in explorer.calls] == [
+        ("node_cpu_utilization", "node_role", "worker"),
+        ("node_memory_utilization", "node_role", "worker"),
+    ]
+    assert {item["data"]["metric"] for item in result.evidence} == {
+        "node_cpu_utilization", "node_memory_utilization",
+    }
 
 
 def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
@@ -6243,6 +6521,94 @@ def test_ask_top_cpu_runs_one_cluster_metric_query_and_renders_table(
         assert explorer.calls[0].limit == 5
 
 
+def test_ask_multi_signal_pod_metrics_use_typed_plan_and_deterministic_table(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, _profile, _api_key, _context):
+            return InquirySemantics(
+                mode="metrics",
+                evidence_goal="Compare CPU and memory for the exact Pod.",
+                metric_request=MetricRequestSemantics(
+                    signals=["cpu_usage", "memory_working_set"],
+                    target=MetricTargetSemantics(
+                        scope="pod", kind="Pod",
+                        namespace="payments", name="api-7d9",
+                    ),
+                    operation="compare",
+                    statistic="current",
+                    range_seconds=900,
+                ),
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            value = 0.75 if intent.metric == "cpu_usage" else 536_870_912.0
+            unit = "cores" if intent.metric == "cpu_usage" else "bytes"
+            return ReadResult((AdHocObservation(
+                id=f"metric-{intent.metric}", tool="query_metrics",
+                summary=f"Read {intent.metric} for payments/api-7d9.",
+                source=f"thanos:query_range/{intent.metric}",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": intent.metric, "scope": "pod",
+                    "namespace": "payments", "name": "api-7d9",
+                    "unit": unit, "complete": True,
+                    "ranking": [{
+                        "labels": {}, "current": value,
+                        "average": value * 0.8, "maximum": value * 1.1,
+                    }],
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Compare current CPU and memory for pod api-7d9 in payments."},
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert rendered.status_code == 200
+    assert [intent.metric for intent in explorer.calls] == [
+        "cpu_usage", "memory_working_set",
+    ]
+    assert all(intent.metric_scope == "pod" for intent in explorer.calls)
+    assert provider.adhoc_plan_calls == []
+    assert provider.adhoc_answer_calls == []
+    assert "Observed metric values" in rendered.text
+    assert "CPU usage" in rendered.text
+    assert "Memory working set" in rendered.text
+    assert "payments/api-7d9" in rendered.text
+
+
 def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
     provider = RbacAwareAdHocProvider()
     app, settings = make_app(
@@ -8647,6 +9013,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-progress-current" in template
     assert "data-progress-title" in template
     assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
+    assert "{% for event in active_run.events %}" in template
+    assert "active_run.events[-6:]" not in template
+    assert "log.firstElementChild?.remove()" not in script
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script
