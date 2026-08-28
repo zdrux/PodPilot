@@ -622,12 +622,19 @@ class KubernetesReadOnlyExplorer:
         self._core = client.CoreV1Api(api_client)
         self._catalog = ResourceCatalog(self._dynamic.resources.search)
 
-    def resource_catalog(self, *, query: str = "", limit: int = 120) -> list[dict[str, object]]:
+    def resource_catalog(
+        self, *, query: str = "", limit: int = 120, refresh: bool = False,
+    ) -> list[dict[str, object]]:
         self._ensure_clients()
         assert self._dynamic is not None
         if self._catalog is None:
             self._catalog = ResourceCatalog(self._dynamic.resources.search)
         try:
+            if refresh:
+                invalidate_discovery = getattr(self._dynamic.resources, "invalidate_cache", None)
+                if callable(invalidate_discovery):
+                    invalidate_discovery()
+                self._catalog.invalidate()
             return self._catalog.prompt_entries(query=query, limit=limit)
         except ResourceCatalogError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc

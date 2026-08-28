@@ -397,6 +397,21 @@ def test_responses_adapter_sends_configured_reasoning_effort() -> None:
     assert responses.requests[0]["reasoning"] == {"effort": "medium"}
 
 
+def test_responses_adapter_sends_explicit_temperature() -> None:
+    responses = RecordingResponses()
+    client = SimpleNamespace(responses=responses)
+    provider = OpenAIResponsesProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.interpret(
+        profile(api_type="responses", temperature=0),
+        "secret-token",
+        {"observations": []},
+    )
+
+    assert responses.requests[0]["temperature"] == 0
+
+
 def test_model_http_diagnostics_normalize_usage_and_redact_probe_preview() -> None:
     request = httpx.Request(
         "POST",
@@ -540,6 +555,22 @@ def test_adapters_omit_reasoning_when_provider_default_is_selected() -> None:
     )
 
     assert "reasoning_effort" not in completions.requests[0]
+    assert "temperature" not in completions.requests[0]
+
+
+def test_chat_adapter_sends_explicit_temperature() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.answer_ad_hoc(
+        profile(temperature=0.25),
+        "secret-token",
+        {"observations": [{"id": "cluster-pod-1"}]},
+    )
+
+    assert completions.requests[0]["temperature"] == 0.25
 
 
 def test_explicit_reasoning_uses_profile_output_budget_for_hidden_tokens() -> None:

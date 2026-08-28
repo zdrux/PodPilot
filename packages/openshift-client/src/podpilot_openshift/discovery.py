@@ -99,6 +99,13 @@ class ResourceCatalog:
             self._loaded_at = now
             return self._entries
 
+    def invalidate(self) -> None:
+        """Discard the bounded catalog so the next read performs fresh discovery."""
+
+        with self._lock:
+            self._entries = ()
+            self._loaded_at = 0.0
+
     def _discover(self) -> tuple[ResourceDescriptor, ...]:
         try:
             resources = list(self._search())

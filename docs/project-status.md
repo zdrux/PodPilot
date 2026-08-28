@@ -56,6 +56,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   resource, and shows a transient live investigation journal with hypotheses, next checks, and
   findings grouped into stable chronological phase sections. Repeated progress messages are
   collapsed so each journal line is shown once.
+- Model profiles can omit sampling temperature for provider compatibility or set an explicit
+  `0`–`2` value. Explicit inventory routes canonicalize model noun variants against fresh live
+  discovery and no longer treat a catalog-name miss as proof of an empty cluster inventory.
 - Alertmanager queue with expected Watchdog separation and durable
   investigations.
 - Bounded Pod status, event, current/previous log, owner-chain, rollout, and node

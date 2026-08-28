@@ -261,6 +261,7 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         custom_ca_pem=profile.custom_ca_pem,
         max_input_tokens=profile.max_input_tokens,
         reasoning_effort=profile.reasoning_effort,
+        temperature=profile.temperature,
     )
 
 
@@ -5598,6 +5599,63 @@ def _semantic_resource_read_plan(
     )
 
 
+_GENERIC_RESOURCE_QUERY_WORDS = {
+    "cluster", "clusters", "instance", "instances", "object", "objects",
+    "resource", "resources", "running", "workload", "workloads",
+}
+
+
+def _canonical_resource_query(
+    resource_query: str | None,
+    resource_catalog: list[dict[str, object]],
+) -> str | None:
+    """Resolve harmless model noun variants to one live catalog Kind."""
+
+    if not resource_query:
+        return None
+
+    def words(value: str) -> list[str]:
+        expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+        return re.findall(r"[a-z0-9]+", expanded.casefold())
+
+    query_words = words(resource_query)
+    reduced_words = [
+        value for value in query_words if value not in _GENERIC_RESOURCE_QUERY_WORDS
+    ]
+    normalized_candidates = {
+        "".join(query_words),
+        "".join(reduced_words),
+    } - {""}
+    matches: list[str] = []
+    for entry in resource_catalog:
+        kind = str(entry.get("kind") or "")
+        resource = str(entry.get("resource") or "").split(".", 1)[0]
+        aliases = {"".join(words(kind)), "".join(words(resource))}
+        singular_aliases = {
+            alias[:-1] if alias.endswith("s") and len(alias) > 3 else alias
+            for alias in aliases
+        }
+        if normalized_candidates.intersection(aliases | singular_aliases):
+            matches.append(kind)
+    return matches[0] if len(set(matches)) == 1 else resource_query
+
+
+def _explicit_inventory_question(question: str) -> bool:
+    """Recognize high-confidence list wording without model-dependent routing."""
+
+    if re.search(
+        r"(?i)\b(?:health|healthy|status|configuration|configure|configured|"
+        r"details?|why|how|logs?|metrics?)\b",
+        question,
+    ):
+        return False
+    return bool(re.search(
+        r"(?i)^\s*(?:show|list|display)\b|"
+        r"\b(?:which|what)\b.{0,120}\b(?:exist|exists|running|available)\b",
+        question,
+    ))
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -5695,6 +5753,52 @@ async def _collect_bounded_cluster_reads(
                 str(exc),
             )
 
+    if inquiry is not None and inquiry.resource_query:
+        canonical_query = _canonical_resource_query(
+            inquiry.resource_query, catalog_entries,
+        )
+        updates: dict[str, object] = {}
+        if canonical_query and canonical_query != inquiry.resource_query:
+            updates["resource_query"] = canonical_query
+            LOGGER.info(
+                "podpilot.adhoc.resource_query_canonicalized actor=%s workflow_id=%s "
+                "original=%s canonical=%s",
+                actor,
+                workflow_id,
+                inquiry.resource_query,
+                canonical_query,
+            )
+        if (
+            _explicit_inventory_question(question)
+            and inquiry.operation not in {
+                "object_fields", "configuration_guidance", "logs", "events",
+                "metrics", "audit", "probe",
+            }
+            and inquiry.cardinality != "exact_one"
+        ):
+            updates.update({
+                "capability": "resource_inventory",
+                "mode": "inventory",
+                "operation": "inventory",
+                "cardinality": "collection",
+                "needs_object_details": False,
+            })
+        if updates:
+            inquiry = inquiry.model_copy(update=updates)
+            if not investigation_gaps:
+                pinned_goal = inquiry.planner_goal
+        LOGGER.info(
+            "podpilot.adhoc.resource_routing actor=%s workflow_id=%s mode=%s "
+            "operation=%s resource_query=%s catalog_entries=%s explicit_inventory=%s",
+            actor,
+            workflow_id,
+            inquiry.mode,
+            inquiry.operation,
+            inquiry.resource_query,
+            len(catalog_entries),
+            _explicit_inventory_question(question),
+        )
+
     semantic_resource_plan = _semantic_resource_read_plan(
         inquiry,
         resource_catalog=catalog_entries,
@@ -5707,9 +5811,9 @@ async def _collect_bounded_cluster_reads(
 
     # Once live discovery resolves an explicit inventory question, normal code owns
     # the same bounded LIST on every selected cluster. This avoids asking the model
-    # to independently rediscover identical syntax and semantics per cluster. An
-    # available catalog with no matching readable type is itself useful negative
-    # evidence; do not replace it with an unrelated catalog traversal.
+    # to independently rediscover identical syntax and semantics per cluster.
+    # A catalog miss is routing uncertainty, not proof that the cluster has zero
+    # objects. Refresh once, then continue through bounded planning if unresolved.
     inventory_request = (
         inquiry.mode == "inventory"
         if inquiry is not None
@@ -5736,44 +5840,45 @@ async def _collect_bounded_cluster_reads(
                 ),
             )
         elif catalog_available:
-            evidence_id = f"cluster-discovery-{uuid4()}"
-            collected_at = datetime.now(timezone.utc)
-            evidence.append({
-                "id": evidence_id,
-                "tool": "discover_resources",
-                "summary": (
-                    "No readable API resource type matched the operator's inventory question."
-                ),
-                "source": "kubernetes:api-discovery",
-                "collected_at": collected_at,
-                "data": {
-                    "query": redact_text(question)[:253],
-                    "count": 0,
-                    "inventoryMatch": "none",
-                    "policy": (
-                        "live API discovery with sensitive resource types excluded"
-                    ),
-                },
-            })
-            activity.append({
-                "round": 0,
-                "tool": "discover_resources",
-                "status": "succeeded",
-                "target": "readable API catalog inventory match",
-                "observations": 1,
-                "evidence_ids": [evidence_id],
-                "investigation_units": 0,
-            })
-            return _BoundedReadCollection(
-                evidence=evidence[-settings.adhoc_max_evidence :],
-                activity=activity,
-                limitations=limitations,
-                scope_summary=(
-                    "The readable API catalog had no resource type matching this inventory question."
-                ),
-                units_used=units_used,
-                read_signatures=sorted(seen_intents),
+            refreshed_entries = catalog_entries
+            try:
+                refreshed_entries = await run_in_threadpool(
+                    catalog_reader,
+                    query=(inquiry.resource_query if inquiry else question),
+                    limit=120,
+                    refresh=True,
+                )
+            except TypeError:
+                # Test doubles and third-party explorers may implement the older
+                # read-only signature. Continuing to planning remains safe.
+                pass
+            except ReadOnlyExplorerError as exc:
+                LOGGER.warning(
+                    "podpilot.resource_catalog.refresh_unavailable actor=%s "
+                    "workflow_id=%s error=%s",
+                    actor,
+                    workflow_id,
+                    str(exc),
+                )
+            refreshed_query = _canonical_resource_query(
+                inquiry.resource_query if inquiry else None,
+                refreshed_entries,
             )
+            if inquiry is not None and refreshed_query != inquiry.resource_query:
+                inquiry = inquiry.model_copy(update={"resource_query": refreshed_query})
+            refreshed_plan = plan_catalog_read(
+                f"list {refreshed_query}" if refreshed_query else question,
+                refreshed_entries,
+                inventory_limit=settings.adhoc_inventory_max_objects,
+            )
+            if refreshed_plan is not None:
+                deterministic_plan = refreshed_plan
+            else:
+                limitations.append(
+                    "Live API discovery did not resolve the requested inventory type; "
+                    "PodPilot continued with bounded planning instead of treating that "
+                    "routing miss as an empty cluster inventory."
+                )
     def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
         known_evidence_ids = {str(item.get("id")) for item in evidence}
         return plan_needs_evidence_repair(
@@ -9183,6 +9288,7 @@ def create_app(
                     "tls_mode": row.tls_mode, "custom_ca_pem": row.custom_ca_pem or "",
                     "max_input_tokens": row.max_input_tokens,
                     "max_output_tokens": row.max_output_tokens,
+                    "temperature": row.temperature,
                     "reasoning_effort": row.reasoning_effort,
                     "reasoning_efforts": _profile_reasoning_efforts(row),
                     "timeout_seconds": row.timeout_seconds, "status": row.status,
@@ -9249,6 +9355,7 @@ def create_app(
         reasoning_effort = form.get(
             "default_reasoning_effort", form.get("reasoning_effort", "")
         ).strip() or None
+        temperature_text = form.get("temperature", "").strip()
         reasoning_efforts = [
             effort for effort in REASONING_EFFORTS
             if form.get(f"reasoning_effort_{effort}") == "true"
@@ -9285,12 +9392,20 @@ def create_app(
             timeout_seconds = float(form.get("timeout_seconds", "30"))
             max_input_tokens = int(form.get("max_input_tokens", "128000"))
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
+            temperature = float(temperature_text) if temperature_text else None
         except ValueError as exc:
-            raise HTTPException(status_code=422, detail="Timeout and token budget must be numeric.") from exc
+            raise HTTPException(
+                status_code=422,
+                detail="Timeout, token budget, and temperature must be numeric.",
+            ) from exc
         if (not 3 <= timeout_seconds <= app_settings.model_timeout_max_seconds
                 or not 1_024 <= max_input_tokens <= 2_000_000
-                or not 128 <= max_output_tokens <= 131_072):
-            raise HTTPException(status_code=422, detail="Timeout or token budget is outside the allowed range.")
+                or not 128 <= max_output_tokens <= 131_072
+                or (temperature is not None and not 0 <= temperature <= 2)):
+            raise HTTPException(
+                status_code=422,
+                detail="Timeout, token budget, or temperature is outside the allowed range.",
+            )
         try:
             profile_id = int(profile_id_text) if profile_id_text else None
         except ValueError as exc:
@@ -9332,6 +9447,7 @@ def create_app(
             profile.tls_mode = tls_mode
             profile.custom_ca_pem = custom_ca_pem if tls_mode == "custom_ca" else None
             profile.max_input_tokens = max_input_tokens
+            profile.temperature = temperature
             profile.reasoning_effort = reasoning_effort
             profile.reasoning_efforts_json = json.dumps(reasoning_efforts)
             profile.tool_calling_hint = form.get("tool_calling_hint") == "true"
@@ -9356,6 +9472,7 @@ def create_app(
                     "chat_model": chat_model,
                     "reasoning_efforts": reasoning_efforts,
                     "default_reasoning_effort": reasoning_effort or "provider_default",
+                    "temperature": temperature if temperature is not None else "provider_default",
                 }, sort_keys=True),
             ))
             db_session.commit()

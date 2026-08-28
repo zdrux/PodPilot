@@ -4037,25 +4037,45 @@ def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() ->
     assert "cluster-kafka-list" in rendered["citations"]
 
 
-def test_inventory_catalog_miss_is_evidence_not_unrelated_model_traversal() -> None:
+def test_inventory_catalog_miss_refreshes_before_planning() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
-            raise AssertionError("A catalog miss must not call the model planner.")
+            raise AssertionError("A refreshed Kafka catalog match must not call the planner.")
 
     class Explorer:
-        def resource_catalog(self, *, query="", limit=120):
+        def __init__(self):
+            self.catalog_calls = []
+            self.calls = []
+
+        def resource_catalog(self, *, query="", limit=120, refresh=False):
+            self.catalog_calls.append(refresh)
+            if refresh:
+                return [{
+                    "resource": "kafkas.kafka.strimzi.io",
+                    "apiVersion": "kafka.strimzi.io/v1beta2",
+                    "kind": "Kafka", "namespaced": True,
+                    "verbs": ["get", "list"],
+                }]
             return [{
                 "resource": "namespaces", "apiVersion": "v1",
                 "kind": "Namespace", "namespaced": False,
                 "verbs": ["get", "list"],
             }]
 
-        def execute(self, _intent):
-            raise AssertionError("A catalog miss must not read an unrelated resource.")
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-list", tool="list_resources",
+                summary="Read Kafka resources.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Kafka", "scope": "cluster", "names": ["vc-cluster"]},
+            ),))
 
+    explorer = Explorer()
     result = asyncio.run(_collect_bounded_cluster_reads(
         model_provider=Provider(),
-        cluster_reader=Explorer(),
+        cluster_reader=explorer,
         profile=ModelProfileConfig(
             provider_label="test", base_url="https://models.example.test/v1",
             chat_model="test", embedding_model=None, timeout_seconds=30,
@@ -4071,9 +4091,66 @@ def test_inventory_catalog_miss_is_evidence_not_unrelated_model_traversal() -> N
         conversation=[], existing_evidence=[],
     ))
 
-    assert result.activity[0]["tool"] == "discover_resources"
+    assert explorer.catalog_calls == [False, True]
+    assert [call.resource for call in explorer.calls] == ["kafkas.kafka.strimzi.io"]
+    assert result.activity[0]["tool"] == "list_resources"
     assert result.activity[0]["status"] == "succeeded"
-    assert result.evidence[0]["data"]["inventoryMatch"] == "none"
+    assert result.evidence[0]["data"]["names"] == ["vc-cluster"]
+
+
+def test_model_kafka_cluster_alias_is_canonicalized_to_live_kafka_kind() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("A canonicalized inventory must not enter planning.")
+
+    class Explorer:
+        def __init__(self):
+            self.calls = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "Kafka", "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-kafka-list", tool="list_resources",
+                summary="Read Kafka resources.",
+                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "Kafka", "scope": "cluster", "names": ["vc-cluster"]},
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="canonical-kafka-inventory",
+        question="show me the kafka clusters running on this openshift cluster",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            capability="cluster_investigation", mode="investigate", operation="explain",
+            cardinality="unknown", resource_query="KafkaCluster",
+            needs_object_details=True,
+            evidence_goal="Find Kafka clusters.",
+        ),
+    ))
+
+    assert [call.kind for call in explorer.calls] == ["Kafka"]
+    assert result.evidence[0]["data"]["names"] == ["vc-cluster"]
 
 
 def test_multi_cluster_inventory_distinguishes_catalog_miss_from_zero_objects() -> None:
@@ -10525,6 +10602,19 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         )
         assert rejected_reasoning.status_code == 422
         assert rejected_reasoning.json()["detail"] == "Reasoning effort is invalid."
+        rejected_temperature = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "provider_label": "Invalid temperature",
+                "base_url": "https://models.example.test/v1",
+                "chat_model": "test-model",
+                "api_token": "test-api-token",
+                "temperature": "2.1",
+            },
+        )
+        assert rejected_temperature.status_code == 422
+        assert "temperature is outside" in rejected_temperature.json()["detail"]
         saved = client.post(
             "/api/v1/model-profile",
             headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
@@ -10536,6 +10626,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
                 "api_token": "test-api-token",
                 "timeout_seconds": "30",
                 "max_output_tokens": "1200",
+                "temperature": "0",
             },
         )
         assert saved.json()["status"] == "saved"
@@ -10555,6 +10646,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         with Session(engine) as db_session:
             profile = db_session.get(ModelProfile, 1)
             assert profile is not None
+            assert profile.temperature == 0
             captured_probe = json.loads(profile.last_probe_diagnostics_json)
             assert captured_probe["outcome"] == "ready"
             assert captured_probe["calls"] == []
@@ -10592,6 +10684,8 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         assert "Redacted response preview" in diagnostics_page.text
         assert "<details open>" in diagnostics_page.text
         assert "Authorization headers and request bodies are never stored" in diagnostics_page.text
+        assert 'name="temperature"' in diagnostics_page.text
+        assert 'value="0.0"' in diagnostics_page.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:

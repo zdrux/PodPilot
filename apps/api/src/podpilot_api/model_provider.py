@@ -72,18 +72,25 @@ class ModelProfileConfig:
     custom_ca_pem: str | None = None
     max_input_tokens: int = 128_000
     reasoning_effort: str | None = None
+    temperature: float | None = None
 
 
 def _responses_reasoning(profile: ModelProfileConfig) -> dict[str, object]:
-    if not profile.reasoning_effort:
-        return {}
-    return {"reasoning": {"effort": profile.reasoning_effort}}
+    options: dict[str, object] = {}
+    if profile.reasoning_effort:
+        options["reasoning"] = {"effort": profile.reasoning_effort}
+    if profile.temperature is not None:
+        options["temperature"] = profile.temperature
+    return options
 
 
 def _chat_reasoning(profile: ModelProfileConfig) -> dict[str, object]:
-    if not profile.reasoning_effort:
-        return {}
-    return {"reasoning_effort": profile.reasoning_effort}
+    options: dict[str, object] = {}
+    if profile.reasoning_effort:
+        options["reasoning_effort"] = profile.reasoning_effort
+    if profile.temperature is not None:
+        options["temperature"] = profile.temperature
+    return options
 
 
 def _output_limit(profile: ModelProfileConfig, concise_limit: int) -> int:
@@ -801,7 +808,7 @@ def _model_http_request_hook(request: httpx.Request) -> None:
         payload = None
     if isinstance(payload, dict):
         safe_request: dict[str, object] = {}
-        for key in ("model", "max_tokens", "max_output_tokens", "stream"):
+        for key in ("model", "max_tokens", "max_output_tokens", "temperature", "stream"):
             value = payload.get(key)
             if isinstance(value, (str, int, float, bool)):
                 safe_request[key] = value

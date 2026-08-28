@@ -243,6 +243,13 @@ Because the provider's output-token limit includes hidden reasoning tokens, an e
 effort uses the profile's full maximum-output budget instead of PodPilot's smaller
 non-reasoning per-operation cap.
 
+Each profile may also set an optional sampling temperature from `0` through `2`. A blank
+value is **Provider default** and omits the parameter entirely, preserving compatibility
+with endpoints that do not accept temperature. An explicit value is sent to classification,
+planning, answer, analysis, and capability-probe calls through both supported API types.
+Temperature `0` generally reduces sampling variation but is not a determinism guarantee;
+providers may ignore or reject it, so test the profile after changing the value.
+
 Completed Ask replies persist a bounded model-diagnostics record for the calls made during that
 turn. The collapsed **Model usage** control beneath the PodPilot author rail shows aggregate input,
 output, reasoning, cached, and total tokens when the provider reports them, plus the largest
@@ -377,6 +384,11 @@ question is not an explicit list or count request, a bounded object list is trea
 rather than a complete answer. PodPilot follows up on up to three discovered
 objects per read with exact namespace/name reads, within the existing per-turn budget, and the
 answer must interpret material fields from those details rather than returning object names alone.
+For explicit inventory wording, normal code stabilizes the route after model classification and
+canonicalizes generic noun variants against the live catalog—for example, `KafkaCluster` or
+“Kafka clusters” can resolve to the uniquely discovered `Kafka` kind. A catalog miss triggers one
+fresh API-discovery pass. If it remains unresolved, PodPilot continues through bounded planning;
+it never reports an empty inventory unless an actual resource LIST succeeds with zero objects.
 This applies to health, diagnosis, comparison, explanation, configuration, topology, and behavior
 questions. Explicit list and count questions remain inventory-only. When a
 `list_resources` plan omits a deliberate limit, the broker replaces the model schema's

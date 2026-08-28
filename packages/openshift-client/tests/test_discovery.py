@@ -168,6 +168,26 @@ def test_catalog_skips_lazy_resource_list_without_resolving_its_base_resource() 
     assert [entry.name for entry in catalog.entries()] == ["pods"]
 
 
+def test_catalog_invalidation_forces_fresh_discovery() -> None:
+    calls = 0
+
+    def search(**_kwargs):
+        nonlocal calls
+        calls += 1
+        kind = "Pod" if calls == 1 else "Kafka"
+        name = "pods" if calls == 1 else "kafkas"
+        api_version = "v1" if calls == 1 else "kafka.strimzi.io/v1beta2"
+        return [resource(name, api_version, kind)]
+
+    catalog = ResourceCatalog(search)
+
+    assert [entry.kind for entry in catalog.entries()] == ["Pod"]
+    assert [entry.kind for entry in catalog.entries()] == ["Pod"]
+    catalog.invalidate()
+    assert [entry.kind for entry in catalog.entries()] == ["Kafka"]
+    assert calls == 2
+
+
 def test_policy_denies_sensitive_descriptor_even_when_get_is_advertised() -> None:
     descriptor = ResourceDescriptor(
         name="oauthaccesstokens",
