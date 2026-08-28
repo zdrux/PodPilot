@@ -9,6 +9,7 @@ from podpilot_api.model_provider import (
     AdHocAnswer,
     AdHocLogAnalysis,
     CapabilityReport,
+    ConciseAdHocAnswer,
     InquirySemantics,
     ModelInterpretation,
     ModelProfileConfig,
@@ -80,6 +81,33 @@ class RecordingResponses:
             recommended_checks=["none"],
             caveats=[],
         ))
+
+
+class InlineCitationCompletions(RecordingCompletions):
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({
+            "content": "compatibility field",
+            "answer": (
+                "The Pod restarted [probe-pods], and its latest log reports successful "
+                "startup [probe-log]. Ignore [invented-evidence]."
+            ),
+            "tool_calls": [],
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
+class InlineCitationResponses:
+    def parse(self, **_kwargs):
+        parsed = ConciseAdHocAnswer(
+            answer=(
+                "The Pod restarted [probe-pods], and its latest log reports successful "
+                "startup [probe-log]. Ignore [invented-evidence]."
+            ),
+        )
+        return SimpleNamespace(output_parsed=parsed, output_text=parsed.model_dump_json())
 
 
 class LogAnalysisCompletions(RecordingCompletions):
@@ -266,8 +294,42 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {"answer", "citations"}
     assert "PodPilot handles checks separately" in request["messages"][0]["content"]
+    assert "structured citations array" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
     assert request["reasoning_effort"] == "high"
+
+
+@pytest.mark.parametrize("api_type", ["chat-completions", "responses"])
+def test_answer_adapter_recovers_only_supplied_exact_inline_citations(
+    api_type: str,
+) -> None:
+    provider = (
+        OpenAIChatCompletionsProvider()
+        if api_type == "chat-completions" else OpenAIResponsesProvider()
+    )
+    client = (
+        SimpleNamespace(chat=SimpleNamespace(completions=InlineCitationCompletions()))
+        if api_type == "chat-completions" else
+        SimpleNamespace(responses=InlineCitationResponses())
+    )
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    answer = provider.answer_ad_hoc(
+        profile(api_type=api_type),
+        "secret-token",
+        {
+            "question": "Which Pod failed and what did its logs report?",
+            "facts": [{
+                "id": "probe-pods", "summary": "The Pod restarted.", "facts": [],
+            }, {
+                "id": "probe-log", "summary": "A recent log was collected.", "facts": [],
+            }],
+        },
+    )
+
+    assert answer.answer_mode == "evidence_based"
+    assert answer.cited_evidence_ids == ["probe-pods", "probe-log"]
+    assert "invented-evidence" not in answer.cited_evidence_ids
 
 
 def test_responses_adapter_sends_configured_reasoning_effort() -> None:

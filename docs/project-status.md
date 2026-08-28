@@ -77,6 +77,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   Compact action-selection prompts retain bounded completed-read history and structured
   candidate capability/evidence metadata, prioritize relevant grounded action IDs, and
   explicitly prohibit repeating successful discovery through authored object reads.
+  Final-answer adapters recover exact bracketed evidence IDs only from the bounded facts
+  supplied to that call when a compatible provider omits the structured citations array;
+  unknown inline IDs remain untrusted and final answer validation still rechecks grounding.
   A schema-invalid correction after a valid premature stop may fall back to one exact
   operator-grounded discovery anchor. After successful evidence collection, independently valid action
   selections survive a malformed sibling read, and a fully invalid corrected selection may continue
