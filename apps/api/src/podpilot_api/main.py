@@ -8129,8 +8129,9 @@ def create_app(
             db_session.commit()
         return JSONResponse({"status": "saved", "cluster_id": cluster_id})
 
-    @app.post("/api/v1/clusters/{cluster_id}/rename")
-    async def rename_runtime_cluster(
+    @app.post("/api/v1/clusters/{cluster_id}/rename", include_in_schema=False)
+    @app.post("/api/v1/clusters/{cluster_id}/metadata")
+    async def update_runtime_cluster_metadata(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
@@ -8148,23 +8149,31 @@ def create_app(
             if not cluster.is_system:
                 raise HTTPException(
                     status_code=409,
-                    detail="Only the runtime system cluster can be renamed through this endpoint.",
+                    detail="Only the runtime system cluster metadata can be changed through this endpoint.",
                 )
             duplicate = db_session.scalar(select(Cluster).where(Cluster.name == name))
             if duplicate is not None and duplicate.id != cluster.id:
                 raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
             previous_name = cluster.name
+            previous_tags = _parse_tags(cluster.tags_json, field_name="Stored cluster tags")
+            tags = (
+                _parse_tags(form["tags_json"], field_name="Cluster tags")
+                if "tags_json" in form else previous_tags
+            )
             cluster.name = name
+            cluster.tags_json = json.dumps(tags, sort_keys=True)
             cluster.updated_by = user.username
             cluster.updated_at = now
             db_session.add(AuditEvent(
                 actor=user.username,
-                action="cluster.rename",
+                action="cluster.metadata.update",
                 outcome="saved",
                 details_json=json.dumps({
                     "cluster_id": cluster.id,
                     "previous_name": previous_name,
                     "name": name,
+                    "previous_tag_keys": sorted(previous_tags),
+                    "tag_keys": sorted(tags),
                 }, sort_keys=True),
             ))
             db_session.commit()
@@ -8172,7 +8181,8 @@ def create_app(
             "status": "saved",
             "cluster_id": cluster_id,
             "name": name,
-            "detail": "Runtime cluster renamed.",
+            "tags": tags,
+            "detail": "Runtime cluster metadata saved.",
         })
 
     @app.post("/api/v1/clusters/{cluster_id}/test")

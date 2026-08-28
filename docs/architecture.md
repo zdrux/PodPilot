@@ -78,8 +78,9 @@ The Ask-only cluster registry stores API origins, tags, lifecycle state, TLS pol
 and opaque credential keys in SQLite. Remote bearer tokens live under those keys in
 the resourceName-restricted `ai-ops/podpilot-cluster-credentials` Secret. The runtime
 cluster is registered automatically and continues to use its projected service-account
-identity. An Approver can create, update, test, and disable remote entries; disabling
-removes the usable token but retains metadata and historical attribution.
+identity; an Approver may update only its display name and tags. An Approver can create,
+update, test, and disable remote entries; disabling removes the usable token but retains
+metadata and historical attribution.
 
 Every standalone Ask conversation stores an immutable ordered selection of one to ten
 cluster IDs. Changing selection starts another conversation and preserves the old session.

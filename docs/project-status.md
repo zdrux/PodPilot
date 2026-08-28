@@ -27,7 +27,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited
   per-cluster insecure exception. The runtime cluster is registered automatically and its
-  persisted display name can be changed without modifying its deployment-managed identity.
+  persisted display name and tags can be changed without modifying its deployment-managed
+  identity or connection.
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
   One shared 25-unit weighted investigation budget fans out across selected clusters, partial failures remain

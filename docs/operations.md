@@ -343,15 +343,15 @@ discovering its Thanos Querier Route and authenticating with that cluster's regi
 bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
-An Approver can rename the automatically registered runtime cluster from **Manage →
-Clusters**. This changes its PodPilot display name on the dashboard, in new Ask evidence,
-and in future runtime-cluster operations without changing the projected service-account
-identity or Kubernetes API connection. Historical evidence keeps the cluster name recorded
-when it was collected.
+An Approver can edit the display name and tags of the automatically registered runtime cluster
+from **Manage → Clusters**. The display name is used on the dashboard, in new Ask evidence, and
+in future runtime-cluster operations. Tags make tag-scoped cluster memory eligible for the runtime
+cluster. These metadata changes do not alter the projected service-account identity or Kubernetes
+API connection. Historical evidence keeps the cluster name recorded when it was collected.
 
-Remote-cluster tags are entered as removable text chips rather than JSON. Use a single-word
-label such as `production` or an exact key/value tag such as `region:toronto`; press Enter or
-comma after each tag. A cluster supports up to 30 tags, and adding another value for an
+Runtime- and remote-cluster tags are entered as removable text chips rather than JSON. Use a
+single-word label such as `production` or an exact key/value tag such as `region:toronto`; press
+Enter or comma after each tag. A cluster supports up to 30 tags, and adding another value for an
 existing key replaces that key's earlier value.
 
 Cluster-memory target tags use the same removable-chip editor. The form previews the configured

@@ -5683,7 +5683,7 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
     assert captured["tls_verify"] is True
 
 
-def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:
+def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,
         assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
@@ -5696,22 +5696,28 @@ def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:
         )
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert page.status_code == 200 and csrf is not None
-        assert 'data-save-url="/api/v1/clusters/' in page.text
+        assert f'data-save-url="/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata"' in page.text
         assert 'name="name"' in page.text
+        assert 'name="tags_json"' in page.text
+        assert "Tags scope cluster memory" in page.text
         assert "projected service-account connection remains managed by the deployment" in page.text
 
         headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
         renamed = client.post(
-            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/rename",
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
             headers=headers,
-            data={"name": "toronto-sno-lab"},
+            data={
+                "name": "toronto-sno-lab",
+                "tags_json": '{"azure":"","environment":"dev","region":"toronto"}',
+            },
         )
         assert renamed.status_code == 200
         assert renamed.json() == {
             "status": "saved",
             "cluster_id": SYSTEM_CLUSTER_ID,
             "name": "toronto-sno-lab",
-            "detail": "Runtime cluster renamed.",
+            "tags": {"azure": "", "environment": "dev", "region": "toronto"},
+            "detail": "Runtime cluster metadata saved.",
         }
 
         dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
@@ -5720,7 +5726,7 @@ def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:
         assert "toronto-sno-lab" in ask.text
 
         denied = client.post(
-            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/rename",
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
             data={"name": "not-authorized"},
         )
@@ -5740,16 +5746,21 @@ def test_approver_renames_runtime_cluster_display_name(tmp_path: Path) -> None:
         cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
         assert cluster is not None
         assert cluster.name == "toronto-sno-lab"
+        assert json.loads(cluster.tags_json) == {
+            "azure": "", "environment": "dev", "region": "toronto",
+        }
         assert cluster.api_url == "in-cluster://service-account"
         assert cluster.credential_key is None
         event = db_session.scalar(
-            select(AuditEvent).where(AuditEvent.action == "cluster.rename")
+            select(AuditEvent).where(AuditEvent.action == "cluster.metadata.update")
         )
         assert event is not None
         assert json.loads(event.details_json) == {
             "cluster_id": SYSTEM_CLUSTER_ID,
             "name": "toronto-sno-lab",
             "previous_name": "test-cluster",
+            "previous_tag_keys": ["connection", "environment"],
+            "tag_keys": ["azure", "environment", "region"],
         }
     engine.dispose()
 
