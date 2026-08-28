@@ -7862,6 +7862,35 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'class="raw-model-response"' in template
 
 
+def test_recent_ask_sessions_remain_visible_outside_ask_routes(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
+    )
+    conversation_id = "00000000-0000-0000-0000-0000000000f1"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id,
+            created_by="ivy",
+            title="Persistent sidebar session",
+            status="active",
+            evidence_json="[]",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
+        memory = client.get("/memory", headers={"x-forwarded-user": "ivy"})
+
+    for response in (dashboard, memory):
+        assert response.status_code == 200
+        assert 'class="nav-tree expanded"' in response.text
+        assert 'aria-label="Ask PodPilot conversations"' in response.text
+        assert f'href="/ask/{conversation_id}"' in response.text
+        assert "Persistent sidebar session" in response.text
+
+
 def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
     tmp_path: Path,
 ) -> None:

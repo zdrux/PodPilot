@@ -524,10 +524,11 @@ current repository and cluster state.
 - Extended the selected Quiet Ledger direction from Ask to the complete operator UI: Cluster Health, cluster registry, cluster memory, model registry, and investigation detail pages now share one mellow slate-blue surface and divider-led hierarchy.
 - Replaced floating dashboard metrics and page panels with continuous rails, subtle silver-blue separators, and flatter status treatments while preserving evidence, provenance, forms, action controls, and live cluster data.
 - Removed the unused Alert Queue, Investigations, and disabled Actions entries from primary navigation. Correct active states are now present for every remaining route, including Model Settings.
+- The signed-in user's recent Ask sessions remain expanded in the shared sidebar on Dashboard, management, and investigation pages, so switching sections no longer hides the active conversation list.
 - Versioned the stylesheet request so an existing Chrome session receives the redesign immediately after rollout instead of retaining the earlier cached CSS.
-- SNO binary build `podpilot-32` is deployed at digest `sha256:0b9240a085ee297ee9a740a12b4bab057d48e44a42120cb7503491e0a2f5eca7`.
+- SNO binary build `podpilot-33` is deployed at digest `sha256:fd43b4bc680f1c99790604c005a28aa375b032b3698250280fcb3a8c8ee44630`.
 - Authenticated Chrome QA covered Dashboard, Ask, Clusters, Memory, Model Settings, an investigation detail, and the 720px responsive dashboard. `design-qa.md` records the passed source/implementation comparison.
-- Model-free verification remains green: 425 tests passed with 84% coverage.
+- Model-free verification remains green: 426 tests passed with 84% coverage.
 
 ## Known Limitations
 

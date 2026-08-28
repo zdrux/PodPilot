@@ -5697,6 +5697,16 @@ def create_app(
     templates.env.filters["safe_markdown"] = render_safe_markdown
     templates.env.filters["est_time"] = _format_est_time
 
+    def recent_conversations_for(
+        db_session: Session, username: str
+    ) -> list[AdHocConversation]:
+        return list(db_session.scalars(
+            select(AdHocConversation)
+            .where(AdHocConversation.created_by == username)
+            .order_by(AdHocConversation.updated_at.desc())
+            .limit(20)
+        ))
+
     def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:
         if remote_read_explorer_factory is not None:
             return remote_read_explorer_factory(cluster, token)
@@ -7254,10 +7264,7 @@ def create_app(
     ):
         csrf_token, csrf_is_new = _csrf_token(request)
         with Session(request.app.state.engine) as db_session:
-            recent = list(db_session.scalars(
-                select(AdHocConversation).where(AdHocConversation.created_by == user.username)
-                .order_by(AdHocConversation.updated_at.desc()).limit(20)
-            ))
+            recent = recent_conversations_for(db_session, user.username)
             profile = _active_profile(db_session)
             available_clusters = list(db_session.scalars(
                 select(Cluster).where(Cluster.is_enabled.is_(True)).order_by(Cluster.name)
@@ -7301,10 +7308,7 @@ def create_app(
                 for item in evidence
                 if isinstance(item, dict) and item.get("id")
             }
-            recent = list(db_session.scalars(
-                select(AdHocConversation).where(AdHocConversation.created_by == user.username)
-                .order_by(AdHocConversation.updated_at.desc()).limit(20)
-            ))
+            recent = recent_conversations_for(db_session, user.username)
             profile = _active_profile(db_session)
             active_run_row = db_session.scalar(
                 select(AdHocRun).where(
@@ -7679,6 +7683,7 @@ def create_app(
         edit_id = request.query_params.get("edit", "").strip()
         with Session(request.app.state.engine) as db_session:
             rows = list(db_session.scalars(select(Cluster).order_by(Cluster.name)))
+            recent_conversations = recent_conversations_for(db_session, user.username)
         clusters_view = [_cluster_summary(item) for item in rows]
         selected = next((item for item in clusters_view if item["id"] == edit_id), None)
         response = templates.TemplateResponse(
@@ -7688,6 +7693,7 @@ def create_app(
                 "user": user,
                 "clusters": clusters_view,
                 "selected": selected,
+                "recent_conversations": recent_conversations,
                 "csrf_token": csrf_token,
             },
         )
@@ -7968,6 +7974,7 @@ def create_app(
                 }
             profile_view = view(profile) if profile else None
             profile_views = [view(row) for row in rows]
+            recent_conversations = recent_conversations_for(db_session, user.username)
         credential_error = None
         try:
             token_configured = bool(credentials.get(profile.credential_key)) if profile else False
@@ -7981,6 +7988,7 @@ def create_app(
                 "user": user,
                 "profile": profile_view,
                 "profiles": profile_views,
+                "recent_conversations": recent_conversations,
                 "token_configured": token_configured,
                 "credential_error": credential_error,
                 "model_timeout_max_seconds": app_settings.model_timeout_max_seconds,
@@ -8296,6 +8304,7 @@ def create_app(
                 cluster_tags=json.loads(preview_cluster.tags_json or "{}"),
                 namespace=namespace, include_restricted=user.role >= Role.APPROVER,
             ) if query else []
+            recent_conversations = recent_conversations_for(db_session, user.username)
         response = templates.TemplateResponse(
             request=request,
             name="cluster_memory.html",
@@ -8304,6 +8313,7 @@ def create_app(
                 "results": results, "query": query, "namespace": namespace or "",
                 "cluster_id": preview_cluster.id, "cluster_name": preview_cluster.name,
                 "clusters": [_cluster_summary(item) for item in clusters],
+                "recent_conversations": recent_conversations,
                 "selected_target_ids": (
                     json.loads(selected.target_cluster_ids_json or "[]") if selected else []
                 ),
@@ -8557,6 +8567,7 @@ def create_app(
             runtime_cluster_name = (
                 runtime_cluster.name if runtime_cluster is not None else app_settings.cluster_name
             )
+            recent_conversations = recent_conversations_for(db_session, user.username)
 
         response = templates.TemplateResponse(
             request=request,
@@ -8575,6 +8586,7 @@ def create_app(
                 "silenced_count": sum(alert.is_silenced for alert in active_alerts),
                 "inhibited_count": sum(alert.is_inhibited for alert in active_alerts),
                 "recent_investigations": recent,
+                "recent_conversations": recent_conversations,
                 "awaiting_approval_count": awaiting_approval_count,
                 "csrf_token": csrf_token,
             },
@@ -9015,6 +9027,7 @@ def create_app(
                 }
                 for message in reversed(message_rows)
             ]
+            recent_conversations = recent_conversations_for(db_session, user.username)
         response = templates.TemplateResponse(
             request=request,
             name="investigation.html",
@@ -9024,6 +9037,7 @@ def create_app(
                 "actions": actions,
                 "checks": checks,
                 "messages": messages,
+                "recent_conversations": recent_conversations,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "chat_budget_exhausted": len(messages) + 2 > app_settings.chat_max_messages,

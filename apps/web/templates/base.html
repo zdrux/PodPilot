@@ -26,18 +26,17 @@
           <span class="nav-icon" aria-hidden="true">⌁</span>
           Cluster health
         </a>
-        <div class="nav-tree {% if request.url.path.startswith('/ask') %}expanded{% endif %}">
+        <div class="nav-tree {% if recent_conversations is defined and recent_conversations %}expanded{% endif %}">
           <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
             <span class="nav-icon" aria-hidden="true">✦</span>
             Ask PodPilot
           </a>
-          {% if request.url.path.startswith('/ask') and recent_conversations is defined %}
+          {% if recent_conversations is defined and recent_conversations %}
           <div class="nav-subtree" aria-label="Ask PodPilot conversations">
             <div class="nav-subtree-heading">
               <span>Sessions</span>
               <a href="/ask" title="New conversation" aria-label="New conversation">+</a>
             </div>
-            {% if recent_conversations %}
             <ul class="nav-session-list">
               {% for item in recent_conversations %}
               <li class="{% if conversation is defined and conversation and item.id == conversation.id %}active{% endif %}">
@@ -53,9 +52,6 @@
               </li>
               {% endfor %}
             </ul>
-            {% else %}
-            <p class="nav-session-empty">Your conversations will appear here.</p>
-            {% endif %}
           </div>
           {% endif %}
         </div>
