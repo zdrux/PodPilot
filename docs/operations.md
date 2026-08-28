@@ -825,6 +825,12 @@ the final answer remains empty, invalid, or unavailable after cluster reads succ
 `podpilot.adhoc.provider_fallback` and renders the specialized Route/resource/inventory answer when
 available plus a cited collection summary. The message retains `invalid_response` or `unavailable`
 provider status and displays the failure as a limitation; collected evidence is not discarded.
+The generic exact-resource fallback keeps three-character operational terms such as `DNS` and `Pod`,
+removes conversational and resource-kind terms before matching fields, and suppresses labels,
+annotations, managed fields, and image inventories unless an explicit metadata renderer owns the
+request. It renders at most six matched fields across three objects with individually bounded values;
+when no material field matches, PodPilot uses the concise cited collection summary instead of dumping
+object content.
 
 Every turn that successfully collects Pod logs also sends all current bounded, redacted
 log excerpts through a separate structured model request with no conversation history. The

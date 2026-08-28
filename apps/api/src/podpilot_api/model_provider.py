@@ -1236,6 +1236,8 @@ def _minimal_answer_payload(context: dict[str, object]) -> dict[str, object]:
     feedback = context.get("answer_feedback")
     if isinstance(feedback, dict) and feedback.get("reason"):
         payload["retry"] = str(feedback["reason"])[:80]
+        if feedback.get("message"):
+            payload["retry_instruction"] = str(feedback["message"])[:300]
     return payload
 
 
@@ -2167,6 +2169,16 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             return (
                 f"{detail} The action selection requires exact opaque IDs copied from "
                 "available_actions. Do not invent, shorten, or modify an ID."
+            )
+        has_answer_string_error = any(
+            item.get("loc", ()) and item.get("loc", ())[0] == "answer"
+            and item.get("type") == "string_type"
+            for item in error.errors(include_url=False, include_input=False)
+        )
+        if schema is ConciseAdHocAnswer and has_answer_string_error:
+            return (
+                f"{detail} ConciseAdHocAnswer.answer must be one plain JSON string containing "
+                "the operator-facing prose, not an object, array, or nested schema."
             )
         if schema is not ReadPlan or not has_intent_error:
             return detail

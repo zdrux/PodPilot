@@ -4173,6 +4173,72 @@ def test_exact_node_label_fallback_renders_metadata_labels() -> None:
     assert rendered["citations"] == ["cluster-node-detail"]
 
 
+def test_dns_resource_fallback_omits_unrelated_node_object_dumps() -> None:
+    evidence = [{
+        "id": "cluster-dns-detail",
+        "cluster_id": "central",
+        "cluster_name": "Central DEV",
+        "tool": "get_resource",
+        "data": {
+            "apiVersion": "config.openshift.io/v1",
+            "kind": "DNS",
+            "metadata": {"name": "cluster"},
+            "spec": {
+                "baseDomain": "devocp4cmspc.azcanc.cloud.cibc.com",
+                "privateZone": {
+                    "id": "/subscriptions/example/privateDnsZones/devocp4cmspc.azcanc.cloud.cibc.com"
+                },
+            },
+        },
+    }]
+    activity = [{
+        "tool": "get_resource", "status": "succeeded",
+        "evidence_ids": ["cluster-dns-detail"],
+    }]
+    for index in range(4):
+        evidence_id = f"cluster-node-{index}"
+        evidence.append({
+            "id": evidence_id,
+            "cluster_id": "central",
+            "cluster_name": "Central DEV",
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "v1",
+                "kind": "Node",
+                "metadata": {
+                    "name": f"worker-{index}",
+                    "labels": {"node-role.kubernetes.io/worker": ""},
+                    "annotations": {"cloud.network.openshift.io/egress-ipconfig": "node data"},
+                },
+                "status": {
+                    "nodeInfo": {"operatingSystem": "linux", "osImage": "RHCOS"},
+                    "images": [{"names": ["registry.example.test/node-helper:latest"]}],
+                },
+            },
+        })
+        activity.append({
+            "tool": "get_resource", "status": "succeeded", "evidence_ids": [evidence_id],
+        })
+
+    rendered = _deterministic_resource_detail_answer(
+        question="How does pod and node DNS work on this cluster?",
+        evidence=evidence,
+        activity=activity,
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "spec.privateZone" in content
+    assert "privateDnsZones" in content
+    assert "· Node" not in content
+    assert "metadata.labels" not in content
+    assert "metadata.annotations" not in content
+    assert "status.nodeInfo" not in content
+    assert "status.images" not in content
+    assert rendered["citations"] == ["cluster-dns-detail"]
+    assert len(content) < 2_000
+
+
 def test_kafka_namespace_followup_reuses_prior_evidence_and_honors_named_cluster() -> None:
     def clf_evidence(evidence_id: str, cluster_name: str, namespaces: list[str]) -> dict:
         return {

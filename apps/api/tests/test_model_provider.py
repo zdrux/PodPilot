@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from podpilot_api.model_provider import (
     ActionSelection,
@@ -1190,6 +1191,38 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     assert set(payload) == {"clusters", "collection_issues", "facts", "question"}
     assert "observations" not in payload
     assert "capability_ledger" not in payload
+
+
+def test_answer_retry_payload_includes_bounded_server_instruction() -> None:
+    payload = _minimal_answer_payload({
+        "question": "How does DNS work?",
+        "answer_feedback": {
+            "reason": "insufficient_interpretation_with_available_evidence",
+            "message": "Briefly interpret the supplied evidence and state what remains uncertain.",
+        },
+    })
+
+    assert payload["retry"] == "insufficient_interpretation_with_available_evidence"
+    assert payload["retry_instruction"] == (
+        "Briefly interpret the supplied evidence and state what remains uncertain."
+    )
+
+
+def test_concise_answer_string_failure_gets_contract_specific_correction() -> None:
+    with pytest.raises(ValidationError) as caught:
+        ConciseAdHocAnswer.model_validate({
+            "answer_mode": "evidence_based",
+            "answer": {"summary": "DNS is configured."},
+            "citations": ["cluster-dns"],
+        })
+
+    detail = OpenAIChatCompletionsProvider._schema_correction_detail(
+        ConciseAdHocAnswer, caught.value
+    )
+
+    assert "answer: string_type" in detail
+    assert "must be one plain JSON string" in detail
+    assert "not an object, array, or nested schema" in detail
 
 
 def test_chat_completions_raw_capture_is_explicit_and_scoped() -> None:

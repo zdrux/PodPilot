@@ -1794,13 +1794,21 @@ def _deterministic_resource_detail_answer(
         }
 
     stopwords = {
-        "about", "cluster", "configuration", "details", "each", "from", "have", "show",
-        "that", "their", "these", "this", "what", "which", "with", "your",
+        "about", "cluster", "configuration", "details", "does", "each", "from", "have",
+        "how", "show", "that", "their", "these", "this", "what", "which", "with", "work",
+        "works", "working", "your",
     }
     terms = {
-        token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{3,}", question)
+        token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", question)
         if token.casefold() not in stopwords
     }
+    # Resource-kind words identify which objects matter, but are poor field selectors: a
+    # Node question otherwise matches nodeInfo, node-related annotations, and image names.
+    # Keep short operational terms such as DNS and Pod while preferring the remaining
+    # question concepts for field matching.
+    field_terms = terms - {"node", "nodes", "pod", "pods", "resource", "resources"}
+    if not field_terms:
+        field_terms = terms
     sections = [
         "## Question-focused resource evidence",
         "",
@@ -1810,6 +1818,11 @@ def _deterministic_resource_detail_answer(
         ),
     ]
     citations: list[str] = []
+    rendered_fields = 0
+    rendered_observations = 0
+    omitted_fields = 0
+    max_fields = 6
+    max_observations = 3
     for observation in observations:
         data = observation["data"]
         metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
@@ -1819,6 +1832,42 @@ def _deterministic_resource_detail_answer(
         cluster = str(
             observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
         )[:253]
+        scored_fields: list[tuple[int, str, object]] = []
+
+        def relevance_score(field: str, value: object) -> int:
+            field_text = field.casefold()
+            if any(term in field_text for term in field_terms):
+                return 2
+            value_text = json.dumps(value, sort_keys=True, default=str).casefold()
+            return 1 if any(term in value_text for term in field_terms) else 0
+
+        metadata_candidates = [
+            (relevance_score(f"metadata.{key}", value), f"metadata.{key}", value)
+            for key, value in metadata.items()
+            if key not in {"name", "namespace", "labels", "annotations", "managedFields"}
+            and relevance_score(f"metadata.{key}", value)
+        ]
+        scored_fields.extend(metadata_candidates)
+        for section_name in ("spec", "status"):
+            section = data.get(section_name)
+            if isinstance(section, dict):
+                candidates = [
+                    (
+                        relevance_score(f"{section_name}.{key}", value),
+                        f"{section_name}.{key}",
+                        value,
+                    )
+                    for key, value in section.items()
+                    if key not in {"images"}
+                    and (not field_terms or relevance_score(f"{section_name}.{key}", value))
+                ]
+                scored_fields.extend(candidates)
+        scored_fields.sort(key=lambda item: item[0], reverse=True)
+        remaining = max_fields - rendered_fields
+        fields = [(field, value) for _, field, value in scored_fields[:remaining]]
+        omitted_fields += max(0, len(scored_fields) - len(fields))
+        if not fields or rendered_observations >= max_observations:
+            continue
         sections.extend([
             "",
             f"### {cluster} · {kind} `{namespace}/{name}`",
@@ -1826,37 +1875,21 @@ def _deterministic_resource_detail_answer(
             "| Field | Observed value |",
             "|---|---|",
         ])
-        fields: list[tuple[str, object]] = []
-        metadata_candidates = [
-            (f"metadata.{key}", value)
-            for key, value in metadata.items()
-            if key not in {"name", "namespace"}
-            and any(
-                term in f"{key} {json.dumps(value, default=str)}".casefold()
-                for term in terms
-            )
-        ]
-        fields.extend(metadata_candidates[:6])
-        for section_name in ("spec", "status"):
-            section = data.get(section_name)
-            if isinstance(section, dict):
-                candidates = [
-                    (f"{section_name}.{key}", value)
-                    for key, value in section.items()
-                    if not terms or any(
-                        term in f"{key} {json.dumps(value, default=str)}".casefold()
-                        for term in terms
-                    )
-                ]
-                fields.extend(candidates[:6])
-        if not fields and data.get("truncated_json"):
-            fields.append(("object", data["truncated_json"]))
-        if not fields:
-            fields.append(("result", "No exact-object fields matched the question terms."))
         sections.extend(
-            f"| `{field}` | `{bounded_value(value)}` |" for field, value in fields
+            f"| `{field}` | `{bounded_value(value, limit=220)}` |" for field, value in fields
         )
         citations.append(str(observation["id"]))
+        rendered_fields += len(fields)
+        rendered_observations += 1
+        if rendered_fields >= max_fields:
+            break
+    if not citations:
+        return None
+    if omitted_fields:
+        sections.extend([
+            "",
+            f"_PodPilot omitted {omitted_fields} additional matched fields from this bounded fallback._",
+        ])
     sections.extend([
         "",
         "## Interpretation boundary",
