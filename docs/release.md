@@ -53,6 +53,9 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Evidence disagreement causes uncertainty or abstention rather than fabrication.
 - An unrelated follow-up cannot cite prior-turn Node or other resource evidence when its current
   audit read fails or returns no current evidence.
+- A “last N” audit query expands beyond its initial window until N matches or the configured ceiling;
+  a duration-only follow-up inherits the prior typed audit target, executes a fresh read, and remains
+  functional after one invalid structured-classification response.
 
 Milestone 4 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,

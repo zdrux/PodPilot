@@ -1924,11 +1924,15 @@ def _deterministic_audit_answer(
                 ) + " |"
             )
     username = str(observations[0]["data"].get("username") or "the supplied user")
-    range_seconds = int(observations[0]["data"].get("rangeSeconds") or 0)
+    range_seconds = max(
+        (int(item["data"].get("rangeSeconds") or 0) for item in observations),
+        default=0,
+    )
     if rows:
         content = "\n".join([
             "## Cluster audit activity", "",
-            f"Found {total} matching completed operation(s) for `{username}` in the bounded audit window.", "",
+            f"Found {total} matching completed operation(s) for `{username}` in the "
+            f"searched {range_seconds}-second audit window.", "",
             "| Cluster | Time | User | Operation | Target | HTTP result |",
             "|---|---|---|---|---|---|",
             *rows,
@@ -4298,6 +4302,115 @@ def _fallback_pod_log_plan(
     )
 
 
+def _latest_audit_query_semantics(
+    evidence: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Recover the latest server-validated audit coordinates for an elliptical follow-up."""
+
+    for item in reversed(evidence):
+        if item.get("tool") != "query_audit_events" or not isinstance(item.get("data"), dict):
+            continue
+        data = item["data"]
+        username = str(data.get("username") or "").strip()
+        operation_scope = str(data.get("operationScope") or "")
+        outcome = str(data.get("outcomeFilter") or "")
+        if (
+            not username
+            or len(username) > 512
+            or any(ord(character) < 32 or ord(character) == 127 for character in username)
+            or operation_scope not in {"all", "mutations"}
+            or outcome not in {"all", "successful", "failed"}
+        ):
+            continue
+        try:
+            limit = int(data.get("limit") or 0)
+            range_seconds = int(data.get("rangeSeconds") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= limit <= 100 or not 300 <= range_seconds <= 7_776_000:
+            continue
+        return {
+            "username": username,
+            "operation_scope": operation_scope,
+            "outcome": outcome,
+            "limit": limit,
+            "range_seconds": range_seconds,
+        }
+    return None
+
+
+_AUDIT_DURATION_FOLLOWUP = re.compile(
+    r"^\s*(?:(?:what|how)\s+about\s+)?(?:in\s+)?(?:the\s+)?"
+    r"(?:last|past|previous|over)?\s*"
+    r"(?P<count>\d{1,4}|one|a|an)\s*"
+    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)"
+    r"\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _audit_followup_range_seconds(question: str) -> int | None:
+    """Parse only an unambiguous duration-only continuation, never a new audit target."""
+
+    match = _AUDIT_DURATION_FOLLOWUP.fullmatch(question)
+    if match is None:
+        return None
+    raw_count = match.group("count").lower()
+    count = 1 if raw_count in {"one", "a", "an"} else int(raw_count)
+    unit = match.group("unit").lower()
+    multiplier = (
+        1 if unit in {"s", "sec", "secs", "second", "seconds"} else
+        60 if unit in {"m", "min", "mins", "minute", "minutes"} else
+        3600 if unit in {"h", "hr", "hrs", "hour", "hours"} else
+        86_400
+    )
+    return count * multiplier
+
+
+def _resolve_audit_inquiry(
+    *,
+    question: str,
+    inquiry: InquirySemantics | None,
+    prior_audit_query: dict[str, object] | None,
+    max_range_seconds: int,
+) -> InquirySemantics | None:
+    """Merge a semantic audit delta with the latest validated audit query."""
+
+    if prior_audit_query is None:
+        return inquiry
+    followup_range = _audit_followup_range_seconds(question)
+    if followup_range is not None:
+        return InquirySemantics(
+            mode="audit",
+            needs_object_details=True,
+            evidence_goal="Repeat the prior audit query over the newly supplied period.",
+            result_limit=prior_audit_query.get("limit"),
+            audit_username=str(prior_audit_query["username"]),
+            audit_operation_scope=str(prior_audit_query.get("operation_scope") or "all"),
+            audit_outcome=str(prior_audit_query.get("outcome") or "all"),
+            audit_range_seconds=min(followup_range, max_range_seconds),
+            continues_prior_audit_query=True,
+        )
+    if (
+        inquiry is None
+        or inquiry.mode != "audit"
+        or not inquiry.continues_prior_audit_query
+    ):
+        return inquiry
+    return InquirySemantics.model_validate({
+        **inquiry.model_dump(),
+        "audit_username": inquiry.audit_username or prior_audit_query.get("username"),
+        "audit_operation_scope": (
+            inquiry.audit_operation_scope or prior_audit_query.get("operation_scope")
+        ),
+        "audit_outcome": inquiry.audit_outcome or prior_audit_query.get("outcome"),
+        "result_limit": inquiry.result_limit or prior_audit_query.get("limit"),
+        "audit_range_seconds": (
+            inquiry.audit_range_seconds or prior_audit_query.get("range_seconds")
+        ),
+    })
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -4306,8 +4419,9 @@ async def _classify_ad_hoc_inquiry(
     question: str,
     conversation: list[dict[str, str]],
     cluster_names: list[str],
+    prior_audit_query: dict[str, object] | None = None,
 ) -> InquirySemantics | None:
-    """Ask the model for coarse semantics once; deterministic routing is the fallback."""
+    """Ask the model for coarse semantics, retrying one invalid structured response."""
 
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
@@ -4323,11 +4437,21 @@ async def _classify_ad_hoc_inquiry(
         ],
         "selected_clusters": [str(name)[:120] for name in cluster_names[:10]],
     }
-    try:
-        return await run_in_threadpool(classify, profile, api_key, context)
-    except ModelProviderError as exc:
-        LOGGER.warning("podpilot.adhoc.classification_failed error=%s", str(exc))
-        return None
+    if prior_audit_query is not None:
+        context["prior_audit_query"] = prior_audit_query
+    for attempt in range(1, 3):
+        try:
+            return await run_in_threadpool(classify, profile, api_key, context)
+        except ModelProviderError as exc:
+            LOGGER.warning(
+                "podpilot.adhoc.classification_failed attempt=%s error=%s", attempt, str(exc)
+            )
+            if attempt == 1:
+                context["structured_response_retry"] = (
+                    "Return one schema-valid inquiry classification. Preserve prior_audit_query "
+                    "for an elliptical audit follow-up and override only explicitly changed fields."
+                )
+    return None
 
 
 def _semantic_metric_read_plan(
@@ -4373,7 +4497,7 @@ def _semantic_audit_read_plan(
     inquiry: InquirySemantics | None,
     *,
     default_limit: int,
-    default_range_seconds: int,
+    initial_range_seconds: int,
 ) -> tuple[ReadPlan, bool] | None:
     """Compile model-extracted audit semantics into one fixed, bounded query."""
 
@@ -4390,7 +4514,8 @@ def _semantic_audit_read_plan(
             True,
         )
     limit = inquiry.result_limit or default_limit
-    range_seconds = inquiry.audit_range_seconds or default_range_seconds
+    search_until_limit = inquiry.audit_range_seconds is None
+    range_seconds = inquiry.audit_range_seconds or initial_range_seconds
     operation_scope = inquiry.audit_operation_scope or "all"
     outcome = inquiry.audit_outcome or "all"
     return (
@@ -4404,6 +4529,7 @@ def _semantic_audit_read_plan(
                 audit_username=inquiry.audit_username,
                 audit_operation_scope=operation_scope,
                 audit_outcome=outcome,
+                audit_search_until_limit=search_until_limit,
                 range_seconds=range_seconds,
                 limit=limit,
             )],
@@ -4448,7 +4574,7 @@ async def _collect_bounded_cluster_reads(
     semantic_audit_plan = _semantic_audit_read_plan(
         inquiry,
         default_limit=settings.adhoc_audit_default_limit,
-        default_range_seconds=settings.adhoc_audit_default_range_seconds,
+        initial_range_seconds=settings.adhoc_audit_initial_range_seconds,
     )
     known_plan = plan_known_read(
         question,
@@ -5846,6 +5972,7 @@ def create_app(
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 inquiry = None
+                prior_audit_query = _latest_audit_query_semantics(evidence)
                 if not followup_action:
                     if progress:
                         await progress("planning", "Understanding the investigation request.")
@@ -5856,6 +5983,13 @@ def create_app(
                         question=source_question,
                         conversation=history,
                         cluster_names=[item.name for item in selected_clusters],
+                        prior_audit_query=prior_audit_query,
+                    )
+                    inquiry = _resolve_audit_inquiry(
+                        question=source_question,
+                        inquiry=inquiry,
+                        prior_audit_query=prior_audit_query,
+                        max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
                     )
                 provider_phase = "bounded_read_collection"
                 if not selected_clusters:
@@ -5993,7 +6127,7 @@ def create_app(
                     )
                 answer_evidence = evidence
                 if inquiry is not None and inquiry.mode == "audit":
-                    audit_evidence_ids = {
+                    current_evidence_ids = {
                         str(evidence_id)
                         for entry in activity
                         if entry.get("tool") == "query_audit_events"
@@ -6001,7 +6135,17 @@ def create_app(
                     }
                     answer_evidence = [
                         item for item in evidence
-                        if str(item.get("id") or "") in audit_evidence_ids
+                        if str(item.get("id") or "") in current_evidence_ids
+                    ]
+                elif inquiry is None and prior_audit_query is not None:
+                    current_evidence_ids = {
+                        str(evidence_id)
+                        for entry in activity
+                        for evidence_id in (entry.get("evidence_ids") or [])
+                    }
+                    answer_evidence = [
+                        item for item in evidence
+                        if str(item.get("id") or "") in current_evidence_ids
                     ]
                 answer_observations, answer_context_metadata = _compact_answer_evidence(
                     answer_evidence, activity=activity, question=message_text, total_byte_limit=48_000,
@@ -6086,12 +6230,12 @@ def create_app(
                     "earlier_context_summary": redact_text(context_summary)[-1500:],
                     "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
-                    "facts": _model_fact_cards(evidence, activity=activity),
+                    "facts": _model_fact_cards(answer_evidence, activity=activity),
                     "curated_knowledge": knowledge_context[:6],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
                     "capability_ledger": _investigation_capability_ledger(
-                        evidence=evidence,
+                        evidence=answer_evidence,
                         activity=activity,
                         remaining_units=remaining_budget,
                     ),
@@ -6175,9 +6319,9 @@ def create_app(
                         )
                     validated = _validated_adhoc_answer(
                         answer,
-                        known_evidence_ids={str(item.get("id")) for item in evidence},
+                        known_evidence_ids={str(item.get("id")) for item in answer_evidence},
                         collection_limitations=limitations,
-                        observations=evidence,
+                        observations=answer_evidence,
                     )
                 _reconcile_validated_answer_gaps(
                     validated,
@@ -6186,7 +6330,7 @@ def create_app(
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
                     answer_mode=str(validated["answer_mode"]),
-                    has_evidence=bool(evidence),
+                    has_evidence=bool(answer_evidence),
                     has_citations=bool(validated["citations"]),
                 )
                 if answer_quality_issue:
@@ -6242,9 +6386,9 @@ def create_app(
                             )
                         retry_validated = _validated_adhoc_answer(
                             retry_answer,
-                            known_evidence_ids={str(item.get("id")) for item in evidence},
+                            known_evidence_ids={str(item.get("id")) for item in answer_evidence},
                             collection_limitations=limitations,
-                            observations=evidence,
+                            observations=answer_evidence,
                         )
                         retry_validated = _merge_validated_recommendations(
                             validated, retry_validated
@@ -6256,7 +6400,7 @@ def create_app(
                         retry_issue = _adhoc_answer_quality_issue(
                             content=str(retry_validated["content"]),
                             answer_mode=str(retry_validated["answer_mode"]),
-                            has_evidence=bool(evidence),
+                            has_evidence=bool(answer_evidence),
                             has_citations=bool(retry_validated["citations"]),
                         )
                         validated = retry_validated

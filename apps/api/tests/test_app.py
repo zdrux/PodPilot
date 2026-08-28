@@ -43,6 +43,7 @@ from podpilot_api.main import (
     _grounded_read_candidates,
     _investigation_capability_ledger,
     _investigation_unit_cost,
+    _latest_audit_query_semantics,
     _merge_validated_recommendations,
     _model_log_analysis_section,
     _model_fact_cards,
@@ -51,6 +52,7 @@ from podpilot_api.main import (
     _reconcile_validated_answer_gaps,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
+    _resolve_audit_inquiry,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -169,6 +171,47 @@ def test_semantic_classification_is_one_small_call_for_all_selected_clusters() -
     assert result is not None and result.mode == "inventory"
     assert len(provider.calls) == 1
     assert provider.calls[0]["selected_clusters"] == ["Central", "East", "West", "DR"]
+
+
+def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.calls.append(dict(context))
+            if len(self.calls) == 1:
+                raise ModelProviderError("response: json_invalid")
+            return InquirySemantics(
+                mode="audit", needs_object_details=True,
+                evidence_goal="Repeat the prior audit query over 24 hours.",
+                result_limit=5, audit_username="druciare-adm",
+                audit_operation_scope="all", audit_outcome="all",
+                audit_range_seconds=86_400,
+                continues_prior_audit_query=True,
+            )
+
+    provider = Provider()
+    prior = {
+        "username": "druciare-adm", "operation_scope": "all",
+        "outcome": "all", "limit": 5, "range_seconds": 3600,
+    }
+    result = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="what about in the last 24hrs",
+        conversation=[], cluster_names=["Central"], prior_audit_query=prior,
+    ))
+
+    assert result is not None and result.audit_range_seconds == 86_400
+    assert len(provider.calls) == 2
+    assert provider.calls[0]["prior_audit_query"] == prior
+    assert "structured_response_retry" in provider.calls[1]
 
 
 def test_capability_ledger_distinguishes_available_uncollected_from_unavailable() -> None:
@@ -1766,7 +1809,7 @@ def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
             audit_range_seconds=7200,
         ),
         default_limit=20,
-        default_range_seconds=3600,
+        initial_range_seconds=3600,
     )
 
     assert compiled is not None
@@ -1792,7 +1835,7 @@ def test_semantic_audit_plan_requests_missing_username_instead_of_other_reads() 
             audit_outcome="all",
         ),
         default_limit=20,
-        default_range_seconds=3600,
+        initial_range_seconds=3600,
     )
 
     assert compiled is not None
@@ -1800,6 +1843,88 @@ def test_semantic_audit_plan_requests_missing_username_instead_of_other_reads() 
     assert terminal is True
     assert plan.decision == "needs_clarification"
     assert plan.intents == []
+
+
+def test_audit_last_n_starts_bounded_search_and_expands_until_limit() -> None:
+    compiled = _semantic_audit_read_plan(
+        InquirySemantics(
+            mode="audit",
+            needs_object_details=True,
+            evidence_goal="List the last five actions by the supplied user.",
+            result_limit=5,
+            audit_username="druciare-adm",
+            audit_operation_scope="all",
+            audit_outcome="all",
+        ),
+        default_limit=20,
+        initial_range_seconds=3600,
+    )
+
+    assert compiled is not None
+    intent = compiled[0].intents[0]
+    assert intent.range_seconds == 3600
+    assert intent.audit_search_until_limit is True
+
+
+def test_duration_only_audit_followup_inherits_prior_query_and_overrides_range() -> None:
+    prior = _latest_audit_query_semantics([{
+        "id": "audit-old", "tool": "query_audit_events", "data": {
+            "username": "druciare-adm", "operationScope": "mutations",
+            "outcomeFilter": "successful", "limit": 5, "rangeSeconds": 3600,
+        },
+    }])
+
+    resolved = _resolve_audit_inquiry(
+        question="what about in the last 24hrs",
+        inquiry=None,
+        prior_audit_query=prior,
+        max_range_seconds=86_400,
+    )
+
+    assert resolved is not None
+    assert resolved.mode == "audit"
+    assert resolved.audit_username == "druciare-adm"
+    assert resolved.audit_operation_scope == "mutations"
+    assert resolved.audit_outcome == "successful"
+    assert resolved.result_limit == 5
+    assert resolved.audit_range_seconds == 86_400
+    assert resolved.continues_prior_audit_query is True
+
+
+def test_unrelated_question_does_not_inherit_prior_audit_query() -> None:
+    resolved = _resolve_audit_inquiry(
+        question="list the cluster nodes",
+        inquiry=None,
+        prior_audit_query={
+            "username": "druciare-adm", "operation_scope": "all",
+            "outcome": "all", "limit": 5, "range_seconds": 3600,
+        },
+        max_range_seconds=86_400,
+    )
+
+    assert resolved is None
+
+
+def test_new_audit_question_does_not_inherit_an_old_audit_target() -> None:
+    inquiry = InquirySemantics(
+        mode="audit", needs_object_details=True,
+        evidence_goal="List actions for a newly supplied user.",
+        result_limit=3, audit_username="another-user",
+        audit_operation_scope="all", audit_outcome="all",
+    )
+
+    resolved = _resolve_audit_inquiry(
+        question="show the last 3 actions by another-user",
+        inquiry=inquiry,
+        prior_audit_query={
+            "username": "druciare-adm", "operation_scope": "mutations",
+            "outcome": "successful", "limit": 5, "range_seconds": 3600,
+        },
+        max_range_seconds=86_400,
+    )
+
+    assert resolved == inquiry
+    assert resolved.audit_range_seconds is None
 
 
 def test_deterministic_audit_answer_uses_only_current_turn_audit_evidence() -> None:
@@ -2620,7 +2745,7 @@ def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
         settings=Settings(
             auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
             role_breakglass_groups=[], adhoc_audit_default_limit=20,
-            adhoc_audit_default_range_seconds=3600,
+            adhoc_audit_initial_range_seconds=3600,
         ),
         actor="ivy", workflow_id="semantic-audit",
         question="Show the last 5 successful actions by Druciare-Adm over 2 hours.",

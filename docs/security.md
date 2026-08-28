@@ -24,6 +24,11 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
   fields—not raw lines, request objects, or response objects. Infrastructure and audit access add
   investigation visibility but no mutation authority.
 
+An omitted audit period is not interpreted as a one-hour evidence boundary. The broker expands a
+bounded initial window until the requested result count is satisfied or the configured maximum
+range is reached. Follow-up inheritance uses only the prior server-validated audit projection and
+accepts a strict duration-only override; it does not derive a new username from chat prose.
+
 ## Credentials That Must Never Be Committed
 
 - Red Hat/OpenShift pull secrets

@@ -86,6 +86,54 @@ def test_reader_escapes_username_regex_and_filters_semantic_scope() -> None:
     assert [event["verb"] for event in result.observations[0].data["events"]] == ["delete"]
 
 
+def test_last_n_query_expands_backward_until_it_finds_requested_events() -> None:
+    class ExpandingSource:
+        def __init__(self) -> None:
+            self.ranges: list[int] = []
+
+        def query_audit_entries(self, _logql, *, start, end, limit):
+            searched = int((end - start).total_seconds())
+            self.ranges.append(searched)
+            entries = (
+                (("1787831940000000000", _event("druciare-adm", verb="patch")),)
+                if searched >= 7200 else ()
+            )
+            return AuditLogEntries(entries=entries, is_complete=True)
+
+    source = ExpandingSource()
+    reader = BoundedAuditEventReader(
+        source, max_range_seconds=86_400, clock=lambda: NOW,
+    )
+
+    result = reader.execute(ReadIntent(
+        tool="query_audit_events", audit_username="druciare-adm",
+        audit_operation_scope="all", audit_outcome="all",
+        audit_search_until_limit=True, range_seconds=3600, limit=1,
+    ))
+
+    assert source.ranges == [3600, 7200]
+    assert result.observations[0].data["rangeSeconds"] == 7200
+    assert result.observations[0].data["rangeExpanded"] is True
+    assert result.observations[0].data["count"] == 1
+
+
+def test_last_n_query_stops_at_configured_ceiling_and_reports_it() -> None:
+    source = FakeAuditSource(())
+    reader = BoundedAuditEventReader(
+        source, max_range_seconds=14_400, clock=lambda: NOW,
+    )
+
+    result = reader.execute(ReadIntent(
+        tool="query_audit_events", audit_username="druciare-adm",
+        audit_operation_scope="all", audit_outcome="all",
+        audit_search_until_limit=True, range_seconds=3600, limit=5,
+    ))
+
+    searched = [int((call["end"] - call["start"]).total_seconds()) for call in source.calls]
+    assert searched == [3600, 7200, 14_400]
+    assert any("configured 14400-second audit ceiling" in item for item in result.limitations)
+
+
 def _client(tmp_path: Path, handler) -> LokiQueryClient:
     token = tmp_path / "token"
     token.write_text("fixture-token", encoding="utf-8")

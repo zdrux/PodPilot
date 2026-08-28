@@ -95,16 +95,102 @@ class BoundedAuditEventReader:
         username = intent.audit_username.strip()
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         end = self._clock()
-        start = end - timedelta(seconds=range_seconds)
         query = (
             '{log_type="audit"} '
-            '| json audit_username="user.username", audit_stage="stage" '
+            '| json audit_username="user.username", audit_stage="stage", '
+            'audit_verb="verb", audit_code="responseStatus.code" '
             f'| audit_username=~{_logql_regex_literal(username)} '
             '| audit_stage="ResponseComplete"'
         )
-        snapshot = self._source.query_audit_entries(
-            query, start=start, end=end, limit=min(100, max(intent.limit * 4, intent.limit))
-        )
+        if intent.audit_operation_scope == "mutations":
+            query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
+        if intent.audit_outcome == "successful":
+            query += ' | audit_code=~"^[123][0-9]{2}$"'
+        elif intent.audit_outcome == "failed":
+            query += ' | audit_code=~"^[45][0-9]{2}$"'
+        snapshot = AuditLogEntries(entries=(), is_complete=True)
+        events: list[dict[str, object]] = []
+        while True:
+            start = end - timedelta(seconds=range_seconds)
+            snapshot = self._source.query_audit_entries(
+                query,
+                start=start,
+                end=end,
+                limit=min(100, max(intent.limit * 4, intent.limit)),
+            )
+            events = self._project_events(
+                snapshot,
+                username=username,
+                operation_scope=str(intent.audit_operation_scope),
+                outcome=str(intent.audit_outcome),
+                limit=intent.limit,
+            )
+            if (
+                not intent.audit_search_until_limit
+                or len(events) >= intent.limit
+                or range_seconds >= self._max_range_seconds
+            ):
+                break
+            range_seconds = min(self._max_range_seconds, range_seconds * 2)
+        limitations: list[str] = []
+        if intent.range_seconds > self._max_range_seconds:
+            limitations.append(
+                f"The requested audit period was reduced to {range_seconds} seconds by policy."
+            )
+        if not snapshot.is_complete:
+            limitations.append(
+                "The bounded Loki audit result reached its collection ceiling; older matching events may exist."
+            )
+        if (
+            intent.audit_search_until_limit
+            and range_seconds >= self._max_range_seconds
+            and len(events) < intent.limit
+        ):
+            limitations.append(
+                f"PodPilot searched the configured {range_seconds}-second audit ceiling but "
+                f"found fewer than the requested {intent.limit} matching events."
+            )
+        if not events:
+            limitations.append(
+                "No matching completed audit events were observed during the requested period."
+            )
+        return ReadResult(observations=(AdHocObservation(
+            id=f"audit-{uuid4()}",
+            tool="query_audit_events",
+            summary=(
+                f"Read {len(events)} completed audit event"
+                f"{'s' if len(events) != 1 else ''} for user {username}."
+            ),
+            source="loki:audit/query/user_actions",
+            collected_at=self._clock(),
+            data={
+                "username": redact_text(username)[:512],
+                "caseInsensitive": True,
+                "operationScope": intent.audit_operation_scope,
+                "outcomeFilter": intent.audit_outcome,
+                "rangeSeconds": range_seconds,
+                "rangeExpanded": bool(
+                    intent.audit_search_until_limit and range_seconds > intent.range_seconds
+                ),
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "limit": intent.limit,
+                "events": events,
+                "count": len(events),
+                "complete": snapshot.is_complete and len(events) < intent.limit,
+                "rawLinesPersisted": False,
+            },
+        ),), limitations=tuple(limitations))
+
+    def _project_events(
+        self,
+        snapshot: AuditLogEntries,
+        *,
+        username: str,
+        operation_scope: str,
+        outcome: str,
+        limit: int,
+    ) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
         seen: set[str] = set()
         for timestamp_ns, line in snapshot.entries:
@@ -118,7 +204,7 @@ class BoundedAuditEventReader:
             if str(event.get("stage") or "") != "ResponseComplete":
                 continue
             verb = str(event.get("verb") or "").lower()
-            if intent.audit_operation_scope == "mutations" and verb not in self._MUTATING_VERBS:
+            if operation_scope == "mutations" and verb not in self._MUTATING_VERBS:
                 continue
             response_status = (
                 event.get("responseStatus")
@@ -129,9 +215,9 @@ class BoundedAuditEventReader:
             except (TypeError, ValueError):
                 response_code = 0
             successful = bool(response_code and response_code < 400)
-            if intent.audit_outcome == "successful" and not successful:
+            if outcome == "successful" and not successful:
                 continue
-            if intent.audit_outcome == "failed" and successful:
+            if outcome == "failed" and successful:
                 continue
             audit_id = str(event.get("auditID") or "")[:128]
             identity = audit_id or f"{timestamp_ns}:{verb}:{len(events)}"
@@ -161,41 +247,4 @@ class BoundedAuditEventReader:
             ),
             reverse=True,
         )
-        events = events[: intent.limit]
-        limitations: list[str] = []
-        if range_seconds != intent.range_seconds:
-            limitations.append(
-                f"The requested audit period was reduced to {range_seconds} seconds by policy."
-            )
-        if not snapshot.is_complete:
-            limitations.append(
-                "The bounded Loki audit result reached its collection ceiling; older matching events may exist."
-            )
-        if not events:
-            limitations.append(
-                "No matching completed audit events were observed during the requested period."
-            )
-        return ReadResult(observations=(AdHocObservation(
-            id=f"audit-{uuid4()}",
-            tool="query_audit_events",
-            summary=(
-                f"Read {len(events)} completed audit event"
-                f"{'s' if len(events) != 1 else ''} for user {username}."
-            ),
-            source="loki:audit/query/user_actions",
-            collected_at=self._clock(),
-            data={
-                "username": redact_text(username)[:512],
-                "caseInsensitive": True,
-                "operationScope": intent.audit_operation_scope,
-                "outcomeFilter": intent.audit_outcome,
-                "rangeSeconds": range_seconds,
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "limit": intent.limit,
-                "events": events,
-                "count": len(events),
-                "complete": snapshot.is_complete and len(events) < intent.limit,
-                "rawLinesPersisted": False,
-            },
-        ),), limitations=tuple(limitations))
+        return events[:limit]

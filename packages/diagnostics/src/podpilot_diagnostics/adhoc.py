@@ -169,6 +169,7 @@ class ReadIntent(BaseModel):
     audit_username: str | None = Field(default=None, max_length=512)
     audit_operation_scope: Literal["all", "mutations"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
+    audit_search_until_limit: bool = False
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
@@ -269,7 +270,12 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "query_audit_events requires operation scope and outcome semantics"
                 )
-        elif any((self.audit_username, self.audit_operation_scope, self.audit_outcome)):
+        elif any((
+            self.audit_username,
+            self.audit_operation_scope,
+            self.audit_outcome,
+            self.audit_search_until_limit,
+        )):
             raise ValueError("audit fields are valid only for query_audit_events")
         if self.tool == "discover_resources":
             if not self.discovery_query:

@@ -503,6 +503,11 @@ current repository and cluster state.
   `cluster-logging-audit-view` binding.
 - Deterministic fallback and suggested-check generation now use current-turn evidence IDs, stopping
   an unrelated follow-up from recycling an earlier Node inventory as its answer or next check.
+- Follow-up correction: the configured one-hour value is now an initial search window rather than a
+  final default period. “Last N” expands backward to the configured audit ceiling, while a strict
+  duration-only continuation inherits the previous validated audit target and performs a fresh read.
+  Classification retries once after invalid JSON, and a failed unrelated classification cannot cite
+  prior audit evidence.
 
 ## Known Limitations
 

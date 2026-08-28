@@ -67,11 +67,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_logs_max_range_seconds
-            - name: PODPILOT_ADHOC_AUDIT_DEFAULT_RANGE_SECONDS
+            - name: PODPILOT_ADHOC_AUDIT_INITIAL_RANGE_SECONDS
               valueFrom:
                 configMapKeyRef:
                   name: podpilot-runtime
-                  key: adhoc_audit_default_range_seconds
+                  key: adhoc_audit_initial_range_seconds
             - name: PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS
               valueFrom:
                 configMapKeyRef:

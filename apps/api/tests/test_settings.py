@@ -81,16 +81,21 @@ def test_loki_timeout_defaults_to_scan_safe_value_and_is_bounded() -> None:
 
 def test_audit_query_defaults_and_bounds_are_configurable() -> None:
     settings = Settings(
-        adhoc_audit_default_range_seconds=7200,
+        adhoc_audit_initial_range_seconds=7200,
         adhoc_audit_max_range_seconds=172800,
         adhoc_audit_default_limit=5,
     )
 
-    assert settings.adhoc_audit_default_range_seconds == 7200
+    assert settings.adhoc_audit_initial_range_seconds == 7200
     assert settings.adhoc_audit_max_range_seconds == 172800
     assert settings.adhoc_audit_default_limit == 5
     with pytest.raises(ValidationError):
         Settings(adhoc_audit_default_limit=101)
+    with pytest.raises(ValidationError, match="initial audit search range"):
+        Settings(
+            adhoc_audit_initial_range_seconds=7200,
+            adhoc_audit_max_range_seconds=3600,
+        )
 
 
 def test_adhoc_run_deadline_is_bounded() -> None:

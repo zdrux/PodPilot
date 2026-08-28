@@ -188,8 +188,9 @@ The current deployment uses these variables:
   `1` through `60`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
-- `PODPILOT_ADHOC_AUDIT_DEFAULT_RANGE_SECONDS`, default `3600` (one hour), used only
-  when the operator does not supply an audit period
+- `PODPILOT_ADHOC_AUDIT_INITIAL_RANGE_SECONDS`, default `3600` (one hour), is the
+  first bounded window for a “last N” audit request without an explicit period; PodPilot
+  expands that window backward until it finds N matches or reaches the configured ceiling
 - `PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_ADHOC_AUDIT_DEFAULT_LIMIT`, default `20`, used only when the operator does
   not supply a result count
@@ -261,6 +262,14 @@ two-hour mutation query without encoding that username or time window in applica
 Investigators, Approvers, and Breakglass users can use this Ask capability. A 403 from Loki should
 be resolved by verifying the registered cluster identity has `cluster-logging-audit-view` and
 cluster-wide LokiStack tenant authorization.
+
+An audit request such as “last 5 actions” does not treat the initial one-hour window as the answer
+boundary. It doubles the bounded query range until five matching events are found or
+`PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS` is reached, then reports the actual searched period. An
+elliptical continuation such as “what about the last 24hrs” inherits the prior validated username,
+limit, operation scope, and outcome while replacing its period. A malformed classification is
+retried once; the strict duration-only continuation can still be compiled from the prior typed
+audit evidence, but unrelated questions never inherit that audit target.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname

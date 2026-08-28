@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     adhoc_metrics_max_range_seconds: int = Field(default=2_592_000, ge=3600, le=7_776_000)
     adhoc_metrics_max_points_per_series: int = Field(default=300, ge=50, le=1000)
     adhoc_logs_max_range_seconds: int = Field(default=86_400, ge=3600, le=2_592_000)
-    adhoc_audit_default_range_seconds: int = Field(default=3600, ge=300, le=2_592_000)
+    adhoc_audit_initial_range_seconds: int = Field(default=3600, ge=300, le=2_592_000)
     adhoc_audit_max_range_seconds: int = Field(default=86_400, ge=3600, le=7_776_000)
     adhoc_audit_default_limit: int = Field(default=20, ge=1, le=100)
     adhoc_context_messages: int = Field(default=10, ge=4, le=30)
@@ -112,6 +112,10 @@ class Settings(BaseSettings):
         configured = [name for groups in role_groups for name in groups]
         if len(configured) != len(set(configured)):
             raise ValueError("An OpenShift group may be mapped to only one PodPilot role")
+        if self.adhoc_audit_initial_range_seconds > self.adhoc_audit_max_range_seconds:
+            raise ValueError(
+                "The initial audit search range must not exceed the maximum audit range"
+            )
         return self
 
 
