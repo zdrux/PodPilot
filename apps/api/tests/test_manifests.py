@@ -102,6 +102,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
     assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
     assert runtime["data"]["adhoc_metrics_max_points_per_series"] == "300"
+    assert runtime["data"]["loki_timeout_seconds"] == "30"
     configured = next(item for item in env if item["name"] == "PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS")
     assert configured["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",

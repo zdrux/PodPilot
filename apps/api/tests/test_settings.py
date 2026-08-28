@@ -72,6 +72,13 @@ def test_metric_trend_bounds_are_configurable(monkeypatch) -> None:
     assert settings.adhoc_metrics_max_points_per_series == 500
 
 
+def test_loki_timeout_defaults_to_scan_safe_value_and_is_bounded() -> None:
+    assert Settings(_env_file=None).loki_timeout_seconds == 30
+    assert Settings(loki_timeout_seconds=60).loki_timeout_seconds == 60
+    with pytest.raises(ValidationError):
+        Settings(loki_timeout_seconds=61)
+
+
 def test_adhoc_run_deadline_is_bounded() -> None:
     assert Settings(adhoc_run_timeout_seconds=45).adhoc_run_timeout_seconds == 45
     with pytest.raises(ValidationError):

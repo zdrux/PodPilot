@@ -4139,6 +4139,7 @@ def _semantic_metric_read_plan(
     ):
         return None
     limit = inquiry.result_limit or 10
+    range_seconds = inquiry.metric_range_seconds or 3600
     metric_label = {
         "top_cpu_consumers": "pod CPU consumers",
         "top_memory_consumers": "pod memory consumers",
@@ -4154,6 +4155,7 @@ def _semantic_metric_read_plan(
                 tool="query_metrics",
                 metric=inquiry.metric_query,
                 metric_scope="cluster",
+                range_seconds=range_seconds,
                 limit=limit,
             )],
         ),
@@ -4202,7 +4204,14 @@ async def _collect_bounded_cluster_reads(
     )
     # Keep deterministic compilation only for terminal, unambiguous inventory or
     # metric requests. Troubleshooting and object traversal remain model-directed.
-    deterministic_plan = semantic_metric_plan or (
+    known_metric_plan = (
+        known_plan
+        if known_plan is not None
+        and known_plan[1]
+        and known_plan[0].goal_type == "compare"
+        else None
+    )
+    deterministic_plan = known_metric_plan or semantic_metric_plan or (
         (
             known_plan[0],
             False

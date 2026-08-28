@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
@@ -922,6 +922,20 @@ _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\bby\s+(?:namespaces?|projects?)\b",
     re.IGNORECASE,
 )
+_METRIC_DURATION_QUERY = re.compile(
+    r"\b(?:last|past|previous)\s+"
+    r"(?:(?P<count>\d{1,3}|one|a|an)\s*)?"
+    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b",
+    re.IGNORECASE,
+)
+_METRIC_TOP_LIMIT_QUERY = re.compile(
+    r"\btop\s+(?P<limit>\d{1,3})\b",
+    re.IGNORECASE,
+)
+_DEFAULT_METRIC_RANGE_SECONDS = 3600
+_MIN_METRIC_RANGE_SECONDS = 300
+_MAX_METRIC_RANGE_SECONDS = 7_776_000
+_DEFAULT_METRIC_RESULT_LIMIT = 10
 _KUBERNETES_NAME_PATTERN = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
 _POD_IN_NAMESPACE_QUERY = re.compile(
     rf"\bpod\s+[`'\"]?(?P<pod>{_KUBERNETES_NAME_PATTERN})[`'\"]?\s+"
@@ -955,6 +969,45 @@ _POD_HINT_AFTER_KIND_QUERY = re.compile(
     rf"\bpods?\s+(?:named\s+|called\s+)?(?P<hint>{_KUBERNETES_NAME_PATTERN})\b",
     re.IGNORECASE,
 )
+
+
+def _requested_metric_range_seconds(
+    question: str,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Parse a bounded operator-requested relative metric period."""
+
+    if re.search(r"\btoday\b", question, re.IGNORECASE):
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds = int((current - start).total_seconds())
+        return min(_MAX_METRIC_RANGE_SECONDS, max(_MIN_METRIC_RANGE_SECONDS, seconds))
+    match = _METRIC_DURATION_QUERY.search(question)
+    if match is None:
+        return _DEFAULT_METRIC_RANGE_SECONDS
+    raw_count = (match.group("count") or "1").lower()
+    count = 1 if raw_count in {"one", "a", "an"} else int(raw_count)
+    unit = match.group("unit").lower()
+    multiplier = (
+        1 if unit in {"s", "sec", "secs", "second", "seconds"} else
+        60 if unit in {"m", "min", "mins", "minute", "minutes"} else
+        3600 if unit in {"h", "hr", "hrs", "hour", "hours"} else
+        86_400
+    )
+    return min(
+        _MAX_METRIC_RANGE_SECONDS,
+        max(_MIN_METRIC_RANGE_SECONDS, count * multiplier),
+    )
+
+
+def _requested_metric_result_limit(question: str, *, default: int) -> int:
+    match = _METRIC_TOP_LIMIT_QUERY.search(question)
+    if match is None:
+        return default
+    return min(100, max(1, int(match.group("limit"))))
 
 
 def _pod_log_discovery_plan(question: str) -> ReadPlan | None:
@@ -1060,23 +1113,29 @@ def plan_known_read(
     inventory_limit: int = 500,
     alert_name: str | None = None,
     alert_labels: dict[str, object] | None = None,
+    now: datetime | None = None,
 ) -> tuple[ReadPlan, bool] | None:
     """Compile unambiguous inventory and alert-scoped reads without model syntax."""
 
     lowered = question.lower()
+    metric_range_seconds = _requested_metric_range_seconds(question, now=now)
+    metric_result_limit = _requested_metric_result_limit(
+        question, default=_DEFAULT_METRIC_RESULT_LIMIT,
+    )
     if _CLUSTER_LOG_VOLUME_QUERY.search(question):
         return (
             ReadPlan(
                 goal_type="compare",
                 scope_summary=(
-                    "Rank namespaces by application-log payload volume across the cluster."
+                    "Rank namespaces by application-log payload volume across the cluster "
+                    f"over {metric_range_seconds} seconds."
                 ),
                 intents=[ReadIntent(
                     tool="query_metrics",
                     metric="top_log_volume_by_namespace",
                     metric_scope="cluster",
-                    range_seconds=3600,
-                    limit=10,
+                    range_seconds=metric_range_seconds,
+                    limit=metric_result_limit,
                 )],
             ),
             True,
@@ -1089,6 +1148,7 @@ def plan_known_read(
         return pod_log_plan, False
     top_consumers = _NAMESPACE_TOP_CONSUMERS_QUERY.search(question)
     if top_consumers:
+        metric_result_limit = _requested_metric_result_limit(question, default=20)
         metric_name = top_consumers.group("metric") or top_consumers.group("metric_first")
         namespace = (
             top_consumers.group("namespace") or top_consumers.group("namespace_second")
@@ -1108,6 +1168,8 @@ def plan_known_read(
                     metric=metric,
                     metric_scope="namespace",
                     namespace=namespace,
+                    range_seconds=metric_range_seconds,
+                    limit=metric_result_limit,
                 )],
             ),
             True,

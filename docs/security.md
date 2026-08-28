@@ -443,6 +443,7 @@ registered metric, period, and limit; server code owns LogQL and authenticates t
 gateway. Responses are capped and reduced to namespace/byte aggregates, with no log lines returned
 or persisted. Cluster-wide Loki authorization can technically permit raw queries, so production
 deployments should isolate this credential behind PodPilot and restrict direct gateway access.
+Operator-authored periods are parsed only into bounded integer seconds and never become LogQL text.
 Projected Route destination names are treated only as observed Kubernetes object references
 eligible for the existing exact read broker. They do not authorize mutation, arbitrary name
 construction, credential access, or traffic to a new destination.

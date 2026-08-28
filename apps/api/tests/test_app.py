@@ -1745,6 +1745,7 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
         metric_query="top_log_volume_by_namespace",
         metric_scope="cluster",
         result_limit=10,
+        metric_range_seconds=300,
     ))
 
     assert compiled is not None
@@ -1754,6 +1755,7 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
         tool="query_metrics",
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
+        range_seconds=300,
         limit=10,
     )]
 

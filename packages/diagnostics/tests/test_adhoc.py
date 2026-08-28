@@ -670,6 +670,38 @@ def test_pod_log_request_compiles_bounded_name_discovery(question: str) -> None:
     )]
 
 
+@pytest.mark.parametrize(("period", "expected_seconds"), [
+    ("last 5m", 300),
+    ("past 30 minutes", 1800),
+    ("previous 2 hours", 7200),
+    ("last 7d", 604800),
+    ("past hour", 3600),
+    ("last 30 seconds", 300),
+    ("last 999 days", 7_776_000),
+])
+def test_cluster_log_volume_preserves_bounded_requested_period(
+    period: str, expected_seconds: int,
+) -> None:
+    planned = plan_known_read(
+        f"Rank namespaces by application log volume in the {period}"
+    )
+
+    assert planned is not None
+    assert planned[0].intents[0].range_seconds == expected_seconds
+
+
+def test_cluster_log_volume_today_uses_elapsed_utc_day_and_requested_top_n() -> None:
+    planned = plan_known_read(
+        "Show the top 7 namespaces by application log volume today",
+        now=datetime(2026, 8, 27, 12, 30, tzinfo=timezone.utc),
+    )
+
+    assert planned is not None
+    intent = planned[0].intents[0]
+    assert intent.range_seconds == 45_000
+    assert intent.limit == 7
+
+
 def test_pod_log_request_requires_explicit_namespace_and_name_hint() -> None:
     assert plan_known_read("Check the pod logs for errors") is None
     assert plan_known_read("Check authorino pod logs") is None

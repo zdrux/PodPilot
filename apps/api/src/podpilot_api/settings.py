@@ -45,7 +45,7 @@ class Settings(BaseSettings):
         "/api/logs/v1/application"
     )
     loki_route_name: str = "logging-loki"
-    loki_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    loki_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
     loki_max_series: int = Field(default=50, ge=1, le=100)
     workload_max_events: int = Field(default=30, ge=1, le=100)
     workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)

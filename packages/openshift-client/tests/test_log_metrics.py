@@ -147,3 +147,13 @@ def test_loki_denial_has_actionable_role_guidance(tmp_path: Path) -> None:
 
     with pytest.raises(LogMetricsQueryError, match="cluster-logging-application-view"):
         client.query_namespace_volume("fixed")
+
+
+def test_loki_timeout_reports_configured_deadline(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow fixture", request=request)
+
+    client = _client(tmp_path, handler, timeout_seconds=17)
+
+    with pytest.raises(LogMetricsQueryError, match="configured 17-second timeout"):
+        client.query_namespace_volume("fixed")

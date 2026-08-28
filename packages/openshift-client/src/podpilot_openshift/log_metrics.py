@@ -48,7 +48,7 @@ class LokiQueryClient:
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
         route_discovery_tls_verify: bool = True,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 30.0,
         max_series: int = 50,
         max_response_bytes: int = 65_536,
         transport: httpx.BaseTransport | None = None,
@@ -64,6 +64,7 @@ class LokiQueryClient:
             route_discovery_url.rstrip("/") if route_discovery_url else None
         )
         self._route_discovery_tls_verify = route_discovery_tls_verify
+        self._timeout_seconds = timeout_seconds
         self._timeout = httpx.Timeout(timeout_seconds)
         self._max_series = max_series
         self._max_response_bytes = max_response_bytes
@@ -164,6 +165,10 @@ class LokiQueryClient:
             return json.loads(body)
         except LogMetricsQueryError:
             raise
+        except httpx.TimeoutException as exc:
+            raise LogMetricsQueryError(
+                f"The Loki query exceeded the configured {self._timeout_seconds:g}-second timeout."
+            ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
                 message = "The logging API rejected the configured bearer token."
@@ -194,6 +199,11 @@ class LokiQueryClient:
                 response = client.get(self._route_discovery_url)
                 response.raise_for_status()
                 payload = response.json()
+        except httpx.TimeoutException as exc:
+            raise LogMetricsQueryError(
+                "The remote cluster's LokiStack Route discovery exceeded the configured "
+                f"{self._timeout_seconds:g}-second timeout."
+            ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
                 message = "The remote Kubernetes API rejected the configured bearer token."

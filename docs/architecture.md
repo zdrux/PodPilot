@@ -182,6 +182,10 @@ The registered `top_log_volume_by_namespace` metric is an aggregate-only excepti
 the LokiStack application tenant. Normal code owns its fixed `bytes_over_time` LogQL, accepts
 only vector results, and persists namespace, payload bytes, average byte rate, time bounds, and
 completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
+Normal code parses common explicit relative periods before deterministic execution, while the
+semantic classifier carries `metric_range_seconds` for other wording. Requested values remain
+subject to the typed five-minute minimum and deployment maximum; absent periods use the documented
+one-hour default.
 Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
 Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
 and memory queries support cluster, namespace, Deployment, and node scopes. Top-consumer

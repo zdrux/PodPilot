@@ -156,6 +156,9 @@ Log-volume gates must verify authenticated LokiStack application-tenant requests
 multi-cluster rendering, and the absence of raw log lines. Manifest tests must retain
 `cluster-monitoring-view` and bind the investigator only to the read-only OpenShift Logging
 application, infrastructure, and audit ClusterRoles.
+Range-routing tests must prove compact and worded durations preserve the operator request,
+sub-five-minute and over-ceiling values are bounded, `today` is derived from UTC midnight, and
+transport deadlines report the configured timeout.
 Node tests must cover bounded top CPU/memory rankings, optional namespace narrowing, retained
 namespace/Pod/container labels, and operator-visible wording that does not misrepresent
 container telemetry as host process inspection.

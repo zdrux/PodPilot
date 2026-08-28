@@ -203,7 +203,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   pressure not explained by monitored workload containers.
 - Ask PodPilot can rank namespaces by application-log payload volume over a bounded period.
   Normal code owns the fixed Loki `bytes_over_time` query, authenticates through the OpenShift
-  LokiStack gateway, persists only aggregate namespace bytes/rates, renders multi-cluster tables,
+  LokiStack gateway, preserves explicit bounded periods such as `5m`, `2h`, and `today`, persists
+  only aggregate namespace bytes/rates, renders multi-cluster tables,
   and never returns log lines or accepts model-authored LogQL. The investigator retains
   `cluster-monitoring-view` and adds the read-only application, infrastructure, and audit
   OpenShift Logging views.

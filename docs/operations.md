@@ -184,7 +184,8 @@ The current deployment uses these variables:
 - `PODPILOT_LOKI_URL`, defaulting to
   `https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
 - `PODPILOT_LOKI_ROUTE_NAME`, default `logging-loki`, for registered remote clusters
-- `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `8`
+- `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `30`, with a hard accepted range of
+  `1` through `60`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
@@ -897,8 +898,11 @@ Requests and limits are configuration gauges, not measured usage.
 
 `top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
 payload bytes observed during the bounded period. Its average is bytes per second; the total is
-not compressed object-store consumption, and the tool returns no log lines. The default period is
-one hour and `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS` caps it at 24 hours.
+not compressed object-store consumption, and the tool returns no log lines. Explicit relative
+periods such as `5m`, `30 minutes`, `2h`, and `7d` are converted to bounded seconds; `today`
+means elapsed time since 00:00 UTC. An omitted period defaults to one hour, the minimum is five
+minutes, and `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS` caps execution at 24 hours. A Loki deadline
+failure identifies the configured timeout instead of reporting generic gateway unavailability.
 
 `PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS` defaults to 2592000 (30 days) and accepts up to
 7776000 (90 days). `PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES` defaults to 300 and accepts
