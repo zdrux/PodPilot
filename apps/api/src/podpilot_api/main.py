@@ -5684,6 +5684,7 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set(existing_read_signatures or [])
     units_used = 0
     automatic_tls_retries = 0
+    automatic_configmap_reads = 0
     pinned_goal: str | None = (
         "diagnose" if investigation_gaps else inquiry.planner_goal if inquiry else None
     )
@@ -6546,6 +6547,8 @@ async def _collect_bounded_cluster_reads(
                     message = "Correlating a notable bounded log signal with exact Pod evidence."
                 elif automatic_code == "configuration_detail":
                     message = "Reading exact discovered objects to explain their configuration."
+                elif automatic_code == "referenced_configmap":
+                    message = "Reading the exact referenced ConfigMap to display its configuration."
                 await progress("collecting", message)
             entry: dict[str, object] = {
                 "round": round_number,
@@ -6590,16 +6593,26 @@ async def _collect_bounded_cluster_reads(
                 for followup in automatic_read_followups(
                     intent, result.observations, question=question, goal_type=plan.goal_type
                 ):
-                    # Mechanical trust-only retry is not a diagnostic direction.
-                    # All object traversal, logs, events, and configuration reads
-                    # must be explicitly selected by the model on the next round.
-                    if followup.code != "tls_trust_retry" or automatic_tls_retries >= 2:
+                    # Only mechanical trust retries and exact, non-sensitive ConfigMap
+                    # references for an explicit display request may bypass another model
+                    # round. Other diagnostic traversal remains model-selected.
+                    allowed_tls_retry = (
+                        followup.code == "tls_trust_retry" and automatic_tls_retries < 2
+                    )
+                    allowed_configmap_read = (
+                        followup.code == "referenced_configmap"
+                        and automatic_configmap_reads < 3
+                    )
+                    if not (allowed_tls_retry or allowed_configmap_read):
                         continue
                     followup_intent = normalize_read_intent(followup.intent)
                     signature = _read_intent_signature(followup_intent)
                     if signature in seen_intents:
                         continue
-                    automatic_tls_retries += 1
+                    if allowed_tls_retry:
+                        automatic_tls_retries += 1
+                    else:
+                        automatic_configmap_reads += 1
                     seen_intents.add(signature)
                     intent_queue.append((
                         followup_intent,

@@ -3775,8 +3775,12 @@ def test_configuration_guidance_follows_exact_nested_configmap_reference() -> No
         ("Kafka", "kafka-observability-cluster"),
         ("ConfigMap", "kafka-observability-metrics-config"),
     ]
+    assert result.activity[1]["automatic_followup"] == "referenced_configmap"
     assert any(item["id"] == "cluster-exporter-config" for item in result.evidence)
-    assert provider.contexts[0]["read_candidates"][0]["relation"] == "configures_from"
+    assert any(
+        item.get("id") == "cluster-exporter-config"
+        for item in provider.contexts[0]["facts"]
+    )
 
 
 def test_semantic_named_resource_without_namespace_compiles_grounded_search() -> None:

@@ -494,6 +494,66 @@ def test_configuration_question_expands_inventory_to_exact_object_reads() -> Non
     )
 
 
+def test_explicit_config_display_follows_exact_observed_configmap_reference() -> None:
+    kafka = AdHocObservation(
+        id="cluster-kafka", tool="get_resource", summary="Read Kafka.",
+        source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:vc-streams/vc-cluster",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            "spec": {"kafka": {"metricsConfig": {"valueFrom": {
+                "configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"},
+            }}}},
+        },
+    )
+
+    followups = automatic_read_followups(
+        ReadIntent(
+            tool="get_resource", resource="kafkas.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
+            namespace="vc-streams", name="vc-cluster",
+        ),
+        (kafka,),
+        question="Show me the config.",
+        goal_type="explain",
+    )
+
+    assert len(followups) == 1
+    assert followups[0].code == "referenced_configmap"
+    assert followups[0].evidence_ids == ("cluster-kafka",)
+    assert followups[0].intent == ReadIntent(
+        tool="get_resource", resource="configmaps", api_version="v1",
+        kind="ConfigMap", namespace="vc-streams", name="kafka-metrics",
+    )
+
+
+def test_configmap_reference_is_not_automatically_followed_without_display_request() -> None:
+    kafka = AdHocObservation(
+        id="cluster-kafka", tool="get_resource", summary="Read Kafka.",
+        source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:vc-streams/vc-cluster",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Kafka",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            "spec": {"metricsConfig": {
+                "configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"},
+            }},
+        },
+    )
+
+    assert automatic_read_followups(
+        ReadIntent(
+            tool="get_resource", resource="kafkas.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
+            namespace="vc-streams", name="vc-cluster",
+        ),
+        (kafka,),
+        question="Is Prometheus export configured?",
+        goal_type="explain",
+    ) == ()
+
+
 def test_plain_inventory_question_does_not_expand_every_object() -> None:
     inventory = AdHocObservation(
         id="cluster-widget-list", tool="list_resources", summary="Read Widgets.",

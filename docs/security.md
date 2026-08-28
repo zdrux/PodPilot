@@ -436,7 +436,11 @@ ServiceAccount's RBAC for the final authorization decision. Recursive redaction
 and compact payload ceilings apply to discovered built-ins and CRDs alike.
 ConfigMap LIST evidence contains metadata only. After an exact broker-authorized ConfigMap GET, the
 final-answer model may receive at most a small bounded projection of `data`; recursive sensitive-key and
-value redaction runs before that projection. Secret objects remain denied regardless of references or RBAC.
+value redaction runs before that projection. When the operator explicitly asks to show configuration,
+PodPilot may automatically GET a bounded number of exact same-namespace ConfigMaps whose names were
+observed in the structured spec of an exact source object. This relationship traversal cannot infer names,
+does not apply to Secrets, and remains subject to broker policy, RBAC, read budgets, and redaction. Secret
+objects remain denied regardless of references or RBAC.
 An API `403` becomes an explicit operator-facing limitation naming the
 `podpilot-investigator` ServiceAccount, requested read verb, resource, scope, and
 the need for an administrator-granted permission. The answer validator prepends

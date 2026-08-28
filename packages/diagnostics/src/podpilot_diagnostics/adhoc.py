@@ -1547,7 +1547,7 @@ class AutomaticReadFollowup:
 
     code: Literal[
         "tls_trust_retry", "traffic_path_investigation", "pod_log_investigation",
-        "log_signal_investigation", "configuration_detail",
+        "log_signal_investigation", "configuration_detail", "referenced_configmap",
     ]
     reason: str
     intent: ReadIntent
@@ -1805,6 +1805,47 @@ def automatic_read_followups(
                     and str(item.get("kind") or data.get("kind") or "") == kind
                 )
         return matched
+
+    explicit_config_display = bool(re.search(
+        r"(?is)\b(?:show|display|view|print|dump|read|open)\b.{0,120}"
+        r"\b(?:config(?:uration|map)?|settings?|contents?|data)\b|"
+        r"\b(?:config(?:uration|map)?)\b.{0,120}"
+        r"\b(?:show|display|view|print|dump|read|open)\b",
+        question,
+    ))
+    if explicit_config_display and intent.tool == "get_resource":
+        referenced_configmaps: list[AutomaticReadFollowup] = []
+        seen_configmaps: set[tuple[str, str]] = set()
+        for observation in observations:
+            data = observation.data
+            if str(data.get("kind") or "") in {"ConfigMap", "Secret"}:
+                continue
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            namespace = str(metadata.get("namespace") or "")[:253]
+            spec = data.get("spec")
+            if not namespace or not isinstance(spec, dict):
+                continue
+            for name in config_map_references_from_spec(spec):
+                target = (namespace, name)
+                if target in seen_configmaps:
+                    continue
+                seen_configmaps.add(target)
+                referenced_configmaps.append(AutomaticReadFollowup(
+                    code="referenced_configmap",
+                    reason=(
+                        f"Read the exact ConfigMap {namespace}/{name} referenced by the "
+                        "observed resource so its requested configuration can be displayed."
+                    ),
+                    intent=ReadIntent(
+                        tool="get_resource", resource="configmaps", api_version="v1",
+                        kind="ConfigMap", namespace=namespace, name=name,
+                    ),
+                    evidence_ids=(observation.id,),
+                ))
+                if len(referenced_configmaps) >= 3:
+                    return tuple(referenced_configmaps)
+        if referenced_configmaps:
+            return tuple(referenced_configmaps)
 
     if traffic_question and intent.tool in {
         "get_resource", "list_resources", "search_resources",

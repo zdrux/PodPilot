@@ -256,8 +256,12 @@ Kafka compile to `KafkaTopic` objects in the Kafka namespace with the model-sele
 and server-bound Kafka name. Invalid, incomplete, or invented scope selections receive the existing
 bounded semantic correction attempt rather than being executed.
 An exact custom-resource read also derives bounded relationships from structured ConfigMap reference
-objects in its observed spec. The model receives the referenced ConfigMap as an opaque exact action and
-chooses whether it is needed; a `configuration_guidance` read remains open for that selection. Explicit
+objects in its observed spec. The model normally receives the referenced ConfigMap as an opaque exact
+action and chooses whether it is needed; a `configuration_guidance` read remains open for that selection.
+For an explicit show, display, or read-configuration request, normal code may follow up to three exact
+same-namespace ConfigMap references observed in the source object's structured spec without another
+model round. The broker, remaining investigation budget, and normal ConfigMap redaction still apply;
+Secret references and inferred names are never traversed by this exception. Explicit
 `configures_from` actions outrank generic catalog and list-result candidates during malformed-plan
 recovery. An exact ConfigMap GET contributes a bounded, recursively redacted `data` projection to final
 fact cards; LIST responses continue to expose metadata only.
