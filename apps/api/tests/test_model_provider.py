@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from podpilot_api.model_provider import (
@@ -15,9 +16,14 @@ from podpilot_api.model_provider import (
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
     OpenAIResponsesProvider,
+    _model_http_request_hook,
+    _model_http_response_hook,
+    _model_request_context,
     _minimal_action_payload,
     _minimal_answer_payload,
+    capture_model_diagnostics,
     capture_raw_model_responses,
+    summarize_model_diagnostics,
     validate_model_endpoint,
 )
 from podpilot_diagnostics.adhoc import ReadIntent, ReadPlan
@@ -277,6 +283,90 @@ def test_responses_adapter_sends_configured_reasoning_effort() -> None:
     )
 
     assert responses.requests[0]["reasoning"] == {"effort": "medium"}
+
+
+def test_model_http_diagnostics_normalize_usage_and_redact_probe_preview() -> None:
+    request = httpx.Request(
+        "POST",
+        "https://models.example.test/v1/chat/completions",
+        headers={"authorization": "Bearer must-never-be-recorded"},
+        json={
+            "model": "gpt-oss-120b-rhoai",
+            "max_tokens": 4096,
+            "reasoning_effort": "high",
+            "messages": [{"content": "request body must never be recorded"}],
+        },
+    )
+    response = httpx.Response(
+        200,
+        request=request,
+        headers={"x-request-id": "request-123"},
+        json={
+            "id": "chatcmpl-123",
+            "model": "gpt-oss-120b-rhoai",
+            "choices": [{"message": {
+                "content": "token=sk-abcdefghijklmnop should be redacted"
+            }}],
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 30,
+                "total_tokens": 150,
+                "prompt_tokens_details": {"cached_tokens": 40},
+                "completion_tokens_details": {"reasoning_tokens": 20},
+            },
+        },
+    )
+
+    with capture_model_diagnostics(include_content=True) as calls:
+        with _model_request_context("workflow.ReadPlan", schema="ReadPlan"):
+            _model_http_request_hook(request)
+            _model_http_response_hook(response)
+
+    summary = summarize_model_diagnostics(calls)
+    assert summary["call_count"] == 1
+    assert summary["usage"] == {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "total_tokens": 150,
+        "cached_tokens": 40,
+        "reasoning_tokens": 20,
+    }
+    assert summary["largest_input_tokens"] == 120
+    call = summary["calls"][0]
+    assert call["operation"] == "workflow.ReadPlan"
+    assert call["schema"] == "ReadPlan"
+    assert call["endpoint"] == "/v1/chat/completions"
+    assert call["request_id"] == "request-123"
+    assert call["request"] == {
+        "model": "gpt-oss-120b-rhoai",
+        "max_tokens": 4096,
+        "reasoning_effort": "high",
+    }
+    serialized = json.dumps(summary)
+    assert "must-never-be-recorded" not in serialized
+    assert "request body must never be recorded" not in serialized
+    assert "sk-abcdefghijklmnop" not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_model_diagnostics_omit_response_content_for_normal_ask_turns() -> None:
+    request = httpx.Request("POST", "https://models.example.test/v1/responses")
+    response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "id": "resp-123",
+            "output": [{"type": "message", "content": [{"text": "private answer"}]}],
+            "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+        },
+    )
+
+    with capture_model_diagnostics() as calls:
+        _model_http_request_hook(request)
+        _model_http_response_hook(response)
+
+    assert calls[0]["usage"]["total_tokens"] == 12
+    assert "response_preview" not in calls[0]
 
 
 def test_adapters_omit_reasoning_when_provider_default_is_selected() -> None:

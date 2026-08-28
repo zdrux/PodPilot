@@ -40,7 +40,9 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIProviderRouter,
     REASONING_EFFORTS,
+    capture_model_diagnostics,
     capture_raw_model_responses,
+    summarize_model_diagnostics,
     validate_model_endpoint,
 )
 from podpilot_api.models import (
@@ -7556,19 +7558,28 @@ def create_app(
             await _record_run_progress(engine, run_id, phase, message)
 
         try:
-            await asyncio.wait_for(
-                _execute_adhoc_turn(
-                    engine=engine,
-                    username=username,
-                    conversation_id=conversation_id,
-                    message_text=message_text,
-                    run_id=run_id,
-                    include_raw_response=include_raw_response,
-                    followup_action=followup_action or None,
-                    progress=report,
-                ),
-                timeout=app_settings.adhoc_run_timeout_seconds,
-            )
+            with capture_model_diagnostics() as model_calls:
+                assistant_message_id = await asyncio.wait_for(
+                    _execute_adhoc_turn(
+                        engine=engine,
+                        username=username,
+                        conversation_id=conversation_id,
+                        message_text=message_text,
+                        run_id=run_id,
+                        include_raw_response=include_raw_response,
+                        followup_action=followup_action or None,
+                        progress=report,
+                    ),
+                    timeout=app_settings.adhoc_run_timeout_seconds,
+                )
+            if assistant_message_id:
+                with Session(engine) as db_session:
+                    assistant_message = db_session.get(AdHocMessage, assistant_message_id)
+                    if assistant_message is not None:
+                        assistant_message.model_diagnostics_json = json.dumps(
+                            summarize_model_diagnostics(model_calls), sort_keys=True
+                        )
+                        db_session.commit()
         except TimeoutError:
             LOGGER.warning(
                 "podpilot.adhoc.run_timed_out actor=%s conversation_id=%s run_id=%s timeout=%s",
@@ -7791,6 +7802,7 @@ def create_app(
                 "answer_mode": row.answer_mode, "citations": citations,
                 "activity": activity_view, "provider_status": row.provider_status,
                 "raw_responses": json.loads(row.raw_responses_json or "[]"),
+                "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
                 "prefer_metric_card": prefer_metric_card,
                 "created_at": row.created_at,
             })
@@ -8423,6 +8435,7 @@ def create_app(
                     "capabilities": json.loads(row.capabilities_json),
                     "tool_calling_hint": row.tool_calling_hint, "vision_hint": row.vision_hint,
                     "is_active": row.is_active, "last_error": row.last_error,
+                    "probe_diagnostics": json.loads(row.last_probe_diagnostics_json or "{}"),
                     "last_probe_at": row.last_probe_at, "updated_by": row.updated_by,
                     "updated_at": row.updated_at,
                 }
@@ -8558,6 +8571,7 @@ def create_app(
             profile.status = "not_tested"
             profile.capabilities_json = "{}"
             profile.last_error = None
+            profile.last_probe_diagnostics_json = "{}"
             profile.last_probe_at = None
             profile.updated_by = user.username
             profile.updated_at = now
@@ -8597,40 +8611,47 @@ def create_app(
             config_snapshot.api_type,
             config_snapshot.chat_model,
         )
-        try:
-            api_key = await run_in_threadpool(credentials.get, credential_key)
-            if not api_key:
-                raise ModelProviderError("No model API token is configured.")
-            report = await run_in_threadpool(provider.probe, config_snapshot, api_key)
-            outcome = "ready" if report.ready else "reduced_capability"
-            capabilities = report.to_dict()
-            error = None if report.ready else (
-                report.ask_schema_error
-                or "The endpoint lacks one or more required capabilities."
-            )
-            log_method = LOGGER.info if report.ready else LOGGER.warning
-            log_method(
-                "podpilot.model_probe.complete actor=%s profile_id=%s outcome=%s "
-                "structured_output=%s ask_schemas=%s streaming=%s tool_calls=%s error=%s",
-                user.username,
-                profile_id,
-                outcome,
-                report.structured_output,
-                report.ask_schemas,
-                report.streaming,
-                report.tool_calls,
-                error,
-            )
-        except (CredentialStoreError, ModelProviderError) as exc:
-            outcome = "unavailable"
-            capabilities = {}
-            error = str(exc)
-            LOGGER.warning(
-                "podpilot.model_probe.failed actor=%s profile_id=%s error=%s",
-                user.username,
-                profile_id,
-                error,
-            )
+        with capture_model_diagnostics(include_content=True) as probe_calls:
+            try:
+                api_key = await run_in_threadpool(credentials.get, credential_key)
+                if not api_key:
+                    raise ModelProviderError("No model API token is configured.")
+                report = await run_in_threadpool(provider.probe, config_snapshot, api_key)
+                outcome = "ready" if report.ready else "reduced_capability"
+                capabilities = report.to_dict()
+                error = None if report.ready else (
+                    report.ask_schema_error
+                    or "The endpoint lacks one or more required capabilities."
+                )
+                log_method = LOGGER.info if report.ready else LOGGER.warning
+                log_method(
+                    "podpilot.model_probe.complete actor=%s profile_id=%s outcome=%s "
+                    "structured_output=%s ask_schemas=%s streaming=%s tool_calls=%s error=%s",
+                    user.username,
+                    profile_id,
+                    outcome,
+                    report.structured_output,
+                    report.ask_schemas,
+                    report.streaming,
+                    report.tool_calls,
+                    error,
+                )
+            except (CredentialStoreError, ModelProviderError) as exc:
+                outcome = "unavailable"
+                capabilities = {}
+                error = str(exc)
+                LOGGER.warning(
+                    "podpilot.model_probe.failed actor=%s profile_id=%s error=%s",
+                    user.username,
+                    profile_id,
+                    error,
+                )
+        probe_calls.append({
+            "operation": "probe.summary",
+            "result": outcome,
+            "error": error,
+        })
+        probe_diagnostics = summarize_model_diagnostics(probe_calls)
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)
@@ -8639,6 +8660,9 @@ def create_app(
             profile.status = outcome
             profile.capabilities_json = json.dumps(capabilities, sort_keys=True)
             profile.last_error = error
+            profile.last_probe_diagnostics_json = json.dumps(
+                probe_diagnostics, sort_keys=True
+            )
             profile.last_probe_at = now
             db_session.add(AuditEvent(
                 actor=user.username,
@@ -8647,7 +8671,12 @@ def create_app(
                 details_json=json.dumps({"capabilities": capabilities}, sort_keys=True),
             ))
             db_session.commit()
-        return JSONResponse({"status": outcome, "capabilities": capabilities, "detail": error})
+        return JSONResponse({
+            "status": outcome,
+            "capabilities": capabilities,
+            "detail": error,
+            "diagnostic_call_count": probe_diagnostics["call_count"],
+        })
 
     @app.post("/api/v1/model-profiles/{profile_id}/activate")
     async def activate_model_profile(request: Request, profile_id: int, user: AuthContext = Depends(current_user)):

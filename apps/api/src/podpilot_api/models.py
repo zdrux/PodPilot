@@ -64,6 +64,7 @@ class ModelProfile(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_tested")
     capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_probe_diagnostics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_by: Mapped[str] = mapped_column(String(253), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -247,6 +248,7 @@ class AdHocMessage(Base):
     tool_activity_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     provider_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     raw_responses_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    model_diagnostics_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
 
 class AdHocRun(Base):

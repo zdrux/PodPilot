@@ -530,6 +530,11 @@ current repository and cluster state.
 - Audit usernames are now optional. “Last 10 delete actions according to the audit log” compiles to
   a cluster-wide query that filters completed deletes in Loki and requests ten newest-first compact
   results; “by USER” retains the escaped exact, case-insensitive username filter.
+- Added normalized model-call diagnostics for both Responses and Chat Completions. Completed Ask
+  replies expose aggregate token usage and largest single-request input in a collapsed author-rail
+  control. The latest model capability test retains an Approver-visible collapsed request trace with
+  operation/schema labels, status, duration, usage, request ID, and bounded redacted synthetic output;
+  request bodies, authorization headers, and credentials are never captured.
 
 ## 2026-08-28 Site-wide Quiet Ledger redesign
 

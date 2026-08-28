@@ -237,6 +237,20 @@ Because the provider's output-token limit includes hidden reasoning tokens, an e
 effort uses the profile's full maximum-output budget instead of PodPilot's smaller
 non-reasoning per-operation cap.
 
+Completed Ask replies persist a bounded model-diagnostics record for the calls made during that
+turn. The collapsed **Model usage** control beneath the PodPilot author rail shows aggregate input,
+output, reasoning, cached, and total tokens when the provider reports them, plus the largest
+single-call input. Aggregate usage measures processing across the turn; only the largest individual
+request is relevant to context-window pressure. Compatible providers may omit some or all usage
+fields, which PodPilot reports without estimating them.
+
+**Test connection** persists the latest bounded synthetic-probe trace on the model profile. The
+collapsed **Request diagnostics** section includes the probe operation/schema, endpoint path, HTTP
+status, duration, request ID, token usage, and a redacted response preview. It never stores request
+bodies, authorization headers, API tokens, or complete HTTP headers. Response previews are enabled
+only for the fixed synthetic capability probes, capped at 4,000 characters per response, and passed
+through normal secret redaction.
+
 A `reduced_capability` probe result does not automatically disable AI workflows. PodPilot
 allows the profile when the recorded probe still proves an accepted transport, endpoint
 reachability, authentication, model availability, and structured output. Failures of the

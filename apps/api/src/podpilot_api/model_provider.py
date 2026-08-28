@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import re
 import ssl
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from functools import wraps
 from typing import Literal, Protocol
 from urllib.parse import urlparse
 
@@ -15,6 +17,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 from podpilot_diagnostics.adhoc import CandidateReadPlan, InvestigationGap, ReadIntent, ReadPlan
+from podpilot_diagnostics.redaction import redact_text
 
 
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -356,6 +359,15 @@ class AdHocLogAnalysis(BaseModel):
 _RAW_RESPONSE_CAPTURE: ContextVar[list[str] | None] = ContextVar(
     "podpilot_raw_response_capture", default=None
 )
+_MODEL_DIAGNOSTIC_CAPTURE: ContextVar[list[dict[str, object]] | None] = ContextVar(
+    "podpilot_model_diagnostic_capture", default=None
+)
+_MODEL_DIAGNOSTIC_INCLUDE_CONTENT: ContextVar[bool] = ContextVar(
+    "podpilot_model_diagnostic_include_content", default=False
+)
+_MODEL_REQUEST_CONTEXT: ContextVar[dict[str, object]] = ContextVar(
+    "podpilot_model_request_context", default={}
+)
 
 
 @contextmanager
@@ -377,6 +389,228 @@ def _record_raw_response(content: str | None) -> None:
     capture = _RAW_RESPONSE_CAPTURE.get()
     if capture is not None and content:
         capture.append(content)
+
+
+@contextmanager
+def capture_model_diagnostics(
+    *, include_content: bool = False,
+) -> Iterator[list[dict[str, object]]]:
+    """Capture bounded provider metadata without request bodies or authorization headers."""
+
+    captured: list[dict[str, object]] = []
+    capture_token = _MODEL_DIAGNOSTIC_CAPTURE.set(captured)
+    content_token = _MODEL_DIAGNOSTIC_INCLUDE_CONTENT.set(include_content)
+    try:
+        yield captured
+    finally:
+        _MODEL_DIAGNOSTIC_INCLUDE_CONTENT.reset(content_token)
+        _MODEL_DIAGNOSTIC_CAPTURE.reset(capture_token)
+
+
+@contextmanager
+def _model_request_context(
+    operation: str,
+    *,
+    schema: str | None = None,
+) -> Iterator[None]:
+    value: dict[str, object] = {"operation": operation[:80]}
+    if schema:
+        value["schema"] = schema[:100]
+    token = _MODEL_REQUEST_CONTEXT.set(value)
+    try:
+        yield
+    finally:
+        _MODEL_REQUEST_CONTEXT.reset(token)
+
+
+def _diagnostic_operation(operation: str, schema: str | None = None):
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            with _model_request_context(operation, schema=schema):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
+
+
+def _json_member(value: object, name: str) -> object | None:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _normalized_usage(value: object) -> dict[str, int] | None:
+    if value is None:
+        return None
+    input_tokens = _json_member(value, "input_tokens")
+    if input_tokens is None:
+        input_tokens = _json_member(value, "prompt_tokens")
+    output_tokens = _json_member(value, "output_tokens")
+    if output_tokens is None:
+        output_tokens = _json_member(value, "completion_tokens")
+    total_tokens = _json_member(value, "total_tokens")
+    input_details = (
+        _json_member(value, "input_tokens_details")
+        or _json_member(value, "prompt_tokens_details")
+    )
+    output_details = (
+        _json_member(value, "output_tokens_details")
+        or _json_member(value, "completion_tokens_details")
+    )
+    fields = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cached_tokens": _json_member(input_details, "cached_tokens"),
+        "reasoning_tokens": _json_member(output_details, "reasoning_tokens"),
+    }
+    normalized: dict[str, int] = {}
+    for key, item in fields.items():
+        try:
+            parsed = int(item) if item is not None else None
+        except (TypeError, ValueError):
+            continue
+        if parsed is not None and parsed >= 0:
+            normalized[key] = parsed
+    return normalized or None
+
+
+def _bounded_response_preview(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    preview: object | None = None
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        message = choices[0].get("message")
+        if isinstance(message, dict):
+            preview = {
+                key: message.get(key)
+                for key in ("content", "tool_calls", "refusal")
+                if message.get(key) is not None
+            }
+    elif isinstance(payload.get("output"), list):
+        preview = payload.get("output")
+    elif payload.get("error") is not None:
+        preview = payload.get("error")
+    if preview is None:
+        return None
+    rendered = json.dumps(preview, sort_keys=True, default=str, ensure_ascii=False)
+    return redact_text(rendered)[:4000]
+
+
+def _model_http_request_hook(request: httpx.Request) -> None:
+    request.extensions["podpilot_diagnostic_started"] = time.monotonic()
+    try:
+        payload = json.loads(request.content)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        payload = None
+    if isinstance(payload, dict):
+        safe_request: dict[str, object] = {}
+        for key in ("model", "max_tokens", "max_output_tokens", "stream"):
+            value = payload.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                safe_request[key] = value
+        effort = payload.get("reasoning_effort")
+        reasoning = payload.get("reasoning")
+        if effort is None and isinstance(reasoning, dict):
+            effort = reasoning.get("effort")
+        if isinstance(effort, str):
+            safe_request["reasoning_effort"] = effort[:32]
+        response_format = payload.get("response_format")
+        if isinstance(response_format, dict):
+            safe_request["response_format"] = str(response_format.get("type") or "")[:80]
+            json_schema = response_format.get("json_schema")
+            if isinstance(json_schema, dict) and json_schema.get("name"):
+                safe_request["schema_name"] = str(json_schema["name"])[:100]
+        if safe_request:
+            request.extensions["podpilot_safe_request"] = safe_request
+
+
+def _model_http_response_hook(response: httpx.Response) -> None:
+    capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
+    if capture is None:
+        return
+    started = response.request.extensions.get("podpilot_diagnostic_started")
+    elapsed_ms = (
+        max(0, int((time.monotonic() - float(started)) * 1000))
+        if isinstance(started, (int, float)) else None
+    )
+    diagnostic: dict[str, object] = {
+        **_MODEL_REQUEST_CONTEXT.get(),
+        "method": response.request.method,
+        "endpoint": response.request.url.path[:500],
+        "http_status": response.status_code,
+    }
+    safe_request = response.request.extensions.get("podpilot_safe_request")
+    if isinstance(safe_request, dict):
+        diagnostic["request"] = safe_request
+    if elapsed_ms is not None:
+        diagnostic["duration_ms"] = elapsed_ms
+    request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+    if request_id:
+        diagnostic["request_id"] = request_id[:200]
+    content_type = response.headers.get("content-type", "").casefold()
+    if "json" in content_type:
+        try:
+            response.read()
+            payload = response.json()
+        except (ValueError, httpx.HTTPError):
+            payload = None
+        if isinstance(payload, dict):
+            usage = _normalized_usage(payload.get("usage"))
+            if usage:
+                diagnostic["usage"] = usage
+            model = payload.get("model")
+            if model:
+                diagnostic["response_model"] = str(model)[:253]
+            response_id = payload.get("id")
+            if response_id:
+                diagnostic["response_id"] = str(response_id)[:253]
+            status = payload.get("status")
+            if status:
+                diagnostic["response_status"] = str(status)[:80]
+            if _MODEL_DIAGNOSTIC_INCLUDE_CONTENT.get():
+                preview = _bounded_response_preview(payload)
+                if preview:
+                    diagnostic["response_preview"] = preview
+    capture.append(diagnostic)
+
+
+def summarize_model_diagnostics(
+    calls: list[dict[str, object]],
+) -> dict[str, object]:
+    """Return turn totals plus the largest single request for context-pressure inspection."""
+
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cached_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    reported_calls = 0
+    largest_input = 0
+    for call in calls:
+        usage = call.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        reported_calls += 1
+        for key in totals:
+            try:
+                totals[key] += max(0, int(usage.get(key) or 0))
+            except (TypeError, ValueError):
+                pass
+        try:
+            largest_input = max(largest_input, int(usage.get("input_tokens") or 0))
+        except (TypeError, ValueError):
+            pass
+    return {
+        "call_count": len(calls),
+        "usage_reported_calls": reported_calls,
+        "usage": totals if reported_calls else None,
+        "largest_input_tokens": largest_input if reported_calls else None,
+        "calls": calls[:40],
+    }
 
 
 class ModelProviderError(RuntimeError):
@@ -613,7 +847,14 @@ class OpenAIResponsesProvider:
                 base_url=profile.base_url.rstrip("/"),
                 timeout=profile.timeout_seconds,
                 max_retries=0,
-                http_client=httpx.Client(verify=verify, timeout=profile.timeout_seconds),
+                http_client=httpx.Client(
+                    verify=verify,
+                    timeout=profile.timeout_seconds,
+                    event_hooks={
+                        "request": [_model_http_request_hook],
+                        "response": [_model_http_response_hook],
+                    },
+                ),
             )
         except ModelProviderError:
             raise
@@ -626,57 +867,64 @@ class OpenAIResponsesProvider:
         streaming = tools = structured = False
         embeddings: bool | None = None
         try:
-            client.models.retrieve(profile.chat_model)
+            with _model_request_context("capability.model_available"):
+                client.models.retrieve(profile.chat_model)
             reached = authenticated = model = True
             plaintext = urlparse(profile.base_url).scheme == "http"
             tls = not plaintext and profile.tls_mode != "insecure"
-            parsed = client.responses.parse(
-                model=profile.chat_model,
-                instructions="Return the requested capability probe object only.",
-                input="Confirm structured output with summary set to probe-ok.",
-                text_format=ModelInterpretation,
-                max_output_tokens=_output_limit(profile, 512),
-                store=False,
-                **_responses_reasoning(profile),
-            )
+            with _model_request_context(
+                "capability.structured_output", schema=ModelInterpretation.__name__
+            ):
+                parsed = client.responses.parse(
+                    model=profile.chat_model,
+                    instructions="Return the requested capability probe object only.",
+                    input="Confirm structured output with summary set to probe-ok.",
+                    text_format=ModelInterpretation,
+                    max_output_tokens=_output_limit(profile, 512),
+                    store=False,
+                    **_responses_reasoning(profile),
+                )
             structured = parsed.output_parsed is not None
 
-            stream = client.responses.create(
-                model=profile.chat_model,
-                input="Reply with OK.",
-                max_output_tokens=_output_limit(profile, 64),
-                store=False,
-                stream=True,
-                **_responses_reasoning(profile),
-            )
-            for _event in stream:
-                streaming = True
-                break
-            if hasattr(stream, "close"):
-                stream.close()
+            with _model_request_context("capability.streaming"):
+                stream = client.responses.create(
+                    model=profile.chat_model,
+                    input="Reply with OK.",
+                    max_output_tokens=_output_limit(profile, 64),
+                    store=False,
+                    stream=True,
+                    **_responses_reasoning(profile),
+                )
+                for _event in stream:
+                    streaming = True
+                    break
+                if hasattr(stream, "close"):
+                    stream.close()
 
-            tool_response = client.responses.create(
-                model=profile.chat_model,
-                input="Call the podpilot_probe function once.",
-                max_output_tokens=_output_limit(profile, 128),
-                store=False,
-                tools=[{
-                    "type": "function",
-                    "name": "podpilot_probe",
-                    "description": "Confirm tool-call support.",
-                    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-                    "strict": True,
-                }],
-                tool_choice={"type": "function", "name": "podpilot_probe"},
-                **_responses_reasoning(profile),
-            )
+            with _model_request_context("capability.tool_call"):
+                tool_response = client.responses.create(
+                    model=profile.chat_model,
+                    input="Call the podpilot_probe function once.",
+                    max_output_tokens=_output_limit(profile, 128),
+                    store=False,
+                    tools=[{
+                        "type": "function",
+                        "name": "podpilot_probe",
+                        "description": "Confirm tool-call support.",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                        "strict": True,
+                    }],
+                    tool_choice={"type": "function", "name": "podpilot_probe"},
+                    **_responses_reasoning(profile),
+                )
             tools = any(getattr(item, "type", "") == "function_call" for item in tool_response.output)
 
             if profile.embedding_model:
-                embedding = client.embeddings.create(
-                    model=profile.embedding_model,
-                    input="PodPilot capability probe",
-                )
+                with _model_request_context("capability.embeddings"):
+                    embedding = client.embeddings.create(
+                        model=profile.embedding_model,
+                        input="PodPilot capability probe",
+                    )
                 embeddings = bool(embedding.data and embedding.data[0].embedding)
             ask_schemas, ask_schema_error = self._probe_ask_schemas(profile, api_key)
         except Exception as exc:
@@ -814,6 +1062,7 @@ class OpenAIResponsesProvider:
             return False, f"AdHocLogAnalysis probe failed. {exc}"
         return True, None
 
+    @_diagnostic_operation("workflow.interpret", ModelInterpretation.__name__)
     def interpret(
         self, profile: ModelProfileConfig, api_key: str, evidence: dict[str, object]
     ) -> ModelInterpretation:
@@ -837,6 +1086,7 @@ class OpenAIResponsesProvider:
             raise ModelProviderError("The provider returned no schema-valid analysis.")
         return response.output_parsed
 
+    @_diagnostic_operation("workflow.investigation_chat", InvestigationChatAnswer.__name__)
     def chat(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> InvestigationChatAnswer:
@@ -864,6 +1114,7 @@ class OpenAIResponsesProvider:
             raise ModelProviderError("The provider returned no schema-valid chat answer.")
         return response.output_parsed
 
+    @_diagnostic_operation("workflow.read_plan", ReadPlan.__name__)
     def plan_ad_hoc(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> ReadPlan:
@@ -993,6 +1244,7 @@ class OpenAIResponsesProvider:
             return response.output_parsed.to_read_plan()
         return response.output_parsed
 
+    @_diagnostic_operation("workflow.classify", InquirySemantics.__name__)
     def classify_ad_hoc(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> InquirySemantics:
@@ -1051,6 +1303,7 @@ class OpenAIResponsesProvider:
             raise ModelProviderError("The provider returned no schema-valid inquiry classification.")
         return response.output_parsed
 
+    @_diagnostic_operation("workflow.answer", ConciseAdHocAnswer.__name__)
     def answer_ad_hoc(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> AdHocAnswer:
@@ -1074,6 +1327,7 @@ class OpenAIResponsesProvider:
         )
         return response.output_parsed.to_adhoc_answer()
 
+    @_diagnostic_operation("workflow.log_analysis", AdHocLogAnalysis.__name__)
     def analyze_logs(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> AdHocLogAnalysis:
@@ -1136,33 +1390,39 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             {"role": "user", "content": json.dumps(payload, sort_keys=True, default=str)},
         ]
         try:
-            response = client.chat.completions.create(
-                model=profile.chat_model,
-                messages=messages,
-                response_format=response_format,
-                max_tokens=limit or profile.max_output_tokens,
-                **_chat_reasoning(profile),
-            )
-            content = response.choices[0].message.content
-            retried_empty_content = False
-            if not content:
-                retried_empty_content = True
+            with _model_request_context(
+                f"workflow.{schema.__name__}", schema=schema.__name__
+            ):
                 response = client.chat.completions.create(
                     model=profile.chat_model,
-                    messages=[
-                        *messages,
-                        {
-                            "role": "system",
-                            "content": (
-                                "The previous response contained no structured content. Return one "
-                                "complete object that satisfies the requested JSON schema."
-                            ),
-                        },
-                    ],
+                    messages=messages,
                     response_format=response_format,
                     max_tokens=limit or profile.max_output_tokens,
                     **_chat_reasoning(profile),
                 )
+            content = response.choices[0].message.content
+            retried_empty_content = False
+            if not content:
+                retried_empty_content = True
+                with _model_request_context(
+                    f"workflow.{schema.__name__}.empty_retry", schema=schema.__name__
+                ):
+                    response = client.chat.completions.create(
+                        model=profile.chat_model,
+                        messages=[
+                            *messages,
+                            {
+                                "role": "system",
+                                "content": (
+                                    "The previous response contained no structured content. Return one "
+                                    "complete object that satisfies the requested JSON schema."
+                                ),
+                            },
+                        ],
+                        response_format=response_format,
+                        max_tokens=limit or profile.max_output_tokens,
+                        **_chat_reasoning(profile),
+                    )
                 content = response.choices[0].message.content
                 if not content:
                     raise ModelProviderError(
@@ -1181,23 +1441,26 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                         f"{self._schema_correction_detail(schema, first_error)}"
                     ) from first_error
                 validation_detail = self._schema_correction_detail(schema, first_error)
-                correction = client.chat.completions.create(
-                    model=profile.chat_model,
-                    messages=[
-                        *messages,
-                        {
-                            "role": "system",
-                            "content": (
-                                "The previous response did not satisfy the required JSON schema. "
-                                f"Correct these validation issues: {validation_detail} "
-                                "Return a complete corrected object only."
-                            ),
-                        },
-                    ],
-                    response_format=response_format,
-                    max_tokens=limit or profile.max_output_tokens,
-                    **_chat_reasoning(profile),
-                )
+                with _model_request_context(
+                    f"workflow.{schema.__name__}.schema_retry", schema=schema.__name__
+                ):
+                    correction = client.chat.completions.create(
+                        model=profile.chat_model,
+                        messages=[
+                            *messages,
+                            {
+                                "role": "system",
+                                "content": (
+                                    "The previous response did not satisfy the required JSON schema. "
+                                    f"Correct these validation issues: {validation_detail} "
+                                    "Return a complete corrected object only."
+                                ),
+                            },
+                        ],
+                        response_format=response_format,
+                        max_tokens=limit or profile.max_output_tokens,
+                        **_chat_reasoning(profile),
+                    )
                 corrected_content = correction.choices[0].message.content
                 if not corrected_content:
                     raise ModelProviderError("The provider returned no corrected structured response content.")
@@ -1324,42 +1587,45 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         tools = False
         client = self._client(profile, api_key)
         try:
-            stream = client.chat.completions.create(
-                model=profile.chat_model,
-                messages=[{"role": "user", "content": "Reply OK"}],
-                max_tokens=_output_limit(profile, 16),
-                stream=True,
-                **_chat_reasoning(profile),
-            )
-            for _ in stream:
-                streaming = True
-                break
-            if hasattr(stream, "close"):
-                stream.close()
+            with _model_request_context("capability.streaming"):
+                stream = client.chat.completions.create(
+                    model=profile.chat_model,
+                    messages=[{"role": "user", "content": "Reply OK"}],
+                    max_tokens=_output_limit(profile, 16),
+                    stream=True,
+                    **_chat_reasoning(profile),
+                )
+                for _ in stream:
+                    streaming = True
+                    break
+                if hasattr(stream, "close"):
+                    stream.close()
         except Exception:
             streaming = False
         try:
-            tool_response = client.chat.completions.create(
-                model=profile.chat_model,
-                messages=[{"role": "user", "content": "Call podpilot_probe."}],
-                max_tokens=_output_limit(profile, 64),
-                tools=[{"type": "function", "function": {
-                    "name": "podpilot_probe", "description": "Capability probe",
-                    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-                }}],
-                tool_choice={"type": "function", "function": {"name": "podpilot_probe"}},
-                **_chat_reasoning(profile),
-            )
+            with _model_request_context("capability.tool_call"):
+                tool_response = client.chat.completions.create(
+                    model=profile.chat_model,
+                    messages=[{"role": "user", "content": "Call podpilot_probe."}],
+                    max_tokens=_output_limit(profile, 64),
+                    tools=[{"type": "function", "function": {
+                        "name": "podpilot_probe", "description": "Capability probe",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    }}],
+                    tool_choice={"type": "function", "function": {"name": "podpilot_probe"}},
+                    **_chat_reasoning(profile),
+                )
             tools = bool(tool_response.choices[0].message.tool_calls)
         except Exception:
             tools = False
         embeddings: bool | None = None
         if profile.embedding_model:
             try:
-                embedding = client.embeddings.create(
-                    model=profile.embedding_model,
-                    input="PodPilot capability probe",
-                )
+                with _model_request_context("capability.embeddings"):
+                    embedding = client.embeddings.create(
+                        model=profile.embedding_model,
+                        input="PodPilot capability probe",
+                    )
                 embeddings = bool(embedding.data and embedding.data[0].embedding)
             except Exception:
                 embeddings = False

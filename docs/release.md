@@ -62,6 +62,11 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Audit queries must filter exact typed fields and rewrite matches to the compact safe projection in
   Loki before transfer; fixtures must prove verbose request/response objects are absent from LogQL
   output and cannot exhaust the bounded HTTP response for a small requested result count.
+- Model-call diagnostics normalize Responses and Chat Completions usage fields, aggregate them per
+  Ask turn, and keep the largest individual input visible without treating summed inputs as one
+  context window. Fixtures must prove request bodies and authorization values are never captured.
+- Model connection tests retain a collapsed latest-probe trace with operation, schema, HTTP status,
+  duration, usage, and a bounded redacted response preview; saving the profile clears the old trace.
 
 Milestone 4 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,

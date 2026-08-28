@@ -9389,12 +9389,22 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
             content="",
         )
         assert probed.json()["status"] == "ready"
+        assert probed.json()["diagnostic_call_count"] == 1
+        diagnostics_page = client.get(
+            "/settings/model?edit=1", headers={"x-forwarded-user": "ada"}
+        )
+        assert "Request diagnostics" in diagnostics_page.text
+        assert "probe.summary" in diagnostics_page.text
+        assert "Authorization headers and request bodies are never stored" in diagnostics_page.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
         profile = db_session.get(ModelProfile, 1)
         assert profile is not None and profile.status == "ready"
         assert "test-api-token" not in profile.capabilities_json
+        probe_diagnostics = json.loads(profile.last_probe_diagnostics_json)
+        assert probe_diagnostics["call_count"] == 1
+        assert probe_diagnostics["calls"][0]["operation"] == "probe.summary"
         assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == 2
     engine.dispose()
 
@@ -9926,3 +9936,57 @@ def test_failed_probe_reason_is_shown_with_deterministic_fallback(tmp_path: Path
         detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ada"})
         assert "Provider request failed (ConnectionError)" in detail.text
         assert "expected monitoring heartbeat" in detail.text
+
+
+def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> None:
+    conversation_id = "00000000-0000-0000-0000-000000000190"
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}",
+            updated_by="ivy",
+        ))
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Token diagnostics",
+            status="active", cluster_ids_json=json.dumps([SYSTEM_CLUSTER_ID]),
+            evidence_json="[]",
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000191",
+            conversation_id=conversation_id, role="assistant", actor=None,
+            content="A bounded answer.", answer_mode="general_guidance",
+            model_diagnostics_json=json.dumps({
+                "call_count": 3,
+                "usage_reported_calls": 2,
+                "largest_input_tokens": 42000,
+                "usage": {
+                    "input_tokens": 50000,
+                    "output_tokens": 1200,
+                    "reasoning_tokens": 700,
+                    "cached_tokens": 10000,
+                    "total_tokens": 51200,
+                },
+                "calls": [],
+            }),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        rendered = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+
+    assert rendered.status_code == 200
+    assert '<details class="message-model-diagnostics">' in rendered.text
+    assert "Model usage" in rendered.text
+    assert "50,000" in rendered.text
+    assert "Largest input" in rendered.text
+    assert "3 model calls; usage reported for 2" in rendered.text

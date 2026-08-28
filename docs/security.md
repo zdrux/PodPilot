@@ -76,6 +76,13 @@ Breakglass roles may request them; Viewer may not. Human application roles do no
 Loki credentials or RBAC. The runtime ServiceAccount performs the read through its existing
 `cluster-logging-audit-view` binding.
 
+Model diagnostics follow the existing conversation and model-management authorization boundaries.
+An Ask turn stores only normalized call metadata and token counts; it does not store provider request
+bodies, response content, authorization headers, or credentials. The conversation owner sees this
+metadata in a collapsed control. Model capability probes are Approver-only, use fixed synthetic
+inputs, and may store a redacted 4,000-character response preview so schema failures can be diagnosed.
+Only the latest probe trace is retained on each profile and saving new profile settings clears it.
+
 Pod-log autonomy does not give the model a free-form log client. Pod LIST evidence
 creates bounded opaque candidate IDs for exact observed namespace/Pod/container
 tuples. The broker resolves those IDs, rejects invented names before a Kubernetes
