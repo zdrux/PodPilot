@@ -53,6 +53,7 @@ class RecordingCompletions:
         schema_name = kwargs.get("response_format", {}).get("json_schema", {}).get("name")
         content = json.dumps(
             {
+                "answer_mode": "evidence_based",
                 "answer": "The supplied Pod is pending.",
                 "citations": ["cluster-pod-1"],
             }
@@ -88,6 +89,7 @@ class InlineCitationCompletions(RecordingCompletions):
         self.requests.append(kwargs)
         content = json.dumps({
             "content": "compatibility field",
+            "answer_mode": "evidence_based",
             "answer": (
                 "The Pod restarted [probe-pods], and its latest log reports successful "
                 "startup [probe-log]. Ignore [invented-evidence]."
@@ -102,6 +104,7 @@ class InlineCitationCompletions(RecordingCompletions):
 class InlineCitationResponses:
     def parse(self, **_kwargs):
         parsed = ConciseAdHocAnswer(
+            answer_mode="evidence_based",
             answer=(
                 "The Pod restarted [probe-pods], and its latest log reports successful "
                 "startup [probe-log]. Ignore [invented-evidence]."
@@ -139,6 +142,7 @@ class EmptyThenAnswerCompletions(RecordingCompletions):
                 choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
             )
         content = json.dumps({
+            "answer_mode": "evidence_based",
             "answer": "The collected Route evidence supports TLS passthrough.",
             "citations": ["cluster-route-1"],
         })
@@ -248,6 +252,28 @@ class InquiryClassificationCompletions(RecordingCompletions):
         )
 
 
+class ConfigurationGuidanceCompletions(RecordingCompletions):
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({
+            "capability": "configuration_guidance",
+            "cardinality": "exact_one",
+            "resource_query": "Deployment",
+            "object_name": "checkout",
+            "namespace": "payments",
+            "requested_fields": ["spec.template.spec.containers"],
+            "label_selector": None,
+            "container": None,
+            "previous_logs": False,
+            "log_range_seconds": None,
+            "needs_object_details": True,
+            "evidence_goal": "Explain how to configure the named Deployment.",
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
 class AuditCapabilityCompletions(RecordingCompletions):
     def create(self, **kwargs):
         self.requests.append(kwargs)
@@ -309,7 +335,7 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["response_format"]["type"] == "json_schema"
     assert request["response_format"]["json_schema"]["strict"] is True
     schema = request["response_format"]["json_schema"]["schema"]
-    assert set(schema["properties"]) == {"answer", "citations"}
+    assert set(schema["properties"]) == {"answer_mode", "answer", "citations"}
     assert "PodPilot handles checks separately" in request["messages"][0]["content"]
     assert "structured citations array" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
@@ -498,6 +524,38 @@ def test_minimal_answer_payload_keeps_bounded_material_details() -> None:
         "kubernetes.io/hostname": "worker-1",
         "node-role.kubernetes.io/worker": "",
     }
+
+
+def test_minimal_answer_payload_includes_bounded_guidance_and_inquiry() -> None:
+    payload = _minimal_answer_payload({
+        "question": "How should I configure it?",
+        "inquiry": {"capability": "configuration_guidance"},
+        "curated_knowledge": [{
+            "title": "Deployment configuration",
+            "content": "Use a bounded declarative configuration example.",
+            "source": "operator guide",
+            "trust": "guidance_only",
+        }],
+    })
+
+    assert payload["inquiry"] == {"capability": "configuration_guidance"}
+    assert payload["curated_knowledge"] == [{
+        "title": "Deployment configuration",
+        "content": "Use a bounded declarative configuration example.",
+        "source": "operator guide",
+        "trust": "guidance_only",
+    }]
+
+
+def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
+    answer = ConciseAdHocAnswer(
+        answer_mode="general_guidance",
+        answer="Guidance only: add the desired field to the object manifest; this was not applied.",
+        citations=[],
+    ).to_adhoc_answer()
+
+    assert answer.answer_mode == "general_guidance"
+    assert answer.cited_evidence_ids == []
 
 
 def test_chat_completions_analyzes_logs_in_a_dedicated_structured_request() -> None:
@@ -705,6 +763,30 @@ def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> 
     assert inquiry.result_limit == 5
 
 
+def test_capability_classifier_selects_generic_named_object_configuration_guidance() -> None:
+    completions = ConfigurationGuidanceCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    inquiry = provider.classify_ad_hoc(profile(), "secret-token", {
+        "question": "How should I configure it for a different image?",
+        "recent_context": [{
+            "role": "assistant",
+            "content": "Deployment payments/checkout is currently available.",
+        }],
+        "selected_clusters": ["Central"],
+    })
+
+    assert inquiry.capability == "configuration_guidance"
+    assert inquiry.mode == "explain"
+    assert inquiry.operation == "configuration_guidance"
+    assert inquiry.resource_query == "Deployment"
+    assert inquiry.object_name == "checkout"
+    assert inquiry.namespace == "payments"
+    assert "configuration_guidance" in completions.requests[0]["messages"][0]["content"]
+
+
 @pytest.mark.parametrize(("operation", "expected_mode"), [
     ("inventory", "inventory"),
     ("object_fields", "investigate"),
@@ -713,6 +795,7 @@ def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> 
     ("metrics", "metrics"),
     ("audit", "audit"),
     ("probe", "investigate"),
+    ("configuration_guidance", "explain"),
     ("explain", "explain"),
 ])
 def test_inquiry_operation_normalizes_redundant_mode(
@@ -1009,7 +1092,7 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     request = completions.requests[0]
     assert request["max_tokens"] == 1400
     assert "Do not include JSON" in request["messages"][0]["content"]
-    assert "Cite supplied evidence IDs" in request["messages"][0]["content"]
+    assert "cite supplied evidence IDs" in request["messages"][0]["content"]
     assert "more than one" in request["messages"][0]["content"]
     assert "do not answer only yes or no" in request["messages"][0]["content"]
     assert len(request["messages"][0]["content"]) < 1000

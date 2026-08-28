@@ -1190,32 +1190,7 @@ def _compact_answer_evidence(
         if max_observations is not None and len(compacted) >= max_observations:
             break
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        provider_data = data
-        if (
-            "kafka" in question.casefold()
-            and re.search(r"(?i)\b(?:prometheus|metrics?|export(?:er|ing)?)\b", question)
-            and str(data.get("kind") or "").casefold() == "kafka"
-        ):
-            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-            spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
-            kafka_spec = spec.get("kafka") if isinstance(spec.get("kafka"), dict) else {}
-            status = data.get("status") if isinstance(data.get("status"), dict) else {}
-            provider_data = {
-                "apiVersion": data.get("apiVersion"),
-                "kind": data.get("kind"),
-                "metadata": {
-                    "namespace": metadata.get("namespace"), "name": metadata.get("name"),
-                },
-                "spec": {"kafka": {
-                    key: kafka_spec.get(key)
-                    for key in ("metricsConfig", "metrics_config", "metrics")
-                    if key in kafka_spec
-                }},
-                "status": {"conditions": status.get("conditions")}
-                if status.get("conditions") is not None else {},
-                "podpilotProjection": "kafka_metrics_configuration",
-            }
-        compact_data = _compact_provider_value(provider_data)
+        compact_data = _compact_provider_value(data)
         if item.get("tool") == "pod_logs" and isinstance(compact_data, dict):
             tail = str(data.get("tail") or "")
             compact_data["tail"] = tail[-6_000:]
@@ -1835,127 +1810,6 @@ def _deterministic_resource_detail_answer(
     return {
         "answer_mode": "evidence_based",
         "content": "\n".join(sections),
-        "citations": citations,
-    }
-
-
-def _deterministic_kafka_metrics_answer(
-    *, evidence: list[dict[str, object]], activity: list[dict[str, object]], question: str,
-) -> dict[str, object] | None:
-    """Report Kafka exporter configuration without asking the model to infer CRD semantics."""
-
-    if not (
-        "kafka" in question.casefold()
-        and re.search(r"(?i)\b(?:prometheus|metrics?|export(?:er|ing)?)\b", question)
-    ):
-        return None
-    current_ids = {
-        str(evidence_id)
-        for entry in activity
-        if entry.get("status") == "succeeded" and entry.get("tool") == "get_resource"
-        for evidence_id in (entry.get("evidence_ids") or [])
-    }
-    observations = [
-        item for item in evidence
-        if str(item.get("id") or "") in current_ids
-        and item.get("tool") == "get_resource"
-        and isinstance(item.get("data"), dict)
-        and str(item["data"].get("kind") or "").casefold() == "kafka"
-    ]
-    if not observations:
-        return None
-
-    # A model may ask for an already-read object using a different resource spelling or API
-    # version. Collection now canonicalizes that request, but keep rendering idempotent for
-    # historical runs and any evidence captured before that guard executes.
-    unique_observations: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
-    for observation in observations:
-        data = observation["data"]
-        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-        api_version = str(data.get("apiVersion") or data.get("api_version") or "")
-        api_group = api_version.partition("/")[0] if "/" in api_version else "core"
-        key = (
-            str(observation.get("cluster_id") or observation.get("cluster_name") or "").casefold(),
-            api_group.casefold(),
-            str(data.get("kind") or "").casefold(),
-            str(metadata.get("namespace") or "").casefold(),
-            str(metadata.get("name") or "").casefold(),
-        )
-        unique_observations[key] = observation
-    observations = list(unique_observations.values())[:12]
-
-    rows: list[str] = []
-    citations: list[str] = []
-    configured_count = 0
-    for observation in observations:
-        data = observation["data"]
-        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-        spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
-        kafka_spec = spec.get("kafka") if isinstance(spec.get("kafka"), dict) else {}
-        metrics_config = kafka_spec.get("metricsConfig")
-        if metrics_config is None:
-            metrics_config = kafka_spec.get("metrics_config")
-        legacy_metrics = kafka_spec.get("metrics")
-        configured = bool(metrics_config) or bool(legacy_metrics)
-        configured_count += int(configured)
-
-        config_reference = "—"
-        if isinstance(metrics_config, dict):
-            value_from = metrics_config.get("valueFrom") or metrics_config.get("value_from")
-            if isinstance(value_from, dict):
-                config_map_ref = (
-                    value_from.get("configMapKeyRef") or value_from.get("config_map_key_ref")
-                )
-                if isinstance(config_map_ref, dict) and config_map_ref.get("name"):
-                    config_reference = f"`ConfigMap/{str(config_map_ref['name'])[:253]}`"
-
-        cluster = str(
-            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
-        )[:253]
-        namespace = str(metadata.get("namespace") or "cluster")[:253]
-        name = str(metadata.get("name") or "unnamed")[:253]
-        exporter = (
-            "Configured in the Kafka CR"
-            if configured else
-            "Not configured in the Kafka CR"
-        )
-        scrape = (
-            "Not verified; exporter configuration does not prove Prometheus is scraping it"
-            if configured else
-            "Not applicable to the managed exporter because it is not configured"
-        )
-        rows.append(
-            f"| {cluster} | `{namespace}/{name}` | {exporter} | {config_reference} | {scrape} |"
-        )
-        citations.append(str(observation["id"]))
-
-    if configured_count == len(observations):
-        conclusion = "Every inspected Kafka resource declares metrics exporter configuration."
-    elif configured_count:
-        conclusion = (
-            f"{configured_count} of {len(observations)} inspected Kafka resources declare "
-            "metrics exporter configuration."
-        )
-    else:
-        conclusion = (
-            "No. None of the inspected Kafka resources declares Strimzi-managed metrics "
-            "exporter configuration."
-        )
-    return {
-        "answer_mode": "evidence_based",
-        "content": "\n".join([
-            "## Kafka metrics export configuration", "", conclusion, "",
-            "| OpenShift cluster | Kafka resource | Exporter configuration | Configuration source | Prometheus scrape status |",
-            "|---|---|---|---|---|",
-            *rows,
-            "",
-            "## Verification boundary", "",
-            (
-                "Exporter configuration and Prometheus scraping are separate checks. This result "
-                "reports the exact Kafka CR configuration; it does not claim that Prometheus is "
-                "scraping an endpoint unless separate monitor or scrape evidence was collected."
-            ),
-        ]),
         "citations": citations,
     }
 
@@ -4537,7 +4391,7 @@ def _validate_inquiry_grounding(
         question,
         *[
             str(item.get("content") or "")
-            for item in conversation[-2:]
+            for item in conversation[-4:]
             if isinstance(item, dict)
         ],
     ]).casefold()
@@ -4593,7 +4447,7 @@ async def _classify_ad_hoc_inquiry(
                 "role": str(item.get("role") or "")[:16],
                 "content": redact_text(str(item.get("content") or ""))[:500],
             }
-            for item in conversation[-2:]
+            for item in conversation[-4:]
         ],
         "selected_clusters": [str(name)[:120] for name in cluster_names[:10]],
     }
@@ -4731,7 +4585,9 @@ def _semantic_resource_read_plan(
 
     if (
         inquiry is None
-        or inquiry.operation not in {"inventory", "object_fields", "logs", "events"}
+        or inquiry.operation not in {
+            "inventory", "object_fields", "logs", "events", "configuration_guidance"
+        }
         or not inquiry.resource_query
     ):
         return None
@@ -4835,7 +4691,9 @@ def _semantic_resource_read_plan(
             ),
             False,
         )
-    exact_one = inquiry.cardinality == "exact_one" or inquiry.operation == "object_fields"
+    exact_one = inquiry.cardinality == "exact_one" or inquiry.operation in {
+        "object_fields", "configuration_guidance"
+    }
     if exact_one:
         if not name:
             return None
@@ -6618,6 +6476,8 @@ def create_app(
                     "model_log_analysis": model_log_analysis,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
+                if inquiry is not None:
+                    answer_context["inquiry"] = inquiry.model_dump()
                 fast_inventory_answer = (
                     _deterministic_inventory_answer(
                         evidence=evidence,
@@ -6979,6 +6839,8 @@ def create_app(
                                 gap.model_dump() for gap in remaining_gaps
                             ],
                         }
+                        if inquiry is not None:
+                            answer_context["inquiry"] = inquiry.model_dump()
                         with capture_raw_model_responses(
                             include_raw_response
                         ) as captured:
@@ -7055,25 +6917,17 @@ def create_app(
                     activity=activity,
                     question=message_text,
                 )
-                kafka_metrics_answer = _deterministic_kafka_metrics_answer(
-                    evidence=evidence,
-                    activity=activity,
-                    question=message_text,
-                )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,
                     evidence=evidence,
                     activity=activity,
                 )
                 route_fallback_needed = (
-                    validated.get("answer_mode") != "evidence_based"
-                    or not validated.get("citations")
+                    validated.get("answer_mode") == "insufficient_evidence"
                     or answer_quality_issue is not None
                 )
                 deterministic_answer = (
                     audit_answer
-                ) or (
-                    kafka_metrics_answer
                 ) or (
                     route_tls_answer if route_fallback_needed else None
                 ) or (

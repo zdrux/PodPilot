@@ -152,6 +152,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   cluster's live safe catalog before normal code issues a bounded LIST; non-inventory modes guide
   the existing planner. Invalid or unavailable classification falls back to deterministic routing,
   and never changes broker, RBAC, sensitive-kind, or mutation policy.
+- Named-object configuration questions now select a generic `configuration_guidance` capability. The
+  classifier can recover exact resource coordinates from the last four chat messages, after which normal
+  code grounds them in the conversation, resolves the resource through live discovery, and performs the
+  same bounded read used for any other object kind. Final answers distinguish unapplied general guidance
+  from cited observed state; Kafka-specific keyword projection and answer replacement have been removed.
 - Inventory classification now guarantees the base catalog-resolved LIST on every selected cluster.
   The classifier's detail flag controls only an optional follow-up phase, so it can no longer suppress
   inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and

@@ -33,7 +33,6 @@ from podpilot_api.main import (
     _deterministic_evidence_fallback_answer,
     _deterministic_audit_answer,
     _deterministic_inventory_answer,
-    _deterministic_kafka_metrics_answer,
     _deterministic_metric_ranking_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
@@ -191,6 +190,45 @@ def test_semantic_classification_is_one_small_call_for_all_selected_clusters() -
     assert result is not None and result.mode == "inventory"
     assert len(provider.calls) == 1
     assert provider.calls[0]["selected_clusters"] == ["Central", "East", "West", "DR"]
+
+
+def test_configuration_guidance_can_resolve_named_object_from_recent_context() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.context = None
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.context = context
+            return InquirySemantics(
+                mode="explain", operation="configuration_guidance",
+                cardinality="exact_one", resource_query="Route",
+                object_name="checkout", namespace="payments",
+                needs_object_details=True,
+                evidence_goal="Explain how to configure the previously named Route.",
+            )
+
+    provider = Provider()
+    conversation = [
+        {"role": "user", "content": "Inspect Route payments/checkout."},
+        {"role": "assistant", "content": "Route payments/checkout terminates TLS at edge."},
+        {"role": "user", "content": "What does that imply?"},
+        {"role": "assistant", "content": "The observed Route uses edge termination."},
+    ]
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token", question="How should I configure it differently?",
+        conversation=conversation, cluster_names=["Central"],
+    ))
+
+    assert inquiry is not None
+    assert inquiry.capability == "configuration_guidance"
+    assert inquiry.object_name == "checkout"
+    assert len(provider.context["recent_context"]) == 4
 
 
 def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
@@ -2997,6 +3035,36 @@ def test_semantic_exact_named_resource_compiles_get_through_live_catalog() -> No
     )]
 
 
+def test_named_object_configuration_guidance_compiles_generic_exact_get() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="explain", operation="configuration_guidance", cardinality="exact_one",
+            resource_query="Deployment", object_name="checkout", namespace="payments",
+            requested_fields=["spec.template.spec.containers"], needs_object_details=True,
+            evidence_goal="Explain how to configure the named Deployment.",
+        ),
+        resource_catalog=[{
+            "resource": "deployments", "apiVersion": "apps/v1", "kind": "Deployment",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="How should I configure it?",
+        conversation=[{
+            "role": "assistant",
+            "content": "The Deployment payments/checkout is currently available.",
+        }],
+        inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.goal_type == "explain"
+    assert plan.intents == [ReadIntent(
+        tool="get_resource", resource="deployments", api_version="apps/v1",
+        kind="Deployment", namespace="payments", name="checkout",
+    )]
+
+
 def test_semantic_named_resource_without_namespace_compiles_grounded_search() -> None:
     compiled = _semantic_resource_read_plan(
         InquirySemantics(
@@ -3455,109 +3523,6 @@ def test_exact_node_label_fallback_renders_metadata_labels() -> None:
     assert "kubernetes.io/hostname" in content
     assert "node-role.kubernetes.io/worker" in content
     assert rendered["citations"] == ["cluster-node-detail"]
-
-
-@pytest.mark.parametrize(
-    ("kafka_spec", "expected"),
-    [
-        ({}, "None of the inspected Kafka resources declares"),
-        (
-            {"metricsConfig": {
-                "type": "jmxPrometheusExporter",
-                "valueFrom": {"configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"}},
-            }},
-            "Every inspected Kafka resource declares metrics exporter configuration",
-        ),
-    ],
-)
-def test_kafka_metrics_answer_separates_exporter_from_scraping(
-    kafka_spec: dict[str, object], expected: str,
-) -> None:
-    rendered = _deterministic_kafka_metrics_answer(
-        question="Do the Kafka clusters have Prometheus metrics exporting set up?",
-        evidence=[{
-            "id": "cluster-kafka-detail", "cluster_name": "Central DEV",
-            "tool": "get_resource",
-            "data": {
-                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
-                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
-                "spec": {"kafka": kafka_spec},
-            },
-        }],
-        activity=[{
-            "tool": "get_resource", "status": "succeeded",
-            "evidence_ids": ["cluster-kafka-detail"],
-        }],
-    )
-
-    assert rendered is not None
-    assert expected in str(rendered["content"])
-    assert "Prometheus scrape status" in str(rendered["content"])
-    assert "does not claim that Prometheus is scraping" in str(rendered["content"])
-    if kafka_spec:
-        assert "`ConfigMap/kafka-metrics`" in str(rendered["content"])
-    else:
-        assert "Not configured in the Kafka CR" in str(rendered["content"])
-    assert rendered["citations"] == ["cluster-kafka-detail"]
-
-
-def test_kafka_metrics_answer_deduplicates_repeated_exact_object_evidence() -> None:
-    data = {
-        "apiVersion": "kafka.strimzi.io/v1", "kind": "Kafka",
-        "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
-        "spec": {"kafka": {"metricsConfig": {
-            "type": "jmxPrometheusExporter",
-            "valueFrom": {"configMapKeyRef": {"name": "kafka-metrics"}},
-        }}},
-    }
-    rendered = _deterministic_kafka_metrics_answer(
-        question="Do the Kafka clusters have Prometheus metrics exporting set up?",
-        evidence=[
-            {"id": "first", "cluster_id": "central", "cluster_name": "Central DEV",
-             "tool": "get_resource", "data": {
-                 **data, "apiVersion": "kafka.strimzi.io/v1beta2",
-             }},
-            {"id": "second", "cluster_id": "central", "cluster_name": "Central DEV",
-             "tool": "get_resource", "data": data},
-        ],
-        activity=[
-            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["first"]},
-            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["second"]},
-        ],
-    )
-
-    assert rendered is not None
-    assert str(rendered["content"]).count("`vc-streams/vc-cluster`") == 1
-    assert rendered["citations"] == ["second"]
-
-
-def test_kafka_metrics_final_context_omits_unrelated_custom_resource_fields() -> None:
-    compacted, metadata = _compact_answer_evidence(
-        question="Does this Kafka cluster have Prometheus metrics exporting set up?",
-        evidence=[{
-            "id": "cluster-kafka-detail", "tool": "get_resource",
-            "data": {
-                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
-                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
-                "spec": {
-                    "kafka": {"replicas": 12, "storage": {"type": "jbod"}},
-                    "zookeeper": {"replicas": 3},
-                },
-                "status": {"listeners": [{"bootstrapServers": "large-payload"}]},
-            },
-        }],
-        activity=[{
-            "tool": "get_resource", "status": "succeeded",
-            "evidence_ids": ["cluster-kafka-detail"],
-        }],
-    )
-
-    assert metadata["observations_sent"] == 1
-    projected = compacted[0]["data"]
-    assert projected["podpilotProjection"] == "kafka_metrics_configuration"
-    assert projected["spec"] == {"kafka": {}}
-    assert "zookeeper" not in projected["spec"]
-    assert projected["status"] == {}
 
 
 def test_kafka_namespace_followup_reuses_prior_evidence_and_honors_named_cluster() -> None:

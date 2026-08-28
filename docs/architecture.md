@@ -216,7 +216,8 @@ only as a compatibility path for older model output.
 Before per-cluster collection, one compact model call interprets the operator's wording
 across the selected cluster set and selects one registered evidence capability:
 resource inventory, resource details, workload logs, Kubernetes Events, cluster metrics,
-cluster audit events, endpoint probe, general investigation, or conceptual explanation.
+cluster audit events, endpoint probe, general investigation, named-object configuration guidance,
+or conceptual explanation.
 The same tool-free contract carries semantic arguments such as resource concept, exact
 namespace/object coordinates, requested fields, time range, outcome, and bounded result count.
 Normal code verifies that exact coordinates occur in the operator's question or recent context,
@@ -235,6 +236,13 @@ silently route it to a different evidence family. If capability selection is una
 repair attempt, the existing bounded deterministic inventory/known-read path remains as a reduced-
 capability compatibility fallback; it cannot authorize broader reads and its absence is not treated
 as evidence that the requested data does not exist.
+For `configuration_guidance`, the model may resolve a resource type, object name, and namespace from
+the current question or the four-message recent-context window. Normal code validates those exact
+coordinates against the operator-visible conversation and the live safe discovery catalog, then reads
+the named object through the same broker. The final model may combine that observed configuration with
+bounded curated knowledge and general Kubernetes/OpenShift knowledge, but must label proposed YAML as
+unapplied guidance and cite evidence for every claim about current cluster state. This path is generic
+across discoverable resource kinds and does not use keyword or sentence-pattern recognizers.
 For `cluster_audit_events`, normal code compiles the grounded namespace, username, operation,
 outcome, period, and limit into a fixed Loki audit query. Loki applies those filters before its
 backward result limit and compact line projection; PodPilot revalidates them while projecting
@@ -266,10 +274,6 @@ router address. Secrets, access-review resources, arbitrary subresources, comman
 and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
-Question-specific deterministic projections may render decisive configuration facts directly from
-exact-object evidence. For Kafka metrics questions, the API reports whether the Kafka CR declares a
-managed metrics exporter separately from whether Prometheus scraping was independently verified,
-instead of asking the model to infer both states from a full custom-resource payload.
 Automatic continuation is limited to mechanical safeguards such as the trust-only retry of the same
 HTTPS probe and bounded recovery from a repeated model stop. Object traversal, log selection, Events,
 metrics, and configuration reads otherwise require a model-selected direction and return through the
@@ -516,11 +520,13 @@ pairs, those fact cards, up to three collection issues, and an optional 500-char
 short retry code.
 Its system prompt covers evidence-only claims, exact citations, multi-cluster attribution, uncertainty,
 no claimed mutation, and optional simple Markdown. For inventory/existence questions it also asks for
-counts and identifiable matches rather than a bare yes/no conclusion. The concise schema contains only `answer` and
-`citations`; recommendation generation and formatting are not part of this call. Single-line bold labels,
+counts and identifiable matches rather than a bare yes/no conclusion. The concise schema contains
+`answer_mode`, `answer`, and `citations`; recommendation generation and formatting are not part of this
+call. `general_guidance` can be uncited, while any observed-state claim remains evidence-gated. Single-line bold labels,
 Unicode bullets, and recognized section headings
-flattened later in a line are normalized into headings and lists before rendering. Domain teaching, graph,
-capability-ledger, findings, knowledge, and raw observation payloads stay server-side. The database and
+flattened later in a line are normalized into headings and lists before rendering. Graph,
+capability-ledger, findings, and raw observation payloads stay server-side. A small bounded
+curated-knowledge projection is included only for explanation and configuration guidance. The database and
 evidence drawer retain the complete redacted bounded observations. A schema-valid
 answer must also pass semantic substance checks: citations plus headings alone are not
 enough, and every current Pod-log observation with a structured finding must be cited. A bounded
