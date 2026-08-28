@@ -230,8 +230,7 @@ class InquiryClassificationCompletions(RecordingCompletions):
     def create(self, **kwargs):
         self.requests.append(kwargs)
         content = json.dumps({
-            "mode": "inventory",
-            "operation": "inventory",
+            "capability": "resource_inventory",
             "cardinality": "collection",
             "resource_query": "Kafka",
             "object_name": None,
@@ -243,6 +242,24 @@ class InquiryClassificationCompletions(RecordingCompletions):
             "log_range_seconds": None,
             "needs_object_details": False,
             "evidence_goal": "Identify Kafka resources by selected cluster.",
+        })
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+
+class AuditCapabilityCompletions(RecordingCompletions):
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        content = json.dumps({
+            "capability": "cluster_audit_events",
+            "cardinality": "collection",
+            "namespace": "spt-llm",
+            "result_limit": 5,
+            "needs_object_details": True,
+            "evidence_goal": "List namespace audit actions.",
+            "audit_operation_scope": "all",
+            "audit_outcome": "all",
         })
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
@@ -659,7 +676,7 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     request = completions.requests[0]
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
-        "mode", "operation", "cardinality", "resource_query", "object_name",
+        "capability", "cardinality", "resource_query", "object_name",
         "namespace", "requested_fields", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
         "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
@@ -668,6 +685,24 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     }
     assert request["max_tokens"] == 1000
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
+    assert "cluster_audit_events" in request["messages"][0]["content"]
+
+
+def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> None:
+    completions = AuditCapabilityCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    inquiry = provider.classify_ad_hoc(profile(), "secret-token", {
+        "question": "show me the last 5 audit actions on the namespace spt-llm",
+        "selected_clusters": ["Central"],
+    })
+
+    assert inquiry.mode == "audit"
+    assert inquiry.operation == "audit"
+    assert inquiry.namespace == "spt-llm"
+    assert inquiry.result_limit == 5
 
 
 @pytest.mark.parametrize(("operation", "expected_mode"), [

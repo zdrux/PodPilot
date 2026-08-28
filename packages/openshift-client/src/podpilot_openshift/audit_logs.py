@@ -110,6 +110,7 @@ class BoundedAuditEventReader:
         if intent.tool != "query_audit_events":
             raise ValueError("BoundedAuditEventReader requires a typed audit event intent.")
         username = intent.audit_username.strip() if intent.audit_username else None
+        namespace = intent.namespace.strip() if intent.namespace else None
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         end = self._clock()
         query = (
@@ -123,6 +124,8 @@ class BoundedAuditEventReader:
         )
         if username:
             query += f'| audit_username=~{_logql_regex_literal(username)} '
+        if namespace:
+            query += f'| audit_namespace=~{_logql_regex_literal(namespace)} '
         query += '| audit_stage="ResponseComplete"'
         if intent.audit_operation_scope == "mutations":
             query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
@@ -152,6 +155,7 @@ class BoundedAuditEventReader:
             events = self._project_events(
                 snapshot,
                 username=username,
+                namespace=namespace,
                 operation_scope=str(intent.audit_operation_scope),
                 outcome=str(intent.audit_outcome),
                 limit=intent.limit,
@@ -191,12 +195,14 @@ class BoundedAuditEventReader:
             summary=(
                 f"Read {len(events)} completed audit event"
                 f"{'s' if len(events) != 1 else ''} "
-                + (f"for user {username}." if username else "across all users.")
+                + (f"for user {username}" if username else "across all users")
+                + (f" in namespace {namespace}." if namespace else ".")
             ),
             source="loki:audit/query/user_actions",
             collected_at=self._clock(),
             data={
                 "username": redact_text(username)[:512] if username else None,
+                "namespace": namespace,
                 "caseInsensitive": bool(username),
                 "operationScope": intent.audit_operation_scope,
                 "outcomeFilter": intent.audit_outcome,
@@ -219,6 +225,7 @@ class BoundedAuditEventReader:
         snapshot: AuditLogEntries,
         *,
         username: str | None,
+        namespace: str | None,
         operation_scope: str,
         outcome: str,
         limit: int,
@@ -253,13 +260,16 @@ class BoundedAuditEventReader:
                 continue
             if outcome == "failed" and successful:
                 continue
+            object_ref = event.get("objectRef") if isinstance(event.get("objectRef"), dict) else {}
+            observed_namespace = str(object_ref.get("namespace") or "")
+            if namespace and observed_namespace.casefold() != namespace.casefold():
+                continue
             audit_id = str(event.get("auditID") or "")[:128]
             identity = audit_id or f"{timestamp_ns}:{verb}:{len(events)}"
             if identity in seen:
                 continue
             seen.add(identity)
             occurred_at = _timestamp(event.get("requestReceivedTimestamp"), timestamp_ns)
-            object_ref = event.get("objectRef") if isinstance(event.get("objectRef"), dict) else {}
             events.append({
                 "timestamp": occurred_at.isoformat() if occurred_at else "unknown",
                 "username": redact_text(observed_username)[:512],
@@ -268,7 +278,7 @@ class BoundedAuditEventReader:
                 "apiVersion": str(object_ref.get("apiVersion") or "")[:128] or None,
                 "resource": str(object_ref.get("resource") or "")[:128] or None,
                 "subresource": str(object_ref.get("subresource") or "")[:128] or None,
-                "namespace": str(object_ref.get("namespace") or "")[:253] or None,
+                "namespace": observed_namespace[:253] or None,
                 "name": str(object_ref.get("name") or "")[:253] or None,
                 "responseCode": response_code or None,
                 "outcome": "succeeded" if successful else "failed",

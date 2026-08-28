@@ -4451,6 +4451,8 @@ def _latest_audit_query_semantics(
         data = item["data"]
         raw_username = data.get("username")
         username = str(raw_username).strip() if raw_username is not None else None
+        raw_namespace = data.get("namespace")
+        namespace = str(raw_namespace).strip() if raw_namespace is not None else None
         operation_scope = str(data.get("operationScope") or "")
         outcome = str(data.get("outcomeFilter") or "")
         if (
@@ -4461,6 +4463,9 @@ def _latest_audit_query_semantics(
             ))
             or operation_scope not in {"all", "mutations", "deletes"}
             or outcome not in {"all", "successful", "failed"}
+            or (namespace is not None and not re.fullmatch(
+                r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", namespace
+            ))
         ):
             continue
         try:
@@ -4472,40 +4477,13 @@ def _latest_audit_query_semantics(
             continue
         return {
             "username": username,
+            "namespace": namespace,
             "operation_scope": operation_scope,
             "outcome": outcome,
             "limit": limit,
             "range_seconds": range_seconds,
         }
     return None
-
-
-_AUDIT_DURATION_FOLLOWUP = re.compile(
-    r"^\s*(?:(?:what|how)\s+about\s+)?(?:in\s+)?(?:the\s+)?"
-    r"(?:last|past|previous|over)?\s*"
-    r"(?P<count>\d{1,4}|one|a|an)\s*"
-    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)"
-    r"\s*[?.!]*\s*$",
-    re.IGNORECASE,
-)
-
-
-def _audit_followup_range_seconds(question: str) -> int | None:
-    """Parse only an unambiguous duration-only continuation, never a new audit target."""
-
-    match = _AUDIT_DURATION_FOLLOWUP.fullmatch(question)
-    if match is None:
-        return None
-    raw_count = match.group("count").lower()
-    count = 1 if raw_count in {"one", "a", "an"} else int(raw_count)
-    unit = match.group("unit").lower()
-    multiplier = (
-        1 if unit in {"s", "sec", "secs", "second", "seconds"} else
-        60 if unit in {"m", "min", "mins", "minute", "minutes"} else
-        3600 if unit in {"h", "hr", "hrs", "hour", "hours"} else
-        86_400
-    )
-    return count * multiplier
 
 
 def _resolve_audit_inquiry(
@@ -4519,30 +4497,15 @@ def _resolve_audit_inquiry(
 
     if prior_audit_query is None:
         return inquiry
-    followup_range = _audit_followup_range_seconds(question)
-    if followup_range is not None:
-        return InquirySemantics(
-            mode="audit",
-            needs_object_details=True,
-            evidence_goal="Repeat the prior audit query over the newly supplied period.",
-            result_limit=prior_audit_query.get("limit"),
-            audit_username=(
-                str(prior_audit_query["username"])
-                if prior_audit_query.get("username") is not None else None
-            ),
-            audit_operation_scope=str(prior_audit_query.get("operation_scope") or "all"),
-            audit_outcome=str(prior_audit_query.get("outcome") or "all"),
-            audit_range_seconds=min(followup_range, max_range_seconds),
-            continues_prior_audit_query=True,
-        )
     if (
         inquiry is None
         or inquiry.mode != "audit"
         or not inquiry.continues_prior_audit_query
     ):
         return inquiry
-    return InquirySemantics.model_validate({
+    merged = InquirySemantics.model_validate({
         **inquiry.model_dump(),
+        "namespace": inquiry.namespace or prior_audit_query.get("namespace"),
         "audit_username": inquiry.audit_username or prior_audit_query.get("username"),
         "audit_operation_scope": (
             inquiry.audit_operation_scope or prior_audit_query.get("operation_scope")
@@ -4553,83 +4516,59 @@ def _resolve_audit_inquiry(
             inquiry.audit_range_seconds or prior_audit_query.get("range_seconds")
         ),
     })
-
-
-def _deterministic_audit_inquiry(question: str) -> InquirySemantics | None:
-    """Recover explicit audit-log semantics without treating cluster data as instructions."""
-
-    if not re.search(
-        r"(?i)\b(?:audit\s+(?:logs?|events?|trail|records?|activity)|"
-        r"according\s+to\s+(?:the\s+)?audit\s+logs?)\b",
-        question,
-    ):
-        return None
-    username_match = re.search(
-        r"(?i)\b(?:by(?:\s+user)?|for\s+user)\s+[`\"']?"
-        r"(?P<username>[A-Za-z0-9][A-Za-z0-9:_.@/\-]{0,511})",
-        question,
-    )
-    limit_match = re.search(
-        r"(?i)\b(?:last|latest|recent)\s+(?P<limit>\d{1,3})\b",
-        question,
-    )
-    duration_match = re.search(
-        r"(?i)\b(?:last|past|previous|over|within)\s+"
-        r"(?P<count>\d{1,4})\s*"
-        r"(?P<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\b",
-        question,
-    )
-    range_seconds: int | None = None
-    if duration_match is not None:
-        count = int(duration_match.group("count"))
-        unit = duration_match.group("unit").casefold()
-        multiplier = (
-            1 if unit.startswith("sec") else
-            60 if unit.startswith("min") else
-            3600 if unit.startswith("h") else
-            86_400
+    return merged.model_copy(update={
+        "audit_range_seconds": min(
+            int(merged.audit_range_seconds or prior_audit_query.get("range_seconds") or 300),
+            max_range_seconds,
         )
-        range_seconds = min(7_776_000, max(300, count * multiplier))
-    delete_requested = bool(re.search(
-        r"(?i)\b(?:deletes?|deleted|deleting|deletecollections?)\b",
+    })
+
+
+def _validate_inquiry_grounding(
+    inquiry: InquirySemantics,
+    *,
+    question: str,
+    conversation: list[dict[str, str]],
+    prior_audit_query: dict[str, object] | None,
+) -> None:
+    """Reject model-invented exact coordinates without interpreting operator wording."""
+
+    grounding_text = "\n".join([
         question,
-    ))
-    mutation_requested = bool(re.search(
-        r"(?i)\b(?:mutations?|changes?|writes?|creates?|created|creating|"
-        r"patch(?:es|ed|ing)?|updates?|updated|updating)\b",
-        question,
-    ))
-    failed_requested = bool(re.search(
-        r"(?i)\b(?:failed|failures?|denied|rejected|unsuccessful)\b",
-        question,
-    ))
-    successful_requested = bool(re.search(
-        r"(?i)\b(?:successful|succeeded|allowed|completed)\b",
-        question,
-    ))
-    return InquirySemantics(
-        mode="audit",
-        operation="audit",
-        cardinality="collection",
-        needs_object_details=True,
-        evidence_goal="List bounded cluster audit operations matching the supplied filters.",
-        result_limit=(
-            min(100, max(1, int(limit_match.group("limit"))))
-            if limit_match is not None else None
-        ),
-        audit_username=(username_match.group("username") if username_match else None),
-        audit_operation_scope=(
-            "mutations" if mutation_requested else
-            "deletes" if delete_requested else
-            "all"
-        ),
-        audit_outcome=(
-            "failed" if failed_requested and not successful_requested else
-            "successful" if successful_requested and not failed_requested else
-            "all"
-        ),
-        audit_range_seconds=range_seconds,
+        *[
+            str(item.get("content") or "")
+            for item in conversation[-2:]
+            if isinstance(item, dict)
+        ],
+    ]).casefold()
+    prior_username = (
+        str(prior_audit_query.get("username") or "").casefold()
+        if prior_audit_query and inquiry.continues_prior_audit_query else ""
     )
+    prior_namespace = (
+        str(prior_audit_query.get("namespace") or "").casefold()
+        if prior_audit_query and inquiry.continues_prior_audit_query else ""
+    )
+    for field_name in ("object_name", "namespace", "container", "label_selector"):
+        value = getattr(inquiry, field_name)
+        inherited_audit_namespace = (
+            field_name == "namespace"
+            and inquiry.mode == "audit"
+            and value
+            and value.casefold() == prior_namespace
+        )
+        if value and value.casefold() not in grounding_text and not inherited_audit_namespace:
+            raise ModelProviderError(
+                f"Capability selection invented an ungrounded {field_name}."
+            )
+    if (
+        inquiry.audit_username
+        and inquiry.audit_username.casefold() not in grounding_text
+        and inquiry.audit_username.casefold() != prior_username
+    ):
+        raise ModelProviderError(
+            "Capability selection invented an ungrounded audit_username."
+        )
 
 
 async def _classify_ad_hoc_inquiry(
@@ -4644,10 +4583,9 @@ async def _classify_ad_hoc_inquiry(
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
 
-    audit_fallback = _deterministic_audit_inquiry(question)
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
-        return audit_fallback
+        return None
     context = {
         "question": redact_text(question)[:1000],
         "recent_context": [
@@ -4664,44 +4602,25 @@ async def _classify_ad_hoc_inquiry(
     for attempt in range(1, 3):
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
-            if audit_fallback is None:
-                return classified
-            if classified.mode != "audit":
-                LOGGER.warning(
-                    "podpilot.adhoc.classification_overridden expected=audit actual=%s",
-                    classified.mode,
-                )
-                return audit_fallback
-            return classified.model_copy(update={
-                "operation": classified.operation or "audit",
-                "cardinality": (
-                    classified.cardinality
-                    if classified.cardinality != "unknown" else "collection"
-                ),
-                "result_limit": classified.result_limit or audit_fallback.result_limit,
-                "audit_username": classified.audit_username or audit_fallback.audit_username,
-                "audit_operation_scope": (
-                    classified.audit_operation_scope or audit_fallback.audit_operation_scope
-                ),
-                "audit_outcome": classified.audit_outcome or audit_fallback.audit_outcome,
-                "audit_range_seconds": (
-                    classified.audit_range_seconds or audit_fallback.audit_range_seconds
-                ),
-            })
+            _validate_inquiry_grounding(
+                classified,
+                question=question,
+                conversation=conversation,
+                prior_audit_query=prior_audit_query,
+            )
+            return classified
         except ModelProviderError as exc:
             LOGGER.warning(
                 "podpilot.adhoc.classification_failed attempt=%s error=%s", attempt, str(exc)
             )
             if attempt == 1:
                 context["structured_response_retry"] = (
-                    "Return one schema-valid semantic inquiry object. Use only grounded object_name "
-                    "and namespace coordinates from the supplied question or recent context. Preserve "
-                    "prior_audit_query for an elliptical audit follow-up and override only explicitly "
-                    "changed fields."
+                    "Return one schema-valid registered capability selection. Correct the prior error: "
+                    f"{str(exc)[:300]} Use only exact coordinates grounded in the supplied question or "
+                    "recent context. Preserve prior_audit_query for an elliptical audit follow-up and "
+                    "override only explicitly changed fields."
                 )
-    if audit_fallback is not None:
-        LOGGER.info("podpilot.adhoc.classification_fallback mode=audit")
-    return audit_fallback
+    return None
 
 
 def _semantic_metric_read_plan(
@@ -4715,8 +4634,16 @@ def _semantic_metric_read_plan(
         or inquiry.metric_query not in {
             "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace"
         }
-        or inquiry.metric_scope != "cluster"
+        or inquiry.metric_scope not in {"cluster", "namespace", "deployment", "node"}
     ):
+        return None
+    if inquiry.metric_scope == "namespace" and not inquiry.namespace:
+        return None
+    if inquiry.metric_scope == "deployment" and not (
+        inquiry.namespace and inquiry.object_name
+    ):
+        return None
+    if inquiry.metric_scope == "node" and not inquiry.object_name:
         return None
     limit = inquiry.result_limit or 10
     range_seconds = inquiry.metric_range_seconds or 3600
@@ -4729,12 +4656,15 @@ def _semantic_metric_read_plan(
         ReadPlan(
             goal_type="compare",
             scope_summary=(
-                f"Rank the top {limit} {metric_label} across this cluster."
+                f"Rank the top {limit} {metric_label} for the requested "
+                f"{inquiry.metric_scope} scope."
             ),
             intents=[ReadIntent(
                 tool="query_metrics",
                 metric=inquiry.metric_query,
-                metric_scope="cluster",
+                metric_scope=inquiry.metric_scope,
+                namespace=inquiry.namespace,
+                name=inquiry.object_name,
                 range_seconds=range_seconds,
                 limit=limit,
             )],
@@ -4763,11 +4693,12 @@ def _semantic_audit_read_plan(
         "mutations": "mutation audit operations",
         "deletes": "delete audit operations",
     }[operation_scope]
+    target_label = f" in namespace {inquiry.namespace}" if inquiry.namespace else ""
     return (
         ReadPlan(
             goal_type="logs",
             scope_summary=(
-                f"List the last {limit} {operation_label} "
+                f"List the last {limit} {operation_label}{target_label} "
                 + (
                     f"for user {inquiry.audit_username}."
                     if inquiry.audit_username else "across all users."
@@ -4775,6 +4706,7 @@ def _semantic_audit_read_plan(
             ),
             intents=[ReadIntent(
                 tool="query_audit_events",
+                namespace=inquiry.namespace,
                 audit_username=inquiry.audit_username,
                 audit_operation_scope=operation_scope,
                 audit_outcome=outcome,
@@ -5000,48 +4932,32 @@ async def _collect_bounded_cluster_reads(
         default_limit=settings.adhoc_audit_default_limit,
         initial_range_seconds=settings.adhoc_audit_initial_range_seconds,
     )
-    known_plan = plan_known_read(
-        question,
-        inventory_limit=settings.adhoc_inventory_max_objects,
-        alert_name=alert_name,
-        alert_labels=alert_labels,
-    )
-    # Keep deterministic compilation only for terminal, unambiguous inventory or
-    # metric requests. Troubleshooting and object traversal remain model-directed.
-    known_metric_plan = (
-        known_plan
-        if known_plan is not None
-        and known_plan[1]
-        and known_plan[0].goal_type == "compare"
-        else None
-    )
-    deterministic_plan = semantic_audit_plan or known_metric_plan or semantic_metric_plan or (
-        (
-            known_plan[0],
-            False
-            if inquiry is not None
-            and inquiry.mode == "inventory"
-            and inquiry.needs_object_details
-            else known_plan[1],
+    # A valid model selection owns semantic routing; normal code owns its fixed,
+    # bounded compilation. The older known-read path remains only when capability
+    # selection is unavailable, preserving reduced operation during model failure.
+    legacy_fallback = (
+        plan_known_read(
+            question,
+            inventory_limit=settings.adhoc_inventory_max_objects,
+            alert_name=alert_name,
+            alert_labels=alert_labels,
         )
-        if known_plan is not None
-        and known_plan[1]
-        and (
-            inquiry is None
-            or inquiry.mode == "inventory"
-            or known_plan[0].goal_type != "inventory"
-        )
-        else None
+        if inquiry is None else None
     )
-    # A single non-terminal read compiled from an exact operator coordinate (for
-    # example, searching Route.spec.host for a supplied URL) is retained only as
-    # a recovery anchor. It is never the initial troubleshooting plan and it does
-    # not prescribe any traversal after the first observation.
+    deterministic_plan = (
+        semantic_audit_plan
+        or semantic_metric_plan
+        or (
+            legacy_fallback
+            if legacy_fallback is not None and legacy_fallback[1]
+            else None
+        )
+    )
     recovery_anchor_plan = (
-        known_plan[0]
-        if known_plan is not None
-        and not known_plan[1]
-        and len(known_plan[0].intents) == 1
+        legacy_fallback[0]
+        if legacy_fallback is not None
+        and not legacy_fallback[1]
+        and len(legacy_fallback[0].intents) == 1
         else None
     )
     catalog_entries: list[dict[str, object]] = []
@@ -5052,7 +4968,9 @@ async def _collect_bounded_cluster_reads(
             await progress("discovering", "Discovering available cluster resources.")
         try:
             catalog_entries = await run_in_threadpool(
-                catalog_reader, query=question, limit=120
+                catalog_reader,
+                query=(inquiry.resource_query if inquiry and inquiry.resource_query else question),
+                limit=120,
             )
             catalog_available = True
         except ReadOnlyExplorerError as exc:
@@ -5794,7 +5712,8 @@ async def _collect_bounded_cluster_reads(
                     f"{intent.namespace + '/' if intent.namespace else ''}{intent.name or '*'} "
                     f"range={intent.range_seconds}s"
                     if intent.tool == "query_metrics" else
-                    f"audit user={intent.audit_username or '*'} scope={intent.audit_operation_scope} "
+                    f"audit namespace={intent.namespace or '*'} user={intent.audit_username or '*'} "
+                    f"scope={intent.audit_operation_scope} "
                     f"outcome={intent.audit_outcome} range={intent.range_seconds}s"
                     if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"

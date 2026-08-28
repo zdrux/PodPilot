@@ -140,6 +140,29 @@ def test_cluster_wide_delete_query_filters_in_loki_and_returns_all_users() -> No
     assert result.observations[0].summary.endswith("across all users.")
 
 
+def test_namespace_audit_query_filters_in_loki_and_projection() -> None:
+    payments = _event("alice", verb="patch")
+    other = json.loads(_event("bob", verb="patch"))
+    other["objectRef"]["namespace"] = "other"
+    source = FakeAuditSource((
+        ("1787831940000000000", payments),
+        ("1787831930000000000", json.dumps(other)),
+    ))
+
+    result = BoundedAuditEventReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_audit_events", namespace="payments",
+        audit_operation_scope="all", audit_outcome="all", limit=5,
+    ))
+
+    query = str(source.calls[0]["logql"])
+    assert r'audit_namespace=~"(?i)^payments$"' in query
+    assert [event["namespace"] for event in result.observations[0].data["events"]] == [
+        "payments"
+    ]
+    assert result.observations[0].data["namespace"] == "payments"
+    assert result.observations[0].summary.endswith("in namespace payments.")
+
+
 def test_last_n_query_expands_backward_until_it_finds_requested_events() -> None:
     class ExpandingSource:
         def __init__(self) -> None:

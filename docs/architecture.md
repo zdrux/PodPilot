@@ -213,12 +213,14 @@ apiVersion, Kind, namespaced scope, and advertised read verb. Unambiguous
 inventory questions compile directly from that live catalog so a model cannot
 omit the only required intent. The small built-in canonicalization table remains
 only as a compatibility path for older model output.
-Before per-cluster collection, one compact semantic-classification call interprets the
-operator's wording across the selected cluster set. It returns only a coarse mode
-(`inventory`, `investigate`, `logs`, `metrics`, or `explain`), a short resource concept,
-whether exact object details are needed, and the evidence goal. For a top-consumer metric request,
-the same small contract may additionally identify CPU or memory, cluster scope, and the requested
-rank count. Normal code compiles that semantic result into one registered query per selected cluster
+Before per-cluster collection, one compact model call interprets the operator's wording
+across the selected cluster set and selects one registered evidence capability:
+resource inventory, resource details, workload logs, Kubernetes Events, cluster metrics,
+cluster audit events, endpoint probe, general investigation, or conceptual explanation.
+The same tool-free contract carries semantic arguments such as resource concept, exact
+namespace/object coordinates, requested fields, time range, outcome, and bounded result count.
+Normal code verifies that exact coordinates occur in the operator's question or recent context,
+then compiles the selected capability into one registered query per selected cluster
 and renders the evidence directly as a multi-cluster table. This lets the model handle
 unfamiliar phrasing without maintaining a growing question-pattern list. For inventory mode,
 normal code always resolves the model's resource concept against each cluster's live safe catalog and
@@ -226,9 +228,17 @@ runs the same bounded LIST. A request for object details may open a subsequent m
 phase, but it cannot suppress that base inventory collection. Successful inventory evidence is always
 rendered by server code even if the optional detail phase or final model response fails. For other modes
 the semantic contract pins the planner's goal but
-does not select tools. Classification cannot authorize a read, supply coordinates, weaken RBAC,
-or bypass sensitivity policy. If it is unavailable or invalid, existing deterministic recognition
-and the ordinary planner remain the fallback.
+does not select tools. Capability selection cannot authorize a read, invent an exact coordinate,
+weaken RBAC, or bypass sensitivity policy. Invalid selections receive one focused repair attempt;
+PodPilot does not use wording-specific recognizers to override a valid capability selection or
+silently route it to a different evidence family. If capability selection is unavailable after its
+repair attempt, the existing bounded deterministic inventory/known-read path remains as a reduced-
+capability compatibility fallback; it cannot authorize broader reads and its absence is not treated
+as evidence that the requested data does not exist.
+For `cluster_audit_events`, normal code compiles the grounded namespace, username, operation,
+outcome, period, and limit into a fixed Loki audit query. Loki applies those filters before its
+backward result limit and compact line projection; PodPilot revalidates them while projecting
+events and never sends model-authored LogQL.
 The model owns troubleshooting direction, but selects rather than authors each ordinary read.
 Normal code derives up to twelve opaque actions from exact operator coordinates, observed
 relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches

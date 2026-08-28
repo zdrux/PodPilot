@@ -32,7 +32,6 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_audit_answer,
-    _deterministic_audit_inquiry,
     _deterministic_inventory_answer,
     _deterministic_kafka_metrics_answer,
     _deterministic_metric_ranking_answer,
@@ -235,7 +234,7 @@ def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_q
     assert "structured_response_retry" in provider.calls[1]
 
 
-def test_explicit_audit_question_uses_grounded_fallback_after_invalid_classification() -> None:
+def test_invalid_capability_selection_does_not_use_wording_specific_fallback() -> None:
     class Provider:
         def __init__(self) -> None:
             self.calls = 0
@@ -258,23 +257,83 @@ def test_explicit_audit_question_uses_grounded_fallback_after_invalid_classifica
     ))
 
     assert provider.calls == 2
-    assert result == _deterministic_audit_inquiry(
-        "show the last 10 mutation actions by druciare-adm according to the audit log"
+    assert result is None
+
+
+def test_capability_selection_retries_and_rejects_ungrounded_coordinate() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(dict(context))
+            return InquirySemantics(
+                mode="audit", operation="audit", namespace="invented-namespace",
+                audit_operation_scope="all", audit_outcome="all",
+                needs_object_details=True, evidence_goal="Read audit actions.",
+            )
+
+    provider = Provider()
+    result = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="show me recent audit actions",
+        conversation=[], cluster_names=["Central"],
+    ))
+
+    assert result is None
+    assert len(provider.contexts) == 2
+    assert "ungrounded namespace" in provider.contexts[1]["structured_response_retry"]
+
+
+def test_model_selected_audit_actions_request_compiles_grounded_namespace() -> None:
+    class Provider:
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="audit", operation="audit", cardinality="collection",
+                namespace="spt-llm", result_limit=5,
+                audit_operation_scope="all", audit_outcome="all",
+                needs_object_details=True,
+                evidence_goal="List the requested namespace audit actions.",
+            )
+
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="show me the last 5 audit actions on the namespace spt-llm",
+        conversation=[], cluster_names=["Central"],
+    ))
+
+    compiled = _semantic_audit_read_plan(
+        inquiry, default_limit=20, initial_range_seconds=3600,
     )
-    assert result is not None
-    assert result.mode == "audit"
-    assert result.operation == "audit"
-    assert result.result_limit == 10
-    assert result.audit_username == "druciare-adm"
-    assert result.audit_operation_scope == "mutations"
+    assert compiled is not None
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_audit_events", namespace="spt-llm",
+        audit_operation_scope="all", audit_outcome="all",
+        audit_search_until_limit=True, range_seconds=3600, limit=5,
+    )]
 
 
-def test_explicit_audit_fallback_without_username_queries_all_users() -> None:
-    inquiry = _deterministic_audit_inquiry(
-        "show me the last 10 delete actions according to the audit log"
+def test_model_selected_audit_capability_without_username_queries_all_users() -> None:
+    inquiry = InquirySemantics(
+        mode="audit", operation="audit", cardinality="collection",
+        needs_object_details=True,
+        evidence_goal="List bounded cluster audit operations matching the supplied filters.",
+        result_limit=10, audit_operation_scope="deletes", audit_outcome="all",
     )
 
-    assert inquiry is not None and inquiry.mode == "audit"
+    assert inquiry.mode == "audit"
     assert inquiry.audit_username is None
     assert inquiry.audit_operation_scope == "deletes"
     compiled = _semantic_audit_read_plan(
@@ -1957,22 +2016,27 @@ def test_semantic_audit_plan_compiles_missing_username_as_cluster_wide() -> None
     assert plan.intents[0].audit_username is None
 
 
-def test_latest_cluster_wide_audit_query_can_be_reused_by_duration_followup() -> None:
+def test_model_selected_audit_followup_reuses_latest_cluster_wide_query() -> None:
     prior = _latest_audit_query_semantics([{
         "id": "audit-old", "tool": "query_audit_events", "data": {
-            "username": None, "operationScope": "deletes",
+            "username": None, "namespace": "payments", "operationScope": "deletes",
             "outcomeFilter": "all", "limit": 10, "rangeSeconds": 3600,
         },
     }])
 
     resolved = _resolve_audit_inquiry(
         question="what about in the last 24hrs",
-        inquiry=None,
+        inquiry=InquirySemantics(
+            mode="audit", operation="audit", needs_object_details=True,
+            evidence_goal="Repeat the prior audit query over 24 hours.",
+            audit_range_seconds=86_400, continues_prior_audit_query=True,
+        ),
         prior_audit_query=prior,
         max_range_seconds=86_400,
     )
 
     assert resolved is not None
+    assert resolved.namespace == "payments"
     assert resolved.audit_username is None
     assert resolved.audit_operation_scope == "deletes"
     assert resolved.result_limit == 10
@@ -2000,7 +2064,7 @@ def test_audit_last_n_starts_bounded_search_and_expands_until_limit() -> None:
     assert intent.audit_search_until_limit is True
 
 
-def test_duration_only_audit_followup_inherits_prior_query_and_overrides_range() -> None:
+def test_model_selected_duration_followup_inherits_prior_audit_filters() -> None:
     prior = _latest_audit_query_semantics([{
         "id": "audit-old", "tool": "query_audit_events", "data": {
             "username": "druciare-adm", "operationScope": "mutations",
@@ -2010,7 +2074,11 @@ def test_duration_only_audit_followup_inherits_prior_query_and_overrides_range()
 
     resolved = _resolve_audit_inquiry(
         question="what about in the last 24hrs",
-        inquiry=None,
+        inquiry=InquirySemantics(
+            mode="audit", operation="audit", needs_object_details=True,
+            evidence_goal="Repeat the prior audit query over 24 hours.",
+            audit_range_seconds=86_400, continues_prior_audit_query=True,
+        ),
         prior_audit_query=prior,
         max_range_seconds=86_400,
     )
@@ -3023,7 +3091,7 @@ def test_semantic_event_request_compiles_related_object_search() -> None:
     )]
 
 
-def test_exact_node_label_request_executes_get_despite_inventory_classification() -> None:
+def test_exact_node_label_capability_executes_grounded_get() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             raise AssertionError("An exact Node label request must not enter open planning.")
@@ -3070,15 +3138,17 @@ def test_exact_node_label_request_executes_get_despite_inventory_classification(
             '"devocp4cmspc-wtlkr-worker-canadacentral1-vk96r"'
         ),
         conversation=[], existing_evidence=[],
-        # Reproduce the coarse classification that previously triggered a LIST.
         inquiry=InquirySemantics(
-            mode="inventory", resource_query="Node", needs_object_details=False,
+            mode="investigate", operation="object_fields", cardinality="exact_one",
+            resource_query="Node",
+            object_name="devocp4cmspc-wtlkr-worker-canadacentral1-vk96r",
+            requested_fields=["metadata.labels"], needs_object_details=True,
             evidence_goal="Show the requested Node labels.",
         ),
     ))
 
     assert explorer.calls == [ReadIntent(
-        tool="get_resource", resource="nodes", api_version="v1", kind="Node",
+        tool="get_resource", resource="nodes.core", api_version="v1", kind="Node",
         name="devocp4cmspc-wtlkr-worker-canadacentral1-vk96r",
     )]
     assert result.activity[0]["tool"] == "get_resource"

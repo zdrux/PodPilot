@@ -260,6 +260,10 @@ class ReadIntent(BaseModel):
         elif self.metric or self.metric_scope:
             raise ValueError("metric and metric_scope are valid only for query_metrics")
         if self.tool == "query_audit_events":
+            if self.namespace and not _METRIC_IDENTIFIER.fullmatch(self.namespace):
+                raise ValueError(
+                    "audit namespace must be an exact Kubernetes namespace identifier"
+                )
             if self.audit_username and any(
                 ord(character) < 32 or ord(character) == 127
                 for character in self.audit_username
