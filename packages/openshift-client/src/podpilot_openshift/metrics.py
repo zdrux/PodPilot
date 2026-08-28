@@ -75,7 +75,7 @@ class ThanosQueryClient:
         timeout_seconds: float = 8.0,
         max_series: int = 20,
         max_points_per_series: int = 300,
-        max_response_bytes: int = 65_536,
+        max_response_bytes: int = 1_048_576,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if (token_path is None) == (token is None):

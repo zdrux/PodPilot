@@ -102,6 +102,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
     assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
     assert runtime["data"]["adhoc_metrics_max_points_per_series"] == "300"
+    assert runtime["data"]["adhoc_metrics_max_response_bytes"] == "1048576"
     assert runtime["data"]["loki_timeout_seconds"] == "30"
     assert runtime["data"]["adhoc_audit_initial_range_seconds"] == "3600"
     assert runtime["data"]["adhoc_audit_max_range_seconds"] == "86400"
@@ -139,6 +140,13 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES"
     )
     assert metric_points["valueFrom"]["configMapKeyRef"]["key"] == "adhoc_metrics_max_points_per_series"
+    metric_bytes = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_RESPONSE_BYTES"
+    )
+    assert metric_bytes["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_metrics_max_response_bytes",
+    }
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {

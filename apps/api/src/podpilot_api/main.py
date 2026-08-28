@@ -57,10 +57,12 @@ from podpilot_api.models import (
     KnowledgeDocument,
     ModelProfile,
     RemediationAction,
+    UserModelPreference,
 )
 from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.adhoc import (
+    DEFAULT_METRIC_RANGE_SECONDS,
     InvestigationGap,
     PodLogCandidate,
     ReadIntent,
@@ -260,6 +262,80 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         max_input_tokens=profile.max_input_tokens,
         reasoning_effort=profile.reasoning_effort,
     )
+
+
+def _profile_reasoning_efforts(profile: ModelProfile | None) -> tuple[str, ...]:
+    if profile is None:
+        return ()
+    try:
+        configured = json.loads(profile.reasoning_efforts_json or "[]")
+    except (TypeError, ValueError):
+        configured = []
+    selected = {
+        str(item) for item in configured
+        if isinstance(item, str) and item in REASONING_EFFORTS
+    }
+    # Profiles saved before the multi-choice setting retain their prior behavior.
+    if profile.reasoning_effort in REASONING_EFFORTS:
+        selected.add(profile.reasoning_effort)
+    return tuple(effort for effort in REASONING_EFFORTS if effort in selected)
+
+
+def _preferred_reasoning_effort(
+    db_session: Session, username: str, profile: ModelProfile | None
+) -> str | None:
+    if profile is None:
+        return None
+    supported = set(_profile_reasoning_efforts(profile))
+    preference = db_session.scalar(
+        select(UserModelPreference).where(
+            UserModelPreference.username == username,
+            UserModelPreference.model_profile_id == profile.id,
+        )
+    )
+    if preference is not None:
+        if preference.reasoning_effort is None:
+            return None
+        if preference.reasoning_effort in supported:
+            return preference.reasoning_effort
+    return profile.reasoning_effort if profile.reasoning_effort in supported else None
+
+
+def _save_reasoning_preference(
+    db_session: Session,
+    *,
+    username: str,
+    profile: ModelProfile | None,
+    submitted: str,
+) -> str | None:
+    if profile is None:
+        if submitted not in {"", "provider_default"}:
+            raise HTTPException(status_code=409, detail="No active model supports that reasoning level.")
+        return None
+    supported = set(_profile_reasoning_efforts(profile))
+    reasoning_effort = None if submitted in {"", "provider_default"} else submitted
+    if reasoning_effort is not None and reasoning_effort not in supported:
+        raise HTTPException(
+            status_code=422,
+            detail="That reasoning level is not enabled for the active model.",
+        )
+    preference = db_session.scalar(
+        select(UserModelPreference).where(
+            UserModelPreference.username == username,
+            UserModelPreference.model_profile_id == profile.id,
+        )
+    )
+    if preference is None:
+        preference = UserModelPreference(
+            username=username,
+            model_profile_id=profile.id,
+            reasoning_effort=reasoning_effort,
+        )
+        db_session.add(preference)
+    else:
+        preference.reasoning_effort = reasoning_effort
+        preference.updated_at = datetime.now(timezone.utc)
+    return reasoning_effort
 
 
 def _active_profile(db_session: Session) -> ModelProfile | None:
@@ -5004,7 +5080,11 @@ def _semantic_metric_read_plan(
         if "node" in request.group_by and scope not in {"node", "node_role"}:
             return None
         metric_scope = "workload" if scope == "workload" else scope
-        range_seconds = request.range_seconds or inquiry.metric_range_seconds or 3600
+        range_seconds = (
+            request.range_seconds
+            or inquiry.metric_range_seconds
+            or DEFAULT_METRIC_RANGE_SECONDS
+        )
         limit = request.result_limit or inquiry.result_limit or 10
         intents = [ReadIntent(
             tool="query_metrics",
@@ -5058,7 +5138,7 @@ def _semantic_metric_read_plan(
     if inquiry.metric_scope in {"node", "node_role"} and not inquiry.object_name:
         return None
     limit = inquiry.result_limit or 10
-    range_seconds = inquiry.metric_range_seconds or 3600
+    range_seconds = inquiry.metric_range_seconds or DEFAULT_METRIC_RANGE_SECONDS
     metric_label = {
         "top_cpu_consumers": "pod CPU consumers",
         "top_memory_consumers": "pod memory consumers",
@@ -6517,6 +6597,7 @@ def create_app(
                 timeout_seconds=app_settings.thanos_timeout_seconds,
                 max_series=app_settings.thanos_max_series,
                 max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+                max_response_bytes=app_settings.adhoc_metrics_max_response_bytes,
             ),
             max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
             max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
@@ -6580,6 +6661,7 @@ def create_app(
                     timeout_seconds=app_settings.thanos_timeout_seconds,
                     max_series=app_settings.thanos_max_series,
                     max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+                    max_response_bytes=app_settings.adhoc_metrics_max_response_bytes,
                 ),
                 max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
                 max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
@@ -6723,6 +6805,7 @@ def create_app(
     async def _execute_adhoc_turn(
         *, engine, username: str, conversation_id: str, message_text: str,
         run_id: str, include_raw_response: bool = False,
+        reasoning_effort: str | None = None,
         followup_action: dict[str, object] | None = None,
         progress: ProgressReporter | None = None,
     ) -> str:
@@ -6802,6 +6885,15 @@ def create_app(
             profile_snapshot = (
                 _profile_config(profile) if _profile_is_usable(profile) else None
             )
+            if profile_snapshot is not None:
+                profile_snapshot = replace(
+                    profile_snapshot,
+                    reasoning_effort=(
+                        reasoning_effort
+                        if reasoning_effort in _profile_reasoning_efforts(profile)
+                        else None
+                    ),
+                )
             profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
@@ -7969,6 +8061,7 @@ def create_app(
             conversation_id = run.conversation_id
             message_text = run.message_text
             include_raw_response = run.include_raw_response
+            reasoning_effort = run.reasoning_effort
             followup_action = json.loads(run.followup_action_json or "{}")
 
         async def report(phase: str, message: str) -> None:
@@ -7984,6 +8077,7 @@ def create_app(
                         message_text=message_text,
                         run_id=run_id,
                         include_raw_response=include_raw_response,
+                        reasoning_effort=reasoning_effort,
                         followup_action=followup_action or None,
                         progress=report,
                     ),
@@ -8082,6 +8176,10 @@ def create_app(
                 status_code=409,
                 detail="Wait for the current PodPilot investigation to finish.",
             )
+        active_profile = _active_profile(db_session)
+        reasoning_effort = _preferred_reasoning_effort(
+            db_session, username, active_profile
+        )
         run_id = str(uuid4())
         events = [{
             "seq": 0,
@@ -8105,6 +8203,7 @@ def create_app(
             created_by=username,
             message_text=message_text,
             include_raw_response=include_raw_response,
+            reasoning_effort=reasoning_effort,
             followup_action_json=json.dumps(followup_action or {}, sort_keys=True),
             status="queued",
             phase="queued",
@@ -8119,6 +8218,7 @@ def create_app(
                 "run_id": run_id,
                 "cluster_ids": json.loads(conversation.cluster_ids_json or "[]"),
                 "raw_response_requested": include_raw_response,
+                "reasoning_effort": reasoning_effort or "provider_default",
                 "followup_action_id": (
                     str(followup_action.get("id")) if followup_action else None
                 ),
@@ -8143,6 +8243,10 @@ def create_app(
         with Session(request.app.state.engine) as db_session:
             recent = recent_conversations_for(db_session, user.username)
             profile = _active_profile(db_session)
+            reasoning_efforts = _profile_reasoning_efforts(profile)
+            selected_reasoning_effort = _preferred_reasoning_effort(
+                db_session, user.username, profile
+            )
             available_clusters = list(db_session.scalars(
                 select(Cluster).where(Cluster.is_enabled.is_(True)).order_by(Cluster.name)
             ))
@@ -8155,6 +8259,8 @@ def create_app(
                 "model_ready": _profile_is_usable(profile),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
+                "reasoning_efforts": reasoning_efforts,
+                "selected_reasoning_effort": selected_reasoning_effort,
                 "active_run": None,
                 "clusters": [_cluster_summary(item) for item in available_clusters],
                 "selected_cluster_ids": [SYSTEM_CLUSTER_ID],
@@ -8195,6 +8301,12 @@ def create_app(
                     AdHocRun.status.in_(("queued", "running")),
                 ).order_by(AdHocRun.created_at.desc()).limit(1)
             )
+            reasoning_efforts = _profile_reasoning_efforts(profile)
+            selected_reasoning_effort = (
+                active_run_row.reasoning_effort
+                if active_run_row is not None
+                else _preferred_reasoning_effort(db_session, user.username, profile)
+            )
             conversation_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
             available_clusters = list(db_session.scalars(
                 select(Cluster).where(
@@ -8233,6 +8345,8 @@ def create_app(
                 "model_ready": _profile_is_usable(profile),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
+                "reasoning_efforts": reasoning_efforts,
+                "selected_reasoning_effort": selected_reasoning_effort,
                 "messages_truncated": conversation.summarized_message_count > 0,
                 "adhoc_run_timeout_seconds": app_settings.adhoc_run_timeout_seconds,
                 "active_run": ({
@@ -8283,6 +8397,14 @@ def create_app(
             )
         conversation_id = str(uuid4())
         with Session(request.app.state.engine) as db_session:
+            profile = _active_profile(db_session)
+            if "reasoning_effort" in form:
+                _save_reasoning_preference(
+                    db_session,
+                    username=user.username,
+                    profile=profile,
+                    submitted=form["reasoning_effort"].strip(),
+                )
             valid_cluster_count = db_session.scalar(
                 select(func.count()).select_from(Cluster).where(
                     Cluster.id.in_(requested_cluster_ids), Cluster.is_enabled.is_(True)
@@ -8328,6 +8450,13 @@ def create_app(
                 raise HTTPException(
                     status_code=404,
                     detail="That PodPilot conversation does not exist.",
+                )
+            if "reasoning_effort" in form:
+                _save_reasoning_preference(
+                    db_session,
+                    username=user.username,
+                    profile=_active_profile(db_session),
+                    submitted=form["reasoning_effort"].strip(),
                 )
             run_id = _queue_adhoc_run(
                 db_session,
@@ -8858,6 +8987,7 @@ def create_app(
                     "max_input_tokens": row.max_input_tokens,
                     "max_output_tokens": row.max_output_tokens,
                     "reasoning_effort": row.reasoning_effort,
+                    "reasoning_efforts": _profile_reasoning_efforts(row),
                     "timeout_seconds": row.timeout_seconds, "status": row.status,
                     "capabilities": json.loads(row.capabilities_json),
                     "tool_calling_hint": row.tool_calling_hint, "vision_hint": row.vision_hint,
@@ -8886,6 +9016,7 @@ def create_app(
                 "token_configured": token_configured,
                 "credential_error": credential_error,
                 "model_timeout_max_seconds": app_settings.model_timeout_max_seconds,
+                "reasoning_effort_choices": REASONING_EFFORTS,
                 "csrf_token": csrf_token,
             },
         )
@@ -8918,7 +9049,16 @@ def create_app(
         api_type = form.get("api_type", "responses").strip()
         tls_mode = form.get("tls_mode", "system").strip()
         custom_ca_pem = form.get("custom_ca_pem", "").strip() or None
-        reasoning_effort = form.get("reasoning_effort", "").strip() or None
+        reasoning_effort = form.get(
+            "default_reasoning_effort", form.get("reasoning_effort", "")
+        ).strip() or None
+        reasoning_efforts = [
+            effort for effort in REASONING_EFFORTS
+            if form.get(f"reasoning_effort_{effort}") == "true"
+        ]
+        # Accept the former single-value form contract during rolling upgrades.
+        if reasoning_effort and not reasoning_efforts and "reasoning_effort" in form:
+            reasoning_efforts = [reasoning_effort]
         if not provider_label or len(provider_label) > 100:
             raise HTTPException(status_code=422, detail="Provider label is required and must be at most 100 characters.")
         try:
@@ -8933,6 +9073,11 @@ def create_app(
             raise HTTPException(status_code=422, detail="TLS mode is invalid.")
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
             raise HTTPException(status_code=422, detail="Reasoning effort is invalid.")
+        if reasoning_effort is not None and reasoning_effort not in reasoning_efforts:
+            raise HTTPException(
+                status_code=422,
+                detail="The default reasoning effort must be enabled for chat users.",
+            )
         if tls_mode == "custom_ca" and not custom_ca_pem:
             raise HTTPException(status_code=422, detail="Custom-CA mode requires a PEM CA bundle.")
         if custom_ca_pem and len(custom_ca_pem) > 65_536:
@@ -8991,6 +9136,7 @@ def create_app(
             profile.custom_ca_pem = custom_ca_pem if tls_mode == "custom_ca" else None
             profile.max_input_tokens = max_input_tokens
             profile.reasoning_effort = reasoning_effort
+            profile.reasoning_efforts_json = json.dumps(reasoning_efforts)
             profile.tool_calling_hint = form.get("tool_calling_hint") == "true"
             profile.vision_hint = form.get("vision_hint") == "true"
             profile.timeout_seconds = timeout_seconds
@@ -9007,7 +9153,13 @@ def create_app(
                 actor=user.username,
                 action="model_profile.save",
                 outcome="not_tested",
-                details_json=json.dumps({"provider_label": provider_label, "base_url": base_url, "chat_model": chat_model}, sort_keys=True),
+                details_json=json.dumps({
+                    "provider_label": provider_label,
+                    "base_url": base_url,
+                    "chat_model": chat_model,
+                    "reasoning_efforts": reasoning_efforts,
+                    "default_reasoning_effort": reasoning_effort or "provider_default",
+                }, sort_keys=True),
             ))
             db_session.commit()
             saved_profile_id = profile.id
@@ -9163,6 +9315,9 @@ def create_app(
             if profile is None:
                 raise HTTPException(status_code=409, detail="The model profile changed before deletion.")
             was_active = profile.is_active
+            db_session.execute(delete(UserModelPreference).where(
+                UserModelPreference.model_profile_id == profile_id
+            ))
             db_session.delete(profile)
             replacement = None
             if was_active:

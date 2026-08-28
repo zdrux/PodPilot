@@ -107,6 +107,24 @@
     return payload;
   };
   if (settingsForm?.dataset.saveUrl) {
+    const reasoningChecks = Array.from(
+      settingsForm.querySelectorAll('input[name^="reasoning_effort_"]'),
+    );
+    const defaultReasoning = settingsForm.querySelector('select[name="default_reasoning_effort"]');
+    const syncReasoningDefaults = () => {
+      if (!defaultReasoning) return;
+      const enabled = new Set(
+        reasoningChecks.filter((item) => item.checked).map((item) => item.name.replace("reasoning_effort_", "")),
+      );
+      Array.from(defaultReasoning.options).forEach((option) => {
+        option.disabled = Boolean(option.value) && !enabled.has(option.value);
+      });
+      if (defaultReasoning.value && !enabled.has(defaultReasoning.value)) {
+        defaultReasoning.value = "";
+      }
+    };
+    reasoningChecks.forEach((item) => item.addEventListener("change", syncReasoningDefaults));
+    syncReasoningDefaults();
     settingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const submit = settingsForm.querySelector('button[type="submit"]');
@@ -726,6 +744,7 @@
       const submit = adhocForm.querySelector('button[type="submit"]');
       const textarea = adhocForm.querySelector("textarea");
       const rawResponseToggle = adhocForm.querySelector('input[name="include_raw_response"]');
+      const reasoningSelect = adhocForm.querySelector('select[name="reasoning_effort"]');
       const question = textarea?.value.trim() || "";
       if (!question) return;
       const requestBody = new URLSearchParams(new FormData(adhocForm));
@@ -733,6 +752,7 @@
       const optimistic = appendOptimisticTurn(question);
       if (textarea) textarea.value = "";
       if (rawResponseToggle) rawResponseToggle.disabled = true;
+      if (reasoningSelect) reasoningSelect.disabled = true;
       if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
       try {
         const response = await fetch(adhocForm.dataset.chatUrl, {
@@ -752,6 +772,7 @@
         if (optimistic?.empty) optimistic.empty.hidden = false;
         if (textarea) textarea.value = question;
         if (rawResponseToggle) rawResponseToggle.disabled = false;
+        if (reasoningSelect) reasoningSelect.disabled = false;
         if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
       }
     });

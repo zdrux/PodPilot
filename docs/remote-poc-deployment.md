@@ -121,9 +121,9 @@ returned LIST evidence and `adhoc_search_max_scan_objects` to `"2000"` for bound
 projected-field searches that return only matches.
 Metric trends default to a 30-day range and 300 points per series through
 `adhoc_metrics_max_range_seconds: "2592000"` and
-`adhoc_metrics_max_points_per_series: "300"`.
-Optionally add that key to this overlay patch with a value from `"50"` through
-`"1000"` when the target routinely has larger namespace inventories.
+`adhoc_metrics_max_points_per_series: "300"`. Thanos response bodies default to a bounded
+1 MiB through `adhoc_metrics_max_response_bytes: "1048576"`; set it between `"65536"` and
+`"4194304"` when the target routinely returns more metric series or label data.
 
 Group names are case-sensitive. Later changes to the role-group arrays require an
 application rollout because ConfigMap-backed environment variables are read at

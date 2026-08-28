@@ -601,12 +601,15 @@ current repository and cluster state.
 
 ## 2026-08-28 Configurable model reasoning effort
 
-- Model profiles now persist an optional reasoning-effort level, with provider default retained
-  for existing profiles and endpoints that do not support explicit reasoning controls.
-- PodPilot sends the selection using the API-specific OpenAI-compatible shape on every Responses
-  or Chat Completions request, including capability probes and bounded correction attempts.
+- Model profiles now declare their supported reasoning levels and a default selection. Provider
+  default remains available for endpoints with unknown or no explicit reasoning controls.
+- Ask PodPilot exposes those levels beside the raw-response switch. The user's per-model choice
+  persists across conversations and is snapshotted onto each queued run.
+- PodPilot sends the effective selection using the API-specific OpenAI-compatible shape on every
+  Responses or Chat Completions request. Capability probes use the profile default.
 - Explicit reasoning uses the profile's full maximum-output budget because hidden reasoning tokens
-  count against that allowance. Migration `0015_model_reasoning_effort` adds the nullable profile field.
+  count against that allowance. Migration `0017_user_reasoning_preferences` adds the supported-level
+  metadata, queued-run snapshot, and per-user/per-model preference.
 - Reduced-capability profiles now remain usable when their probe proves the core safe text contract;
   semantic Ask-probe failures are shown as warnings and continue through typed validation and fallback.
 - The model-free suite and a fresh SQLite migration through the new head pass locally; this change

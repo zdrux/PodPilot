@@ -1186,6 +1186,7 @@ def test_ask_answer_probe_uses_smaller_output_budget_and_forbids_operator_comman
     assert "cite supplied evidence IDs" in request["messages"][0]["content"]
     assert "more than one" in request["messages"][0]["content"]
     assert "do not answer only yes or no" in request["messages"][0]["content"]
+    assert "minimum five-minute metrics window" in request["messages"][0]["content"]
     assert len(request["messages"][0]["content"]) < 1000
     payload = json.loads(request["messages"][1]["content"])
     assert set(payload) == {"clusters", "collection_issues", "facts", "question"}

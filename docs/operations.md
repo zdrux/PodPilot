@@ -180,7 +180,9 @@ The current deployment uses these variables:
   `https://thanos-querier.openshift-monitoring.svc:9091`
 - `PODPILOT_THANOS_TIMEOUT_SECONDS`, default `8`
 - `PODPILOT_THANOS_MAX_SERIES`, default `20`, with a hard accepted range of
-  `1` through `100`; the adapter also enforces a fixed 64 KiB response ceiling
+  `1` through `100`
+- `PODPILOT_ADHOC_METRICS_MAX_RESPONSE_BYTES`, default `1048576` (1 MiB), with a
+  hard accepted range of `65536` through `4194304` bytes
 - `PODPILOT_LOKI_URL`, defaulting to
   `https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
 - `PODPILOT_LOKI_ROUTE_NAME`, default `logging-loki`, for registered remote clusters
@@ -220,7 +222,7 @@ The current deployment uses these variables:
 - `PODPILOT_ADHOC_MAX_CLUSTERS_PER_CONVERSATION`, default `10`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
-Model profile metadata (API type, base URL, model names, optional reasoning effort,
+Model profile metadata (API type, base URL, model names, available reasoning levels,
 TLS mode/custom CA, capability hints, timeout, and token budgets) is configured through
 `/settings/model` and stored in SQLite. Local development reads `OPENAI_API_KEY`
 without persisting it. In OpenShift, every profile has an opaque key in the fixed
@@ -229,10 +231,14 @@ FastAPI patches only that key through the Kubernetes API using the runtime
 ServiceAccount. The UI never reads the saved value back. Model calls reread the
 key, so token creation and rotation require no Deployment restart.
 
-Reasoning effort defaults to the provider's model-specific behavior. When selected,
-PodPilot sends `reasoning.effort` to the Responses API or `reasoning_effort` to Chat
-Completions on every model request, including capability probes. Supported values vary
-by model, so save the profile and run **Test connection** after changing the level.
+Each model profile declares the explicit reasoning levels it supports and a default for
+users who have not made a choice. **Provider default** is always available and omits the
+reasoning parameter for compatibility with unknown or non-reasoning endpoints. Ask PodPilot
+offers the configured levels beside the raw-response switch and persists each user's choice
+per model across conversations. PodPilot snapshots that choice on a queued run and sends
+`reasoning.effort` to the Responses API or `reasoning_effort` to Chat Completions. Capability
+probes use the model profile's configured default. Supported values vary by model, so save the
+profile and run **Test connection** after changing its available levels or default.
 Because the provider's output-token limit includes hidden reasoning tokens, an explicit
 effort uses the profile's full maximum-output budget instead of PodPilot's smaller
 non-reasoning per-operation cap.
@@ -994,6 +1000,11 @@ installed. Overall node CPU and memory utilization uses node-exporter metrics. F
 using everything” questions, PodPilot collects both the overall node value and top workload
 containers; a gap can represent kernel, filesystem cache, host services, or unmonitored work.
 Requests and limits are configuration gauges, not measured usage.
+When a metric question supplies no period, PodPilot uses a five-minute window and reports the
+requested current/average/minimum/maximum statistic from that bounded result. Explicit periods such
+as `15m`, `2h`, or `7d` remain authoritative within the configured maximum-range policy. A current
+request already uses the five-minute minimum, so failure guidance does not recommend shortening it
+or ask the operator to author PromQL.
 
 `top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
 payload bytes observed during the bounded period. Its average is bytes per second; the total is
@@ -1005,8 +1016,10 @@ failure identifies the configured timeout instead of reporting generic gateway u
 
 `PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS` defaults to 2592000 (30 days) and accepts up to
 7776000 (90 days). `PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES` defaults to 300 and accepts
-50–1000. Configure `adhoc_metrics_max_range_seconds` and
-`adhoc_metrics_max_points_per_series` in `podpilot-runtime`. PodPilot may increase the
+50–1000. `PODPILOT_ADHOC_METRICS_MAX_RESPONSE_BYTES` defaults to 1048576 (1 MiB) and accepts
+65536–4194304 bytes. Configure `adhoc_metrics_max_range_seconds`,
+`adhoc_metrics_max_points_per_series`, and `adhoc_metrics_max_response_bytes` in
+`podpilot-runtime`. PodPilot may increase the
 requested step to stay within the point ceiling. Thanos retention, unavailable metrics,
 series/response ceilings, and access failures are returned as explicit limitations.
 

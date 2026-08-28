@@ -238,11 +238,19 @@
             <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
             {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
           </div>
-          <label class="raw-response-switch">
-            <input type="checkbox" role="switch" name="include_raw_response" {% if active_run and active_run.include_raw_response %}checked{% endif %} {% if active_run %}disabled{% endif %}>
-            <span aria-hidden="true"></span>
-            <strong>Show raw model response</strong>
-          </label>
+          <div class="composer-controls">
+            <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
+              <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>
+                <option value="provider_default" {% if not selected_reasoning_effort %}selected{% endif %}>Provider default</option>
+                {% for effort in reasoning_efforts %}<option value="{{ effort }}" {% if selected_reasoning_effort == effort %}selected{% endif %}>{{ effort | capitalize }}</option>{% endfor %}
+              </select>
+            </label>
+            <label class="raw-response-switch">
+              <input type="checkbox" role="switch" name="include_raw_response" {% if active_run and active_run.include_raw_response %}checked{% endif %} {% if active_run %}disabled{% endif %}>
+              <span aria-hidden="true"></span>
+              <strong>Show raw model response</strong>
+            </label>
+          </div>
         </div>
         <div class="composer-input-wrap">
           <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>

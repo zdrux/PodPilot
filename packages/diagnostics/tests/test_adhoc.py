@@ -608,6 +608,19 @@ def test_custom_resource_coordinates_remain_model_proposed_for_broker_validation
     assert normalize_read_intent(proposed) == proposed
 
 
+def test_metric_intent_without_explicit_range_normalizes_to_five_minutes() -> None:
+    proposed = ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="node_role", name="worker",
+    )
+
+    normalized = normalize_read_intent(proposed)
+
+    assert proposed.range_seconds == 3600
+    assert "range_seconds" not in proposed.model_fields_set
+    assert normalized.range_seconds == 300
+
+
 def test_qualified_same_kind_resource_is_not_rewritten_to_builtin_api() -> None:
     knative = ReadIntent(
         tool="list_resources",
@@ -1181,7 +1194,7 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: st
         tool="query_metrics",
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
-        range_seconds=3600,
+        range_seconds=300,
         limit=10,
     )]
 
@@ -1198,11 +1211,11 @@ def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -
     assert plan.intents == [
         ReadIntent(
             tool="query_metrics", metric="node_cpu_utilization",
-            metric_scope="node_role", name="worker",
+            metric_scope="node_role", name="worker", range_seconds=300,
         ),
         ReadIntent(
             tool="query_metrics", metric="node_memory_utilization",
-            metric_scope="node_role", name="worker",
+            metric_scope="node_role", name="worker", range_seconds=300,
         ),
     ]
 
@@ -1236,6 +1249,7 @@ def test_namespace_top_consumer_question_compiles_to_typed_metric_query(
         metric=metric,
         metric_scope="namespace",
         namespace=namespace,
+        range_seconds=300,
     )]
 
 

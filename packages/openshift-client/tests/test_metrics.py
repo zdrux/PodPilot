@@ -89,6 +89,31 @@ def test_query_rejects_oversized_response_before_json_parsing(tmp_path: Path) ->
         query_client.query("up")
 
 
+def test_query_default_response_ceiling_accepts_payload_larger_than_64_kib(
+    tmp_path: Path,
+) -> None:
+    padding = "x" * 70_000
+    query_client = client(
+        tmp_path,
+        lambda request: httpx.Response(200, json={
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [{
+                    "metric": {"namespace": "demo", "padding": padding},
+                    "value": [1_777_000_000, "1"],
+                }],
+            },
+        }),
+    )
+
+    snapshot = query_client.query("up")
+
+    assert snapshot.samples[0].value == 1
+    assert snapshot.samples[0].labels["padding"].startswith("x")
+    assert len(snapshot.samples[0].labels["padding"]) < len(padding)
+
+
 def test_range_query_is_authenticated_bounded_and_normalized(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["authorization"] == "Bearer fixture-token"

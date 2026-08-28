@@ -55,6 +55,7 @@ class ModelProfile(Base):
     custom_ca_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=128_000)
     reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reasoning_efforts_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     tool_calling_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vision_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
@@ -267,9 +268,27 @@ class AdHocRun(Base):
     created_by: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
     message_text: Mapped[str] = mapped_column(Text, nullable=False)
     include_raw_response: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
     followup_action_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
     progress_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     assistant_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class UserModelPreference(Base):
+    __tablename__ = "user_model_preferences"
+    __table_args__ = (
+        UniqueConstraint("username", "model_profile_id", name="uq_user_model_preference"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(253), nullable=False, index=True)
+    model_profile_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("model_profiles.id"), nullable=False, index=True
+    )
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )

@@ -977,6 +977,8 @@ def normalize_read_intent(intent: ReadIntent) -> ReadIntent:
     """Canonicalize trusted built-in resource coordinates before broker validation."""
 
     updates: dict[str, object] = {}
+    if intent.tool == "query_metrics" and "range_seconds" not in intent.model_fields_set:
+        updates["range_seconds"] = DEFAULT_METRIC_RANGE_SECONDS
     if (
         intent.namespace is not None
         and intent.namespace.strip() == "*"
@@ -1047,7 +1049,7 @@ _METRIC_TOP_LIMIT_QUERY = re.compile(
     r"\btop\s+(?P<limit>\d{1,3})\b",
     re.IGNORECASE,
 )
-_DEFAULT_METRIC_RANGE_SECONDS = 3600
+DEFAULT_METRIC_RANGE_SECONDS = 300
 _MIN_METRIC_RANGE_SECONDS = 300
 _MAX_METRIC_RANGE_SECONDS = 7_776_000
 _DEFAULT_METRIC_RESULT_LIMIT = 10
@@ -1115,7 +1117,7 @@ def _requested_metric_range_seconds(
         return min(_MAX_METRIC_RANGE_SECONDS, max(_MIN_METRIC_RANGE_SECONDS, seconds))
     match = _METRIC_DURATION_QUERY.search(question)
     if match is None:
-        return _DEFAULT_METRIC_RANGE_SECONDS
+        return DEFAULT_METRIC_RANGE_SECONDS
     raw_count = (match.group("count") or "1").lower()
     count = 1 if raw_count in {"one", "a", "an"} else int(raw_count)
     unit = match.group("unit").lower()

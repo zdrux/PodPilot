@@ -139,7 +139,8 @@ activate one successfully tested profile:
 - Responses or Chat Completions API mode, selected explicitly and checked by a
   connection probe
 - reasoning/chat model name, initially `gpt-5.6-terra`
-- optional model-specific reasoning effort, verified by the connection probe
+- model-specific available reasoning levels and profile default, with provider default
+  always available; each user's per-model Ask preference persists across conversations
 - optional embedding model, initially `text-embedding-3-small`
 - system TLS trust, an optional custom CA bundle, or an explicitly warned insecure
   PoC mode

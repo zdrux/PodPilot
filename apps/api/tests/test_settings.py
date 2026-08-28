@@ -65,11 +65,17 @@ def test_resource_search_scan_ceiling_is_configurable(monkeypatch) -> None:
 def test_metric_trend_bounds_are_configurable(monkeypatch) -> None:
     monkeypatch.setenv("PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS", "604800")
     monkeypatch.setenv("PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES", "500")
+    monkeypatch.setenv("PODPILOT_ADHOC_METRICS_MAX_RESPONSE_BYTES", "2097152")
 
     settings = Settings(_env_file=None)
 
     assert settings.adhoc_metrics_max_range_seconds == 604800
     assert settings.adhoc_metrics_max_points_per_series == 500
+    assert settings.adhoc_metrics_max_response_bytes == 2_097_152
+    with pytest.raises(ValidationError):
+        Settings(adhoc_metrics_max_response_bytes=65_535)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_metrics_max_response_bytes=4_194_305)
 
 
 def test_loki_timeout_defaults_to_scan_safe_value_and_is_bounded() -> None:

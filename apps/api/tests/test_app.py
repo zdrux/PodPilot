@@ -85,6 +85,7 @@ from podpilot_api.models import (
     KnowledgeDocument,
     ModelProfile,
     RemediationAction,
+    UserModelPreference,
 )
 from podpilot_api.settings import Settings
 from podpilot_diagnostics.workloads import (
@@ -2224,11 +2225,11 @@ def test_semantic_worker_node_utilization_expands_to_cpu_and_memory_queries() ->
     assert plan.intents == [
         ReadIntent(
             tool="query_metrics", metric="node_cpu_utilization",
-            metric_scope="node_role", name="worker",
+            metric_scope="node_role", name="worker", range_seconds=300,
         ),
         ReadIntent(
             tool="query_metrics", metric="node_memory_utilization",
-            metric_scope="node_role", name="worker",
+            metric_scope="node_role", name="worker", range_seconds=300,
         ),
     ]
 
@@ -2279,6 +2280,7 @@ def test_typed_metric_request_compiles_statefulset_metrics_through_workload_scop
     assert [intent.kind for intent in plan.intents] == ["StatefulSet"] * 3
     assert all(intent.metric_scope == "workload" for intent in plan.intents)
     assert all(intent.metric_statistic == "maximum" for intent in plan.intents)
+    assert all(intent.range_seconds == 300 for intent in plan.intents)
 
 
 def test_typed_metric_rank_maps_signal_to_registered_bounded_ranking() -> None:
@@ -2473,9 +2475,12 @@ def test_worker_node_utilization_guard_overrides_wrong_pod_ranking_semantics() -
         ),
     ))
 
-    assert [(call.metric, call.metric_scope, call.name) for call in explorer.calls] == [
-        ("node_cpu_utilization", "node_role", "worker"),
-        ("node_memory_utilization", "node_role", "worker"),
+    assert [
+        (call.metric, call.metric_scope, call.name, call.range_seconds)
+        for call in explorer.calls
+    ] == [
+        ("node_cpu_utilization", "node_role", "worker", 300),
+        ("node_memory_utilization", "node_role", "worker", 300),
     ]
     assert {item["data"]["metric"] for item in result.evidence} == {
         "node_cpu_utilization", "node_memory_utilization",
@@ -5954,6 +5959,105 @@ def test_ask_raw_response_toggle_persists_and_displays_both_answer_attempts(
     engine.dispose()
 
 
+def test_ask_reasoning_choice_is_limited_by_model_and_persists_per_user(
+    tmp_path: Path,
+) -> None:
+    class ReasoningCaptureProvider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reasoning_efforts: list[str | None] = []
+
+        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
+            self.reasoning_efforts.append(profile.reasoning_effort)
+            return super().plan_ad_hoc(profile, api_key, context)
+
+    provider = ReasoningCaptureProvider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="GPT OSS", base_url="https://models.example.test/v1",
+            chat_model="gpt-oss-120b", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}",
+            reasoning_efforts_json=json.dumps(["low", "medium", "high"]),
+            reasoning_effort=None, updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert '<option value="provider_default" selected>Provider default</option>' in page.text
+        assert '<option value="low"' in page.text
+        assert '<option value="medium"' in page.text
+        assert '<option value="high"' in page.text
+        assert '<option value="xhigh"' not in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)}
+
+        selected = client.post(
+            "/api/v1/adhoc-conversations",
+            headers=headers,
+            data={
+                "message": "Why is pod api-7d9 pending in payments?",
+                "reasoning_effort": "high",
+            },
+            follow_redirects=False,
+        )
+        assert selected.status_code == 303
+        persisted_page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert '<option value="high" selected>High</option>' in persisted_page.text
+
+        inherited = client.post(
+            "/api/v1/adhoc-conversations",
+            headers=headers,
+            data={"message": "Inspect pod api-7d9 again."},
+            follow_redirects=False,
+        )
+        assert inherited.status_code == 303
+
+        rejected = client.post(
+            "/api/v1/adhoc-conversations",
+            headers=headers,
+            data={"message": "Inspect it once more.", "reasoning_effort": "xhigh"},
+            follow_redirects=False,
+        )
+        assert rejected.status_code == 422
+
+        provider_default = client.post(
+            "/api/v1/adhoc-conversations",
+            headers=headers,
+            data={
+                "message": "Inspect pod api-7d9 with the provider default.",
+                "reasoning_effort": "provider_default",
+            },
+            follow_redirects=False,
+        )
+        assert provider_default.status_code == 303
+
+    assert provider.reasoning_efforts[0] == "high"
+    assert provider.reasoning_efforts[-1] is None
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        preference = db_session.scalar(select(UserModelPreference))
+        assert preference is not None
+        assert preference.username == "ivy"
+        assert preference.model_profile_id == 1
+        assert preference.reasoning_effort is None
+        assert [run.reasoning_effort for run in db_session.scalars(
+            select(AdHocRun).order_by(AdHocRun.created_at)
+        )] == ["high", "high", None]
+    engine.dispose()
+
+
 def test_clicking_grounded_suggestion_runs_fresh_context_check_in_same_chat(
     tmp_path: Path,
 ) -> None:
@@ -6199,6 +6303,7 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
         assignments={"ada": Role.APPROVER},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
+        settings_overrides={"adhoc_metrics_max_response_bytes": 2_097_152},
     )
 
     with TestClient(app) as client:
@@ -6224,6 +6329,7 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
 
     assert tested.status_code == 200
     assert isinstance(captured["metric_reader"], BoundedMetricTrendReader)
+    assert captured["metric_reader"]._source._max_response_bytes == 2_097_152
     assert captured["api_url"] == "https://api.remote.example:6443"
     assert captured["token"] == "sha256~remote-monitoring-token"
     assert captured["tls_verify"] is True
@@ -10386,7 +10492,10 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
                 "timeout_seconds": "45",
                 "max_input_tokens": "128000",
                 "max_output_tokens": "10000",
-                "reasoning_effort": "high",
+                "reasoning_effort_low": "true",
+                "reasoning_effort_medium": "true",
+                "reasoning_effort_high": "true",
+                "default_reasoning_effort": "high",
                 "tool_calling_hint": "true",
                 "vision_hint": "true",
             },
@@ -10422,6 +10531,7 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
         assert profiles[0].api_type == "chat-completions"
         assert profiles[0].tls_mode == "insecure"
         assert profiles[0].reasoning_effort == "high"
+        assert json.loads(profiles[0].reasoning_efforts_json) == ["low", "medium", "high"]
         assert profiles[0].tool_calling_hint is True
         assert profiles[0].vision_hint is True
         assert profiles[0].credential_key in credentials.values
