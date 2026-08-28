@@ -1125,6 +1125,7 @@ def _compact_answer_evidence(
     evidence: list[dict[str, object]],
     *,
     activity: list[dict[str, object]],
+    question: str = "",
     total_byte_limit: int = 96_000,
     per_observation_byte_limit: int = 14_000,
     max_observations: int | None = None,
@@ -1146,7 +1147,32 @@ def _compact_answer_evidence(
         if max_observations is not None and len(compacted) >= max_observations:
             break
         data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        compact_data = _compact_provider_value(data)
+        provider_data = data
+        if (
+            "kafka" in question.casefold()
+            and re.search(r"(?i)\b(?:prometheus|metrics?|export(?:er|ing)?)\b", question)
+            and str(data.get("kind") or "").casefold() == "kafka"
+        ):
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+            kafka_spec = spec.get("kafka") if isinstance(spec.get("kafka"), dict) else {}
+            status = data.get("status") if isinstance(data.get("status"), dict) else {}
+            provider_data = {
+                "apiVersion": data.get("apiVersion"),
+                "kind": data.get("kind"),
+                "metadata": {
+                    "namespace": metadata.get("namespace"), "name": metadata.get("name"),
+                },
+                "spec": {"kafka": {
+                    key: kafka_spec.get(key)
+                    for key in ("metricsConfig", "metrics_config", "metrics")
+                    if key in kafka_spec
+                }},
+                "status": {"conditions": status.get("conditions")}
+                if status.get("conditions") is not None else {},
+                "podpilotProjection": "kafka_metrics_configuration",
+            }
+        compact_data = _compact_provider_value(provider_data)
         if item.get("tool") == "pod_logs" and isinstance(compact_data, dict):
             tail = str(data.get("tail") or "")
             compact_data["tail"] = tail[-6_000:]
@@ -1715,6 +1741,108 @@ def _deterministic_resource_detail_answer(
     return {
         "answer_mode": "evidence_based",
         "content": "\n".join(sections),
+        "citations": citations,
+    }
+
+
+def _deterministic_kafka_metrics_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]], question: str,
+) -> dict[str, object] | None:
+    """Report Kafka exporter configuration without asking the model to infer CRD semantics."""
+
+    if not (
+        "kafka" in question.casefold()
+        and re.search(r"(?i)\b(?:prometheus|metrics?|export(?:er|ing)?)\b", question)
+    ):
+        return None
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") == "get_resource"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") == "get_resource"
+        and isinstance(item.get("data"), dict)
+        and str(item["data"].get("kind") or "").casefold() == "kafka"
+    ][:12]
+    if not observations:
+        return None
+
+    rows: list[str] = []
+    citations: list[str] = []
+    configured_count = 0
+    for observation in observations:
+        data = observation["data"]
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        spec = data.get("spec") if isinstance(data.get("spec"), dict) else {}
+        kafka_spec = spec.get("kafka") if isinstance(spec.get("kafka"), dict) else {}
+        metrics_config = kafka_spec.get("metricsConfig")
+        if metrics_config is None:
+            metrics_config = kafka_spec.get("metrics_config")
+        legacy_metrics = kafka_spec.get("metrics")
+        configured = bool(metrics_config) or bool(legacy_metrics)
+        configured_count += int(configured)
+
+        config_reference = "—"
+        if isinstance(metrics_config, dict):
+            value_from = metrics_config.get("valueFrom") or metrics_config.get("value_from")
+            if isinstance(value_from, dict):
+                config_map_ref = (
+                    value_from.get("configMapKeyRef") or value_from.get("config_map_key_ref")
+                )
+                if isinstance(config_map_ref, dict) and config_map_ref.get("name"):
+                    config_reference = f"`ConfigMap/{str(config_map_ref['name'])[:253]}`"
+
+        cluster = str(
+            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+        )[:253]
+        namespace = str(metadata.get("namespace") or "cluster")[:253]
+        name = str(metadata.get("name") or "unnamed")[:253]
+        exporter = (
+            "Configured in the Kafka CR"
+            if configured else
+            "Not configured in the Kafka CR"
+        )
+        scrape = (
+            "Not verified; exporter configuration does not prove Prometheus is scraping it"
+            if configured else
+            "Not applicable to the managed exporter because it is not configured"
+        )
+        rows.append(
+            f"| {cluster} | `{namespace}/{name}` | {exporter} | {config_reference} | {scrape} |"
+        )
+        citations.append(str(observation["id"]))
+
+    if configured_count == len(observations):
+        conclusion = "Every inspected Kafka resource declares metrics exporter configuration."
+    elif configured_count:
+        conclusion = (
+            f"{configured_count} of {len(observations)} inspected Kafka resources declare "
+            "metrics exporter configuration."
+        )
+    else:
+        conclusion = (
+            "No. None of the inspected Kafka resources declares Strimzi-managed metrics "
+            "exporter configuration."
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": "\n".join([
+            "## Kafka metrics export configuration", "", conclusion, "",
+            "| OpenShift cluster | Kafka resource | Exporter configuration | Configuration source | Prometheus scrape status |",
+            "|---|---|---|---|---|",
+            *rows,
+            "",
+            "## Verification boundary", "",
+            (
+                "Exporter configuration and Prometheus scraping are separate checks. This result "
+                "reports the exact Kafka CR configuration; it does not claim that Prometheus is "
+                "scraping an endpoint unless separate monitor or scrape evidence was collected."
+            ),
+        ]),
         "citations": citations,
     }
 
@@ -3830,11 +3958,15 @@ def _bind_plan_log_intents(
         refs = data.get("objects")
         if isinstance(refs, list):
             for ref in refs:
-                if not isinstance(ref, dict) or not ref.get("name") or not ref.get("namespace"):
+                if not isinstance(ref, dict) or not ref.get("name"):
                     continue
-                observed_scopes.setdefault(str(ref["name"]).lower(), set()).add(
-                    str(ref["namespace"])
-                )
+                ref_name = str(ref["name"]).lower()
+                observed_names.add(ref_name)
+                ref_namespace = ref.get("namespace")
+                if not ref_namespace and data.get("scope") not in {None, "cluster"}:
+                    ref_namespace = data.get("scope")
+                if ref_namespace:
+                    observed_scopes.setdefault(ref_name, set()).add(str(ref_namespace))
         add_object_targets(data)
         items = data.get("items")
         if isinstance(items, list):
@@ -3873,6 +4005,11 @@ def _bind_plan_log_intents(
             namespaces = observed_scopes.get(resolved.name.lower(), set())
             if len(namespaces) == 1:
                 resolved = resolved.model_copy(update={"namespace": next(iter(namespaces))})
+            elif len(namespaces) > 1:
+                error = (
+                    "The named resource exists in multiple observed namespaces; select an exact "
+                    "grounded candidate ID instead of issuing a cluster-scoped GET."
+                )
         if (
             error is None
             and resolved is not None
@@ -5565,7 +5702,7 @@ def create_app(
                         f"{'s' if len(evidence) != 1 else ''}.",
                     )
                 answer_observations, answer_context_metadata = _compact_answer_evidence(
-                    evidence, activity=activity, total_byte_limit=48_000,
+                    evidence, activity=activity, question=message_text, total_byte_limit=48_000,
                     per_observation_byte_limit=8_000, max_observations=16,
                 )
                 answer_findings = _compact_answer_findings(
@@ -5918,7 +6055,8 @@ def create_app(
                         ]
                         answer_observations, answer_context_metadata = (
                             _compact_answer_evidence(
-                                evidence, activity=activity, total_byte_limit=48_000,
+                                evidence, activity=activity, question=message_text,
+                                total_byte_limit=48_000,
                                 per_observation_byte_limit=8_000, max_observations=16,
                             )
                         )
@@ -6075,6 +6213,11 @@ def create_app(
                     activity=activity,
                     question=message_text,
                 )
+                kafka_metrics_answer = _deterministic_kafka_metrics_answer(
+                    evidence=evidence,
+                    activity=activity,
+                    question=message_text,
+                )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,
                     evidence=evidence,
@@ -6086,6 +6229,8 @@ def create_app(
                     or answer_quality_issue is not None
                 )
                 deterministic_answer = (
+                    kafka_metrics_answer
+                ) or (
                     route_tls_answer if route_fallback_needed else None
                 ) or (
                     resource_detail_answer if route_fallback_needed else None

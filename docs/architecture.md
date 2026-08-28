@@ -235,6 +235,10 @@ the wrong decision label. A non-empty selection continues; an empty `investigate
 recover with the highest-priority action the server already supplied. The server compiles selected IDs back to typed intents it retained privately. The
 catalog, deterministic findings, ownership, selectors, endpoints, and mount relationships remain
 server-side inputs to action construction rather than a prescribed scenario path or model prompt.
+When a model-authored exact GET omits a namespace, the broker reuses the sole namespace attached to
+that object by bounded discovery; if the same name was observed in multiple namespaces, it rejects
+the ambiguous GET and requires an exact grounded action. This scope repair is deterministic and does
+not add planning instructions or object payloads to the model context.
 Invalid or empty plans receive one structured repair attempt; the API does not silently
 replace a diagnostic direction with a generic catalog traversal.
 ConfigMaps, bounded logs, and unauthenticated HTTP/HTTPS probes are intentional
@@ -248,6 +252,10 @@ router address. Secrets, access-review resources, arbitrary subresources, comman
 and mutations remain rejected. A final model pass receives normalized, redacted
 observations, and cluster-specific answers are withheld unless they cite persisted
 evidence IDs. A planning-round failure is recorded as an explicit limitation.
+Question-specific deterministic projections may render decisive configuration facts directly from
+exact-object evidence. For Kafka metrics questions, the API reports whether the Kafka CR declares a
+managed metrics exporter separately from whether Prometheus scraping was independently verified,
+instead of asking the model to infer both states from a full custom-resource payload.
 Automatic continuation is limited to mechanical safeguards such as the trust-only retry of the same
 HTTPS probe and bounded recovery from a repeated model stop. Object traversal, log selection, Events,
 metrics, and configuration reads otherwise require a model-selected direction and return through the

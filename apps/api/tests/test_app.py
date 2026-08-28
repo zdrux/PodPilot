@@ -31,6 +31,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
+    _deterministic_kafka_metrics_answer,
     _deterministic_metric_ranking_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
@@ -1858,6 +1859,61 @@ def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
     assert grounded.intents[0].name == "opentelemetry-collector-operated"
 
 
+def test_unscoped_exact_read_inherits_namespace_from_bounded_list_scope() -> None:
+    plan = ReadPlan(
+        scope_summary="Inspect the discovered Kafka resource.",
+        intents=[ReadIntent(
+            tool="get_resource", resource="kafkas.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="Kafka", name="vc-cluster",
+        )],
+    )
+    evidence = [{
+        "id": "cluster-kafka-list", "tool": "list_resources",
+        "data": {
+            "resource": "kafkas.kafka.strimzi.io",
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "scope": "vc-streams", "objects": [{"name": "vc-cluster"}],
+        },
+    }]
+
+    grounded, errors, _ = _bind_plan_log_intents(
+        plan, [], question="Does this Kafka cluster export Prometheus metrics?", evidence=evidence,
+    )
+
+    assert errors == []
+    assert grounded.intents[0].namespace == "vc-streams"
+
+
+def test_ambiguous_unscoped_exact_read_requires_a_grounded_candidate() -> None:
+    plan = ReadPlan(
+        scope_summary="Inspect the discovered Kafka resource.",
+        intents=[ReadIntent(
+            tool="get_resource", resource="kafkas.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="Kafka", name="shared-cluster",
+        )],
+    )
+    evidence = [{
+        "id": "cluster-kafka-list", "tool": "list_resources",
+        "data": {
+            "resource": "kafkas.kafka.strimzi.io",
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka", "scope": "cluster",
+            "objects": [
+                {"namespace": "payments", "name": "shared-cluster"},
+                {"namespace": "orders", "name": "shared-cluster"},
+            ],
+        },
+    }]
+
+    _, errors, _ = _bind_plan_log_intents(
+        plan, [], question="Does this Kafka cluster export Prometheus metrics?", evidence=evidence,
+    )
+
+    assert errors == [
+        "The named resource exists in multiple observed namespaces; select an exact grounded "
+        "candidate ID instead of issuing a cluster-scoped GET."
+    ]
+
+
 def test_route_backend_service_reference_grounds_exact_followup_read() -> None:
     followup = ReadPlan(
         scope_summary="Inspect the backend Service selected by the Route.",
@@ -2554,6 +2610,79 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
     assert "ValidOutput-audit-kafka=`True`" in content
     assert "status.outputConditions" not in content
     assert rendered["citations"] == ["cluster-clf-detail"]
+
+
+@pytest.mark.parametrize(
+    ("kafka_spec", "expected"),
+    [
+        ({}, "None of the inspected Kafka resources declares"),
+        (
+            {"metricsConfig": {
+                "type": "jmxPrometheusExporter",
+                "valueFrom": {"configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"}},
+            }},
+            "Every inspected Kafka resource declares metrics exporter configuration",
+        ),
+    ],
+)
+def test_kafka_metrics_answer_separates_exporter_from_scraping(
+    kafka_spec: dict[str, object], expected: str,
+) -> None:
+    rendered = _deterministic_kafka_metrics_answer(
+        question="Do the Kafka clusters have Prometheus metrics exporting set up?",
+        evidence=[{
+            "id": "cluster-kafka-detail", "cluster_name": "Central DEV",
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+                "spec": {"kafka": kafka_spec},
+            },
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["cluster-kafka-detail"],
+        }],
+    )
+
+    assert rendered is not None
+    assert expected in str(rendered["content"])
+    assert "Prometheus scrape status" in str(rendered["content"])
+    assert "does not claim that Prometheus is scraping" in str(rendered["content"])
+    if kafka_spec:
+        assert "`ConfigMap/kafka-metrics`" in str(rendered["content"])
+    else:
+        assert "Not configured in the Kafka CR" in str(rendered["content"])
+    assert rendered["citations"] == ["cluster-kafka-detail"]
+
+
+def test_kafka_metrics_final_context_omits_unrelated_custom_resource_fields() -> None:
+    compacted, metadata = _compact_answer_evidence(
+        question="Does this Kafka cluster have Prometheus metrics exporting set up?",
+        evidence=[{
+            "id": "cluster-kafka-detail", "tool": "get_resource",
+            "data": {
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+                "spec": {
+                    "kafka": {"replicas": 12, "storage": {"type": "jbod"}},
+                    "zookeeper": {"replicas": 3},
+                },
+                "status": {"listeners": [{"bootstrapServers": "large-payload"}]},
+            },
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["cluster-kafka-detail"],
+        }],
+    )
+
+    assert metadata["observations_sent"] == 1
+    projected = compacted[0]["data"]
+    assert projected["podpilotProjection"] == "kafka_metrics_configuration"
+    assert projected["spec"] == {"kafka": {}}
+    assert "zookeeper" not in projected["spec"]
+    assert projected["status"] == {}
 
 
 def test_kafka_namespace_followup_reuses_prior_evidence_and_honors_named_cluster() -> None:
