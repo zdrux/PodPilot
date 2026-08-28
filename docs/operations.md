@@ -1021,6 +1021,9 @@ installed. Overall node CPU and memory utilization uses node-exporter metrics. F
 using everything” questions, PodPilot collects both the overall node value and top workload
 containers; a gap can represent kernel, filesystem cache, host services, or unmonitored work.
 Requests and limits are configuration gauges, not measured usage.
+Requests to rank Nodes by CPU or memory use overall node-exporter utilization grouped by Node,
+honor the requested top-N limit, and default to five minutes when no period is supplied. This is
+not the same as ranking monitored Pods or containers that happen to run on a Node.
 When a metric question supplies no period, PodPilot uses a five-minute window and reports the
 requested current/average/minimum/maximum statistic from that bounded result. Explicit periods such
 as `15m`, `2h`, or `7d` remain authoritative within the configured maximum-range policy. A current

@@ -188,19 +188,25 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         expression = _scoped(f"container_memory_working_set_bytes{{{container}}}", intent)
         return f"topk({intent.limit}, sum by (namespace, pod) ({expression}))"
     if metric == "node_cpu_utilization":
-        if intent.metric_scope == "node_role":
-            role = json.dumps(intent.name)
-            membership = (
-                "on(nodename) group_left label_replace("
-                f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
-                ")"
-            )
-            return (
+        if intent.metric_scope in {"cluster", "node_role"}:
+            membership = ""
+            if intent.metric_scope == "node_role":
+                role = json.dumps(intent.name)
+                membership = (
+                    "on(nodename) group_left label_replace("
+                    f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
+                    ")"
+                )
+            expression = (
                 "100 * (1 - avg by (nodename) ("
                 f'rate(node_cpu_seconds_total{{mode="idle"}}[{window}]) '
                 "* on(instance) group_left(nodename) node_uname_info "
-                f"* {membership}"
+                f"{'* ' + membership if membership else ''}"
                 "))"
+            )
+            return (
+                f"topk({intent.limit}, {expression})"
+                if intent.metric_operation == "rank" else expression
             )
         node = json.dumps(intent.name)
         return (
@@ -210,26 +216,33 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             "))"
         )
     if metric == "node_memory_utilization":
-        if intent.metric_scope == "node_role":
-            role = json.dumps(intent.name)
-            membership = (
-                "on(nodename) group_left label_replace("
-                f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
-                ")"
-            )
+        if intent.metric_scope in {"cluster", "node_role"}:
+            membership = ""
+            if intent.metric_scope == "node_role":
+                role = json.dumps(intent.name)
+                membership = (
+                    "on(nodename) group_left label_replace("
+                    f'kube_node_role{{role={role}}}, "nodename", "$1", "node", "(.*)"'
+                    ")"
+                )
+            membership_suffix = f"* {membership}" if membership else ""
             available = (
                 "node_memory_MemAvailable_bytes "
                 "* on(instance) group_left(nodename) node_uname_info "
-                f"* {membership}"
+                f"{membership_suffix}"
             )
             total = (
                 "node_memory_MemTotal_bytes "
                 "* on(instance) group_left(nodename) node_uname_info "
-                f"* {membership}"
+                f"{membership_suffix}"
             )
-            return (
+            expression = (
                 f"100 * (1 - sum by (nodename) ({available}) / "
                 f"clamp_min(sum by (nodename) ({total}), 1))"
+            )
+            return (
+                f"topk({intent.limit}, {expression})"
+                if intent.metric_operation == "rank" else expression
             )
         node = json.dumps(intent.name)
         membership = f'on(instance) group_left(nodename) node_uname_info{{nodename={node}}}'
@@ -303,10 +316,14 @@ class BoundedMetricTrendReader:
             key=lambda item: item["current"] if isinstance(item["current"], (int, float)) else -math.inf,
             reverse=True,
         )
-        if intent.metric in {"top_cpu_consumers", "top_memory_consumers"}:
+        is_ranking = (
+            intent.metric_operation == "rank"
+            or intent.metric in {"top_cpu_consumers", "top_memory_consumers"}
+        )
+        if is_ranking:
             ranking = ranking[:intent.limit]
         stats = self._statistics(all_values)
-        if intent.metric in {"top_cpu_consumers", "top_memory_consumers"} and ranking:
+        if is_ranking and ranking:
             stats["current"] = ranking[0]["current"]
         limitations: list[str] = []
         if range_seconds != intent.range_seconds:

@@ -831,7 +831,8 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
         "capability", "cardinality", "resource_query", "object_reference_id",
-        "scope_reference_id", "relationship_selector_key", "object_name",
+        "scope_reference_id", "relationship_reference_id",
+        "relationship_selector_key", "object_name",
         "namespace", "requested_fields", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
             "metric_query", "metric_scope", "result_limit", "metric_range_seconds",

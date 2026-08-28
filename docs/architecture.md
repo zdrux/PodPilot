@@ -198,6 +198,11 @@ Overall node CPU/memory utilization comes from bounded node-exporter templates j
 `node_uname_info`. Resource-exhaustion planning should collect both overall utilization and
 top workload consumers; any unexplained difference may be host, kernel, cache, or unmonitored
 work and must remain a limitation rather than being assigned to a Pod.
+Cluster-wide or role-scoped Node ranking requests use those same utilization templates grouped
+by Node and wrapped in a bounded `topk`; they are distinct from container-backed top-consumer
+rankings. Normal code recognizes an unambiguous `top/rank + CPU/memory + Nodes` request before
+generic resource inventory routing and applies the standard five-minute default when no period
+is supplied.
 
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
 broker later shared by incident chat. Up to ten
@@ -255,12 +260,24 @@ value and compiles one bounded namespaced LIST. For example, topics belonging to
 Kafka compile to `KafkaTopic` objects in the Kafka namespace with the model-selected relationship key
 and server-bound Kafka name. Invalid, incomplete, or invented scope selections receive the existing
 bounded semantic correction attempt rather than being executed.
+The classifier also receives bounded opaque relationship IDs derived from the trusted evidence graph.
+Each ID represents one direction of an observed edge and exposes only its anchor, target Kind, scope,
+cardinality, and relationship. The model selects the semantic destination; normal code binds the retained
+exact name or complete label selector. Forward and reverse selections support relationships such as
+Machine to Node, Node back to Machine, ConfigMap back to its referencing custom resource, and
+MachineConfigPool to its selected Nodes or MachineConfigs without letting the model author field paths,
+selectors, API coordinates, or object names.
 An exact custom-resource read also derives bounded relationships from structured ConfigMap reference
-objects in its observed spec. The model normally receives the referenced ConfigMap as an opaque exact
-action and chooses whether it is needed; a `configuration_guidance` read remains open for that selection.
+objects in its observed spec. Generic extraction also recognizes metadata owner references, typed
+ObjectReference-shaped spec/status fields, and a bounded registry of selectors whose target Kind is
+defined by a Kubernetes or OpenShift API contract. Each successful read rebuilds the frontier, allowing
+another verified hop within the existing planning-round and investigation-unit ceilings. The model
+normally receives the referenced target as an opaque exact action and chooses whether it is needed; a
+`configuration_guidance` read remains open for that selection.
 For an explicit show, display, or read-configuration request, normal code may follow up to three exact
 same-namespace ConfigMap references observed in the source object's structured spec without another
-model round. The broker, remaining investigation budget, and normal ConfigMap redaction still apply;
+model round unless the operator explicitly requested the source CR, object, manifest, spec, or status.
+The broker, remaining investigation budget, and normal ConfigMap redaction still apply;
 Secret references and inferred names are never traversed by this exception. Explicit
 `configures_from` actions outrank generic catalog and list-result candidates during malformed-plan
 recovery. An exact ConfigMap GET contributes a bounded, recursively redacted `data` projection to final

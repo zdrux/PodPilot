@@ -264,10 +264,17 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "top_log_volume_by_namespace requires cluster scope"
                 )
+            cluster_node_ranking = (
+                self.metric in {"node_cpu_utilization", "node_memory_utilization"}
+                and self.metric_scope == "cluster"
+                and self.metric_operation == "rank"
+                and "node" in self.metric_group_by
+            )
             if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
-                if self.metric_scope not in {"node", "node_role"}:
+                if self.metric_scope not in {"node", "node_role"} and not cluster_node_ranking:
                     raise ValueError(
-                        "the selected node utilization metric requires node or node-role scope"
+                        "the selected node utilization metric requires node or node-role scope, "
+                        "or a cluster ranking grouped by node"
                     )
             if self.metric == "persistent_volume_usage":
                 if self.metric_scope != "persistent_volume_claim":
@@ -278,8 +285,14 @@ class ReadIntent(BaseModel):
                 grouping not in {"cluster", "node"} for grouping in self.metric_group_by
             ):
                 raise ValueError("node metrics can group only by node")
-            if "node" in self.metric_group_by and self.metric_scope not in {"node", "node_role"}:
-                raise ValueError("node grouping requires node or node-role scope")
+            if (
+                "node" in self.metric_group_by
+                and self.metric_scope not in {"node", "node_role"}
+                and not cluster_node_ranking
+            ):
+                raise ValueError(
+                    "node grouping requires node or node-role scope, or a cluster Node ranking"
+                )
             if self.metric_scope == "persistent_volume_claim" and self.metric_group_by:
                 raise ValueError("PVC utilization does not support grouping")
             if self.metric in {"network_receive", "network_transmit", "pod_readiness"}:
@@ -694,6 +707,8 @@ def derive_evidence_relationship_graph(
         evidence_id: str | None = None,
         observed: bool = False,
         selector: str | None = None,
+        api_version: object = None,
+        resource: object = None,
     ) -> str:
         key = node_key(kind, namespace, name, selector=selector)
         node = nodes.setdefault(key, {
@@ -702,9 +717,15 @@ def derive_evidence_relationship_graph(
             "namespace": str(namespace or "cluster")[:253],
             "name": str(name)[:253] if name else None,
             "selector": selector,
+            "api_version": str(api_version)[:253] if api_version else None,
+            "resource": str(resource)[:317] if resource else None,
             "observed": False,
             "evidence_ids": [],
         })
+        if api_version and not node.get("api_version"):
+            node["api_version"] = str(api_version)[:253]
+        if resource and not node.get("resource"):
+            node["resource"] = str(resource)[:317]
         node["observed"] = bool(node["observed"] or observed)
         if evidence_id and evidence_id not in node["evidence_ids"]:
             node["evidence_ids"].append(evidence_id)
@@ -721,6 +742,20 @@ def derive_evidence_relationship_graph(
         if key in edge_keys or len(edges) >= max_edges:
             return
         edge_keys.add(key)
+        source_node = nodes.get(source, {})
+        source_kind = str(source_node.get("kind") or "Resource")
+        source_name = source_node.get("name")
+        source_namespace = source_node.get("namespace")
+        source_read_hint = None
+        if source_name and source_kind != "Secret":
+            source_read_hint = {
+                "tool": "get_resource",
+                "resource": source_node.get("resource"),
+                "api_version": source_node.get("api_version"),
+                "kind": source_kind,
+                "namespace": None if source_namespace == "cluster" else source_namespace,
+                "name": source_name,
+            }
         edges.append({
             "source": source,
             "target": target,
@@ -728,7 +763,102 @@ def derive_evidence_relationship_graph(
             "evidence_ids": [evidence_id],
             "target_observed": bool(nodes.get(target, {}).get("observed")),
             "read_hint": read_hint,
+            "source_read_hint": source_read_hint,
         })
+
+    cluster_scoped_kinds = {
+        "ClusterRole", "ClusterRoleBinding", "CustomResourceDefinition",
+        "MachineConfig", "MachineConfigPool", "Namespace", "Node",
+        "PersistentVolume", "StorageClass",
+    }
+    reference_key_kinds: dict[str, tuple[str, str, str | None]] = {
+        "noderef": ("Node", "v1", "nodes"),
+        "persistentvolumeref": ("PersistentVolume", "v1", "persistentvolumes"),
+        "serviceaccountref": ("ServiceAccount", "v1", "serviceaccounts"),
+        "secretref": ("Secret", "v1", "secrets"),
+        "secretkeyref": ("Secret", "v1", "secrets"),
+    }
+    resource_by_kind = {
+        "ConfigMap": "configmaps", "Machine": "machines.machine.openshift.io",
+        "MachineConfig": "machineconfigs.machineconfiguration.openshift.io",
+        "MachineConfigPool": "machineconfigpools.machineconfiguration.openshift.io",
+        "Node": "nodes", "PersistentVolume": "persistentvolumes",
+        "Pod": "pods", "Secret": "secrets", "ServiceAccount": "serviceaccounts",
+    }
+
+    def selector_text(value: object) -> str | None:
+        if not isinstance(value, dict):
+            return None
+        parts = [
+            f"{key}={item}" for key, item in sorted(
+                (value.get("matchLabels") or value.get("match_labels") or {}).items()
+            ) if key and item is not None
+        ] if isinstance(
+            value.get("matchLabels") or value.get("match_labels"), dict
+        ) else []
+        expressions = value.get("matchExpressions") or value.get("match_expressions") or []
+        if isinstance(expressions, list):
+            for expression in expressions[:20]:
+                if not isinstance(expression, dict) or not expression.get("key"):
+                    continue
+                key = str(expression["key"])
+                operator = str(expression.get("operator") or "")
+                values = [str(item) for item in expression.get("values") or []]
+                if operator in {"In", "NotIn"} and values:
+                    parts.append(
+                        f"{key} {'in' if operator == 'In' else 'notin'} ({','.join(values)})"
+                    )
+                elif operator == "Exists":
+                    parts.append(key)
+                elif operator == "DoesNotExist":
+                    parts.append(f"!{key}")
+        rendered = ",".join(parts)
+        return rendered if rendered and len(rendered) <= 512 else None
+
+    def structured_references(value: object) -> list[dict[str, object]]:
+        """Extract bounded typed object references without interpreting free-form strings."""
+
+        references: list[dict[str, object]] = []
+        visited = 0
+
+        def visit(candidate: object, path_key: str = "", depth: int = 0) -> None:
+            nonlocal visited
+            if depth > 10 or visited >= 300 or len(references) >= 30:
+                return
+            visited += 1
+            if isinstance(candidate, dict):
+                normalized_key = re.sub(r"[^a-z0-9]", "", path_key.casefold())
+                inferred = reference_key_kinds.get(normalized_key)
+                name = candidate.get("name")
+                kind = candidate.get("kind") or (inferred[0] if inferred else None)
+                if name and kind:
+                    references.append({
+                        "name": str(name)[:253],
+                        "kind": str(kind)[:128],
+                        "api_version": (
+                            candidate.get("apiVersion") or candidate.get("api_version")
+                            or (inferred[1] if inferred else None)
+                        ),
+                        "resource": inferred[2] if inferred else resource_by_kind.get(str(kind)),
+                        "namespace": candidate.get("namespace"),
+                        "relation": "represents" if normalized_key == "noderef" else "references",
+                    })
+                for key, item in list(candidate.items())[:100]:
+                    visit(item, str(key), depth + 1)
+            elif isinstance(candidate, (list, tuple)):
+                for item in list(candidate)[:100]:
+                    visit(item, path_key, depth + 1)
+
+        visit(value)
+        unique: dict[tuple[str, str, str], dict[str, object]] = {}
+        for reference in references:
+            key = (
+                str(reference.get("kind") or ""),
+                str(reference.get("namespace") or ""),
+                str(reference.get("name") or ""),
+            )
+            unique.setdefault(key, reference)
+        return list(unique.values())
 
     def objects_from_observation(
         observation: dict[str, object],
@@ -759,7 +889,12 @@ def derive_evidence_relationship_graph(
             if not name:
                 continue
             source = add_node(
-                kind, namespace, name, evidence_id=evidence_id, observed=True
+                kind, namespace, name, evidence_id=evidence_id, observed=True,
+                api_version=obj.get("apiVersion") or obj.get("api_version"),
+                resource=(
+                    observation.get("data", {}).get("resource")
+                    if isinstance(observation.get("data"), dict) else None
+                ),
             )
 
             owners = metadata.get("ownerReferences") or metadata.get("owner_references")
@@ -768,12 +903,87 @@ def derive_evidence_relationship_graph(
                     if not isinstance(owner, dict) or not owner.get("name"):
                         continue
                     owner_kind = owner.get("kind") or "Resource"
-                    target = add_node(owner_kind, namespace, owner.get("name"))
+                    target = add_node(
+                        owner_kind, namespace, owner.get("name"),
+                        api_version=owner.get("apiVersion") or owner.get("api_version"),
+                        resource=resource_by_kind.get(str(owner_kind)),
+                    )
                     add_edge(source, target, "owned_by", evidence_id, {
                         "tool": "get_resource", "kind": owner_kind,
                         "api_version": owner.get("apiVersion") or owner.get("api_version"),
                         "namespace": namespace, "name": owner.get("name"),
                     })
+
+            generic_references = (
+                [] if kind in {"Route", "EndpointSlice", "Endpoints"} else [
+                    *structured_references(spec),
+                    *structured_references(obj.get("status")),
+                ]
+            )
+            for reference in generic_references:
+                target_kind = str(reference.get("kind") or "Resource")
+                # ConfigMap references receive the more specific configures_from edge below.
+                if target_kind == "ConfigMap":
+                    continue
+                target_namespace = (
+                    "cluster" if target_kind in cluster_scoped_kinds else
+                    str(reference.get("namespace") or namespace)
+                )
+                target = add_node(
+                    target_kind, target_namespace, reference.get("name"),
+                    api_version=reference.get("api_version"),
+                    resource=reference.get("resource"),
+                )
+                read_hint = None if target_kind == "Secret" else {
+                    "tool": "get_resource",
+                    "resource": reference.get("resource"),
+                    "api_version": reference.get("api_version"),
+                    "kind": target_kind,
+                    "namespace": None if target_namespace == "cluster" else target_namespace,
+                    "name": reference.get("name"),
+                }
+                add_edge(
+                    source, target, str(reference.get("relation") or "references"),
+                    evidence_id, read_hint,
+                )
+
+            selector_relationships = {
+                "MachineConfigPool": (
+                    ("nodeSelector", "Node", "nodes", "v1", "selects"),
+                    (
+                        "machineConfigSelector", "MachineConfig",
+                        "machineconfigs.machineconfiguration.openshift.io",
+                        "machineconfiguration.openshift.io/v1", "selects_configuration",
+                    ),
+                ),
+                "MachineSet": ((
+                    "selector", "Machine", "machines.machine.openshift.io",
+                    "machine.openshift.io/v1beta1", "selects",
+                ),),
+                "Deployment": (("selector", "Pod", "pods", "v1", "selects"),),
+                "DaemonSet": (("selector", "Pod", "pods", "v1", "selects"),),
+                "ReplicaSet": (("selector", "Pod", "pods", "v1", "selects"),),
+                "StatefulSet": (("selector", "Pod", "pods", "v1", "selects"),),
+            }
+            for selector_field, target_kind, resource, api_version, relation in (
+                selector_relationships.get(kind, ())
+            ):
+                rendered_selector = selector_text(spec.get(selector_field))
+                if not rendered_selector:
+                    continue
+                target_namespace = (
+                    "cluster" if target_kind in cluster_scoped_kinds else namespace
+                )
+                target = add_node(
+                    target_kind, target_namespace, None, selector=rendered_selector,
+                    api_version=api_version, resource=resource,
+                )
+                add_edge(source, target, relation, evidence_id, {
+                    "tool": "list_resources", "resource": resource,
+                    "api_version": api_version, "kind": target_kind,
+                    "namespace": None if target_namespace == "cluster" else target_namespace,
+                    "label_selector": rendered_selector, "limit": 20,
+                })
 
             if kind == "Route":
                 backends: list[dict[str, object]] = []
@@ -916,10 +1126,15 @@ def derive_evidence_relationship_graph(
         edge for edge in bounded_edges
         if not edge["target_observed"] and edge.get("read_hint") is not None
     ]
+    reverse_frontier = [
+        edge for edge in bounded_edges
+        if edge["target_observed"] and edge.get("source_read_hint") is not None
+    ]
     return {
         "nodes": bounded_nodes,
         "edges": bounded_edges,
         "frontier": frontier,
+        "reverse_frontier": reverse_frontier,
         "truncated": len(nodes) > max_nodes or len(edges) > max_edges,
     }
 
@@ -1039,6 +1254,12 @@ _WORKER_NODE_UTILIZATION_QUERY = re.compile(
     r"(?=.*\b(?:utilization|utilisation|usage|used|current)\b)",
     re.IGNORECASE,
 )
+_NODE_UTILIZATION_RANKING_QUERY = re.compile(
+    r"(?=.*\bnodes?\b)"
+    r"(?=.*\b(?P<metric>cpu|mem|memory)\b)"
+    r"(?=.*\b(?:top(?:\s+\d{1,3})?|rank(?:ed|ing)?|highest|largest|most)\b)",
+    re.IGNORECASE,
+)
 _METRIC_DURATION_QUERY = re.compile(
     r"\b(?:last|past|previous)\s+"
     r"(?:(?P<count>\d{1,3}|one|a|an)\s*)?"
@@ -1046,7 +1267,7 @@ _METRIC_DURATION_QUERY = re.compile(
     re.IGNORECASE,
 )
 _METRIC_TOP_LIMIT_QUERY = re.compile(
-    r"\btop\s+(?P<limit>\d{1,3})\b",
+    r"\b(?:top|rank(?:ed|ing)?(?:\s+the)?)\s+(?P<limit>\d{1,3})\b",
     re.IGNORECASE,
 )
 DEFAULT_METRIC_RANGE_SECONDS = 300
@@ -1252,6 +1473,34 @@ def plan_known_read(
     metric_result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    node_ranking = _NODE_UTILIZATION_RANKING_QUERY.search(question)
+    if node_ranking:
+        metric_name = node_ranking.group("metric").lower()
+        role_match = re.search(r"\b(worker|master|infra)\s+nodes?\b", question, re.IGNORECASE)
+        role = role_match.group(1).lower() if role_match else None
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    f"Rank Nodes by {metric_name.upper()} utilization over "
+                    f"{metric_range_seconds} seconds."
+                ),
+                intents=[ReadIntent(
+                    tool="query_metrics",
+                    metric=(
+                        "node_cpu_utilization" if metric_name == "cpu"
+                        else "node_memory_utilization"
+                    ),
+                    metric_scope="node_role" if role else "cluster",
+                    name=role,
+                    range_seconds=metric_range_seconds,
+                    limit=metric_result_limit,
+                    metric_operation="rank",
+                    metric_group_by=["node"],
+                )],
+            ),
+            True,
+        )
     if _WORKER_NODE_UTILIZATION_QUERY.search(question):
         return (
             ReadPlan(
@@ -1780,6 +2029,7 @@ def automatic_read_followups(
     *,
     question: str = "",
     goal_type: str | None = None,
+    primary_kind: str | None = None,
 ) -> tuple[AutomaticReadFollowup, ...]:
     """Plan narrow retries and evidence expansion from normalized observations."""
 
@@ -1813,7 +2063,15 @@ def automatic_read_followups(
         r"\b(?:show|display|view|print|dump|read|open)\b",
         question,
     ))
-    if explicit_config_display and intent.tool == "get_resource":
+    source_object_display = bool(
+        primary_kind
+        and primary_kind.casefold() != "configmap"
+        and re.search(
+            r"(?i)\b(?:cr|custom\s+resource|object\s+itself|manifest|yaml|spec|status)\b",
+            question,
+        )
+    )
+    if explicit_config_display and not source_object_display and intent.tool == "get_resource":
         referenced_configmaps: list[AutomaticReadFollowup] = []
         seen_configmaps: set[tuple[str, str]] = set()
         for observation in observations:

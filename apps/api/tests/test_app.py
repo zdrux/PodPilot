@@ -379,6 +379,149 @@ def test_related_inventory_followup_binds_parent_scope_and_selector_value() -> N
     )]
 
 
+def test_semantic_relationship_followup_binds_reverse_kafka_target() -> None:
+    class Provider:
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            relationship = next(
+                item for item in context["recent_relationship_references"]
+                if item["direction"] == "reverse"
+                and item["relation"] == "configures_from"
+                and item["target_kind"] == "Kafka"
+            )
+            return InquirySemantics(
+                mode="investigate", operation="object_fields",
+                cardinality="exact_one", resource_query="Kafka",
+                relationship_reference_id=relationship["id"],
+                requested_fields=["spec.kafka.metricsConfig"],
+                needs_object_details=True,
+                evidence_goal="Show the Kafka CR that references the observed ConfigMap.",
+            )
+
+    evidence = [{
+        "id": "cluster-kafka", "tool": "get_resource",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "resource": "kafkas.kafka.strimzi.io",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            "spec": {"kafka": {"metricsConfig": {"valueFrom": {
+                "configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"},
+            }}}},
+        },
+    }, {
+        "id": "cluster-config", "tool": "get_resource",
+        "data": {
+            "apiVersion": "v1", "kind": "ConfigMap", "resource": "configmaps",
+            "metadata": {"namespace": "vc-streams", "name": "kafka-metrics"},
+            "data": {"metrics.yml": "rules: []"},
+        },
+    }]
+
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Show me the Kafka CR configuration that references the ConfigMap.",
+        conversation=[], cluster_names=["Central"], evidence=evidence,
+    ))
+
+    assert inquiry is not None
+    assert inquiry.resource_query == "Kafka"
+    assert inquiry.namespace == "vc-streams"
+    assert inquiry.object_name == "vc-cluster"
+    assert inquiry.cardinality == "exact_one"
+
+    compiled = _semantic_resource_read_plan(
+        inquiry,
+        resource_catalog=[{
+            "resource": "kafkas.kafka.strimzi.io",
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show me the Kafka CR configuration that references the ConfigMap.",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="get_resource", resource="kafkas.kafka.strimzi.io",
+        api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+    )]
+
+
+def test_semantic_relationship_followup_compiles_selector_collection() -> None:
+    class Provider:
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            relationship = next(
+                item for item in context["recent_relationship_references"]
+                if item["direction"] == "forward"
+                and item["relation"] == "selects"
+                and item["target_kind"] == "Node"
+            )
+            return InquirySemantics(
+                mode="inventory", operation="inventory",
+                cardinality="collection", resource_query="Node",
+                relationship_reference_id=relationship["id"],
+                evidence_goal="List Nodes selected by the observed MachineConfigPool.",
+            )
+
+    evidence = [{
+        "id": "mcp-worker", "tool": "get_resource",
+        "data": {
+            "apiVersion": "machineconfiguration.openshift.io/v1",
+            "kind": "MachineConfigPool",
+            "resource": "machineconfigpools.machineconfiguration.openshift.io",
+            "metadata": {"name": "worker"},
+            "spec": {
+                "nodeSelector": {
+                    "matchLabels": {"node-role.kubernetes.io/worker": ""},
+                },
+            },
+        },
+    }]
+
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Which Nodes belong to that MachineConfigPool?",
+        conversation=[], cluster_names=["Central"], evidence=evidence,
+    ))
+
+    assert inquiry is not None
+    assert inquiry.resource_query == "Node"
+    assert inquiry.label_selector == "node-role.kubernetes.io/worker="
+    assert inquiry.cardinality == "collection"
+
+    compiled = _semantic_resource_read_plan(
+        inquiry,
+        resource_catalog=[{
+            "resource": "nodes", "apiVersion": "v1", "kind": "Node",
+            "namespaced": False, "verbs": ["get", "list"],
+        }],
+        question="Which Nodes belong to that MachineConfigPool?",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="list_resources", resource="nodes", api_version="v1", kind="Node",
+        label_selector="node-role.kubernetes.io/worker=", limit=500,
+    )]
+
+
 def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
     class Provider:
         def __init__(self) -> None:
@@ -2367,6 +2510,26 @@ def test_typed_metric_rank_maps_signal_to_registered_bounded_ranking() -> None:
     assert intent.metric_operation == "rank"
 
 
+def test_typed_metric_rank_maps_cluster_node_cpu_to_node_utilization() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        evidence_goal="Rank Nodes by CPU utilization.",
+        metric_request=MetricRequestSemantics(
+            signals=["node_cpu_utilization"],
+            target=MetricTargetSemantics(scope="cluster", kind="Cluster"),
+            operation="rank", group_by=["node"], result_limit=5,
+        ),
+    ))
+
+    assert compiled is not None
+    intent = compiled[0].intents[0]
+    assert intent == ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="cluster", range_seconds=300, limit=5,
+        metric_operation="rank", metric_group_by=["node"],
+    )
+
+
 def test_typed_metric_threshold_preserves_grouping_statistic_and_comparator() -> None:
     compiled = _semantic_metric_read_plan(InquirySemantics(
         mode="metrics",
@@ -2545,6 +2708,75 @@ def test_worker_node_utilization_guard_overrides_wrong_pod_ranking_semantics() -
     ]
     assert {item["data"]["metric"] for item in result.evidence} == {
         "node_cpu_utilization", "node_memory_utilization",
+    }
+
+
+def test_cluster_node_ranking_guard_overrides_inventory_semantics() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("the deterministic Node ranking must be terminal")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "nodes", "apiVersion": "v1", "kind": "Node",
+                "namespaced": False, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            assert intent.tool == "query_metrics"
+            return ReadResult((AdHocObservation(
+                id="metric-node-cpu", tool="query_metrics",
+                summary="Ranked Nodes by CPU utilization.",
+                source="thanos:query_range/node_cpu_utilization",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": intent.metric, "scope": intent.metric_scope,
+                    "unit": "percent", "operation": intent.metric_operation,
+                    "groupBy": intent.metric_group_by, "limit": intent.limit,
+                    "ranking": [{
+                        "labels": {"nodename": "worker-1"},
+                        "current": 42.0, "average": 40.0, "maximum": 45.0,
+                    }],
+                    "series": [], "complete": True,
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="cluster-node-ranking",
+        question="show me the top 5 cpu consuming nodes on the cluster",
+        conversation=[], existing_evidence=[],
+        # Reproduce the observed schema-valid inventory classification.
+        inquiry=InquirySemantics(
+            capability="resource_inventory", mode="inventory", operation="inventory",
+            cardinality="collection", resource_query="Node",
+            evidence_goal="List Nodes on the cluster.",
+        ),
+    ))
+
+    assert explorer.calls == [ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="cluster", range_seconds=300, limit=5,
+        metric_operation="rank", metric_group_by=["node"],
+    )]
+    assert result.evidence[0]["data"]["ranking"][0]["labels"] == {
+        "nodename": "worker-1",
     }
 
 
@@ -4321,6 +4553,40 @@ def test_exact_configmap_fallback_renders_data_with_an_explicit_limit() -> None:
     assert "lowercaseOutputName: true" in content
     assert "pattern: kafka.server" in content
     assert rendered["citations"] == ["cluster-configmap-detail"]
+
+
+def test_primary_kafka_target_prevents_supporting_configmap_takeover() -> None:
+    rendered = _deterministic_resource_detail_answer(
+        question="Show me the Kafka CR configuration that references the ConfigMap.",
+        preferred_kind="Kafka",
+        evidence=[{
+            "id": "cluster-kafka-detail", "tool": "get_resource",
+            "data": {
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+                "spec": {"kafka": {"metricsConfig": {"valueFrom": {
+                    "configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"},
+                }}}},
+            },
+        }, {
+            "id": "cluster-configmap-detail", "tool": "get_resource",
+            "data": {
+                "apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": {"namespace": "vc-streams", "name": "kafka-metrics"},
+                "data": {"metrics.yml": "rules: []"},
+            },
+        }],
+        activity=[
+            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["cluster-kafka-detail"]},
+            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["cluster-configmap-detail"]},
+        ],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert not content.startswith("## ConfigMap configuration")
+    assert "Kafka `vc-streams/vc-cluster`" in content
+    assert rendered["citations"] == ["cluster-kafka-detail"]
 
 
 def test_exact_node_label_fallback_renders_metadata_labels() -> None:

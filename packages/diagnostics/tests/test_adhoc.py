@@ -118,6 +118,124 @@ def test_relationship_graph_follows_nested_custom_resource_configmap_reference()
     }
 
 
+def test_relationship_graph_derives_machine_node_reference() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "machine-1", "tool": "get_resource",
+        "data": {
+            "apiVersion": "machine.openshift.io/v1beta1", "kind": "Machine",
+            "resource": "machines.machine.openshift.io",
+            "metadata": {"namespace": "openshift-machine-api", "name": "worker-0"},
+            "status": {"nodeRef": {"apiVersion": "v1", "kind": "Node", "name": "worker-0-node"}},
+        },
+    }])
+
+    edge = next(item for item in graph["frontier"] if item["relation"] == "represents")
+    assert edge["target"] == "Node:cluster/worker-0-node"
+    assert edge["read_hint"] == {
+        "tool": "get_resource", "resource": "nodes", "api_version": "v1",
+        "kind": "Node", "namespace": None, "name": "worker-0-node",
+    }
+
+
+def test_relationship_graph_derives_machineconfigpool_selector_collections() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "mcp-worker", "tool": "get_resource",
+        "data": {
+            "apiVersion": "machineconfiguration.openshift.io/v1",
+            "kind": "MachineConfigPool",
+            "resource": "machineconfigpools.machineconfiguration.openshift.io",
+            "metadata": {"name": "worker"},
+            "spec": {
+                "nodeSelector": {"matchLabels": {"node-role.kubernetes.io/worker": ""}},
+                "machineConfigSelector": {"matchExpressions": [{
+                    "key": "machineconfiguration.openshift.io/role",
+                    "operator": "In", "values": ["worker", "infra"],
+                }]},
+            },
+        },
+    }])
+
+    by_relation = {item["relation"]: item for item in graph["frontier"]}
+    assert by_relation["selects"]["read_hint"] == {
+        "tool": "list_resources", "resource": "nodes", "api_version": "v1",
+        "kind": "Node", "namespace": None,
+        "label_selector": "node-role.kubernetes.io/worker=", "limit": 20,
+    }
+    assert by_relation["selects_configuration"]["read_hint"] == {
+        "tool": "list_resources",
+        "resource": "machineconfigs.machineconfiguration.openshift.io",
+        "api_version": "machineconfiguration.openshift.io/v1",
+        "kind": "MachineConfig", "namespace": None,
+        "label_selector": "machineconfiguration.openshift.io/role in (worker,infra)",
+        "limit": 20,
+    }
+
+
+def test_relationship_graph_exposes_reverse_source_when_target_is_observed() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "kafka-1", "tool": "get_resource",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "resource": "kafkas.kafka.strimzi.io",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            "spec": {"metricsConfig": {"configMapKeyRef": {"name": "kafka-metrics"}}},
+        },
+    }, {
+        "id": "config-1", "tool": "get_resource",
+        "data": {
+            "apiVersion": "v1", "kind": "ConfigMap", "resource": "configmaps",
+            "metadata": {"namespace": "vc-streams", "name": "kafka-metrics"},
+            "data": {"metrics.yml": "rules: []"},
+        },
+    }])
+
+    edge = next(item for item in graph["reverse_frontier"] if item["relation"] == "configures_from")
+    assert edge["source_read_hint"] == {
+        "tool": "get_resource", "resource": "kafkas.kafka.strimzi.io",
+        "api_version": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+        "namespace": "vc-streams", "name": "vc-cluster",
+    }
+
+
+def test_relationship_graph_advances_owner_chain_one_bounded_hop_at_a_time() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "pod-1", "tool": "get_resource",
+        "data": {
+            "apiVersion": "v1", "kind": "Pod", "resource": "pods",
+            "metadata": {
+                "namespace": "payments", "name": "api-abc",
+                "ownerReferences": [{
+                    "apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "api-123",
+                    "uid": "rs-uid",
+                }],
+            },
+        },
+    }, {
+        "id": "rs-1", "tool": "get_resource",
+        "data": {
+            "apiVersion": "apps/v1", "kind": "ReplicaSet", "resource": "replicasets",
+            "metadata": {
+                "namespace": "payments", "name": "api-123",
+                "ownerReferences": [{
+                    "apiVersion": "apps/v1", "kind": "Deployment", "name": "api",
+                    "uid": "deployment-uid",
+                }],
+            },
+        },
+    }])
+
+    assert {
+        (item["source"], item["target"], item["relation"])
+        for item in graph["edges"]
+    } >= {
+        ("Pod:payments/api-abc", "ReplicaSet:payments/api-123", "owned_by"),
+        ("ReplicaSet:payments/api-123", "Deployment:payments/api", "owned_by"),
+    }
+    assert [item["target"] for item in graph["frontier"] if item["relation"] == "owned_by"] == [
+        "Deployment:payments/api"
+    ]
+
+
 def test_candidate_selection_normalizes_plan_to_collect() -> None:
     plan = ReadPlan(
         scope_summary="Select the grounded backend Service read.",
@@ -551,6 +669,32 @@ def test_configmap_reference_is_not_automatically_followed_without_display_reque
         (kafka,),
         question="Is Prometheus export configured?",
         goal_type="explain",
+    ) == ()
+
+
+def test_source_cr_display_does_not_automatically_follow_supporting_configmap() -> None:
+    kafka = AdHocObservation(
+        id="cluster-kafka", tool="get_resource", summary="Read Kafka.",
+        source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:vc-streams/vc-cluster",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "kind": "Kafka",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            "spec": {"metricsConfig": {
+                "configMapKeyRef": {"name": "kafka-metrics", "key": "metrics.yml"},
+            }},
+        },
+    )
+
+    assert automatic_read_followups(
+        ReadIntent(
+            tool="get_resource", resource="kafkas.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
+            namespace="vc-streams", name="vc-cluster",
+        ),
+        (kafka,),
+        question="Show the Kafka CR configuration that references the ConfigMap.",
+        goal_type="explain", primary_kind="Kafka",
     ) == ()
 
 
@@ -1222,6 +1366,17 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         metric_scope="cluster", limit=5,
     )
     assert cluster.namespace is None and cluster.name is None and cluster.limit == 5
+    node_ranking = ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["node"], limit=5,
+    )
+    assert node_ranking.name is None and node_ranking.limit == 5
+    with pytest.raises(ValidationError, match="cluster ranking grouped by node"):
+        ReadIntent(
+            tool="query_metrics", metric="node_cpu_utilization",
+            metric_scope="cluster",
+        )
     with pytest.raises(ValidationError, match="requires cluster, namespace, workload, or node scope"):
         ReadIntent(
             tool="query_metrics", metric="top_memory_consumers",
@@ -1278,6 +1433,35 @@ def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -
             metric_scope="node_role", name="worker", range_seconds=300,
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("question", "metric", "scope", "name", "limit"),
+    [
+        (
+            "show me the top 5 cpu consuming nodes on the cluster",
+            "node_cpu_utilization", "cluster", None, 5,
+        ),
+        (
+            "rank the 3 worker nodes with the highest memory usage",
+            "node_memory_utilization", "node_role", "worker", 3,
+        ),
+    ],
+)
+def test_node_utilization_ranking_compiles_to_bounded_metric_query(
+    question: str, metric: str, scope: str, name: str | None, limit: int,
+) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "compare"
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope=scope,
+        name=name, range_seconds=300, limit=limit,
+        metric_operation="rank", metric_group_by=["node"],
+    )]
 
 
 @pytest.mark.parametrize(

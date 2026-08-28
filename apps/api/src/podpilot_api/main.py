@@ -1484,6 +1484,7 @@ def _deterministic_provider_failure_answer(
     evidence: list[dict[str, object]],
     activity: list[dict[str, object]],
     inventory_only: bool | None = None,
+    preferred_kind: str | None = None,
 ) -> dict[str, object]:
     """Preserve successful reads when the final provider call has no usable content."""
 
@@ -1495,7 +1496,8 @@ def _deterministic_provider_failure_answer(
             question=question, evidence=evidence, activity=activity
         )
         or _deterministic_resource_detail_answer(
-            question=question, evidence=evidence, activity=activity
+            question=question, evidence=evidence, activity=activity,
+            preferred_kind=preferred_kind,
         )
         or _deterministic_inventory_answer(
             question=question,
@@ -1526,7 +1528,7 @@ def _deterministic_provider_failure_answer(
 
 def _deterministic_resource_detail_answer(
     *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
-    question: str = "",
+    question: str = "", preferred_kind: str | None = None,
 ) -> dict[str, object] | None:
     """Render a bounded question-focused answer from exact-object evidence."""
 
@@ -1561,6 +1563,30 @@ def _deterministic_resource_detail_answer(
     if not observations:
         return None
 
+    normalized_preferred_kind = re.sub(
+        r"[^a-z0-9]", "", str(preferred_kind or "").casefold()
+    )
+    preferred_kind_terms = _resource_query_terms(preferred_kind) - {
+        "cluster", "object", "resource",
+    }
+    if normalized_preferred_kind:
+        preferred_observations = [
+            item for item in observations
+            if (
+                re.sub(
+                    r"[^a-z0-9]", "",
+                    str(item["data"].get("kind") or "").casefold(),
+                ) == normalized_preferred_kind
+                or (
+                    preferred_kind_terms
+                    and _resource_query_terms(item["data"].get("kind"))
+                    == preferred_kind_terms
+                )
+            )
+        ]
+        if preferred_observations:
+            observations = preferred_observations
+
     def bounded_value(value: object, *, limit: int = 450) -> str:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
         safe = redact_text(encoded).replace("|", "\\|").replace("`", "'")
@@ -1587,7 +1613,8 @@ def _deterministic_resource_detail_answer(
             question,
         )
     )
-    if configmaps and configmap_display_requested:
+    configmap_is_primary = normalized_preferred_kind in {"", "configmap", "configmaps"}
+    if configmaps and configmap_display_requested and configmap_is_primary:
         lines = [
             "## ConfigMap configuration",
             "",
@@ -3845,6 +3872,9 @@ def _grounded_read_candidates(
         "owned_by": "resource_read",
         "mounts_from": "resource_read",
         "configures_from": "resource_read",
+        "references": "resource_read",
+        "represents": "resource_read",
+        "selects_configuration": "resource_read",
     }
     for edge in relationship_graph.get("frontier") or []:
         if not isinstance(edge, dict) or not isinstance(edge.get("read_hint"), dict):
@@ -3862,6 +3892,28 @@ def _grounded_read_candidates(
             reason=f"Observed evidence relation {relation} points to an unread target.",
             evidence_ids=[str(item) for item in edge.get("evidence_ids") or []],
             relation=relation,
+        )
+
+    # Reverse candidates let the model move from an observed referenced/child object
+    # back to the exact source object that established the relationship. The source
+    # coordinate comes from observed Kubernetes metadata, never model prose.
+    for edge in relationship_graph.get("reverse_frontier") or []:
+        if not isinstance(edge, dict) or not isinstance(edge.get("source_read_hint"), dict):
+            continue
+        try:
+            intent = ReadIntent.model_validate(edge["source_read_hint"])
+        except (TypeError, ValueError):
+            continue
+        relation = str(edge.get("relation") or "related_to")[:64]
+        add(
+            intent,
+            capability="resource_read",
+            target=str(edge.get("source") or "referencing resource"),
+            reason=(
+                f"Observed evidence relation {relation} was established by this exact source object."
+            ),
+            evidence_ids=[str(item) for item in edge.get("evidence_ids") or []],
+            relation=f"reverse_{relation}"[:64],
         )
 
     for log_candidate in pod_log_candidates_from_evidence(evidence):
@@ -4047,6 +4099,9 @@ def _grounded_read_candidates(
     candidates.sort(key=lambda item: (
         0 if item.capability in gap_capabilities else 1,
         0 if item.capability == "initial_discovery" and not evidence else 1,
+        0 if _resource_query_terms(item.target).intersection(
+            _resource_query_terms(question)
+        ) else 1,
         post_protocol_priority.get(item.capability, 10) if protocol_proven else 0,
         {
             "configures_from": 0,
@@ -4916,6 +4971,7 @@ def _validate_inquiry_grounding(
     conversation: list[dict[str, str]],
     prior_audit_query: dict[str, object] | None,
     object_references: list[dict[str, object]] | None = None,
+    relationship_references: list[dict[str, object]] | None = None,
 ) -> None:
     """Reject model-invented exact coordinates without interpreting operator wording."""
 
@@ -4943,10 +4999,16 @@ def _validate_inquiry_grounding(
         item for item in (object_references or [])
         if item.get("id") == inquiry.scope_reference_id
     ), None)
+    selected_relationship_reference = next((
+        item for item in (relationship_references or [])
+        if item.get("id") == inquiry.relationship_reference_id
+    ), None)
     if inquiry.object_reference_id and selected_reference is None:
         raise ModelProviderError("Capability selection invented an object_reference_id.")
     if inquiry.scope_reference_id and selected_scope_reference is None:
         raise ModelProviderError("Capability selection invented a scope_reference_id.")
+    if inquiry.relationship_reference_id and selected_relationship_reference is None:
+        raise ModelProviderError("Capability selection invented a relationship_reference_id.")
     for field_name in ("object_name", "namespace", "container", "label_selector"):
         value = getattr(inquiry, field_name)
         grounded_by_reference = bool(
@@ -4969,6 +5031,15 @@ def _validate_inquiry_grounding(
                     f"{inquiry.relationship_selector_key}="
                     f"{selected_scope_reference.get('name')}"
                 )
+            )
+            or (
+                selected_relationship_reference
+                and field_name in {"object_name", "namespace", "label_selector"}
+                and value == selected_relationship_reference.get({
+                    "object_name": "target_name",
+                    "namespace": "target_namespace",
+                    "label_selector": "target_selector",
+                }[field_name])
             )
         )
         inherited_audit_namespace = (
@@ -5065,6 +5136,69 @@ def _recent_object_references(
     return references[:limit]
 
 
+def _recent_relationship_references(
+    evidence: list[dict[str, object]], *, limit: int = 32
+) -> list[dict[str, object]]:
+    """Expose bounded graph directions as opaque model-selectable semantic targets."""
+
+    graph = derive_evidence_relationship_graph(evidence)
+    nodes = {
+        str(item.get("id")): item
+        for item in graph.get("nodes") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    references: list[dict[str, object]] = []
+
+    def add(edge: dict[str, object], *, reverse: bool) -> None:
+        source_id = str(edge.get("source") or "")
+        target_id = str(edge.get("target") or "")
+        selected_id = source_id if reverse else target_id
+        selected = nodes.get(selected_id)
+        anchor = nodes.get(target_id if reverse else source_id)
+        hint_key = "source_read_hint" if reverse else "read_hint"
+        if (
+            not isinstance(selected, dict)
+            or str(selected.get("kind") or "").casefold() == "secret"
+            or not isinstance(edge.get(hint_key), dict)
+        ):
+            return
+        coordinate = json.dumps({
+            "source": source_id, "target": target_id,
+            "relation": edge.get("relation"), "reverse": reverse,
+        }, sort_keys=True)
+        references.append({
+            "id": f"rel-{hashlib.sha256(coordinate.encode('utf-8')).hexdigest()[:20]}",
+            "direction": "reverse" if reverse else "forward",
+            "relation": str(edge.get("relation") or "related_to")[:64],
+            "anchor_kind": str((anchor or {}).get("kind") or "Resource")[:128],
+            "anchor_namespace": str((anchor or {}).get("namespace") or "cluster")[:253],
+            "anchor_name": (anchor or {}).get("name"),
+            "target_kind": str(selected.get("kind") or "Resource")[:128],
+            "target_namespace": str(selected.get("namespace") or "cluster")[:253],
+            "target_name": selected.get("name"),
+            "target_selector": selected.get("selector"),
+            "target_observed": bool(selected.get("observed")),
+            "supporting_evidence_ids": [
+                str(item)[:128] for item in edge.get("evidence_ids") or []
+            ],
+        })
+
+    for edge in graph.get("edges") or []:
+        if not isinstance(edge, dict):
+            continue
+        add(edge, reverse=False)
+        if edge.get("target_observed"):
+            add(edge, reverse=True)
+    references.sort(key=lambda item: (
+        0 if item.get("target_observed") else 1,
+        0 if item.get("direction") == "reverse" else 1,
+        str(item.get("target_kind") or ""),
+        str(item.get("target_namespace") or ""),
+        str(item.get("target_name") or item.get("target_selector") or ""),
+    ))
+    return references[:limit]
+
+
 def _bind_inquiry_object_reference(
     inquiry: InquirySemantics,
     object_references: list[dict[str, object]],
@@ -5125,6 +5259,48 @@ def _bind_inquiry_scope_reference(
     })
 
 
+def _bind_inquiry_relationship_reference(
+    inquiry: InquirySemantics,
+    relationship_references: list[dict[str, object]],
+) -> InquirySemantics:
+    """Bind one semantic graph direction to trusted target coordinates or a selector."""
+
+    if not inquiry.relationship_reference_id:
+        return inquiry
+    selected = next((
+        item for item in relationship_references
+        if item.get("id") == inquiry.relationship_reference_id
+    ), None)
+    if selected is None:
+        raise ModelProviderError("Capability selection invented a relationship_reference_id.")
+    target_kind = str(selected.get("target_kind") or "")
+    target_name = str(selected.get("target_name") or "") or None
+    target_selector = str(selected.get("target_selector") or "") or None
+    if not target_kind or (not target_name and not target_selector):
+        raise ModelProviderError("The selected relationship has no executable target coordinate.")
+    if inquiry.resource_query:
+        requested = _resource_query_terms(inquiry.resource_query) - {
+            "cluster", "object", "resource",
+        }
+        resolved = _resource_query_terms(target_kind) - {
+            "cluster", "object", "resource",
+        }
+        if requested and resolved and requested != resolved:
+            raise ModelProviderError(
+                "The selected relationship target does not match resource_query."
+            )
+    namespace = selected.get("target_namespace")
+    updates: dict[str, object] = {
+        "resource_query": target_kind,
+        "namespace": None if namespace in {None, "cluster"} else str(namespace),
+        "object_name": target_name,
+        "label_selector": target_selector,
+        "cardinality": "exact_one" if target_name else "collection",
+        "needs_object_details": bool(target_name),
+    }
+    return inquiry.model_copy(update=updates)
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -5142,6 +5318,7 @@ async def _classify_ad_hoc_inquiry(
     if not callable(classify):
         return None
     object_references = _recent_object_references(evidence or [])
+    relationship_references = _recent_relationship_references(evidence or [])
     context = {
         "question": redact_text(question)[:1000],
         "recent_context": [
@@ -5153,6 +5330,7 @@ async def _classify_ad_hoc_inquiry(
         ],
         "selected_clusters": [str(name)[:120] for name in cluster_names[:10]],
         "recent_object_references": object_references,
+        "recent_relationship_references": relationship_references,
     }
     if prior_audit_query is not None:
         context["prior_audit_query"] = prior_audit_query
@@ -5161,12 +5339,16 @@ async def _classify_ad_hoc_inquiry(
             classified = await run_in_threadpool(classify, profile, api_key, context)
             classified = _bind_inquiry_object_reference(classified, object_references)
             classified = _bind_inquiry_scope_reference(classified, object_references)
+            classified = _bind_inquiry_relationship_reference(
+                classified, relationship_references
+            )
             _validate_inquiry_grounding(
                 classified,
                 question=question,
                 conversation=conversation,
                 prior_audit_query=prior_audit_query,
                 object_references=object_references,
+                relationship_references=relationship_references,
             )
             return classified
         except ModelProviderError as exc:
@@ -5180,6 +5362,8 @@ async def _classify_ad_hoc_inquiry(
                     "recent context. Preserve prior_audit_query for an elliptical audit follow-up and "
                     "override only explicitly changed fields. For an elliptical object follow-up, select "
                     "one exact id from recent_object_references instead of reconstructing coordinates. "
+                    "For a relationship follow-up, select one exact id from "
+                    "recent_relationship_references instead of inventing a field path or selector. "
                     "For a related collection, use scope_reference_id plus a Kubernetes relationship "
                     "selector key; never copy or invent the parent's selector value."
                 )
@@ -5203,15 +5387,33 @@ def _semantic_metric_read_plan(
                 "node_memory_utilization" if signal == "memory_working_set" else signal
                 for signal in signals
             ]
+        node_ranking = (
+            request.operation == "rank"
+            and scope in {"cluster", "node_role"}
+            and "node" in request.group_by
+        )
+        if node_ranking and scope == "cluster":
+            signals = [
+                "node_cpu_utilization" if signal == "cpu_usage" else
+                "node_memory_utilization" if signal == "memory_working_set" else signal
+                for signal in signals
+            ]
         if request.operation == "rank":
-            rank_signals = {
-                "cpu_usage": "top_cpu_consumers",
-                "memory_working_set": "top_memory_consumers",
-                "application_log_volume": "top_log_volume_by_namespace",
-            }
-            if any(signal not in rank_signals for signal in signals):
-                return None
-            signals = [rank_signals[signal] for signal in signals]
+            if node_ranking:
+                if any(
+                    signal not in {"node_cpu_utilization", "node_memory_utilization"}
+                    for signal in signals
+                ):
+                    return None
+            else:
+                rank_signals = {
+                    "cpu_usage": "top_cpu_consumers",
+                    "memory_working_set": "top_memory_consumers",
+                    "application_log_volume": "top_log_volume_by_namespace",
+                }
+                if any(signal not in rank_signals for signal in signals):
+                    return None
+                signals = [rank_signals[signal] for signal in signals]
         elif "application_log_volume" in signals:
             return None
         if len(signals) != len(set(signals)):
@@ -5228,13 +5430,13 @@ def _semantic_metric_read_plan(
         if any(
             signal in {"node_cpu_utilization", "node_memory_utilization"}
             for signal in signals
-        ) and scope not in {"node", "node_role"}:
+        ) and scope not in {"node", "node_role"} and not node_ranking:
             return None
         if "top_log_volume_by_namespace" in signals and (
             scope != "cluster" or len(signals) != 1
         ):
             return None
-        if scope in {"node", "node_role"} and any(
+        if (scope in {"node", "node_role"} or node_ranking) and any(
             grouping not in {"cluster", "node"} for grouping in request.group_by
         ):
             return None
@@ -5251,7 +5453,11 @@ def _semantic_metric_read_plan(
             for signal in signals
         ):
             return None
-        if "node" in request.group_by and scope not in {"node", "node_role"}:
+        if (
+            "node" in request.group_by
+            and scope not in {"node", "node_role"}
+            and not node_ranking
+        ):
             return None
         metric_scope = "workload" if scope == "workload" else scope
         range_seconds = (
@@ -5462,10 +5668,12 @@ def _semantic_resource_read_plan(
         return bool(value and value.casefold() in grounding_text)
 
     name = inquiry.object_name if (
-        inquiry.object_reference_id or grounded(inquiry.object_name)
+        inquiry.object_reference_id or inquiry.relationship_reference_id
+        or grounded(inquiry.object_name)
     ) else None
     namespace = inquiry.namespace if (
         inquiry.object_reference_id or inquiry.scope_reference_id
+        or inquiry.relationship_reference_id
         or grounded(inquiry.namespace)
     ) else None
     if inquiry.operation == "events":
@@ -5696,28 +5904,30 @@ async def _collect_bounded_cluster_reads(
         initial_range_seconds=settings.adhoc_audit_initial_range_seconds,
     )
     # A valid model selection normally owns semantic routing; normal code owns its
-    # fixed, bounded compilation. The exact worker-node CPU+memory request is a
-    # deterministic exception so a schema-valid pod-ranking misclassification cannot
-    # discard either the Node scope or the requested memory signal. Other known reads
-    # remain a fallback only when capability selection is unavailable.
+    # fixed, bounded compilation. Unambiguous Node utilization requests are a
+    # deterministic exception so a schema-valid inventory or pod-ranking
+    # misclassification cannot discard the Node scope, requested signals, or rank.
+    # Other known reads remain a fallback only when capability selection is unavailable.
     known_read = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
         alert_name=alert_name,
         alert_labels=alert_labels,
     )
-    node_role_metric_override = (
+    node_metric_override = (
         known_read
         if known_read is not None
-        and {intent.metric for intent in known_read[0].intents} == {
-            "node_cpu_utilization", "node_memory_utilization"
-        }
-        and all(intent.metric_scope == "node_role" for intent in known_read[0].intents)
+        and known_read[0].intents
+        and all(
+            intent.metric in {"node_cpu_utilization", "node_memory_utilization"}
+            and intent.tool == "query_metrics"
+            for intent in known_read[0].intents
+        )
         else None
     )
     legacy_fallback = known_read if inquiry is None else None
     deterministic_plan = (
-        node_role_metric_override
+        node_metric_override
         or semantic_audit_plan
         or semantic_metric_plan
         or (
@@ -5807,7 +6017,7 @@ async def _collect_bounded_cluster_reads(
         conversation=conversation,
         inventory_limit=settings.adhoc_inventory_max_objects,
     )
-    if semantic_resource_plan is not None:
+    if semantic_resource_plan is not None and node_metric_override is None:
         deterministic_plan = semantic_resource_plan
 
     # Once live discovery resolves an explicit inventory question, normal code owns
@@ -6591,7 +6801,8 @@ async def _collect_bounded_cluster_reads(
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
                 for followup in automatic_read_followups(
-                    intent, result.observations, question=question, goal_type=plan.goal_type
+                    intent, result.observations, question=question, goal_type=plan.goal_type,
+                    primary_kind=(inquiry.resource_query if inquiry is not None else None),
                 ):
                     # Only mechanical trust retries and exact, non-sensitive ConfigMap
                     # references for an explicit display request may bypass another model
@@ -7541,6 +7752,7 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                     question=message_text,
+                    preferred_kind=(inquiry.resource_query if inquiry is not None else None),
                 )
                 fast_configmap_answer = (
                     fast_resource_answer_candidate
@@ -7962,6 +8174,7 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                     question=message_text,
+                    preferred_kind=(inquiry.resource_query if inquiry is not None else None),
                 )
                 route_tls_answer = _deterministic_route_tls_answer(
                     question=message_text,
@@ -8075,6 +8288,9 @@ def create_app(
                         activity=activity,
                         inventory_only=(
                             inquiry.mode == "inventory" if inquiry is not None else None
+                        ),
+                        preferred_kind=(
+                            inquiry.resource_query if inquiry is not None else None
                         ),
                     )
                     failure_kind = (

@@ -371,6 +371,7 @@ class InquirySemantics(BaseModel):
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    relationship_reference_id: str | None = Field(default=None, pattern=r"^rel-[a-f0-9]{20}$")
     relationship_selector_key: str | None = Field(default=None, max_length=317)
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
@@ -486,8 +487,10 @@ class InquirySemantics(BaseModel):
             "explain": "explanation",
             "investigate": "cluster_investigation",
         }[self.mode]
-        if self.object_reference_id and self.scope_reference_id:
-            raise ValueError("object and scope references are mutually exclusive")
+        if sum(bool(item) for item in (
+            self.object_reference_id, self.scope_reference_id, self.relationship_reference_id,
+        )) > 1:
+            raise ValueError("object, scope, and relationship references are mutually exclusive")
         if self.scope_reference_id and (
             self.capability != "resource_inventory" or not self.relationship_selector_key
         ):
@@ -543,6 +546,7 @@ class CapabilitySelection(BaseModel):
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    relationship_reference_id: str | None = Field(default=None, pattern=r"^rel-[a-f0-9]{20}$")
     relationship_selector_key: str | None = Field(default=None, max_length=317)
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
@@ -592,8 +596,10 @@ class CapabilitySelection(BaseModel):
 
     @model_validator(mode="after")
     def restrict_capability_arguments(self) -> "CapabilitySelection":
-        if self.object_reference_id and self.scope_reference_id:
-            raise ValueError("object and scope references are mutually exclusive")
+        if sum(bool(item) for item in (
+            self.object_reference_id, self.scope_reference_id, self.relationship_reference_id,
+        )) > 1:
+            raise ValueError("object, scope, and relationship references are mutually exclusive")
         if self.scope_reference_id and (
             self.capability != "resource_inventory" or not self.relationship_selector_key
         ):
@@ -1713,14 +1719,16 @@ class OpenAIResponsesProvider:
                     "type; prefer an exact name or namespace and never request an unbounded watch. "
                     "Use query_metrics for a time trend from the supplied metric_catalog. Select metric_scope=pod "
                     "with exact namespace and name, metric_scope=namespace with namespace, or "
-                    "metric_scope=cluster without coordinates only for top-consumer rankings across the cluster, "
+                    "metric_scope=cluster without coordinates for top-consumer rankings or Node utilization "
+                    "rankings grouped by node across the cluster, "
                     "metric_scope=deployment with exact namespace/name to aggregate owned ReplicaSet Pods, "
                     "metric_scope=node with exact node name, or metric_scope=persistent_volume_claim with "
                     "namespace/name only for persistent_volume_usage. For questions about the largest CPU or "
                     "memory consumers in a cluster, namespace, Deployment, or node, use top_cpu_consumers or "
                     "top_memory_consumers with that scope. These rank "
                     "monitored Kubernetes containers, not host operating-system processes; never claim process-level visibility. "
-                    "Use node_cpu_utilization or node_memory_utilization for overall node pressure. For 'what is using "
+                    "Use node_cpu_utilization or node_memory_utilization for overall node pressure; a cluster-wide "
+                    "Node rank uses cluster scope, operation=rank, group_by=node, and a bounded limit. For 'what is using "
                     "all CPU/memory' questions, collect both overall utilization and the matching top-consumer ranking "
                     "so unaccounted host/kernel usage remains visible as a limitation. "
                     "Convert the operator's requested period and resolution to bounded range_seconds and step_seconds. "
@@ -1807,6 +1815,11 @@ class OpenAIResponsesProvider:
                     "elliptical follow-up refers to one entry in recent_object_references, return that "
                     "entry's exact opaque id in object_reference_id instead of reconstructing its name. "
                     "Leave object_reference_id null when no supplied entry is the intended object. "
+                    "When the request asks for an object related to a supplied anchor, select the exact "
+                    "forward or reverse edge from recent_relationship_references in "
+                    "relationship_reference_id. Preserve the requested target kind in resource_query; "
+                    "normal code binds the observed exact name or complete selector. Never invent a "
+                    "relationship, field path, selector, or coordinate. "
                     "For a collection related to one prior object, such as topics belonging to a Kafka, "
                     "return that object's id in scope_reference_id, keep the requested child resource in "
                     "resource_query, set cardinality=collection, and put only the exact Kubernetes label "
@@ -1828,9 +1841,11 @@ class OpenAIResponsesProvider:
                     "result limit. Use workload scope for an exact Deployment, StatefulSet, DaemonSet, or Job; "
                     "use node_role only when the operator explicitly names worker, master, or infra Nodes. "
                     "For node CPU or memory utilization select node_cpu_utilization or "
-                    "node_memory_utilization, not container usage. For ranking use cpu_usage, "
-                    "memory_working_set, or application_log_volume with operation=rank; normal code maps it "
-                    "to a registered bounded ranking. Never invent omitted target coordinates. The legacy "
+                    "node_memory_utilization, not container usage. To rank Nodes across a cluster, use a "
+                    "Cluster target, the corresponding node utilization signal, operation=rank, group_by=node, "
+                    "and the requested result limit. For pod or workload ranking use cpu_usage or "
+                    "memory_working_set; application-log ranking uses application_log_volume. Normal code maps "
+                    "these to registered bounded rankings. Never invent omitted target coordinates. The legacy "
                     "metric_query fields remain a compatibility fallback; leave them null when metric_request "
                     "fully describes the question. For a request to rank the largest pod CPU or memory consumers, set "
                     "metric_query to the matching top-consumer metric, metric_scope=cluster when the "
@@ -2353,8 +2368,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "and passthrough requires the backend to terminate the original TLS stream. Route spec.to.name is "
                 "an observed backend Service name that may be used for an exact follow-up read. "
                 "Use query_metrics with a metric from tool_policy.metric_catalog for bounded cluster, pod, "
-                "namespace, deployment, node, or persistent-volume-claim trends. Cluster scope is allowed only "
-                "for top-consumer rankings and needs no coordinates. Deployment scope aggregates Pods through "
+                "namespace, deployment, node, or persistent-volume-claim trends. Cluster scope needs no coordinates "
+                "and is allowed for top-consumer rankings or Node utilization rankings grouped by node. Deployment "
+                "scope aggregates Pods through "
                 "Deployment/ReplicaSet ownership. Cluster, Namespace, Deployment, or node top_cpu_consumers and "
                 "top_memory_consumers rank monitored pods, not host processes; node_cpu_utilization "
                 "and node_memory_utilization measure overall node "
@@ -2417,6 +2433,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "elliptical follow-up that refers to an entry in recent_object_references, select its exact "
                 "opaque id in object_reference_id instead of copying coordinates; otherwise leave that field "
                 "null. For a collection related to a prior object, return the parent's id in "
+                "scope_reference_id only when no exact recent_relationship_references entry represents "
+                "the requested relationship. Prefer an exact relationship_reference_id when supplied; "
+                "preserve its requested target kind in resource_query and never reconstruct its selector. For "
+                "a collection related to a prior object without a supplied relationship edge, return the parent's id in "
                 "scope_reference_id, preserve the requested child resource_query, set cardinality=collection, "
                 "and return only the relationship's Kubernetes label key in relationship_selector_key; "
                 "server code supplies the trusted parent name as its value. Return requested_fields as dot-separated "
@@ -2432,8 +2452,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "grouping, threshold, period, and result limit. Workload targets may be Deployment, StatefulSet, "
                 "DaemonSet, or Job. Node-role targets require an explicitly requested worker, master, or infra "
                 "role. Use node_cpu_utilization/node_memory_utilization for Node pressure and use cpu_usage/"
-                "memory_working_set for container-backed workload use. Ranking uses operation=rank and normal "
-                "code selects the registered ranking template. Never invent omitted coordinates. Leave the "
+                "memory_working_set for container-backed workload use. To rank Nodes cluster-wide, use a Cluster "
+                "target with the corresponding node utilization signal, operation=rank, group_by=node, and the "
+                "requested result limit. Other ranking uses operation=rank and normal code selects the registered "
+                "ranking template. Never invent omitted coordinates. Leave the "
                 "legacy metric fields null when metric_request is complete. For pod CPU or "
                 "memory ranking requests, return metric_query, metric_scope, and result_limit; use cluster "
                 "scope for each selected cluster. Leave those fields null otherwise. "

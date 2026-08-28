@@ -167,6 +167,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   inquiries open for that model-selected read. Exact ConfigMap GET evidence contributes bounded redacted
   `data` to final fact cards, while LIST evidence remains metadata-only. Partial unrelated RBAC failures no
   longer replace an otherwise supported answer with an “Access blocked” headline.
+- The relationship graph now exposes opaque forward and reverse semantic targets for observed ownership,
+  typed object references, and registered selectors. Machine `status.nodeRef` links, MachineConfigPool
+  Node/MachineConfig selectors, common workload selectors, and multi-hop owner chains advance through the
+  same bounded planner and broker. The classifier selects a relationship ID while normal code retains names,
+  selectors, API resolution, and authorization. Deterministic rendering prefers the classified primary Kind,
+  preventing a supporting ConfigMap read from replacing a requested source CR.
 - Inventory classification now guarantees the base catalog-resolved LIST on every selected cluster.
   The classifier's detail flag controls only an optional follow-up phase, so it can no longer suppress
   inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and
@@ -638,6 +644,17 @@ current repository and cluster state.
   different schema-valid metric route; model-authored PromQL remains prohibited.
 - The model-free suite passes locally with 509 tests and 83% aggregate coverage; this change
   has not yet been rolled out to the SNO workload.
+
+## 2026-08-28 Cluster-wide Node utilization ranking
+
+- Ask recognizes `top/rank + CPU/memory + Nodes` as an overall Node-utilization ranking rather
+  than a Node inventory or a monitored Pod/container ranking.
+- Normal code compiles the requested top-N against bounded node-exporter CPU or memory templates,
+  groups by Node, and uses the five-minute default when the operator supplies no period.
+- This deterministic route retains priority if model classification returns a schema-valid Node
+  inventory, while typed model semantics can also request the same registered cluster ranking.
+- The model-free suite passes locally with 540 tests and 83% aggregate coverage; these local
+  changes have not yet been rolled out to the SNO workload.
 
 ## 2026-08-28 Composable metric requests
 

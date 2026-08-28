@@ -300,6 +300,25 @@ def test_node_role_utilization_joins_worker_role_and_groups_by_node(metric, need
     assert "label_replace(" in query
 
 
+@pytest.mark.parametrize(("metric", "needle"), [
+    ("node_cpu_utilization", "avg by (nodename)"),
+    ("node_memory_utilization", "sum by (nodename)"),
+])
+def test_cluster_node_utilization_ranking_uses_topk_grouped_by_node(metric, needle) -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="cluster",
+        metric_operation="rank", metric_group_by=["node"], limit=5,
+    ))
+
+    query = source.calls[0]["promql"]
+    assert query.startswith("topk(5, 100 *")
+    assert needle in query
+    assert "kube_node_role" not in query
+
+
 @pytest.mark.parametrize("kind", ["StatefulSet", "DaemonSet", "Job"])
 def test_workload_scope_joins_direct_controller_owned_pods(kind) -> None:
     source = FakeRangeSource()

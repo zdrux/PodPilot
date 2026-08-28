@@ -457,6 +457,14 @@ server-authored traversal. The broker still validates scope and verb, applies
 limits and redaction, and submits the request using the investigator ServiceAccount,
 so Kubernetes RBAC remains the maximum read boundary.
 
+Relationship traversal does not grant the model a general Kubernetes query interface. Normal code
+derives bounded graph edges only from observed owner references, typed object-reference structures, and
+registered selector contracts with known target Kinds. The provider sees opaque relationship IDs and
+descriptive coordinates but never the retained read hints. A selected forward or reverse edge is rebound
+to the server-retained exact name or complete selector, resolved through the safe live catalog, deduplicated,
+and charged against the normal hop/read budget. Unknown free-form strings, inferred names, Secret targets,
+cross-namespace owner guesses, and model-authored field paths or selectors cannot create executable edges.
+
 Milestone 9 treats Prometheus label values as untrusted selectors, not query text.
 The server owns both supported PromQL expressions and
 JSON-escapes exact-match values. Thanos access uses the projected service-account
