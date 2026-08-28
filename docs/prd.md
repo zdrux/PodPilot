@@ -396,8 +396,10 @@ Submitting a turn must clear the composer immediately, place the attributed user
 message in the timeline, and show a pulsating/spinner assistant placeholder. The
 API must persist the turn as a recoverable job and stream truthful workflow phases
 such as resource discovery, safe-read planning, exact resource/log collection,
-and evidence-backed answer preparation. While the spinner is present, the UI may show a rolling
-six-item journal of concise working hypotheses, intended next checks, and observed findings.
+and evidence-backed answer preparation. While the spinner is present, the UI may show a
+chronological journal grouped into stable phase sections containing concise working hypotheses,
+intended next checks, and observed findings. New phases append without reordering existing
+sections, and updates within each phase may be bounded.
 Reloads and reconnects must preserve the current phase. Progress must not claim an action
 before it starts, persist as final-chat clutter, or expose hidden model chain-of-thought. Only
 one turn may run in a conversation at a time.

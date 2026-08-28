@@ -53,8 +53,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   evidence-grounded object, owner, log, Event, metric, probe, and configuration traversal while
   the broker retains all sensitivity, verb, budget, redaction, and RBAC enforcement. It can
   search live API discovery and issue bounded watches against any RBAC-readable non-sensitive
-  resource, and shows a transient
-  six-item live investigation journal with hypotheses, next checks, and findings.
+  resource, and shows a transient live investigation journal with hypotheses, next checks, and
+  findings grouped into stable chronological phase sections.
 - Alertmanager queue with expected Watchdog separation and durable
   investigations.
 - Bounded Pod status, event, current/previous log, owner-chain, rollout, and node
@@ -648,6 +648,13 @@ current repository and cluster state.
 - Machine, Service/Route, OpenShift control-plane, Kafka, and arbitrary CRD telemetry remain future
   capability packs because Kubernetes API discovery does not prove that their metrics exist.
 - This local change has not yet been rolled out to the SNO workload.
+
+## 2026-08-28 Stable live-investigation phases
+
+- The active Ask placeholder groups progress into phase sections in chronological order.
+- New phases append without reordering existing headings. Each phase displays its latest three
+  updates, and reloads reconstruct the same bounded phase view from persisted progress.
+- This UI behavior is locally implemented and has not yet been rolled out to the SNO workload.
 
 ## Known Limitations
 

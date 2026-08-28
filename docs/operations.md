@@ -1039,9 +1039,11 @@ On Pod startup, interrupted `running` rows are returned to `queued` and retried.
 The work is read-only, but a restart can therefore repeat model inference and
 bounded reads. While a run is active, a second turn and conversation deletion
 return HTTP 409. Inspect phase transitions without payloads through
-`podpilot.adhoc.*` application logs. The active assistant placeholder keeps only the latest six
-human-readable updates, including the planner's bounded working hypothesis, its proposed next
-check, and summaries of evidence actually found. These transient updates disappear when the
+`podpilot.adhoc.*` application logs. The active assistant placeholder groups human-readable
+updates into phase sections in stable chronological order, including the planner's bounded working
+hypothesis, its proposed next check, and summaries of evidence actually found. New phase sections
+append without reordering existing sections; each section displays its latest three updates. These
+transient updates disappear when the
 final answer replaces the spinner. They are structured plan/action summaries, not hidden model
 reasoning. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
