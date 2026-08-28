@@ -528,7 +528,15 @@ current repository and cluster state.
 - Versioned the stylesheet request so an existing Chrome session receives the redesign immediately after rollout instead of retaining the earlier cached CSS.
 - SNO binary build `podpilot-33` is deployed at digest `sha256:fd43b4bc680f1c99790604c005a28aa375b032b3698250280fcb3a8c8ee44630`.
 - Authenticated Chrome QA covered Dashboard, Ask, Clusters, Memory, Model Settings, an investigation detail, and the 720px responsive dashboard. `design-qa.md` records the passed source/implementation comparison.
-- Model-free verification remains green: 426 tests passed with 84% coverage.
+- Model-free verification remains green: 430 tests passed with 84% coverage.
+
+## 2026-08-28 Exact Node label reads
+
+- Ask now compiles an explicit label request for an exact named Node into a cluster-scoped
+  `get_resource` read instead of treating the word “show” as a request to relist every Node.
+- Semantic classification treats labels, annotations, spec, status, and taints as object-detail
+  requests, and deterministic provider fallback can render matching metadata such as Node labels.
+- Evidence payload ceilings remain unchanged.
 
 ## Known Limitations
 

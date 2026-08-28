@@ -707,6 +707,26 @@ def test_pod_log_request_requires_explicit_namespace_and_name_hint() -> None:
     assert plan_known_read("Check authorino pod logs") is None
 
 
+@pytest.mark.parametrize("question", [
+    'show the labels on the node "devocp4cmspc-wtlkr-worker-canadacentral1-vk96r"',
+    "Show node devocp4cmspc-wtlkr-worker-canadacentral1-vk96r labels",
+])
+def test_exact_node_label_request_compiles_to_terminal_get(question: str) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "explain"
+    assert plan.intents == [ReadIntent(
+        tool="get_resource",
+        resource="nodes",
+        api_version="v1",
+        kind="Node",
+        name="devocp4cmspc-wtlkr-worker-canadacentral1-vk96r",
+    )]
+
+
 def test_pod_search_evidence_exposes_exact_container_log_candidates() -> None:
     candidates = pod_log_candidates_from_evidence([{
         "id": "cluster-authorino-pods",

@@ -2770,6 +2770,68 @@ def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
     assert result.activity[0]["tool"] == "query_audit_events"
 
 
+def test_exact_node_label_request_executes_get_despite_inventory_classification() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("An exact Node label request must not enter open planning.")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "nodes.core", "apiVersion": "v1", "kind": "Node",
+                "namespaced": False, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="cluster-node-detail", tool="get_resource",
+                summary="Read the exact Node.",
+                source=f"kubernetes:v1:Node:cluster/{intent.name}",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "v1", "kind": "Node",
+                    "metadata": {"name": intent.name, "labels": {"role": "worker"}},
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="exact-node-labels",
+        question=(
+            'show the labels on the node '
+            '"devocp4cmspc-wtlkr-worker-canadacentral1-vk96r"'
+        ),
+        conversation=[], existing_evidence=[],
+        # Reproduce the coarse classification that previously triggered a LIST.
+        inquiry=InquirySemantics(
+            mode="inventory", resource_query="Node", needs_object_details=False,
+            evidence_goal="Show the requested Node labels.",
+        ),
+    ))
+
+    assert explorer.calls == [ReadIntent(
+        tool="get_resource", resource="nodes", api_version="v1", kind="Node",
+        name="devocp4cmspc-wtlkr-worker-canadacentral1-vk96r",
+    )]
+    assert result.activity[0]["tool"] == "get_resource"
+    assert result.evidence[0]["data"]["metadata"]["labels"] == {"role": "worker"}
+
+
 def test_inventory_details_begin_with_catalog_list_before_optional_planning() -> None:
     class Provider:
         def __init__(self) -> None:
@@ -3035,6 +3097,40 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
     assert "ValidOutput-audit-kafka=`True`" in content
     assert "status.outputConditions" not in content
     assert rendered["citations"] == ["cluster-clf-detail"]
+
+
+def test_exact_node_label_fallback_renders_metadata_labels() -> None:
+    rendered = _deterministic_resource_detail_answer(
+        question="Show the labels on the node worker-canadacentral1-vk96r.",
+        evidence=[{
+            "id": "cluster-node-detail",
+            "cluster_id": "central",
+            "cluster_name": "Central DEV",
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "v1",
+                "kind": "Node",
+                "metadata": {
+                    "name": "worker-canadacentral1-vk96r",
+                    "labels": {
+                        "kubernetes.io/hostname": "worker-canadacentral1-vk96r",
+                        "node-role.kubernetes.io/worker": "",
+                    },
+                },
+            },
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["cluster-node-detail"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "`metadata.labels`" in content
+    assert "kubernetes.io/hostname" in content
+    assert "node-role.kubernetes.io/worker" in content
+    assert rendered["citations"] == ["cluster-node-detail"]
 
 
 @pytest.mark.parametrize(

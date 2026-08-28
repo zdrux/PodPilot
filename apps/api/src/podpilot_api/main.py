@@ -1041,7 +1041,8 @@ def _question_requires_object_details(question: str) -> bool:
         return False
     explanatory_signal = bool(re.search(
         r"(?i)\b(?:why|health|healthy|unhealthy|status|state|ready|readiness|degraded|"
-        r"configur(?:e|ed|ation)|set\s*up|setup|details?|forward(?:ed|ing)?|routing?|"
+        r"configur(?:e|ed|ation)|set\s*up|setup|details?|labels?|annotations?|taints?|"
+        r"forward(?:ed|ing)?|routing?|"
         r"pipeline|destinations?|connect(?:ed|ion)?|integrat(?:e|ed|ion)|"
         r"how(?!\s+many\b))\b",
         question,
@@ -1709,6 +1710,16 @@ def _deterministic_resource_detail_answer(
             "|---|---|",
         ])
         fields: list[tuple[str, object]] = []
+        metadata_candidates = [
+            (f"metadata.{key}", value)
+            for key, value in metadata.items()
+            if key not in {"name", "namespace"}
+            and any(
+                term in f"{key} {json.dumps(value, default=str)}".casefold()
+                for term in terms
+            )
+        ]
+        fields.extend(metadata_candidates[:6])
         for section_name in ("spec", "status"):
             section = data.get(section_name)
             if isinstance(section, dict):
