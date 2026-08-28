@@ -418,7 +418,7 @@ def test_model_http_diagnostics_normalize_usage_and_redact_probe_preview() -> No
             "model": "gpt-oss-120b-rhoai",
             "choices": [{"message": {
                 "content": "token=sk-abcdefghijklmnop should be redacted"
-            }}],
+            }, "finish_reason": "length"}],
             "usage": {
                 "prompt_tokens": 120,
                 "completion_tokens": 30,
@@ -454,6 +454,8 @@ def test_model_http_diagnostics_normalize_usage_and_redact_probe_preview() -> No
         "max_tokens": 4096,
         "reasoning_effort": "high",
     }
+    assert call["finish_reason"] == "length"
+    assert summary["finish_reasons"] == ["length"]
     serialized = json.dumps(summary)
     assert "must-never-be-recorded" not in serialized
     assert "request body must never be recorded" not in serialized
@@ -479,6 +481,25 @@ def test_model_diagnostics_omit_response_content_for_normal_ask_turns() -> None:
 
     assert calls[0]["usage"]["total_tokens"] == 12
     assert "response_preview" not in calls[0]
+
+
+def test_model_diagnostics_capture_responses_incomplete_reason() -> None:
+    request = httpx.Request("POST", "https://models.example.test/v1/responses")
+    response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "id": "resp-incomplete",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+    )
+
+    with capture_model_diagnostics() as calls:
+        _model_http_response_hook(response)
+
+    assert calls[0]["response_status"] == "incomplete"
+    assert calls[0]["finish_reason"] == "max_output_tokens"
 
 
 def test_model_diagnostics_capture_safe_schema_failure_without_rejected_value() -> None:

@@ -51,6 +51,9 @@
             </dl>
             {% else %}<p>The provider did not report token usage.</p>{% endif %}
             <small>{{ message.model_diagnostics.call_count }} model call{% if message.model_diagnostics.call_count != 1 %}s{% endif %}; usage reported for {{ message.model_diagnostics.usage_reported_calls }}.</small>
+            {% if message.model_diagnostics.finish_reasons %}
+            <small>Provider termination: {{ message.model_diagnostics.finish_reasons | join(', ') }}.</small>
+            {% endif %}
             {% if message.model_diagnostics.failures %}
             <div class="message-model-failures">
               <strong>Model request failures</strong>
@@ -91,7 +94,7 @@
                 <div>
                   <span class="evidence-tool">Observed metric</span>
                   <h3 id="metric-result-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }}</h3>
-                  <p>{% if cited.metric_ranking.namespace_only %}Application-log payload volume observed during the bounded period; this is not compressed storage consumption.{% else %}Current values compared within this bounded result. Average and peak cover the collected period.{% endif %}</p>
+                  <p>{{ cited.metric_ranking.description }}</p>
                 </div>
                 <button class="button secondary compact-button" type="button"
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
@@ -99,17 +102,15 @@
               </div>
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
-                  <thead><tr><th>Rank</th><th>Namespace</th>{% if not cited.metric_ranking.namespace_only %}<th>Pod</th><th>Container</th>{% endif %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if not cited.metric_ranking.namespace_only %}<th>Peak</th>{% endif %}</tr></thead>
+                  <thead><tr><th>Rank</th>{% for column in cited.metric_ranking.columns %}<th>{{ column.label }}</th>{% endfor %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if cited.metric_ranking.show_maximum %}<th>Peak</th>{% endif %}</tr></thead>
                   <tbody>
                   {% for row in cited.metric_ranking.rows %}
                     <tr>
                       <td>{{ row.rank }}</td>
-                      <td><code>{{ row.namespace }}</code></td>
-                      {% if not cited.metric_ranking.namespace_only %}<td><code>{{ row.pod }}</code></td>
-                      <td><code>{{ row.container }}</code></td>{% endif %}
+                      {% for value in row.dimensions %}<td><code>{{ value }}</code></td>{% endfor %}
                       <td>{{ row.average }}</td>
-                      <td class="metric-current"><progress max="{{ cited.metric_ranking.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.namespace }} current value {{ row.current }}"></progress><strong>{{ row.current }}</strong></td>
-                      {% if not cited.metric_ranking.namespace_only %}<td>{{ row.maximum }}</td>{% endif %}
+                      <td class="metric-current"><progress max="{{ cited.metric_ranking.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.identity }} current value {{ row.current }}"></progress><strong>{{ row.current }}</strong></td>
+                      {% if cited.metric_ranking.show_maximum %}<td>{{ row.maximum }}</td>{% endif %}
                     </tr>
                   {% endfor %}
                   </tbody>
@@ -175,18 +176,27 @@
           <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
-          {% set progress = namespace(phases=[]) %}
+          {% set progress = namespace(phases=[], seen_messages=[]) %}
           {% for event in active_run.events %}
             {% if event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
           {% endfor %}
           {% for phase in progress.phases %}
             {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
+            {% set unique_phase = namespace(events=[]) %}
+            {% for event in phase_events %}
+              {% if event.message not in progress.seen_messages %}
+                {% set progress.seen_messages = progress.seen_messages + [event.message] %}
+                {% set unique_phase.events = unique_phase.events + [event] %}
+              {% endif %}
+            {% endfor %}
+            {% if unique_phase.events %}
             <li class="progress-phase" data-progress-phase="{{ phase }}">
               <div class="progress-phase-heading"><span aria-hidden="true"></span><small>{{ phase | replace('_', ' ') }}</small></div>
               <ul class="progress-phase-updates" data-progress-items>
-                {% for event in phase_events[-3:] %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
+                {% for event in unique_phase.events[-3:] %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
               </ul>
             </li>
+            {% endif %}
           {% endfor %}
         </ol>
       </article>

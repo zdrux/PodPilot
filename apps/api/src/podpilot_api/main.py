@@ -958,6 +958,12 @@ def _adhoc_answer_quality_issue(
     body = re.sub(r"\s+", " ", body).strip()
     if not body_lines or not body:
         return "heading_only_response"
+    stripped = content.rstrip()
+    if stripped.endswith(":"):
+        return "incomplete_answer_ending"
+    fence_lines = re.findall(r"(?m)^\s{0,3}(`{3,}|~{3,})", content)
+    if len(fence_lines) % 2:
+        return "unclosed_code_fence"
     # An evidence-backed answer may remain unresolved. Do not discard a useful,
     # cited interpretation merely because the provider honestly reports that the
     # available observations do not prove a root cause. Retry only an uncited
@@ -1567,6 +1573,74 @@ def _deterministic_resource_detail_answer(
             item for item in value if isinstance(item, dict)
             and any(term in json.dumps(item, sort_keys=True, default=str).casefold() for term in terms)
         ] if isinstance(value, list) else []
+
+    configmaps = [
+        item for item in observations
+        if str(item["data"].get("kind") or "").casefold() == "configmap"
+    ]
+    configmap_display_requested = bool(
+        re.search(
+            r"(?i)\b(?:show|display|view|print|dump|read)\b.{0,100}"
+            r"\b(?:configmap|configuration|config|contents?|data)\b"
+            r"|\b(?:what(?:'s|\s+is)|contents?|data)\b.{0,100}\bconfigmaps?\b",
+            question,
+        )
+    )
+    if configmaps and configmap_display_requested:
+        lines = [
+            "## ConfigMap configuration",
+            "",
+            "The following values were read directly from the exact ConfigMap object.",
+        ]
+        citations: list[str] = []
+        remaining_chars = 32_000
+        for observation in configmaps:
+            data = observation["data"]
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            namespace = str(metadata.get("namespace") or "cluster")[:253]
+            name = str(metadata.get("name") or "unnamed")[:253]
+            cluster = str(
+                observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+            )[:253]
+            values = data.get("data") if isinstance(data.get("data"), dict) else {}
+            lines.extend(["", f"### {cluster} · ConfigMap `{namespace}/{name}`"])
+            if not values:
+                lines.extend(["", "No readable entries were present in `data`."])
+            for key, value in list(values.items())[:24]:
+                if remaining_chars <= 0:
+                    break
+                rendered = value if isinstance(value, str) else json.dumps(
+                    value, indent=2, sort_keys=True, default=str,
+                )
+                rendered = redact_text(rendered).replace("\r\n", "\n").rstrip()
+                allowance = min(remaining_chars, 16_000)
+                truncated = len(rendered) > allowance
+                shown = rendered[:allowance]
+                longest_backtick_run = max(
+                    (len(match.group(0)) for match in re.finditer(r"`+", shown)),
+                    default=0,
+                )
+                fence = "`" * max(3, longest_backtick_run + 1)
+                language = "yaml" if isinstance(value, str) else "json"
+                safe_key = redact_text(str(key))[:253].replace("`", "'")
+                lines.extend([
+                    "", f"#### `{safe_key}`", "", f"{fence}{language}", shown, fence,
+                ])
+                if truncated:
+                    lines.append(
+                        f"_Value truncated after {allowance:,} characters by the display limit._"
+                    )
+                remaining_chars -= len(shown)
+            if len(values) > 24:
+                lines.extend(["", f"_{len(values) - 24} additional keys were omitted._"])
+            elif remaining_chars <= 0:
+                lines.extend(["", "_Additional values were omitted by the 32,000-character display limit._"])
+            citations.append(str(observation["id"]))
+        return {
+            "answer_mode": "evidence_based",
+            "content": "\n".join(lines),
+            "citations": citations,
+        }
 
     requested_metadata_fields = _requested_metadata_fields(question)
     if requested_metadata_fields:
@@ -3140,6 +3214,87 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         else unit
     )
     rows: list[dict[str, object]] = []
+    ranked_items = [item for item in ranking if isinstance(item, dict)]
+    label_aliases = {
+        "nodename": "node",
+        "consumer_group": "consumer_group",
+        "consumergroup": "consumer_group",
+    }
+    label_names = {
+        "node": "Node",
+        "namespace": "Namespace",
+        "pod": "Pod",
+        "container": "Container",
+        "topic": "Topic",
+        "partition": "Partition",
+        "consumer_group": "Consumer group",
+        "broker": "Broker",
+        "cluster": "Cluster",
+        "service": "Service",
+        "instance": "Instance",
+        "endpoint": "Endpoint",
+        "job": "Job",
+        "pvc": "PVC",
+        "target": "Target",
+    }
+    canonical_keys = {
+        label_aliases.get(str(key), str(key))
+        for item in ranked_items
+        for key in (
+            item.get("labels", {}).keys()
+            if isinstance(item.get("labels"), dict) else []
+        )
+        if str(key) != "__name__"
+    }
+    preferred_order = (
+        "node", "namespace", "pod", "container", "topic", "partition",
+        "consumer_group", "broker", "cluster", "service", "instance",
+        "endpoint", "job",
+    )
+    dimension_keys = [key for key in preferred_order if key in canonical_keys]
+    dimension_keys.extend(sorted(canonical_keys - set(dimension_keys)))
+    dimension_keys = dimension_keys[:6]
+    if not dimension_keys:
+        scope = str(data.get("scope") or "")
+        if data.get("namespace"):
+            dimension_keys.append("namespace")
+        if scope == "pod" and data.get("name"):
+            dimension_keys.append("pod")
+        elif scope == "persistent_volume_claim" and data.get("name"):
+            dimension_keys.append("pvc")
+        elif data.get("name"):
+            dimension_keys.append("target")
+        if not dimension_keys:
+            dimension_keys = ["target"]
+    columns = [{
+        "key": key,
+        "label": label_names.get(key, key.replace("_", " ").replace("-", " ").title()),
+    } for key in dimension_keys]
+
+    def display_dimension(value: object) -> str:
+        return "—" if value is None or value == "" else str(value)
+
+    def dimension_value(labels: dict[str, object], key: str) -> str:
+        if key == "target":
+            return display_dimension(data.get("name") or data.get("scope") or "cluster")
+        if key == "pvc":
+            return display_dimension(data.get("name"))
+        if key == "namespace":
+            return display_dimension(labels.get("namespace") or data.get("namespace"))
+        if key == "pod":
+            return display_dimension(
+                labels.get("pod")
+                or (data.get("name") if data.get("scope") == "pod" else None)
+            )
+        if key == "container":
+            return display_dimension(labels.get("container") or data.get("container"))
+        if key == "node":
+            return display_dimension(labels.get("nodename") or labels.get("node"))
+        if key == "consumer_group":
+            return display_dimension(
+                labels.get("consumer_group") or labels.get("consumergroup") or "—"
+            )
+        return display_dimension(labels.get(key))
     current_values = [
         float(item["current"])
         for item in ranking
@@ -3156,7 +3311,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         if isinstance(limit, int) and not isinstance(limit, bool)
         else 10
     )
-    for index, item in enumerate(ranking[:display_limit], start=1):
+    for index, item in enumerate(ranked_items[:display_limit], start=1):
         if not isinstance(item, dict):
             continue
         labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
@@ -3166,11 +3321,11 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
             if isinstance(current, (int, float)) and not isinstance(current, bool)
             else 0.0
         )
+        dimensions = [dimension_value(labels, key) for key in dimension_keys]
         rows.append({
             "rank": index,
-            "namespace": str(labels.get("namespace") or "—"),
-            "pod": str(labels.get("pod") or "—"),
-            "container": str(labels.get("container") or "—"),
+            "dimensions": dimensions,
+            "identity": " / ".join(value for value in dimensions if value != "—") or "target",
             "average": _format_metric_value(item.get("average"), average_unit),
             "current": _format_metric_value(current, unit),
             "maximum": _format_metric_value(item.get("maximum"), unit),
@@ -3182,14 +3337,32 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "top_cpu_consumers": "Top CPU Consumers",
         "top_memory_consumers": "Top Memory Consumers",
         "top_log_volume_by_namespace": "Top Application-Log Volume by Namespace",
+        "node_cpu_utilization": "Node CPU Utilization",
+        "node_memory_utilization": "Node Memory Utilization",
+        "cpu_usage": "CPU Usage",
+        "memory_working_set": "Memory Working Set",
+        "network_receive": "Network Receive Rate",
+        "network_transmit": "Network Transmit Rate",
+        "container_restarts": "Container Restarts",
+        "persistent_volume_usage": "PVC Utilization",
     }.get(metric_name, metric_name.replace("_", " ").title())
+    namespace_only = metric_name == "top_log_volume_by_namespace"
     return {
         "title": metric_title,
         "unit": unit,
         "scale_max": scale_max,
         "rows": rows,
+        "columns": columns,
         "complete": data.get("complete") is True,
-        "namespace_only": metric_name == "top_log_volume_by_namespace",
+        "namespace_only": namespace_only,
+        "show_maximum": not namespace_only,
+        "description": (
+            "Application-log payload volume observed during the bounded period; "
+            "this is not compressed storage consumption."
+            if namespace_only else
+            "Current values compared within this bounded result. Average and peak "
+            "cover the collected period."
+        ),
         "average_label": (
             "Average rate" if metric_name == "top_log_volume_by_namespace" else "Average"
         ),
@@ -7246,12 +7419,32 @@ def create_app(
                     and inquiry.mode == "audit"
                     else None
                 )
+                fast_resource_answer_candidate = _deterministic_resource_detail_answer(
+                    evidence=evidence,
+                    activity=activity,
+                    question=message_text,
+                )
+                fast_configmap_answer = (
+                    fast_resource_answer_candidate
+                    if not followup_action
+                    and fast_resource_answer_candidate is not None
+                    and str(fast_resource_answer_candidate.get("content") or "").startswith(
+                        "## ConfigMap configuration"
+                    )
+                    else None
+                )
                 fast_deterministic_answer = (
-                    fast_audit_answer or fast_metric_answer or fast_inventory_answer
+                    fast_audit_answer
+                    or fast_metric_answer
+                    or fast_configmap_answer
+                    or fast_inventory_answer
                 )
                 if fast_deterministic_answer is not None:
                     inventory_fast_path = True
-                    prefer_metric_card = fast_metric_answer is metric_ranking_candidate
+                    prefer_metric_card = (
+                        fast_metric_answer is metric_ranking_candidate
+                        or fast_metric_answer is metric_summary_candidate
+                    )
                     validated = {
                         **fast_deterministic_answer,
                         "conclusion_status": "confirmed",
@@ -7681,7 +7874,10 @@ def create_app(
                 )
                 if deterministic_answer is not None:
                     validated.update(deterministic_answer)
-                    if deterministic_answer is metric_ranking_answer:
+                    if (
+                        deterministic_answer is metric_ranking_answer
+                        or deterministic_answer is metric_summary_answer
+                    ):
                         prefer_metric_card = True
                     if answer_quality_issue is not None:
                         limitations.append(
@@ -7910,12 +8106,13 @@ def create_app(
             if run is None or run.status not in {"queued", "running"}:
                 return
             events = list(json.loads(run.progress_json))
-            if events and events[-1].get("phase") == phase and events[-1].get("message") == message:
+            safe_message = redact_text(message)[:500]
+            if any(event.get("message") == safe_message for event in events):
                 return
             events.append({
                 "seq": (int(events[-1]["seq"]) + 1) if events else 0,
                 "phase": phase,
-                "message": redact_text(message)[:500],
+                "message": safe_message,
                 "at": datetime.now(timezone.utc).isoformat(),
             })
             run.phase = phase

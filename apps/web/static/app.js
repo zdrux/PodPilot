@@ -642,8 +642,12 @@
     const log = pendingRun.querySelector("[data-progress-log]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
     const progressItemsPerPhase = 3;
+    const displayedProgressMessages = new Set(
+      Array.from(log?.querySelectorAll("[data-progress-items] li") || [], (item) => item.textContent)
+    );
     const appendPhaseUpdate = (event, seq) => {
-      if (!log || !event.message) return;
+      if (!log || !event.message || displayedProgressMessages.has(event.message)) return;
+      displayedProgressMessages.add(event.message);
       const phaseName = event.phase || "investigating";
       const phaseGroups = Array.from(log.querySelectorAll("[data-progress-phase]"));
       let group = phaseGroups.find((item) => item.dataset.progressPhase === phaseName);

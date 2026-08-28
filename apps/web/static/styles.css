@@ -455,7 +455,6 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .progress-phase-heading span { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 4px rgba(69, 212, 232, .08); }
 .progress-phase-updates { display: grid; gap: 2px; margin: 2px 0 0 15px; padding: 0; list-style: none; }
 .progress-phase-updates li { color: var(--muted); font-size: 12px; line-height: 1.45; }
-.progress-phase-updates li::before { margin-right: 5px; content: "-"; }
 @keyframes podpilot-spin { to { transform: rotate(360deg); } }
 @keyframes podpilot-pulse { 50% { opacity: .58; box-shadow: 0 0 0 7px rgba(69, 212, 232, .08); } }
 @media (prefers-reduced-motion: reduce) { .thinking-spinner { animation: none; } .answer-evidence > summary::before { transition: none; } }

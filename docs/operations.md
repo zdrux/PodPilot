@@ -249,6 +249,10 @@ output, reasoning, cached, and total tokens when the provider reports them, plus
 single-call input. Aggregate usage measures processing across the turn; only the largest individual
 request is relevant to context-window pressure. Compatible providers may omit some or all usage
 fields, which PodPilot reports without estimating them.
+PodPilot also records provider termination metadata when it is supplied: Chat Completions
+`finish_reason`, or the Responses API's incomplete reason. The Ask page displays the distinct
+values under **Model usage**, which makes output-budget truncation distinguishable from a
+schema-valid but semantically incomplete answer.
 
 When a structured model response fails validation, the same collapsed control shows a bounded
 failure summary: failure category, schema, attempt number, and up to six validation field paths,
@@ -257,7 +261,8 @@ not stored in normal Ask diagnostics. Empty responses, timeouts, and provider fa
 separate categories so the operator-facing recovery message does not incorrectly call every
 planner failure malformed.
 
-Ask answers are also checked for operator shell commands. A response that tells the operator to run
+Ask answers are also checked for operator shell commands, dangling colons, and unclosed Markdown
+code fences. A response that tells the operator to run
 `oc` or `kubectl` receives one model correction attempt; if it remains unsafe, PodPilot replaces it
 with a deterministic evidence summary. Declarative configuration guidance remains allowed.
 
@@ -383,6 +388,10 @@ object reads feed a redacted, question-focused deterministic answer with evidenc
 Known relationships such as CLF Kafka outputs and their pipelines are summarized directly;
 other resources expose at most a small set of fields matching the question. The fallback never
 renders the whole object and does not treat intended configuration as proof of external behavior.
+An exact ConfigMap display is a deliberate exception to the small-field fallback: PodPilot renders
+the redacted `data` entries directly without asking the model to reproduce them. The display is
+bounded to 24 keys, 16,000 characters per value, and 32,000 characters total, and labels any
+truncation rather than silently ending the answer.
 The active Ask page uses one session header for the conversation title, cluster-lock boundary,
 and evidence count. Agent JSON supplied as a fenced block or standalone JSON paragraph is
 validated and pretty-printed in a scrollable monospace block; invalid JSON remains ordinary text.
@@ -1005,6 +1014,13 @@ requested current/average/minimum/maximum statistic from that bounded result. Ex
 as `15m`, `2h`, or `7d` remain authoritative within the configured maximum-range policy. A current
 request already uses the five-minute minimum, so failure guidance does not recommend shortening it
 or ask the operator to author PromQL.
+
+Ask renders bounded metric rankings through one reusable metric table instead of repeating the
+deterministic Markdown table. Identity columns come from the returned series labels: node metrics
+show nodes, workload metrics can show namespace/Pod/container, and domain metrics can expose
+dimensions such as Kafka topic, partition, and consumer group. Unknown safe label dimensions are
+rendered generically, up to six identity columns, so new registered metrics do not require a bespoke
+table template.
 
 `top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
 payload bytes observed during the bounded period. Its average is bytes per second; the total is

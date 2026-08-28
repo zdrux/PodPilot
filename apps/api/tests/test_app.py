@@ -1433,6 +1433,21 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     ) is None
 
 
+def test_final_answer_quality_rejects_unfinished_content() -> None:
+    assert _adhoc_answer_quality_issue(
+        content="The ConfigMap contains the following observed data:",
+    ) == "incomplete_answer_ending"
+    assert _adhoc_answer_quality_issue(
+        content="The ConfigMap contains:\n\n```yaml\nrules:",
+    ) == "incomplete_answer_ending"
+    assert _adhoc_answer_quality_issue(
+        content="The ConfigMap contains:\n\n```yaml\nrules: []",
+    ) == "unclosed_code_fence"
+    assert _adhoc_answer_quality_issue(
+        content="The ConfigMap contains:\n\n```yaml\nrules: []\n```",
+    ) is None
+
+
 def test_final_answer_quality_rejects_embedded_schema_but_not_markdown_style() -> None:
     assert _adhoc_answer_quality_issue(
         content=(
@@ -2180,11 +2195,57 @@ def test_operator_evidence_view_builds_metric_ranking_for_direct_rendering() -> 
     ranking = view["metric_ranking"]
     assert ranking["title"] == "Top CPU Consumers"
     assert ranking["scale_max"] == 0.9
+    assert ranking["columns"] == [
+        {"key": "namespace", "label": "Namespace"},
+        {"key": "pod", "label": "Pod"},
+        {"key": "container", "label": "Container"},
+    ]
     assert ranking["rows"][0] == {
-        "rank": 1, "namespace": "logging", "pod": "collector-1",
-        "container": "collector", "average": "0.700 cores",
+        "rank": 1, "dimensions": ["logging", "collector-1", "collector"],
+        "identity": "logging / collector-1 / collector", "average": "0.700 cores",
         "current": "0.900 cores", "maximum": "1.000 cores", "progress": 0.9,
     }
+
+
+def test_metric_card_derives_node_and_generic_kafka_dimensions() -> None:
+    node = _adhoc_evidence_view({
+        "id": "metric-node-cpu", "tool": "query_metrics",
+        "source": "thanos:query_range/node_cpu_utilization",
+        "data": {
+            "metric": "node_cpu_utilization", "scope": "node_role",
+            "unit": "percent", "complete": True,
+            "ranking": [{
+                "labels": {"nodename": "worker-1"},
+                "average": 18.2, "current": 18.4, "maximum": 18.8,
+            }],
+        },
+    })["metric_ranking"]
+    kafka = _adhoc_evidence_view({
+        "id": "metric-kafka-lag", "tool": "query_metrics",
+        "source": "thanos:query_range/kafka_topic_lag",
+        "data": {
+            "metric": "kafka_topic_lag", "scope": "cluster",
+            "unit": "messages", "complete": True,
+            "ranking": [{
+                "labels": {
+                    "namespace": "streams", "topic": "orders", "partition": 0,
+                    "consumer_group": "fulfillment",
+                },
+                "average": 80, "current": 120, "maximum": 150,
+            }],
+        },
+    })["metric_ranking"]
+
+    assert node["title"] == "Node CPU Utilization"
+    assert node["columns"] == [{"key": "node", "label": "Node"}]
+    assert node["rows"][0]["dimensions"] == ["worker-1"]
+    assert kafka["title"] == "Kafka Topic Lag"
+    assert [column["label"] for column in kafka["columns"]] == [
+        "Namespace", "Topic", "Partition", "Consumer group",
+    ]
+    assert kafka["rows"][0]["dimensions"] == [
+        "streams", "orders", "0", "fulfillment",
+    ]
 
 
 def test_semantic_cluster_metric_plan_preserves_requested_top_n() -> None:
@@ -4141,6 +4202,44 @@ def test_exact_resource_fallback_renders_material_configuration_fields() -> None
     assert "ValidOutput-audit-kafka=`True`" in content
     assert "status.outputConditions" not in content
     assert rendered["citations"] == ["cluster-clf-detail"]
+
+
+def test_exact_configmap_fallback_renders_data_with_an_explicit_limit() -> None:
+    rendered = _deterministic_resource_detail_answer(
+        question="Show me the exporter ConfigMap.",
+        evidence=[{
+            "id": "cluster-configmap-detail",
+            "cluster_id": "central",
+            "cluster_name": "Central DEV",
+            "tool": "get_resource",
+            "data": {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "namespace": "vc-streams",
+                    "name": "kafka-metrics",
+                },
+                "data": {
+                    "kafka-metrics-config.yml": (
+                        "lowercaseOutputName: true\nrules:\n  - pattern: kafka.server<type=(.+)>"
+                    ),
+                },
+            },
+        }],
+        activity=[{
+            "tool": "get_resource", "status": "succeeded",
+            "evidence_ids": ["cluster-configmap-detail"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert content.startswith("## ConfigMap configuration")
+    assert "Central DEV · ConfigMap `vc-streams/kafka-metrics`" in content
+    assert "#### `kafka-metrics-config.yml`" in content
+    assert "lowercaseOutputName: true" in content
+    assert "pattern: kafka.server" in content
+    assert rendered["citations"] == ["cluster-configmap-detail"]
 
 
 def test_exact_node_label_fallback_renders_metadata_labels() -> None:
@@ -6775,10 +6874,13 @@ def test_ask_multi_signal_pod_metrics_use_typed_plan_and_deterministic_table(
     assert all(intent.metric_scope == "pod" for intent in explorer.calls)
     assert provider.adhoc_plan_calls == []
     assert provider.adhoc_answer_calls == []
-    assert "Observed metric values" in rendered.text
-    assert "CPU usage" in rendered.text
-    assert "Memory working set" in rendered.text
-    assert "payments/api-7d9" in rendered.text
+    assert "Observed metric values" not in rendered.text
+    assert ">CPU Usage</h3>" in rendered.text
+    assert ">Memory Working Set</h3>" in rendered.text
+    assert ">Namespace</th>" in rendered.text
+    assert ">Pod</th>" in rendered.text
+    assert ">payments</code>" in rendered.text
+    assert ">api-7d9</code>" in rendered.text
 
 
 def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
@@ -8662,6 +8764,54 @@ def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Pa
         ).status_code == 404
 
 
+def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"adhoc_job_worker_enabled": False},
+    )
+    conversation_id = "00000000-0000-0000-0000-000000000188"
+    repeated = "Planning safe read-only checks."
+    events = [
+        {"seq": 0, "phase": "planning", "message": repeated},
+        {"seq": 1, "phase": "planning", "message": repeated},
+        {"seq": 2, "phase": "replanning", "message": repeated},
+        {"seq": 3, "phase": "next_check", "message": "Collect selected evidence."},
+    ]
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Unique progress",
+            status="active", evidence_json="[]",
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000187",
+            conversation_id=conversation_id,
+            role="user",
+            actor="ivy",
+            content="Investigate safely",
+        ))
+        db_session.add(AdHocRun(
+            id="00000000-0000-0000-0000-000000000189",
+            conversation_id=conversation_id,
+            created_by="ivy",
+            message_text="Investigate safely",
+            status="queued",
+            phase="next_check",
+            progress_json=json.dumps(events),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+
+    assert page.status_code == 200
+    assert page.text.count(repeated) == 1
+    assert 'data-progress-phase="replanning"' not in page.text
+
+
 def test_owner_can_delete_conversation_and_evidence_with_audit_record(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
@@ -9159,6 +9309,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
         encoding="utf-8"
     )
     script = (ROOT / "apps" / "web" / "static" / "app.js").read_text()
+    styles = (ROOT / "apps" / "web" / "static" / "styles.css").read_text()
     assert "Conversation budget reached" not in template
     assert "Enter to send" not in template and "Shift+Enter for a new line" not in template
     assert 'event.key === "Enter" && !event.shiftKey' in script
@@ -9186,10 +9337,13 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-progress-title" in template
     assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
     assert "data-progress-phase" in template
-    assert "phase_events[-3:]" in template
+    assert "event.message not in progress.seen_messages" in template
+    assert "unique_phase.events[-3:]" in template
     assert "active_run.events[-6:]" not in template
     assert "progressItemsPerPhase = 3" in script
     assert "items.children.length > progressItemsPerPhase" in script
+    assert "displayedProgressMessages.has(event.message)" in script
+    assert '.progress-phase-updates li::before' not in styles
     assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script

@@ -54,7 +54,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   the broker retains all sensitivity, verb, budget, redaction, and RBAC enforcement. It can
   search live API discovery and issue bounded watches against any RBAC-readable non-sensitive
   resource, and shows a transient live investigation journal with hypotheses, next checks, and
-  findings grouped into stable chronological phase sections.
+  findings grouped into stable chronological phase sections. Repeated progress messages are
+  collapsed so each journal line is shown once.
 - Alertmanager queue with expected Watchdog separation and durable
   investigations.
 - Bounded Pod status, event, current/previous log, owner-chain, rollout, and node

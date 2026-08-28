@@ -864,6 +864,16 @@ def _model_http_response_hook(response: httpx.Response) -> None:
             status = payload.get("status")
             if status:
                 diagnostic["response_status"] = str(status)[:80]
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                finish_reason = choices[0].get("finish_reason")
+                if finish_reason:
+                    diagnostic["finish_reason"] = str(finish_reason)[:80]
+            incomplete_details = payload.get("incomplete_details")
+            if isinstance(incomplete_details, dict):
+                reason = incomplete_details.get("reason")
+                if reason:
+                    diagnostic["finish_reason"] = str(reason)[:80]
             if _MODEL_DIAGNOSTIC_INCLUDE_CONTENT.get():
                 preview = _bounded_response_preview(payload)
                 if preview:
@@ -953,6 +963,11 @@ def summarize_model_diagnostics(
                 "attempt": failure.get("attempt"),
                 "fields": failure.get("fields") if isinstance(failure.get("fields"), list) else [],
             })
+    finish_reasons = list(dict.fromkeys(
+        str(call.get("finish_reason"))[:80]
+        for call in calls
+        if call.get("finish_reason")
+    ))
     return {
         "call_count": len(calls),
         "usage_reported_calls": reported_calls,
@@ -960,6 +975,7 @@ def summarize_model_diagnostics(
         "largest_input_tokens": largest_input if reported_calls else None,
         "failure_count": len(failures),
         "failures": failures[:12],
+        "finish_reasons": finish_reasons[:12],
         "calls": calls[:40],
     }
 
