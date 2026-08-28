@@ -167,12 +167,13 @@ class ReadIntent(BaseModel):
         "cluster", "pod", "namespace", "deployment", "node", "persistent_volume_claim"
     ] | None = None
     audit_username: str | None = Field(default=None, max_length=512)
-    audit_operation_scope: Literal["all", "mutations"] | None = None
+    audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
     audit_search_until_limit: bool = False
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
+    since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
 
@@ -286,6 +287,8 @@ class ReadIntent(BaseModel):
             raise ValueError("discovery_query is valid only for discover_resources")
         if self.tool != "watch_resources" and self.watch_seconds != 10:
             raise ValueError("watch_seconds is valid only for watch_resources")
+        if self.tool != "pod_logs" and self.since_seconds is not None:
+            raise ValueError("since_seconds is valid only for pod_logs")
         return self
 
 
@@ -1278,12 +1281,14 @@ def plan_known_read(
             limit=inventory_limit,
         )
         intent = normalize_read_intent(proposed)
+        terminal_inventory = match.group("kind").lower().endswith("s")
         return (
             ReadPlan(
+                goal_type="inventory" if terminal_inventory else "diagnose",
                 scope_summary=f"List {intent.kind} resources in {intent.namespace}.",
                 intents=[intent],
             ),
-            True,
+            terminal_inventory,
         )
 
     labels = alert_labels or {}

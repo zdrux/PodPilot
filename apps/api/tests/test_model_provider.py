@@ -181,7 +181,16 @@ class InquiryClassificationCompletions(RecordingCompletions):
         self.requests.append(kwargs)
         content = json.dumps({
             "mode": "inventory",
+            "operation": "inventory",
+            "cardinality": "collection",
             "resource_query": "Kafka",
+            "object_name": None,
+            "namespace": None,
+            "requested_fields": [],
+            "label_selector": None,
+            "container": None,
+            "previous_logs": False,
+            "log_range_seconds": None,
             "needs_object_details": False,
             "evidence_goal": "Identify Kafka resources by selected cluster.",
         })
@@ -234,6 +243,30 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert set(schema["properties"]) == {"answer", "citations"}
     assert "PodPilot handles checks separately" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
+
+
+def test_minimal_answer_payload_keeps_bounded_material_details() -> None:
+    payload = _minimal_answer_payload({
+        "question": "Show the labels on node worker-1.",
+        "facts": [{
+            "id": "node-1",
+            "cluster": "central",
+            "summary": "Read the exact Node.",
+            "facts": [{"label": "Kind", "value": "Node"}],
+            "material_details": [{
+                "kind": "Node", "name": "worker-1",
+                "metadata": {"labels": {
+                    "kubernetes.io/hostname": "worker-1",
+                    "node-role.kubernetes.io/worker": "",
+                }},
+            }],
+        }],
+    })
+
+    assert payload["facts"][0]["details"][0]["metadata"]["labels"] == {
+        "kubernetes.io/hostname": "worker-1",
+        "node-role.kubernetes.io/worker": "",
+    }
 
 
 def test_chat_completions_analyzes_logs_in_a_dedicated_structured_request() -> None:
@@ -403,6 +436,8 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
 
     assert inquiry == InquirySemantics(
         mode="inventory",
+        operation="inventory",
+        cardinality="collection",
         resource_query="Kafka",
         needs_object_details=False,
         evidence_goal="Identify Kafka resources by selected cluster.",
@@ -410,13 +445,31 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     request = completions.requests[0]
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
-        "mode", "resource_query", "needs_object_details", "evidence_goal",
+        "mode", "operation", "cardinality", "resource_query", "object_name",
+        "namespace", "requested_fields", "container", "previous_logs",
+        "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
         "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
         "audit_username", "audit_operation_scope", "audit_outcome", "audit_range_seconds",
         "continues_prior_audit_query",
     }
-    assert request["max_tokens"] == 350
-    assert "Do not choose tools or coordinates" in request["messages"][0]["content"]
+    assert request["max_tokens"] == 1000
+    assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
+
+
+def test_chat_completions_accepts_one_fenced_structured_object() -> None:
+    content = """```json
+{"mode":"audit","operation":"audit","cardinality":"collection",\
+"needs_object_details":true,"evidence_goal":"Read audit activity.",\
+"audit_username":"druciare-adm","audit_operation_scope":"mutations",\
+"audit_outcome":"all"}
+```"""
+
+    inquiry = OpenAIChatCompletionsProvider._validate_structured_content(
+        InquirySemantics, content
+    )
+
+    assert inquiry.mode == "audit"
+    assert inquiry.audit_username == "druciare-adm"
 
 
 def test_candidate_mode_uses_compact_hybrid_action_and_object_read_schema() -> None:

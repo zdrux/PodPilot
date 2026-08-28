@@ -17,6 +17,7 @@ data:
   adhoc_audit_initial_range_seconds: "3600"
   adhoc_audit_max_range_seconds: "86400"
   adhoc_audit_default_limit: "20"
+  adhoc_audit_max_response_bytes: "1048576"
   loki_url: "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application"
   loki_route_name: "logging-loki"
   loki_timeout_seconds: "30"

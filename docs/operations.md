@@ -194,6 +194,9 @@ The current deployment uses these variables:
 - `PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_ADHOC_AUDIT_DEFAULT_LIMIT`, default `20`, used only when the operator does
   not supply a result count
+- `PODPILOT_ADHOC_AUDIT_MAX_RESPONSE_BYTES`, default `1048576` (1 MiB), with a hard
+  accepted range of 64 KiB through 4 MiB. This ceiling applies only to raw audit-tenant
+  HTTP responses; persisted evidence still contains only the bounded safe projection.
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
@@ -254,7 +257,8 @@ registered identity. The base runtime identity is also bound to
 role `cluster-logging-audit-view`; there is no `cluster-monitoring-audit-view` role.
 
 Ask audit questions are classified separately from workload-log questions. The classifier derives
-the supplied username, period, count, all-versus-mutation scope, and all/successful/failed outcome;
+the supplied username, period, count, all-versus-mutation-versus-delete-only scope, and
+all/successful/failed outcome;
 normal code validates those values and runs a fixed query against
 `/api/logs/v1/audit/loki/api/v1/query_range`. Username matching is exact and case-insensitive.
 For example, “show the last 5 successful changes by Druciare-Adm over 2 hours” produces a five-row,
@@ -263,6 +267,12 @@ Investigators, Approvers, and Breakglass users can use this Ask capability. A 40
 be resolved by verifying the registered cluster identity has `cluster-logging-audit-view` and
 cluster-wide LokiStack tenant authorization.
 
+Explicit audit-log wording also has a narrow server-owned semantic fallback. If an OpenAI-compatible
+provider returns empty, fenced, truncated, or otherwise invalid classification JSON, PodPilot accepts
+one fenced JSON object when valid and otherwise compiles only the grounded audit username, count,
+period, mutation scope, and outcome present in the operator's text. A missing username produces a
+clarification instead of falling through to Kubernetes API inventory discovery.
+
 An audit request such as “last 5 actions” does not treat the initial one-hour window as the answer
 boundary. It doubles the bounded query range until five matching events are found or
 `PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS` is reached, then reports the actual searched period. An
@@ -270,6 +280,9 @@ elliptical continuation such as “what about the last 24hrs” inherits the pri
 limit, operation scope, and outcome while replacing its period. A malformed classification is
 retried once; the strict duration-only continuation can still be compiled from the prior typed
 audit evidence, but unrelated questions never inherit that audit target.
+The Loki request limit now matches the requested result count because its LogQL already applies the
+validated filters. Audit traffic uses the separate 1 MiB default response ceiling rather than
+overfetching four times the requested number of verbose raw records under the generic 64 KiB cap.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname
@@ -656,6 +669,17 @@ namespace and remain subject to ServiceAccount RBAC. Investigative questions sti
 question-relevant catalog entries are supplied so the model proposes a resource
 name rather than guessing apiVersion/Kind coordinates. Interpretation still
 requires the configured model.
+
+Before planning, Ask requests a typed semantic read description containing the operation shape,
+resource concept, singular-versus-collection cardinality, grounded object name and namespace,
+requested object-field paths, explicit label selector, and bounded log semantics when applicable.
+Normal code resolves that description through the live safe API catalog and compiles only registered
+reads. Exact names must occur in the current question or recent conversation; an ungrounded
+model-authored coordinate is ignored. Exact namespaced objects without a grounded namespace are
+located with a bounded `metadata.name` search before any GET. Related-object Event questions use a
+bounded client-side exact field search, and explicit log periods become Kubernetes `sinceSeconds`
+only after an observed Pod/container candidate is selected. Static phrase matching remains a
+recovery path for a small set of unambiguous requests rather than the primary semantic vocabulary.
 
 The default ad-hoc budget is ten planning rounds and 25 weighted investigation units,
 configured with `PODPILOT_ADHOC_MAX_ROUNDS` and

@@ -1064,6 +1064,20 @@ def _question_requires_object_details(question: str) -> bool:
     return not explicit_inventory
 
 
+def _requested_metadata_fields(question: str) -> set[str]:
+    """Identify explicit metadata fields that normal code can render from an exact GET."""
+
+    return {
+        field
+        for field, pattern in {
+            "labels": r"(?i)\blabels?\b",
+            "annotations": r"(?i)\bannotations?\b",
+            "ownerReferences": r"(?i)\bowners?\b|\bowner\s*references?\b",
+        }.items()
+        if re.search(pattern, question)
+    }
+
+
 def _inventory_citations_have_material_details(
     *, citations: list[str], observations: list[dict[str, object]], question: str,
 ) -> bool:
@@ -1416,6 +1430,48 @@ def _deterministic_resource_detail_answer(
             item for item in value if isinstance(item, dict)
             and any(term in json.dumps(item, sort_keys=True, default=str).casefold() for term in terms)
         ] if isinstance(value, list) else []
+
+    requested_metadata_fields = _requested_metadata_fields(question)
+    if requested_metadata_fields:
+        lines = ["## Exact resource metadata"]
+        citations: list[str] = []
+        for observation in observations:
+            data = observation["data"]
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            kind = str(data.get("kind") or "Resource")[:128]
+            namespace = str(metadata.get("namespace") or "cluster")[:253]
+            name = str(metadata.get("name") or "unnamed")[:253]
+            cluster = str(
+                observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+            )[:253]
+            lines.extend(["", f"### {cluster} · {kind} `{namespace}/{name}`"])
+            for field in sorted(requested_metadata_fields):
+                value = metadata.get(field)
+                title = "Owner references" if field == "ownerReferences" else field.title()
+                lines.extend(["", f"#### {title}", ""])
+                if isinstance(value, dict) and value:
+                    lines.extend(["| Key | Value |", "|---|---|"])
+                    lines.extend(
+                        f"| `{redact_text(str(key))[:253].replace('|', '\\|')}` | "
+                        f"`{bounded_value(item, limit=700)}` |"
+                        for key, item in list(value.items())[:100]
+                    )
+                    if len(value) > 100:
+                        lines.append(f"| … | {len(value) - 100} additional entries omitted |")
+                elif isinstance(value, list) and value:
+                    lines.extend(
+                        f"- `{bounded_value(item, limit=700)}`" for item in value[:100]
+                    )
+                    if len(value) > 100:
+                        lines.append(f"- …and {len(value) - 100} additional entries.")
+                else:
+                    lines.append(f"No {title.lower()} were present on the collected object.")
+            citations.append(str(observation["id"]))
+        return {
+            "answer_mode": "evidence_based",
+            "content": "\n".join(lines),
+            "citations": citations,
+        }
 
     def endpoint_summary(output: dict[str, object]) -> str:
         candidates: list[str] = []
@@ -3062,10 +3118,25 @@ def _model_fact_cards(
     evidence: list[dict[str, object]],
     *,
     activity: list[dict[str, object]],
+    question: str = "",
     max_cards: int = 8,
     total_byte_limit: int = 8_000,
 ) -> list[dict[str, object]]:
     """Normalize observations into small, resource-agnostic model evidence cards."""
+
+    requested_metadata_fields = _requested_metadata_fields(question)
+
+    def bounded_metadata_value(value: object) -> object:
+        if isinstance(value, dict):
+            items = list(value.items())
+            bounded = {
+                str(key)[:253]: _compact_provider_value(item, string_limit=500, list_limit=8)
+                for key, item in items[:40]
+            }
+            if len(items) > 40:
+                bounded["podpilot.omittedFieldCount"] = len(items) - 40
+            return bounded
+        return _compact_provider_value(value, string_limit=500, list_limit=20)
 
     current_ids = {
         str(evidence_id)
@@ -3107,6 +3178,13 @@ def _model_fact_cards(
                     "namespace": metadata.get("namespace"),
                     "name": metadata.get("name"),
                 }
+                selected_metadata = {
+                    key: bounded_metadata_value(metadata[key])
+                    for key in requested_metadata_fields
+                    if key in metadata and metadata[key] not in (None, "", [], {})
+                }
+                if selected_metadata:
+                    detail["metadata"] = selected_metadata
                 if isinstance(resource.get("spec"), dict):
                     detail["spec"] = _compact_provider_value(
                         resource["spec"], string_limit=300, list_limit=6
@@ -3123,6 +3201,16 @@ def _model_fact_cards(
                     detail["endpoints"] = _compact_provider_value(
                         resource["endpoints"], string_limit=200, list_limit=8
                     )
+                if str(detail.get("kind") or "").casefold() == "event":
+                    detail["event"] = _compact_provider_value({
+                        key: resource.get(key)
+                        for key in (
+                            "type", "reason", "message", "action", "reportingController",
+                            "count", "eventTime", "firstTimestamp", "lastTimestamp",
+                            "involvedObject",
+                        )
+                        if resource.get(key) not in (None, "", [], {})
+                    }, string_limit=700, list_limit=8)
                 material.append(detail)
             if material and any(
                 any(value not in (None, "", [], {}) for value in detail.values())
@@ -3133,7 +3221,18 @@ def _model_fact_cards(
                 card["names"] = [str(value)[:253] for value in data["names"][:20]]
         encoded = json.dumps(card, sort_keys=True, default=str).encode("utf-8")
         if len(encoded) > 3_000:
-            card.pop("material_details", None)
+            if requested_metadata_fields and card.get("material_details"):
+                card["material_details"] = [
+                    {
+                        key: value
+                        for key, value in detail.items()
+                        if key in {"kind", "namespace", "name", "metadata"}
+                    }
+                    for detail in card["material_details"][:2]
+                    if isinstance(detail, dict)
+                ]
+            else:
+                card.pop("material_details", None)
             card["names"] = list(card.get("names") or [])[:8]
             card["facts"] = [
                 {
@@ -4329,7 +4428,7 @@ def _latest_audit_query_semantics(
             not username
             or len(username) > 512
             or any(ord(character) < 32 or ord(character) == 127 for character in username)
-            or operation_scope not in {"all", "mutations"}
+            or operation_scope not in {"all", "mutations", "deletes"}
             or outcome not in {"all", "successful", "failed"}
         ):
             continue
@@ -4422,6 +4521,83 @@ def _resolve_audit_inquiry(
     })
 
 
+def _deterministic_audit_inquiry(question: str) -> InquirySemantics | None:
+    """Recover explicit audit-log semantics without treating cluster data as instructions."""
+
+    if not re.search(
+        r"(?i)\b(?:audit\s+(?:logs?|events?|trail|records?|activity)|"
+        r"according\s+to\s+(?:the\s+)?audit\s+logs?)\b",
+        question,
+    ):
+        return None
+    username_match = re.search(
+        r"(?i)\b(?:by(?:\s+user)?|for\s+user)\s+[`\"']?"
+        r"(?P<username>[A-Za-z0-9][A-Za-z0-9:_.@/\-]{0,511})",
+        question,
+    )
+    limit_match = re.search(
+        r"(?i)\b(?:last|latest|recent)\s+(?P<limit>\d{1,3})\b",
+        question,
+    )
+    duration_match = re.search(
+        r"(?i)\b(?:last|past|previous|over|within)\s+"
+        r"(?P<count>\d{1,4})\s*"
+        r"(?P<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\b",
+        question,
+    )
+    range_seconds: int | None = None
+    if duration_match is not None:
+        count = int(duration_match.group("count"))
+        unit = duration_match.group("unit").casefold()
+        multiplier = (
+            1 if unit.startswith("sec") else
+            60 if unit.startswith("min") else
+            3600 if unit.startswith("h") else
+            86_400
+        )
+        range_seconds = min(7_776_000, max(300, count * multiplier))
+    delete_requested = bool(re.search(
+        r"(?i)\b(?:deletes?|deleted|deleting|deletecollections?)\b",
+        question,
+    ))
+    mutation_requested = bool(re.search(
+        r"(?i)\b(?:mutations?|changes?|writes?|creates?|created|creating|"
+        r"patch(?:es|ed|ing)?|updates?|updated|updating)\b",
+        question,
+    ))
+    failed_requested = bool(re.search(
+        r"(?i)\b(?:failed|failures?|denied|rejected|unsuccessful)\b",
+        question,
+    ))
+    successful_requested = bool(re.search(
+        r"(?i)\b(?:successful|succeeded|allowed|completed)\b",
+        question,
+    ))
+    return InquirySemantics(
+        mode="audit",
+        operation="audit",
+        cardinality="collection",
+        needs_object_details=True,
+        evidence_goal="List bounded cluster audit operations matching the supplied filters.",
+        result_limit=(
+            min(100, max(1, int(limit_match.group("limit"))))
+            if limit_match is not None else None
+        ),
+        audit_username=(username_match.group("username") if username_match else None),
+        audit_operation_scope=(
+            "mutations" if mutation_requested else
+            "deletes" if delete_requested else
+            "all"
+        ),
+        audit_outcome=(
+            "failed" if failed_requested and not successful_requested else
+            "successful" if successful_requested and not failed_requested else
+            "all"
+        ),
+        audit_range_seconds=range_seconds,
+    )
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -4434,9 +4610,10 @@ async def _classify_ad_hoc_inquiry(
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
 
+    audit_fallback = _deterministic_audit_inquiry(question)
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
-        return None
+        return audit_fallback
     context = {
         "question": redact_text(question)[:1000],
         "recent_context": [
@@ -4452,17 +4629,45 @@ async def _classify_ad_hoc_inquiry(
         context["prior_audit_query"] = prior_audit_query
     for attempt in range(1, 3):
         try:
-            return await run_in_threadpool(classify, profile, api_key, context)
+            classified = await run_in_threadpool(classify, profile, api_key, context)
+            if audit_fallback is None:
+                return classified
+            if classified.mode != "audit":
+                LOGGER.warning(
+                    "podpilot.adhoc.classification_overridden expected=audit actual=%s",
+                    classified.mode,
+                )
+                return audit_fallback
+            return classified.model_copy(update={
+                "operation": classified.operation or "audit",
+                "cardinality": (
+                    classified.cardinality
+                    if classified.cardinality != "unknown" else "collection"
+                ),
+                "result_limit": classified.result_limit or audit_fallback.result_limit,
+                "audit_username": classified.audit_username or audit_fallback.audit_username,
+                "audit_operation_scope": (
+                    classified.audit_operation_scope or audit_fallback.audit_operation_scope
+                ),
+                "audit_outcome": classified.audit_outcome or audit_fallback.audit_outcome,
+                "audit_range_seconds": (
+                    classified.audit_range_seconds or audit_fallback.audit_range_seconds
+                ),
+            })
         except ModelProviderError as exc:
             LOGGER.warning(
                 "podpilot.adhoc.classification_failed attempt=%s error=%s", attempt, str(exc)
             )
             if attempt == 1:
                 context["structured_response_retry"] = (
-                    "Return one schema-valid inquiry classification. Preserve prior_audit_query "
-                    "for an elliptical audit follow-up and override only explicitly changed fields."
+                    "Return one schema-valid semantic inquiry object. Use only grounded object_name "
+                    "and namespace coordinates from the supplied question or recent context. Preserve "
+                    "prior_audit_query for an elliptical audit follow-up and override only explicitly "
+                    "changed fields."
                 )
-    return None
+    if audit_fallback is not None:
+        LOGGER.info("podpilot.adhoc.classification_fallback mode=audit")
+    return audit_fallback
 
 
 def _semantic_metric_read_plan(
@@ -4546,6 +4751,181 @@ def _semantic_audit_read_plan(
             )],
         ),
         True,
+    )
+
+
+def _semantic_resource_read_plan(
+    inquiry: InquirySemantics | None,
+    *,
+    resource_catalog: list[dict[str, object]],
+    question: str,
+    conversation: list[dict[str, str]],
+    inventory_limit: int,
+) -> tuple[ReadPlan, bool] | None:
+    """Compile grounded semantic coordinates through the live safe resource catalog."""
+
+    if (
+        inquiry is None
+        or inquiry.operation not in {"inventory", "object_fields", "logs", "events"}
+        or not inquiry.resource_query
+    ):
+        return None
+    catalog_plan = plan_catalog_read(
+        f"show {inquiry.resource_query}",
+        resource_catalog,
+        inventory_limit=inventory_limit,
+    )
+    if catalog_plan is None or not catalog_plan[0].intents:
+        return None
+    catalog_intent = catalog_plan[0].intents[0]
+    descriptor = next((
+        item for item in resource_catalog
+        if str(item.get("resource") or "") == str(catalog_intent.resource or "")
+        and str(item.get("apiVersion") or "") == str(catalog_intent.api_version or "")
+        and str(item.get("kind") or "").casefold()
+        == str(catalog_intent.kind or "").casefold()
+    ), None)
+    namespaced = bool(descriptor.get("namespaced")) if descriptor else None
+    verbs = {
+        str(value)
+        for value in (descriptor.get("verbs") or [])
+    } if descriptor else set()
+    grounding_text = "\n".join([
+        question,
+        *[
+            str(item.get("content") or "")
+            for item in conversation[-4:]
+            if isinstance(item, dict)
+        ],
+    ]).casefold()
+
+    def grounded(value: str | None) -> bool:
+        return bool(value and value.casefold() in grounding_text)
+
+    name = inquiry.object_name if grounded(inquiry.object_name) else None
+    namespace = inquiry.namespace if grounded(inquiry.namespace) else None
+    if inquiry.operation == "events":
+        if str(catalog_intent.kind or "").casefold() != "event":
+            return None
+        if name:
+            event_field = (
+                "regarding.name"
+                if str(catalog_intent.api_version or "").startswith("events.k8s.io/")
+                else "involvedObject.name"
+            )
+            return (
+                ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary=f"Read bounded Events related to {namespace or 'cluster'}/{name}.",
+                    intents=[ReadIntent(
+                        tool="search_resources",
+                        resource=catalog_intent.resource,
+                        api_version=catalog_intent.api_version,
+                        kind=catalog_intent.kind,
+                        namespace=namespace,
+                        match_field=event_field,
+                        match_value=name,
+                        match_operator="exact",
+                        limit=inquiry.result_limit or min(50, inventory_limit),
+                    )],
+                ),
+                True,
+            )
+        return (
+            ReadPlan(
+                goal_type="diagnose",
+                scope_summary=f"List bounded Events in {namespace or 'the cluster'}.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource=catalog_intent.resource,
+                    api_version=catalog_intent.api_version,
+                    kind=catalog_intent.kind,
+                    namespace=namespace,
+                    limit=inquiry.result_limit or min(50, inventory_limit),
+                )],
+            ),
+            True,
+        )
+    if inquiry.operation == "logs":
+        if str(catalog_intent.kind or "").casefold() != "pod" or not name:
+            return None
+        return (
+            ReadPlan(
+                goal_type="logs",
+                scope_summary=(
+                    f"Resolve the exact Pod {namespace + '/' if namespace else ''}{name} "
+                    "before selecting a bounded container log stream."
+                ),
+                intents=[ReadIntent(
+                    tool="search_resources",
+                    resource=catalog_intent.resource,
+                    api_version=catalog_intent.api_version,
+                    kind=catalog_intent.kind,
+                    namespace=namespace,
+                    match_field="metadata.name",
+                    match_value=name,
+                    match_operator="exact",
+                    limit=5,
+                )],
+            ),
+            False,
+        )
+    exact_one = inquiry.cardinality == "exact_one" or inquiry.operation == "object_fields"
+    if exact_one:
+        if not name:
+            return None
+        if (namespaced is True and not namespace) or (verbs and "get" not in verbs):
+            return (
+                ReadPlan(
+                    goal_type=inquiry.planner_goal,
+                    scope_summary=(
+                        f"Locate the exact {catalog_intent.kind} named {name} before reading fields."
+                    ),
+                    intents=[ReadIntent(
+                        tool="search_resources",
+                        resource=catalog_intent.resource,
+                        api_version=catalog_intent.api_version,
+                        kind=catalog_intent.kind,
+                        match_field="metadata.name",
+                        match_value=name,
+                        match_operator="exact",
+                        limit=5,
+                    )],
+                ),
+                False,
+            )
+        return (
+            ReadPlan(
+                goal_type=inquiry.planner_goal,
+                scope_summary=f"Read the exact {catalog_intent.kind} {namespace or 'cluster'}/{name}.",
+                intents=[ReadIntent(
+                    tool="get_resource",
+                    resource=catalog_intent.resource,
+                    api_version=catalog_intent.api_version,
+                    kind=catalog_intent.kind,
+                    namespace=namespace if namespaced is not False else None,
+                    name=name,
+                )],
+            ),
+            True,
+        )
+    return (
+        ReadPlan(
+            goal_type=inquiry.planner_goal,
+            scope_summary=(
+                f"List {catalog_intent.kind} resources in {namespace or 'the cluster'}."
+            ),
+            intents=[ReadIntent(
+                tool="list_resources",
+                resource=catalog_intent.resource,
+                api_version=catalog_intent.api_version,
+                kind=catalog_intent.kind,
+                namespace=namespace if namespaced is not False else None,
+                label_selector=inquiry.label_selector,
+                limit=inventory_limit,
+            )],
+        ),
+        not bool(inquiry.requested_fields),
     )
 
 
@@ -4649,6 +5029,16 @@ async def _collect_bounded_cluster_reads(
                 workflow_id,
                 str(exc),
             )
+
+    semantic_resource_plan = _semantic_resource_read_plan(
+        inquiry,
+        resource_catalog=catalog_entries,
+        question=question,
+        conversation=conversation,
+        inventory_limit=settings.adhoc_inventory_max_objects,
+    )
+    if semantic_resource_plan is not None:
+        deterministic_plan = semantic_resource_plan
 
     # Once live discovery resolves an explicit inventory question, normal code owns
     # the same bounded LIST on every selected cluster. This avoids asking the model
@@ -4799,7 +5189,7 @@ async def _collect_bounded_cluster_reads(
                 if alert_name else None
             ),
             "observations": compact_observations[-16:],
-            "facts": _model_fact_cards(evidence, activity=activity),
+            "facts": _model_fact_cards(evidence, activity=activity, question=question),
             "findings": _compact_answer_findings(derive_adhoc_findings(evidence))[-8:],
             "relationship_graph": compact_graph,
             "capability_ledger": {
@@ -5308,6 +5698,11 @@ async def _collect_bounded_cluster_reads(
                 intent = intent.model_copy(
                     update={"limit": settings.adhoc_inventory_max_objects}
                 )
+            if intent.tool == "pod_logs" and inquiry is not None and inquiry.operation == "logs":
+                intent = intent.model_copy(update={
+                    "previous": inquiry.previous_logs,
+                    "since_seconds": inquiry.log_range_seconds,
+                })
             intent, binding_error = _bind_pod_log_intent(intent, current_log_candidates)
             if binding_error:
                 limitations.append(
@@ -5375,6 +5770,10 @@ async def _collect_bounded_cluster_reads(
                     f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
                     + (f" container={intent.container}" if intent.container else "")
                     + (" previous=true" if intent.tool == "pod_logs" and intent.previous else "")
+                    + (
+                        f" since={intent.since_seconds}s"
+                        if intent.tool == "pod_logs" and intent.since_seconds else ""
+                    )
                 ),
             }
             if automatic_code:
@@ -5700,6 +6099,7 @@ def create_app(
                 ca_path=app_settings.service_ca_path,
                 timeout_seconds=app_settings.loki_timeout_seconds,
                 max_series=app_settings.loki_max_series,
+                max_response_bytes=app_settings.adhoc_audit_max_response_bytes,
             ),
             max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
         ),
@@ -5764,6 +6164,7 @@ def create_app(
                     tenant="audit",
                     timeout_seconds=app_settings.loki_timeout_seconds,
                     max_series=app_settings.loki_max_series,
+                    max_response_bytes=app_settings.adhoc_audit_max_response_bytes,
                 ),
                 max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
             ),
@@ -6251,7 +6652,9 @@ def create_app(
                     "earlier_context_summary": redact_text(context_summary)[-1500:],
                     "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
-                    "facts": _model_fact_cards(answer_evidence, activity=activity),
+                    "facts": _model_fact_cards(
+                        answer_evidence, activity=activity, question=message_text,
+                    ),
                     "curated_knowledge": knowledge_context[:6],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
@@ -6606,7 +7009,9 @@ def create_app(
                             "earlier_context_summary": redact_text(context_summary)[-1500:],
                             "scope_summary": collected_scope_summary,
                             "observations": answer_observations,
-                            "facts": _model_fact_cards(evidence, activity=activity),
+                            "facts": _model_fact_cards(
+                                evidence, activity=activity, question=message_text,
+                            ),
                             "curated_knowledge": knowledge_context[:6],
                             "evidence_context": answer_context_metadata,
                             "findings": answer_findings,
@@ -6720,7 +7125,9 @@ def create_app(
                 ) or (
                     route_tls_answer if route_fallback_needed else None
                 ) or (
-                    resource_detail_answer if route_fallback_needed else None
+                    resource_detail_answer
+                    if _requested_metadata_fields(message_text) or route_fallback_needed
+                    else None
                 ) or (
                     metric_ranking_answer if route_fallback_needed else None
                 ) or (

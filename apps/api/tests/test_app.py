@@ -32,6 +32,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_audit_answer,
+    _deterministic_audit_inquiry,
     _deterministic_inventory_answer,
     _deterministic_kafka_metrics_answer,
     _deterministic_metric_ranking_answer,
@@ -52,6 +53,7 @@ from podpilot_api.main import (
     _reconcile_validated_answer_gaps,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
+    _semantic_resource_read_plan,
     _resolve_audit_inquiry,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
@@ -212,6 +214,56 @@ def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_q
     assert len(provider.calls) == 2
     assert provider.calls[0]["prior_audit_query"] == prior
     assert "structured_response_retry" in provider.calls[1]
+
+
+def test_explicit_audit_question_uses_grounded_fallback_after_invalid_classification() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            self.calls += 1
+            raise ModelProviderError("response: json_invalid")
+
+    provider = Provider()
+    result = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="show the last 10 mutation actions by druciare-adm according to the audit log",
+        conversation=[], cluster_names=["Central"],
+    ))
+
+    assert provider.calls == 2
+    assert result == _deterministic_audit_inquiry(
+        "show the last 10 mutation actions by druciare-adm according to the audit log"
+    )
+    assert result is not None
+    assert result.mode == "audit"
+    assert result.operation == "audit"
+    assert result.result_limit == 10
+    assert result.audit_username == "druciare-adm"
+    assert result.audit_operation_scope == "mutations"
+
+
+def test_explicit_audit_fallback_without_username_requests_clarification() -> None:
+    inquiry = _deterministic_audit_inquiry(
+        "show me the last 10 delete actions according to the audit log"
+    )
+
+    assert inquiry is not None and inquiry.mode == "audit"
+    assert inquiry.audit_username is None
+    assert inquiry.audit_operation_scope == "deletes"
+    compiled = _semantic_audit_read_plan(
+        inquiry, default_limit=20, initial_range_seconds=3600,
+    )
+    assert compiled is not None
+    assert compiled[0].decision == "needs_clarification"
+    assert compiled[0].intents == []
 
 
 def test_capability_ledger_distinguishes_available_uncollected_from_unavailable() -> None:
@@ -1488,6 +1540,35 @@ def test_model_fact_cards_replace_raw_observations_with_bounded_material_facts()
     assert facts["TLS termination"] == "edge"
     assert "data" not in cards[0]
     assert len(json.dumps(cards[0])) < 3000
+
+
+def test_model_fact_cards_preserve_requested_node_labels() -> None:
+    cards = _model_fact_cards(
+        [{
+            "id": "node-1", "tool": "get_resource", "cluster_name": "central",
+            "summary": "Read the exact Node.",
+            "data": {
+                "apiVersion": "v1", "kind": "Node",
+                "metadata": {
+                    "name": "worker-1",
+                    "labels": {
+                        "kubernetes.io/hostname": "worker-1",
+                        "node-role.kubernetes.io/worker": "",
+                    },
+                },
+                "spec": {"unschedulable": False},
+            },
+        }],
+        activity=[{"status": "succeeded", "evidence_ids": ["node-1"]}],
+        question="Show the labels on node worker-1.",
+    )
+
+    details = cards[0]["material_details"][0]
+    assert details["metadata"]["labels"] == {
+        "kubernetes.io/hostname": "worker-1",
+        "node-role.kubernetes.io/worker": "",
+    }
+    assert len(json.dumps(cards[0]).encode("utf-8")) <= 3_000
 
 
 def test_model_fact_cards_enforce_per_card_and_aggregate_payload_limits() -> None:
@@ -2770,6 +2851,125 @@ def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
     assert result.activity[0]["tool"] == "query_audit_events"
 
 
+def test_semantic_exact_named_resource_compiles_get_through_live_catalog() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="investigate", operation="object_fields", cardinality="exact_one",
+            resource_query="Pod", object_name="api-123", namespace="payments",
+            requested_fields=["spec.containers"], needs_object_details=True,
+            evidence_goal="Read the configured container images.",
+        ),
+        resource_catalog=[{
+            "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show the image on pod api-123 in namespace payments.",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="get_resource", resource="pods", api_version="v1", kind="Pod",
+        namespace="payments", name="api-123",
+    )]
+
+
+def test_semantic_named_resource_without_namespace_compiles_grounded_search() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="investigate", operation="object_fields", cardinality="exact_one",
+            resource_query="Deployment", object_name="checkout",
+            requested_fields=["status.conditions"], needs_object_details=True,
+            evidence_goal="Locate the named Deployment before reading its status.",
+        ),
+        resource_catalog=[{
+            "resource": "deployments", "apiVersion": "apps/v1", "kind": "Deployment",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show deployment checkout status.", conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is False
+    assert plan.intents == [ReadIntent(
+        tool="search_resources", resource="deployments", api_version="apps/v1",
+        kind="Deployment", match_field="metadata.name", match_value="checkout",
+        match_operator="exact", limit=5,
+    )]
+
+
+def test_semantic_coordinates_must_be_grounded_in_operator_context() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="investigate", operation="object_fields", cardinality="exact_one",
+            resource_query="Pod", object_name="model-invented-pod",
+            requested_fields=["metadata.labels"], needs_object_details=True,
+            evidence_goal="Read labels.",
+        ),
+        resource_catalog=[{
+            "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show that Pod's labels.", conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is None
+
+
+def test_semantic_service_account_does_not_resolve_as_service() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="investigate", operation="object_fields", cardinality="exact_one",
+            resource_query="ServiceAccount", object_name="builder", namespace="payments",
+            requested_fields=["metadata.annotations"], needs_object_details=True,
+            evidence_goal="Read the ServiceAccount metadata.",
+        ),
+        resource_catalog=[{
+            "resource": "services", "apiVersion": "v1", "kind": "Service",
+            "namespaced": True, "verbs": ["get", "list"],
+        }, {
+            "resource": "serviceaccounts", "apiVersion": "v1", "kind": "ServiceAccount",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show annotations on service account builder in namespace payments.",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    assert compiled[0].intents[0].kind == "ServiceAccount"
+    assert compiled[0].intents[0].resource == "serviceaccounts"
+
+
+def test_semantic_event_request_compiles_related_object_search() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="investigate", operation="events", cardinality="collection",
+            resource_query="Event", object_name="api-123", namespace="payments",
+            result_limit=30, needs_object_details=True,
+            evidence_goal="Read recent Events related to the supplied Pod.",
+        ),
+        resource_catalog=[{
+            "resource": "events.events.k8s.io", "apiVersion": "events.k8s.io/v1",
+            "kind": "Event", "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show events for pod api-123 in namespace payments.",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="search_resources", resource="events.events.k8s.io",
+        api_version="events.k8s.io/v1", kind="Event", namespace="payments",
+        match_field="regarding.name", match_value="api-123", match_operator="exact",
+        limit=30,
+    )]
+
+
 def test_exact_node_label_request_executes_get_despite_inventory_classification() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
@@ -3127,7 +3327,8 @@ def test_exact_node_label_fallback_renders_metadata_labels() -> None:
 
     assert rendered is not None
     content = str(rendered["content"])
-    assert "`metadata.labels`" in content
+    assert "## Exact resource metadata" in content
+    assert "#### Labels" in content
     assert "kubernetes.io/hostname" in content
     assert "node-role.kubernetes.io/worker" in content
     assert rendered["citations"] == ["cluster-node-detail"]

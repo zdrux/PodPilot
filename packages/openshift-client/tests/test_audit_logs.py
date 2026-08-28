@@ -58,7 +58,7 @@ def test_reader_matches_username_case_insensitively_and_projects_safe_fields() -
 
     query = str(source.calls[0]["logql"])
     assert r'audit_username=~"(?i)^druciare\\-adm$"' in query
-    assert source.calls[0]["limit"] == 20
+    assert source.calls[0]["limit"] == 5
     event = result.observations[0].data["events"][0]
     assert event["username"] == "DRUCIARE-ADM"
     assert event["verb"] == "patch"
@@ -84,6 +84,28 @@ def test_reader_escapes_username_regex_and_filters_semantic_scope() -> None:
 
     assert r'user\\.\\*' in str(source.calls[0]["logql"])
     assert [event["verb"] for event in result.observations[0].data["events"]] == ["delete"]
+
+
+def test_delete_scope_excludes_other_mutations() -> None:
+    source = FakeAuditSource((
+        ("1787831940000000000", _event("druciare-adm", verb="patch")),
+        ("1787831930000000000", _event("druciare-adm", verb="delete")),
+        ("1787831920000000000", _event("druciare-adm", verb="deletecollection")),
+    ))
+    reader = BoundedAuditEventReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_audit_events",
+        audit_username="druciare-adm",
+        audit_operation_scope="deletes",
+        audit_outcome="all",
+        limit=10,
+    ))
+
+    assert 'audit_verb=~"^(?:delete|deletecollection)$"' in str(source.calls[0]["logql"])
+    assert [event["verb"] for event in result.observations[0].data["events"]] == [
+        "delete", "deletecollection",
+    ]
 
 
 def test_last_n_query_expands_backward_until_it_finds_requested_events() -> None:
@@ -134,7 +156,7 @@ def test_last_n_query_stops_at_configured_ceiling_and_reports_it() -> None:
     assert any("configured 14400-second audit ceiling" in item for item in result.limitations)
 
 
-def _client(tmp_path: Path, handler) -> LokiQueryClient:
+def _client(tmp_path: Path, handler, **kwargs) -> LokiQueryClient:
     token = tmp_path / "token"
     token.write_text("fixture-token", encoding="utf-8")
     return LokiQueryClient(
@@ -142,6 +164,7 @@ def _client(tmp_path: Path, handler) -> LokiQueryClient:
         tenant="audit",
         token_path=token,
         transport=httpx.MockTransport(handler),
+        **kwargs,
     )
 
 
@@ -163,6 +186,30 @@ def test_loki_audit_client_uses_audit_tenant_and_query_range(tmp_path: Path) -> 
     )
 
     assert len(result.entries) == 1
+
+
+def test_loki_audit_client_accepts_verbose_requested_entries_with_audit_ceiling(
+    tmp_path: Path,
+) -> None:
+    events = []
+    for index in range(10):
+        event = json.loads(_event("Druciare-Adm", verb="delete"))
+        event["requestObject"] = {"padding": "x" * 8_000}
+        events.append([str(1787831940000000000 - index), json.dumps(event)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"resultType": "streams", "result": [{
+                "stream": {"log_type": "audit"}, "values": events,
+            }]},
+        })
+
+    result = _client(
+        tmp_path, handler, max_response_bytes=1_048_576,
+    ).query_audit_entries("fixed", start=NOW, end=NOW, limit=10)
+
+    assert len(result.entries) == 10
 
 
 def test_loki_audit_denial_names_required_role(tmp_path: Path) -> None:

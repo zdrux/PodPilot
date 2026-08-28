@@ -84,13 +84,17 @@ def test_audit_query_defaults_and_bounds_are_configurable() -> None:
         adhoc_audit_initial_range_seconds=7200,
         adhoc_audit_max_range_seconds=172800,
         adhoc_audit_default_limit=5,
+        adhoc_audit_max_response_bytes=2_097_152,
     )
 
     assert settings.adhoc_audit_initial_range_seconds == 7200
     assert settings.adhoc_audit_max_range_seconds == 172800
     assert settings.adhoc_audit_default_limit == 5
+    assert settings.adhoc_audit_max_response_bytes == 2_097_152
     with pytest.raises(ValidationError):
         Settings(adhoc_audit_default_limit=101)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_audit_max_response_bytes=65_535)
     with pytest.raises(ValidationError, match="initial audit search range"):
         Settings(
             adhoc_audit_initial_range_seconds=7200,

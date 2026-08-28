@@ -707,6 +707,28 @@ def test_pod_log_request_requires_explicit_namespace_and_name_hint() -> None:
     assert plan_known_read("Check authorino pod logs") is None
 
 
+def test_singular_namespaced_resource_phrase_is_discovery_not_terminal_inventory() -> None:
+    planned = plan_known_read(
+        "Show the image on pod api-123 in namespace payments."
+    )
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is False
+    assert plan.goal_type == "diagnose"
+    assert plan.intents[0].tool == "list_resources"
+
+
+def test_service_account_phrase_is_not_terminal_service_inventory() -> None:
+    planned = plan_known_read(
+        "What permissions does service account builder have in namespace payments?"
+    )
+
+    assert planned is not None
+    assert planned[1] is False
+    assert planned[0].intents[0].kind == "Service"
+
+
 @pytest.mark.parametrize("question", [
     'show the labels on the node "devocp4cmspc-wtlkr-worker-canadacentral1-vk96r"',
     "Show node devocp4cmspc-wtlkr-worker-canadacentral1-vk96r labels",

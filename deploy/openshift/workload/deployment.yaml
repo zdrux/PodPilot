@@ -82,6 +82,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_audit_default_limit
+            - name: PODPILOT_ADHOC_AUDIT_MAX_RESPONSE_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_audit_max_response_bytes
             - name: PODPILOT_LOKI_URL
               valueFrom:
                 configMapKeyRef:

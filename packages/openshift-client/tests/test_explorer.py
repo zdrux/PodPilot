@@ -723,6 +723,42 @@ def test_pod_list_exposes_compact_exact_log_candidates():
     assert result.observations[0].data["logCandidatesTruncated"] is False
 
 
+def test_pod_log_candidates_include_init_and_ephemeral_containers():
+    pod = FakeObject(payload={
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {"name": "api-1", "namespace": "payments"},
+        "spec": {
+            "containers": [{"name": "api"}],
+            "initContainers": [{"name": "migrate"}],
+            "ephemeralContainers": [{"name": "debugger"}],
+        },
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "api", "ready": True, "restartCount": 0,
+                "state": {"running": {}},
+            }],
+            "initContainerStatuses": [{
+                "name": "migrate", "ready": True, "restartCount": 0,
+                "state": {"terminated": {"exitCode": 0}},
+            }],
+            "ephemeralContainerStatuses": [{
+                "name": "debugger", "ready": False, "restartCount": 0,
+                "state": {"running": {}},
+            }],
+        },
+    })
+    target, _, _ = explorer(FakeResource([pod]))
+
+    result = target.execute(ReadIntent(
+        tool="list_resources", api_version="v1", kind="Pod",
+        namespace="payments", limit=20,
+    ))
+
+    candidate = result.observations[0].data["logCandidates"][0]
+    assert candidate["containers"] == ["api", "migrate", "debugger"]
+
+
 def test_compact_list_enforces_payload_budget_with_explicit_truncation():
     objects = [FakeObject(name=f"pod-{index}", payload={
         "apiVersion": "v1",
@@ -756,6 +792,43 @@ def test_logs_are_bounded_and_redacted():
     ))
     assert "do-not-leak" not in result.observations[0].data["tail"]
     assert "server started" in result.observations[0].data["tail"]
+
+
+def test_logs_preserve_semantic_time_bound_in_api_call_and_evidence():
+    class TrackingCore:
+        def __init__(self):
+            self.calls = []
+
+        def read_namespaced_pod_log(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            return "recent log"
+
+    target, _, _ = explorer()
+    core = TrackingCore()
+    target._core = core
+
+    result = target.execute(ReadIntent(
+        tool="pod_logs", namespace="payments", name="api", container="app",
+        since_seconds=600,
+    ))
+
+    assert core.calls[0]["since_seconds"] == 600
+    assert result.observations[0].data["sinceSeconds"] == 600
+
+
+def test_events_v1_projection_preserves_regarding_note_and_reporting_fields():
+    projected = _list_projection("Event", {
+        "metadata": {"name": "api-failed", "namespace": "payments"},
+        "type": "Warning", "reason": "Failed", "note": "Probe failed",
+        "action": "HealthCheck", "reportingController": "kubelet",
+        "regarding": {"apiVersion": "v1", "kind": "Pod", "name": "api-123"},
+        "eventTime": "2026-08-28T01:00:00Z",
+    })
+
+    assert projected["message"] == "Probe failed"
+    assert projected["action"] == "HealthCheck"
+    assert projected["reportingController"] == "kubelet"
+    assert projected["involvedObject"]["name"] == "api-123"
 
 
 def test_missing_previous_logs_fall_back_to_bounded_current_logs():

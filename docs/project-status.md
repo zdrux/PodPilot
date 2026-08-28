@@ -518,6 +518,15 @@ current repository and cluster state.
   duration-only continuation inherits the previous validated audit target and performs a fresh read.
   Classification retries once after invalid JSON, and a failed unrelated classification cannot cite
   prior audit evidence.
+- Explicit audit-log questions now retain a grounded deterministic semantic fallback after both
+  provider classification attempts fail, and a valid single fenced JSON object is accepted from
+  compatible Chat Completions endpoints. The richer semantic classifier has a 1,400-token ceiling;
+  profile limits remain authoritative.
+- Audit Loki queries request exactly the validated result count rather than four times that count.
+  Their raw HTTP response has a separate configurable 1 MiB default ceiling, while persisted evidence
+  remains the existing redacted bounded projection with no raw lines or request/response objects.
+- Audit operation scope now distinguishes delete-only (`delete` and `deletecollection`) from broader
+  mutations, so the original “last N delete actions” wording no longer includes creates, patches, or updates.
 
 ## 2026-08-28 Site-wide Quiet Ledger redesign
 
@@ -536,6 +545,24 @@ current repository and cluster state.
   `get_resource` read instead of treating the word “show” as a request to relist every Node.
 - Semantic classification treats labels, annotations, spec, status, and taints as object-detail
   requests, and deterministic provider fallback can render matching metadata such as Node labels.
+- Question-focused model fact cards retain bounded requested metadata, so the final answer receives
+  labels from an exact GET instead of seeing only the Node identity and spec/status.
+- Explicit labels, annotations, and owner-reference questions prefer a deterministic exact-metadata
+  table over a weaker model interpretation once the named GET succeeds.
+- Evidence payload ceilings remain unchanged.
+
+## 2026-08-28 Typed semantic read descriptions
+
+- Replaced the coarse routing-only classification contract with a backward-compatible semantic IR
+  covering operation, cardinality, resource concept, grounded name/namespace, requested fields,
+  explicit label selectors, log container/history/time bounds, metrics, and audit semantics.
+- Normal code resolves semantic resource concepts through live safe discovery and compiles exact GET,
+  bounded exact-name search, collection, related-object Event, and Pod-discovery reads without
+  accepting model-authored API coordinates.
+- Exact semantic coordinates must appear in the current question or recent conversation. Namespaced
+  objects without a grounded namespace are searched before GET, and model-invented names are ignored.
+- Pod logs now support semantic `sinceSeconds`, plus init- and ephemeral-container candidates. Event
+  projection supports both core/v1 and events.k8s.io/v1 field shapes.
 - Evidence payload ceilings remain unchanged.
 
 ## Known Limitations

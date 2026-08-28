@@ -104,6 +104,8 @@ class BoundedAuditEventReader:
         )
         if intent.audit_operation_scope == "mutations":
             query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
+        elif intent.audit_operation_scope == "deletes":
+            query += ' | audit_verb=~"^(?:delete|deletecollection)$"'
         if intent.audit_outcome == "successful":
             query += ' | audit_code=~"^[123][0-9]{2}$"'
         elif intent.audit_outcome == "failed":
@@ -116,7 +118,10 @@ class BoundedAuditEventReader:
                 query,
                 start=start,
                 end=end,
-                limit=min(100, max(intent.limit * 4, intent.limit)),
+                # Loki already applies the username, stage, operation, and outcome
+                # filters. Asking for four times the requested count only inflates
+                # verbose raw audit payloads and can trip the bounded HTTP ceiling.
+                limit=intent.limit,
             )
             events = self._project_events(
                 snapshot,
@@ -205,6 +210,8 @@ class BoundedAuditEventReader:
                 continue
             verb = str(event.get("verb") or "").lower()
             if operation_scope == "mutations" and verb not in self._MUTATING_VERBS:
+                continue
+            if operation_scope == "deletes" and verb not in {"delete", "deletecollection"}:
                 continue
             response_status = (
                 event.get("responseStatus")

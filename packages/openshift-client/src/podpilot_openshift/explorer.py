@@ -158,17 +158,30 @@ def _pod_log_candidate_projection(raw: dict[str, Any], namespace: str | None) ->
     metadata = raw.get("metadata") or {}
     spec = raw.get("spec") or {}
     status = raw.get("status") or {}
-    statuses = _compact_container_statuses(
-        status.get("containerStatuses") or status.get("container_statuses") or []
-    )
+    raw_statuses = [
+        *(status.get("containerStatuses") or status.get("container_statuses") or []),
+        *(
+            status.get("initContainerStatuses")
+            or status.get("init_container_statuses") or []
+        ),
+        *(
+            status.get("ephemeralContainerStatuses")
+            or status.get("ephemeral_container_statuses") or []
+        ),
+    ]
+    statuses = _compact_container_statuses(raw_statuses)
     container_names = [
         str(item.get("name"))[:253]
         for item in statuses
         if item.get("name")
     ]
     if not container_names:
-        configured = spec.get("containers") or []
-        if isinstance(configured, list):
+        configured = [
+            *(spec.get("containers") or []),
+            *(spec.get("initContainers") or spec.get("init_containers") or []),
+            *(spec.get("ephemeralContainers") or spec.get("ephemeral_containers") or []),
+        ]
+        if configured:
             container_names = [
                 str(item.get("name"))[:253]
                 for item in configured
@@ -422,12 +435,19 @@ def _list_projection(kind: str, raw: dict[str, Any]) -> dict[str, Any]:
             "conditions": status.get("conditions") or [],
         }
     elif kind == "Event":
-        involved = raw.get("involvedObject") or raw.get("involved_object") or {}
+        involved = (
+            raw.get("involvedObject") or raw.get("involved_object")
+            or raw.get("regarding") or {}
+        )
         source = raw.get("source") or {}
         projected.update({
             "type": raw.get("type"),
             "reason": raw.get("reason"),
-            "message": raw.get("message"),
+            "message": raw.get("message") or raw.get("note"),
+            "action": raw.get("action"),
+            "reportingController": (
+                raw.get("reportingController") or raw.get("reporting_controller")
+            ),
             "count": raw.get("count") or raw.get("deprecated_count"),
             "firstTimestamp": raw.get("firstTimestamp") or raw.get("first_timestamp"),
             "lastTimestamp": raw.get("lastTimestamp") or raw.get("last_timestamp"),
@@ -1023,14 +1043,16 @@ class KubernetesReadOnlyExplorer:
         limitations: tuple[str, ...] = ()
         try:
             text = self._read_pod_log(
-                name=name, namespace=namespace, container=container, previous=previous
+                name=name, namespace=namespace, container=container, previous=previous,
+                since_seconds=intent.since_seconds,
             )
         except ApiException as exc:
             body = str(getattr(exc, "body", "") or "").lower()
             if not (previous and exc.status == 400 and "previous terminated container" in body):
                 raise
             text = self._read_pod_log(
-                name=name, namespace=namespace, container=container, previous=False
+                name=name, namespace=namespace, container=container, previous=False,
+                since_seconds=intent.since_seconds,
             )
             previous = False
             limitations = (
@@ -1045,19 +1067,28 @@ class KubernetesReadOnlyExplorer:
             summary=f"Collected bounded {qualifier}logs for Pod {namespace}/{name}.",
             source=f"kubernetes:v1:Pod/log:{namespace}/{name}?{'previous' if previous else 'current'}",
             collected_at=datetime.now(timezone.utc),
-            data={"container": container, "previous": previous, "tail": redacted},
+            data={
+                "container": container, "previous": previous,
+                "sinceSeconds": intent.since_seconds, "tail": redacted,
+            },
         ),), limitations)
 
     def _read_pod_log(
-        self, *, name: str, namespace: str, container: str | None, previous: bool
+        self, *, name: str, namespace: str, container: str | None, previous: bool,
+        since_seconds: int | None,
     ) -> str | bytes:
         assert self._core is not None
+        kwargs: dict[str, object] = {
+            "container": container,
+            "previous": previous,
+            "tail_lines": self._log_tail_lines,
+            "timestamps": True,
+            "_request_timeout": 8,
+        }
+        if since_seconds is not None:
+            kwargs["since_seconds"] = since_seconds
         return self._core.read_namespaced_pod_log(
             name,
             namespace,
-            container=container,
-            previous=previous,
-            tail_lines=self._log_tail_lines,
-            timestamps=True,
-            _request_timeout=8,
+            **kwargs,
         )

@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     adhoc_audit_initial_range_seconds: int = Field(default=3600, ge=300, le=2_592_000)
     adhoc_audit_max_range_seconds: int = Field(default=86_400, ge=3600, le=7_776_000)
     adhoc_audit_default_limit: int = Field(default=20, ge=1, le=100)
+    adhoc_audit_max_response_bytes: int = Field(
+        default=1_048_576, ge=65_536, le=4_194_304
+    )
     adhoc_context_messages: int = Field(default=10, ge=4, le=30)
     adhoc_context_summary_chars: int = Field(default=4000, ge=1000, le=12000)
     adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)

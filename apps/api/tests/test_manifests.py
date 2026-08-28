@@ -106,6 +106,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["adhoc_audit_initial_range_seconds"] == "3600"
     assert runtime["data"]["adhoc_audit_max_range_seconds"] == "86400"
     assert runtime["data"]["adhoc_audit_default_limit"] == "20"
+    assert runtime["data"]["adhoc_audit_max_response_bytes"] == "1048576"
     configured = next(item for item in env if item["name"] == "PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS")
     assert configured["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
@@ -122,6 +123,13 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert audit_limit["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_audit_default_limit",
+    }
+    audit_bytes = next(
+        item for item in env if item["name"] == "PODPILOT_ADHOC_AUDIT_MAX_RESPONSE_BYTES"
+    )
+    assert audit_bytes["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_audit_max_response_bytes",
     }
     metric_range = next(
         item for item in env if item["name"] == "PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS"
