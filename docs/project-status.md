@@ -220,7 +220,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
-  a newline.
+  a newline. The Ask screen now uses one mellow slate-blue surface across its
+  header, transcript, and composer. Full-width conversation rows use a dedicated
+  metadata column and subtle silver-blue dividers instead of rounded message cards;
+  narrow layouts stack that metadata above each response.
 - Each Ask question has a default-off **Show raw model response** switch. When enabled,
   the durable run retains up to four redacted, size-bounded final-answer provider bodies,
   including the initial and PodPilot correction attempts. The owner can expand them beneath
@@ -455,6 +458,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   Chat Completions profile, patched its opaque token key into the fixed credential
   Secret, deleted the profile and key, and confirmed the API container did not
   restart. The database and Secret returned to the original single-profile state.
+- The Quiet Ledger Ask redesign was deployed as OpenShift build `podpilot-30` at
+  image digest
+  `sha256:09ba40c6039f05b6a730497a0dbee47fc199501d29c055711e9f4c7b12af2071`.
+  The full 425-test suite passed at 84% coverage. Authenticated Chrome verification
+  under `podpilot-breakglass` exercised the 40-item evidence drawer, raw-response
+  switch, composer state, desktop transcript, and 720px responsive layout with no
+  console warnings, errors, or horizontal page overflow.
 
 These observations are a handoff snapshot, not a substitute for checking the
 current repository and cluster state.

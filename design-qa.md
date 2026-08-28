@@ -1,72 +1,54 @@
-# Ask PodPilot message-card height QA
+# Quiet Ledger Chat Redesign QA
 
-- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-7ca933cc-6391-4f9e-9df2-5b0a0cb56a23.png`
-- Browser-rendered implementation: `C:\Users\zdrux\AppData\Local\Temp\podpilot-chat-card-height-fixed-1861.png`
-- Viewport: 1861 × 1001 CSS px at device scale factor 1
-- Source pixels: 1861 × 1001
-- Implementation pixels: 1861 × 1001
-- Density normalization: none
-- State: dark desktop Ask PodPilot conversation with one user message and one active investigation card containing five progress events
+## Comparison Target
 
-## Full-view comparison evidence
+- Source visual truth: `C:\Users\zdrux\.codex\generated_images\01a0463d-1d49-7eb1-bdea-fc62cd42c430\exec-94c3e556-1835-4d6a-b546-dd2a28714c09.png`
+- Browser-rendered implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-implementation.png`
+- Combined comparison evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-comparison.png`
+- Narrow-width evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-narrow.png`
+- Deployed route: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/ask/8ed4502c-e328-4e55-a617-22d6f87b8a63`
+- State: authenticated `podpilot-breakglass` user, existing six-message Ask conversation, newest response visible, evidence drawer closed.
 
-The source and corrected browser render were opened together at identical dimensions and state. In the source, the two automatic CSS Grid rows stretch vertically to fill the 649px transcript area, leaving large empty regions inside both cards. In the corrected render, the cards are content-sized and the unused transcript height appears below the message stack, where it belongs.
+## Viewport And Normalization
 
-Measured corrected geometry:
-
-- Transcript height: 649px
-- User card: 126.34px rendered height, 124px scroll height
-- Active investigation card: 243.95px rendered height, 242px scroll height
-- Grid automatic rows: `max-content`
-- Grid content alignment: `start`
-- Page scroll height: 1001px, equal to the viewport height
-
-## Focused region comparison evidence
-
-The message region is legible at native size in the full-view pair, so a separate crop was unnecessary. Focused inspection confirmed that card widths, padding, borders, typography, progress markers, and the 12px inter-card gap are unchanged. Only the unintended vertical stretching was removed.
-
-## Required fidelity surfaces
-
-- Fonts and typography: unchanged; existing Inter/system stack, font sizes, weights, line heights, and wrapping are preserved.
-- Spacing and layout rhythm: card padding and the inter-card gap are unchanged. Automatic rows now use intrinsic content height and the message stack is anchored to the transcript top.
-- Colors and visual tokens: unchanged; dark blue-grey surfaces, cyan borders, and semantic progress colors remain intact.
-- Image quality and asset fidelity: no image or icon assets were added, replaced, or altered.
-- Copy and content: the user message, active investigation status, and progress entries render unchanged.
-
-## Interaction and browser verification
-
-- Verified the populated active-investigation state from a seeded isolated QA database.
-- Confirmed the transcript remains independently scrollable when content exceeds its fixed region.
-- Browser console errors checked: none.
-- Model execution and form submission were intentionally not triggered; this change affects only message-row sizing.
-
-## Comparison history
-
-### Pass 1
-
-- [P1] Message cards expanded to consume unused transcript height.
-- Cause: the fixed-height `.ask-thread` remained a grid whose implicit auto rows participated in `align-content: normal`, allowing the rows to stretch.
-- Fix: set `grid-auto-rows: max-content` and `align-content: start` on `.ask-thread`.
-
-### Pass 2
-
-- Post-fix browser evidence shows both cards matching their content height with unused space below the stack.
-- No actionable P0, P1, or P2 findings remain.
+- Source pixels: 1816 x 866 at 72 DPI.
+- Implementation pixels and CSS viewport: 2048 x 976 at device scale 1 and 72 DPI.
+- The source was normalized to 2048 x 976 for the side-by-side comparison. Its aspect ratio differs by less than 0.1%, so no meaningful crop or density correction was needed.
+- Responsive check: 720 x 900 CSS pixels at device scale 1; body width remained 720 pixels with no horizontal page overflow.
 
 ## Findings
 
-No blocking visual, interaction, accessibility, or responsive findings remain for this correction.
+No actionable P0, P1, or P2 differences remain.
 
-## Implementation checklist
+- Fonts and typography: the implementation preserves the source's compact operator hierarchy, 15px readable transcript body, small metadata, and monospace treatment for technical values. Live answer content is longer than the mock data but wraps without clipping.
+- Spacing and layout rhythm: messages occupy full-width transcript rows, the author/time/status metadata uses a dedicated left column, and low-contrast horizontal dividers replace the previous rounded message containers. Header, thread, and composer form one continuous surface.
+- Colors and visual tokens: the deployed Ask page uses the selected mellow slate-blue surface, silver-blue dividers, warm off-white text, pastel cyan actions, sage evidence states, and subdued apricot limitations without glow or high-contrast section blocks.
+- Image quality and assets: the selected direction contains no raster content that must be recreated. The existing PodPilot brand mark remains sharp at both tested widths.
+- Copy and content: live operational copy and persisted conversation data were intentionally preserved instead of replacing them with the mock's audit example.
+- Interaction and accessibility: the 40-item evidence drawer opened and closed correctly, the raw-response switch toggled, the composer enabled its action after text entry, keyboard-semantic controls remained intact, and Chrome reported no console warnings or errors.
+- Responsive behavior: at 720 x 900 the sidebar collapses to the brand/identity header, transcript metadata stacks above message content, the composer controls remain reachable, and no horizontal page overflow occurs.
 
-- [x] Prevent implicit transcript rows from stretching.
-- [x] Keep messages anchored at the top of the scrolling region.
-- [x] Preserve card padding, width, styling, and message content.
-- [x] Verify against the reported active-investigation state at the same viewport.
-- [x] Check browser console and existing API UI tests.
+## Focused Region Comparison
 
-## Follow-up polish
+A separate crop was not required. Both halves of `design-qa-comparison.png` preserve the desktop screen at native 976px height, and the transcript metadata, dividers, status colors, table, evidence row, and composer remain readable at that scale. The narrow capture separately verifies the responsive stacking behavior.
 
-No P3 follow-up is required.
+## Comparison History
+
+- Pass 1: no P0/P1/P2 mismatches found. The implementation matched the selected direction's continuous background, two-column transcript hierarchy, divider rhythm, pastel palette, and fixed composer without a corrective visual iteration.
+
+## Follow-up Polish
+
+- P3: the existing sidebar uses legacy text glyphs for several navigation icons. Replacing the entire product icon set with a coherent packaged icon family would improve consistency, but it is outside the selected chat-surface redesign and does not block this pass.
+- P3: very long authenticated usernames truncate in the compact desktop identity footer, matching existing behavior; a future identity-menu pass could expose the full name on hover or focus.
+
+## Implementation Checklist
+
+- [x] Uniform Ask background across header, thread, and composer.
+- [x] Full-width message rows with subtle horizontal separators.
+- [x] Dedicated desktop metadata column and narrow-width stacking.
+- [x] Flattened evidence and recommendation treatments.
+- [x] Authenticated Chrome interaction verification.
+- [x] Desktop and narrow-width overflow checks.
+- [x] Console warning/error check.
 
 final result: passed
