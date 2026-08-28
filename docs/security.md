@@ -489,6 +489,17 @@ matrices and remain bounded by time, points, series, bytes, timeout, and redacti
 Deployment and node membership are derived from server-owned kube-state-metrics joins, not
 model-provided selectors. Namespace, Deployment, and node consumer rankings expose only
 already-authorized monitoring labels and must be described as container/Pod attribution.
+Kafka, ingress, MachineConfigPool, HPA/workload, storage, ClusterOperator, API server, scheduler,
+etcd, Prometheus/Alertmanager, and LokiStack
+capability packs use the same registered-template boundary. The provider may select only enumerated
+signals, typed groupings, and an exact target or opaque ID from server-supplied recent object
+references. Normal code rebinds opaque IDs to retained coordinates and rejects invented target
+names, namespaces, cross-Kind references, unsupported signal/scope combinations, and attempts to
+route explicit telemetry questions through inventory. Exporter absence produces a limitation; it
+never relaxes the boundary to model-authored PromQL.
+Unknown CRDs stay on the generic discovery/object/relationship broker unless a reviewed metric
+profile is registered. Neither CRD discovery nor a model guess can promote an arbitrary series name,
+label matcher, unit, or aggregation into executable telemetry.
 No node shell, `/proc` access,
 host PID inspection, privileged DaemonSet, or process-level credential is introduced.
 Namespace log-volume rankings preserve the typed metric boundary. The model selects only the

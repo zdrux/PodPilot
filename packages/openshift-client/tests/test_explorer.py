@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from kubernetes.client.exceptions import ApiException
+from kubernetes.dynamic.exceptions import ResourceNotFoundError
 from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import ReadIntent
@@ -721,6 +722,286 @@ def test_pod_list_exposes_compact_exact_log_candidates():
         "restartCount": 1,
     }]
     assert result.observations[0].data["logCandidatesTruncated"] is False
+
+
+def test_pod_health_summary_finds_crashloop_after_healthy_payload_prefix() -> None:
+    healthy = [FakeObject(payload={
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {
+            "name": f"healthy-{index}", "namespace": "apps",
+            "creationTimestamp": "2026-08-28T00:00:00Z",
+        },
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "app", "ready": True, "restartCount": 0,
+                "state": {"running": {}},
+            }],
+        },
+    }) for index in range(80)]
+    crashing = FakeObject(payload={
+        "apiVersion": "v1", "kind": "Pod",
+        "metadata": {
+            "name": "crashing-api", "namespace": "payments",
+            "creationTimestamp": "2026-08-28T00:00:00Z",
+        },
+        "status": {
+            "phase": "Running",
+            "containerStatuses": [{
+                "name": "api", "ready": False, "restartCount": 3595,
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+            }],
+        },
+    })
+    target, _, _ = explorer(FakeResource([*healthy, crashing]))
+    target._max_payload_bytes = 800
+
+    result = target.execute(ReadIntent(tool="pod_health_summary", limit=20))
+
+    data = result.observations[0].data
+    assert data["scannedCount"] == 81
+    assert data["scanComplete"] is True
+    assert data["anomalyCount"] == 1
+    assert data["anomalies"][0] == {
+        "namespace": "payments",
+        "name": "crashing-api",
+        "phase": "Running",
+        "readyContainers": 0,
+        "totalContainers": 1,
+        "restartCount": 3595,
+        "severity": "critical",
+        "issues": [{
+            "reason": "CrashLoopBackOff", "severity": "critical",
+            "container": "api", "containerType": "container",
+        }],
+    }
+    assert data["byReason"] == {"CrashLoopBackOff": 1}
+
+
+def test_pod_health_summary_includes_init_failures_and_excludes_completed_pods() -> None:
+    init_failure = FakeObject(payload={
+        "metadata": {
+            "name": "migrating-api", "namespace": "apps",
+            "creationTimestamp": "2026-08-28T00:00:00Z",
+        },
+        "status": {
+            "phase": "Pending",
+            "initContainerStatuses": [{
+                "name": "migrate", "ready": False, "restartCount": 12,
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+            }],
+        },
+    })
+    completed = FakeObject(payload={
+        "metadata": {
+            "name": "completed-job", "namespace": "apps",
+            "creationTimestamp": "2026-08-28T00:00:00Z",
+        },
+        "status": {
+            "phase": "Succeeded",
+            "containerStatuses": [{
+                "name": "job", "ready": False, "restartCount": 0,
+                "state": {"terminated": {"reason": "Completed", "exitCode": 0}},
+            }],
+        },
+    })
+    target, _, _ = explorer(FakeResource([init_failure, completed]))
+
+    result = target.execute(ReadIntent(tool="pod_health_summary", limit=20))
+
+    data = result.observations[0].data
+    assert data["anomalyCount"] == 1
+    assert data["anomalies"][0]["name"] == "migrating-api"
+    assert data["anomalies"][0]["issues"][0]["containerType"] == "initContainer"
+
+
+def test_pod_health_summary_separates_scan_and_anomaly_result_ceilings() -> None:
+    def pod(name: str, *, crash: bool = False) -> FakeObject:
+        return FakeObject(payload={
+            "metadata": {
+                "name": name, "namespace": "apps",
+                "creationTimestamp": "2026-08-28T00:00:00Z",
+            },
+            "status": {
+                "phase": "Running",
+                "containerStatuses": [{
+                    "name": "app", "ready": not crash,
+                    "restartCount": 5 if crash else 0,
+                    "state": (
+                        {"waiting": {"reason": "CrashLoopBackOff"}}
+                        if crash else {"running": {}}
+                    ),
+                }],
+            },
+        })
+
+    class PagedPodResource:
+        def get(self, **kwargs):
+            token = kwargs.get("_continue")
+            if token is None:
+                return SimpleNamespace(items=[pod("healthy-1"), pod("healthy-2")], metadata={"continue": "page-2"})
+            return SimpleNamespace(items=[pod("crashing-3", crash=True), pod("crashing-4", crash=True)], metadata={"continue": "page-3"})
+
+    target, _, _ = explorer(PagedPodResource())
+    target._max_search_scan_objects = 3
+
+    result = target.execute(ReadIntent(tool="pod_health_summary", limit=1))
+
+    data = result.observations[0].data
+    assert data["scannedCount"] == 3
+    assert data["scanComplete"] is False
+    assert data["anomalyCount"] == 1
+    assert data["returnedAnomalyCount"] == 1
+    assert "3-object scan ceiling" in result.limitations[0]
+
+
+def test_node_health_summary_uses_ready_pressure_and_schedulability_conditions() -> None:
+    healthy = FakeObject(payload={
+        "metadata": {"name": "worker-0"},
+        "spec": {},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    })
+    unhealthy = FakeObject(payload={
+        "metadata": {"name": "worker-1"},
+        "spec": {"unschedulable": True},
+        "status": {"conditions": [
+            {"type": "Ready", "status": "False", "reason": "KubeletNotReady"},
+            {"type": "DiskPressure", "status": "True"},
+        ]},
+    })
+    target, _, _ = explorer(FakeResource([healthy, unhealthy]))
+
+    result = target.execute(ReadIntent(tool="node_health_summary"))
+
+    data = result.observations[0].data
+    assert data["scanComplete"] is True
+    assert data["anomalyCount"] == 1
+    assert data["anomalies"][0]["name"] == "worker-1"
+    assert data["byReason"] == {
+        "DiskPressure": 1, "ReadyFalse": 1, "SchedulingDisabled": 1,
+    }
+
+
+def test_cluster_operator_health_summary_uses_available_degraded_and_progressing() -> None:
+    operators = [
+        FakeObject(payload={
+            "metadata": {"name": "network"},
+            "status": {"conditions": [
+                {"type": "Available", "status": "True"},
+                {"type": "Degraded", "status": "False"},
+                {"type": "Progressing", "status": "False"},
+            ]},
+        }),
+        FakeObject(payload={
+            "metadata": {"name": "storage"},
+            "status": {"conditions": [
+                {"type": "Available", "status": "False", "reason": "NoPods"},
+                {"type": "Degraded", "status": "True", "reason": "OperandFailed"},
+                {"type": "Progressing", "status": "True"},
+            ]},
+        }),
+    ]
+    target, _, _ = explorer(FakeResource(operators))
+
+    result = target.execute(ReadIntent(tool="cluster_operator_health_summary"))
+
+    data = result.observations[0].data
+    assert data["anomalyCount"] == 1
+    assert data["anomalies"][0]["name"] == "storage"
+    assert data["byReason"] == {
+        "AvailableFalse": 1, "Degraded": 1, "Progressing": 1,
+    }
+
+
+def test_machine_health_summary_is_namespaced_and_detects_failed_phase() -> None:
+    machines = [
+        FakeObject(payload={
+            "metadata": {"name": "worker-0", "namespace": "openshift-machine-api"},
+            "status": {"phase": "Running", "nodeRef": {"name": "worker-0"}},
+        }),
+        FakeObject(payload={
+            "metadata": {"name": "worker-1", "namespace": "openshift-machine-api"},
+            "status": {"phase": "Failed", "errorReason": "CreateError"},
+        }),
+    ]
+    target, resource, _ = explorer(FakeResource(machines))
+
+    result = target.execute(ReadIntent(
+        tool="machine_health_summary", namespace="openshift-machine-api",
+    ))
+
+    data = result.observations[0].data
+    assert data["anomalyCount"] == 1
+    assert data["anomalies"][0]["state"] == "Failed"
+    assert data["byReason"] == {"CreateError": 1}
+    assert resource.calls == [{"limit": 100, "namespace": "openshift-machine-api"}]
+
+
+def test_machine_health_summary_reports_missing_openshift_api_as_unresolved_coverage() -> None:
+    class MissingResources:
+        def get(self, **_kwargs):
+            raise ResourceNotFoundError
+
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=SimpleNamespace(resources=MissingResources()), core_api=FakeCore(),
+    )
+
+    result = target.execute(ReadIntent(tool="machine_health_summary"))
+
+    data = result.observations[0].data
+    assert data["resourceAvailable"] is False
+    assert data["scanComplete"] is False
+    assert data["unavailableKinds"] == ["machine.openshift.io/v1beta1 Machine"]
+    assert "not available" in result.limitations[0].lower()
+
+
+def test_workload_health_summary_scans_each_controller_kind_with_namespace() -> None:
+    resources_by_kind = {
+        "Deployment": FakeResource([FakeObject(payload={
+            "metadata": {"name": "api", "namespace": "payments", "generation": 2},
+            "spec": {"replicas": 3},
+            "status": {
+                "readyReplicas": 1, "availableReplicas": 1, "updatedReplicas": 2,
+                "observedGeneration": 2,
+            },
+        })]),
+        "StatefulSet": FakeResource([FakeObject(payload={
+            "metadata": {"name": "db", "namespace": "payments", "generation": 1},
+            "spec": {"replicas": 2},
+            "status": {
+                "readyReplicas": 2, "updatedReplicas": 2, "observedGeneration": 1,
+            },
+        })]),
+        "DaemonSet": FakeResource([FakeObject(payload={
+            "metadata": {"name": "agent", "namespace": "payments", "generation": 1},
+            "status": {
+                "desiredNumberScheduled": 2, "numberReady": 2,
+                "numberAvailable": 2, "updatedNumberScheduled": 2,
+                "numberMisscheduled": 1, "observedGeneration": 1,
+            },
+        })]),
+    }
+
+    class KindResources:
+        def get(self, **kwargs):
+            return resources_by_kind[kwargs["kind"]]
+
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=SimpleNamespace(resources=KindResources()), core_api=FakeCore(),
+    )
+
+    result = target.execute(ReadIntent(
+        tool="workload_health_summary", namespace="payments", limit=20,
+    ))
+
+    data = result.observations[0].data
+    assert data["scannedByKind"] == {"Deployment": 1, "StatefulSet": 1, "DaemonSet": 1}
+    assert data["anomalyCount"] == 2
+    assert {item["kind"] for item in data["anomalies"]} == {"Deployment", "DaemonSet"}
+    assert all(
+        resource.calls == [{"limit": 100, "namespace": "payments"}]
+        for resource in resources_by_kind.values()
+    )
 
 
 def test_pod_log_candidates_include_init_and_ephemeral_containers():

@@ -666,9 +666,21 @@ current repository and cluster state.
   StatefulSet, DaemonSet, Job, Node, Node-role, and PVC targets. The model cannot author PromQL.
 - Controller metrics use trusted owner joins, supported groupings become bounded PromQL aggregation,
   and metric-only results receive a deterministic current/average/peak table.
-- Machine, Service/Route, OpenShift control-plane, Kafka, and arbitrary CRD telemetry remain future
-  capability packs because Kubernetes API discovery does not prove that their metrics exist.
-- This local change has not yet been rolled out to the SNO workload.
+- Registered domain packs now cover Strimzi Kafka topic throughput/storage/lag/replication health,
+  OpenShift router traffic, MachineConfigPool rollout state, HPA/workload availability, PVC
+  byte/inode pressure, ClusterOperator conditions, API server/scheduler/etcd health, Prometheus and
+  Alertmanager self-health, and LokiStack ingestion/query health. Kubernetes API
+  discovery still does not prove that the corresponding exporter is scraped, so empty results name
+  the required telemetry profile rather than reporting a zero value.
+- Elliptical metric follow-ups can select opaque recent object or relationship references. The
+  server rebinds those IDs to trusted exact coordinates, rejects cross-Kind and ungrounded targets,
+  and retries explicit utilization/throughput/lag questions that were misclassified as inventory.
+- Unknown CRDs continue through live discovery, bounded redacted object/status reads, and opaque
+  evidence-derived relationship traversal. They require an explicit reviewed metric profile before
+  they can become telemetry targets; the model cannot invent a series from the CRD Kind.
+- The model-free suite passes locally with 578 tests and 83% aggregate coverage. These capability
+  packs have not yet been rolled out to the SNO workload or validated against its live metric-label
+  profile.
 
 ## 2026-08-28 Stable live-investigation phases
 
@@ -676,6 +688,23 @@ current repository and cluster state.
 - New phases append without reordering existing headings. Each phase displays its latest three
   updates, and reloads reconstruct the same bounded phase view from persisted progress.
 - This UI behavior is locally implemented and has not yet been rolled out to the SNO workload.
+
+## 2026-08-28 Deterministic resource health summaries
+
+- Cluster-wide and namespace-scoped Pod health/crash questions compile to a typed
+  `pod_health_summary` read even when model classification selects generic object fields.
+- The read scans bounded Pod pages, evaluates current Pod plus primary/init container
+  state in normal code, and retains anomaly-first compact evidence with counts by reason and
+  severity. A `Running`-phase Pod with a `CrashLoopBackOff` container is detected.
+- Scan coverage and returned anomaly detail have independent ceilings. Deterministic answer
+  rendering confirms absence only for a complete scan and otherwise reports the result unresolved.
+- Typed summaries now also cover Nodes, ClusterOperators, Machines, and Deployment/StatefulSet/
+  DaemonSet controllers. Nodes and ClusterOperators are cluster-scoped; Machines and workload
+  controllers support namespace filters. Each uses reviewed resource-specific conditions or
+  lifecycle fields rather than a generic status rule.
+- Missing OpenShift Machine or ClusterOperator APIs are unresolved coverage, not an empty healthy
+  result. Combined workload scans report per-kind coverage.
+- This capability is locally implemented and has not yet been rolled out to the SNO workload.
 
 ## Known Limitations
 

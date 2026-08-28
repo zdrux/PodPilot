@@ -35,6 +35,8 @@ from podpilot_api.main import (
     _deterministic_inventory_answer,
     _deterministic_metric_ranking_answer,
     _deterministic_metric_summary_answer,
+    _deterministic_pod_health_answer,
+    _deterministic_resource_health_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
@@ -163,6 +165,157 @@ def test_investigation_budget_weights_high_volume_operations() -> None:
     assert _investigation_unit_cost(ReadIntent(
         tool="watch_resources", resource="pods", namespace="payments", watch_seconds=5,
     )) == 3
+    assert _investigation_unit_cost(ReadIntent(tool="pod_health_summary")) == 2
+
+
+def test_deterministic_pod_health_answer_reports_running_phase_crashloop() -> None:
+    evidence = [{
+        "id": "pod-health-1",
+        "tool": "pod_health_summary",
+        "cluster_name": "lab",
+        "data": {
+            "kind": "Pod", "scannedCount": 600, "scanComplete": True,
+            "anomalyCount": 1, "returnedAnomalyCount": 1,
+            "anomalies": [{
+                "namespace": "payments", "name": "api-7d9", "phase": "Running",
+                "readyContainers": 1, "totalContainers": 2, "restartCount": 3595,
+                "issues": [{"reason": "CrashLoopBackOff"}],
+            }],
+        },
+    }]
+    activity = [{
+        "tool": "pod_health_summary", "status": "succeeded",
+        "evidence_ids": ["pod-health-1"],
+    }]
+
+    answer = _deterministic_pod_health_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert answer["conclusion_status"] == "confirmed"
+    assert "found 1 Pod with current health anomalies" in answer["content"]
+    assert "`payments` | `api-7d9` | Running | 1/2 | 3595 | CrashLoopBackOff" in answer["content"]
+    assert answer["citations"] == ["pod-health-1"]
+
+
+def test_deterministic_pod_health_answer_refuses_incomplete_absence_claim() -> None:
+    evidence = [{
+        "id": "pod-health-limited",
+        "tool": "pod_health_summary",
+        "data": {
+            "kind": "Pod", "scannedCount": 2000, "scanComplete": False,
+            "anomalyCount": 0, "returnedAnomalyCount": 0, "anomalies": [],
+        },
+    }]
+    activity = [{
+        "tool": "pod_health_summary", "status": "succeeded",
+        "evidence_ids": ["pod-health-limited"],
+    }]
+
+    answer = _deterministic_pod_health_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert answer["conclusion_status"] == "unresolved"
+    assert "scan was incomplete" in answer["content"]
+    assert "cannot be concluded" in answer["content"]
+
+
+def test_deterministic_resource_health_answer_reports_anomaly() -> None:
+    evidence = [{
+        "id": "node-health-1", "tool": "node_health_summary", "cluster_name": "lab",
+        "data": {
+            "kind": "Node", "scannedCount": 3, "scanComplete": True,
+            "anomalyCount": 1, "returnedAnomalyCount": 1, "unavailableKinds": [],
+            "anomalies": [{
+                "kind": "Node", "name": "worker-1", "state": "Ready=False",
+                "issues": [{"reason": "ReadyFalse"}, {"reason": "DiskPressure"}],
+            }],
+        },
+    }]
+    activity = [{
+        "tool": "node_health_summary", "status": "succeeded",
+        "evidence_ids": ["node-health-1"],
+    }]
+
+    answer = _deterministic_resource_health_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert answer["conclusion_status"] == "confirmed"
+    assert "found 1 Node health anomaly" in answer["content"]
+    assert "Node | `—` | `worker-1` | Ready=False | DiskPressure, ReadyFalse" in answer["content"]
+
+
+def test_deterministic_resource_health_answer_marks_unavailable_api_unresolved() -> None:
+    evidence = [{
+        "id": "machine-health-1", "tool": "machine_health_summary",
+        "data": {
+            "kind": "Machine", "scannedCount": 0, "scanComplete": False,
+            "anomalyCount": 0, "returnedAnomalyCount": 0, "anomalies": [],
+            "unavailableKinds": ["machine.openshift.io/v1beta1 Machine"],
+        },
+    }]
+    activity = [{
+        "tool": "machine_health_summary", "status": "succeeded",
+        "evidence_ids": ["machine-health-1"],
+    }]
+
+    answer = _deterministic_resource_health_answer(evidence=evidence, activity=activity)
+
+    assert answer is not None
+    assert answer["conclusion_status"] == "unresolved"
+    assert "required API was unavailable" in answer["content"]
+
+
+def test_pod_health_route_overrides_generic_object_field_classification() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("the model planner must not own a typed Pod health scan")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="pod-health-override", tool="pod_health_summary",
+                summary="Detected one CrashLooping Pod.",
+                source="kubernetes:v1:Pod/health:cluster",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Pod", "scannedCount": 600, "scanComplete": True,
+                    "anomalyCount": 1, "returnedAnomalyCount": 1,
+                    "anomalies": [], "objects": [],
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(),
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[],
+            role_approver_groups=[], role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="pod-health-override",
+        question="Are any pods on the cluster crashing currently?",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            mode="investigate", operation="object_fields", cardinality="collection",
+            resource_query="Pod", needs_object_details=True,
+            evidence_goal="Inspect Pod status fields.",
+        ),
+    ))
+
+    assert explorer.calls == [ReadIntent(tool="pod_health_summary", limit=200)]
+    assert result.units_used == 2
+    assert result.activity[0]["tool"] == "pod_health_summary"
+    assert result.evidence[0]["id"] == "pod-health-override"
 
 
 def test_semantic_classification_is_one_small_call_for_all_selected_clusters() -> None:
@@ -2528,6 +2681,212 @@ def test_typed_metric_rank_maps_cluster_node_cpu_to_node_utilization() -> None:
         metric_scope="cluster", range_seconds=300, limit=5,
         metric_operation="rank", metric_group_by=["node"],
     )
+
+
+def test_kafka_topic_utilization_followup_binds_opaque_cluster_target() -> None:
+    class Provider:
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            kafka = next(
+                item for item in context["recent_object_references"]
+                if item["kind"] == "Kafka"
+            )
+            return InquirySemantics(
+                mode="metrics", evidence_goal="Show utilization for those Kafka topics.",
+                metric_request=MetricRequestSemantics(
+                    signals=[
+                        "kafka_topic_messages_in", "kafka_topic_storage",
+                        "kafka_consumer_lag", "kafka_under_replicated_partitions",
+                    ],
+                    target=MetricTargetSemantics(
+                        scope="kafka_cluster", kind="Kafka", reference_id=kafka["id"],
+                    ),
+                    operation="compare", group_by=["topic"], range_seconds=300,
+                ),
+            )
+
+    evidence = [{
+        "id": "cluster-kafka", "tool": "get_resource",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "resource": "kafkas.kafka.strimzi.io",
+            "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+        },
+    }]
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Can you show the utilization of those Kafka topics?",
+        conversation=[], cluster_names=["Central"], evidence=evidence,
+    ))
+
+    assert inquiry is not None and inquiry.metric_request is not None
+    target = inquiry.metric_request.target
+    assert (target.kind, target.namespace, target.name, target.reference_id) == (
+        "Kafka", "vc-streams", "vc-cluster", None,
+    )
+    compiled = _semantic_metric_read_plan(inquiry)
+    assert compiled is not None
+    assert [intent.metric for intent in compiled[0].intents] == [
+        "kafka_topic_messages_in", "kafka_topic_storage",
+        "kafka_consumer_lag", "kafka_under_replicated_partitions",
+    ]
+    assert all(intent.metric_scope == "kafka_cluster" for intent in compiled[0].intents)
+    assert all(intent.namespace == "vc-streams" for intent in compiled[0].intents)
+    assert all(intent.name == "vc-cluster" for intent in compiled[0].intents)
+
+
+def test_explicit_metric_question_retries_inventory_classification() -> None:
+    class Provider:
+        calls = 0
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.calls += 1
+            if self.calls == 1:
+                return InquirySemantics(
+                    mode="inventory", evidence_goal="List KafkaTopic resources.",
+                    resource_query="KafkaTopic",
+                )
+            assert "select metrics mode" in context["structured_response_retry"]
+            kafka = next(
+                item for item in context["recent_object_references"]
+                if item["kind"] == "Kafka"
+            )
+            return InquirySemantics(
+                mode="metrics", evidence_goal="Show Kafka topic throughput.",
+                metric_request=MetricRequestSemantics(
+                    signals=["kafka_topic_messages_in"],
+                    target=MetricTargetSemantics(
+                        scope="kafka_cluster", kind="Kafka", reference_id=kafka["id"],
+                    ),
+                    group_by=["topic"],
+                ),
+            )
+
+    provider = Provider()
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Show the throughput of those Kafka topics.",
+        conversation=[], cluster_names=["Central"],
+        evidence=[{
+            "id": "cluster-kafka", "tool": "get_resource",
+            "data": {
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "resource": "kafkas.kafka.strimzi.io",
+                "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+            },
+        }],
+    ))
+
+    assert provider.calls == 2
+    assert inquiry is not None and inquiry.mode == "metrics"
+
+
+@pytest.mark.parametrize(
+    ("signal", "scope", "kind", "namespace", "name"),
+    [
+        ("ingress_request_rate", "route", "Route", "payments", "api"),
+        (
+            "machineconfigpool_updated", "machine_config_pool",
+            "MachineConfigPool", None, "worker",
+        ),
+        (
+            "hpa_current_replicas", "horizontal_pod_autoscaler",
+            "HorizontalPodAutoscaler", "payments", "api",
+        ),
+        (
+            "workload_availability", "workload", "Deployment", "payments", "api",
+        ),
+        (
+            "cluster_operator_degraded", "cluster_operator",
+            "ClusterOperator", None, "network",
+        ),
+        ("apiserver_request_rate", "control_plane", "APIServer", None, None),
+        ("apiserver_inflight_requests", "control_plane", "APIServer", None, None),
+        ("scheduler_pending_pods", "control_plane", "Scheduler", None, None),
+        ("etcd_db_size", "control_plane", "Etcd", None, None),
+        ("etcd_has_leader", "control_plane", "Etcd", None, None),
+        ("monitoring_targets_down", "monitoring", "Prometheus", None, None),
+        ("prometheus_ingestion_rate", "monitoring", "Prometheus", None, None),
+        ("logging_ingestion_rate", "logging", "LokiStack", None, None),
+        ("logging_query_latency", "logging", "LokiStack", None, None),
+    ],
+)
+def test_platform_metric_semantics_compile_registered_scope(
+    signal: str, scope: str, kind: str, namespace: str | None, name: str | None,
+) -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", evidence_goal=f"Read {signal}.",
+        metric_request=MetricRequestSemantics(
+            signals=[signal],
+            target=MetricTargetSemantics(
+                scope=scope, kind=kind, namespace=namespace, name=name,
+            ),
+        ),
+    ))
+
+    assert compiled is not None
+    intent = compiled[0].intents[0]
+    assert intent.metric == signal
+    assert intent.metric_scope == scope
+    assert intent.namespace == namespace
+    assert intent.name == name
+
+
+def test_control_plane_metric_rejects_cross_component_signal() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", evidence_goal="Read etcd data from the API server.",
+        metric_request=MetricRequestSemantics(
+            signals=["etcd_db_size"],
+            target=MetricTargetSemantics(scope="control_plane", kind="APIServer"),
+        ),
+    ))
+
+    assert compiled is None
+
+
+def test_kafka_metric_rank_preserves_top_n_and_topic_grouping() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", evidence_goal="Rank topics by incoming bytes.",
+        metric_request=MetricRequestSemantics(
+            signals=["kafka_topic_bytes_in"],
+            target=MetricTargetSemantics(
+                scope="kafka_cluster", kind="Kafka",
+                namespace="vc-streams", name="vc-cluster",
+            ),
+            operation="rank", group_by=["topic"], result_limit=7,
+        ),
+    ))
+
+    assert compiled is not None
+    assert compiled[0].intents[0].limit == 7
+    assert compiled[0].intents[0].metric_operation == "rank"
+
+
+def test_kafka_broker_topic_rate_rejects_partition_grouping() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", evidence_goal="Read partition message rates.",
+        metric_request=MetricRequestSemantics(
+            signals=["kafka_topic_messages_in"],
+            target=MetricTargetSemantics(
+                scope="kafka_cluster", kind="Kafka",
+                namespace="vc-streams", name="vc-cluster",
+            ),
+            group_by=["partition"],
+        ),
+    ))
+
+    assert compiled is None
 
 
 def test_typed_metric_threshold_preserves_grouping_statistic_and_comparator() -> None:
@@ -5119,6 +5478,21 @@ class FakeReadExplorer:
 
     def execute(self, intent):
         self.calls.append(intent)
+        if intent.tool == "cluster_operator_health_summary":
+            return ReadResult((AdHocObservation(
+                id="cluster-operators-1",
+                tool="cluster_operator_health_summary",
+                summary="No ClusterOperator health anomalies detected.",
+                source="kubernetes:config.openshift.io/v1:ClusterOperator/health:cluster",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "ClusterOperator", "scope": "cluster",
+                    "resourceAvailable": True, "unavailableKinds": [],
+                    "scannedCount": 2, "scanComplete": True,
+                    "anomalyCount": 0, "returnedAnomalyCount": 0,
+                    "anomaliesComplete": True, "anomalies": [], "objects": [],
+                },
+            ),))
         return ReadResult((AdHocObservation(
             id="cluster-pod-1", tool=intent.tool,
             summary="Read Pod payments/api-7d9.", source="kubernetes:v1:Pod:payments/api-7d9",
@@ -8825,7 +9199,7 @@ def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan
     assert re.search(r'data-csv-table="metric-table-[^"]+-metric-cpu-1"', rendered.text)
 
 
-def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(
+def test_ask_cluster_operator_status_uses_typed_health_summary(
     tmp_path: Path,
 ) -> None:
     provider = ImpliedHealthProvider()
@@ -8863,19 +9237,14 @@ def test_ask_repairs_implied_health_intent_and_reads_live_catalog_target(
         assert "cluster-operators-1" in rendered.text
 
     assert len(explorer.calls) == 1
-    assert explorer.calls[0].resource == "clusteroperators"
-    assert explorer.calls[0].limit == 250
-    assert len(provider.adhoc_plan_calls) == 3
-    assert provider.adhoc_plan_calls[0]["read_candidates"][0]["target"] == (
-        "List a bounded sample of ClusterOperator resources"
+    assert explorer.calls[0] == ReadIntent(
+        tool="cluster_operator_health_summary", limit=200,
     )
-    assert provider.adhoc_plan_calls[1]["planner_feedback"]["code"] == (
-        "actionable_goal_requires_evidence"
-    )
-    assert provider.adhoc_plan_calls[2]["completed_reads"][0]["status"] == "succeeded"
+    assert provider.adhoc_plan_calls == []
+    assert len(provider.adhoc_answer_calls) == 1
 
 
-def test_ask_does_not_override_model_direction_with_catalog_fallback(
+def test_ask_typed_cluster_operator_health_overrides_model_refusal(
     tmp_path: Path,
 ) -> None:
     provider = RefusingCatalogProvider()
@@ -8908,14 +9277,14 @@ def test_ask_does_not_override_model_direction_with_catalog_fallback(
             follow_redirects=False,
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "could not provide a verified cluster-specific answer" in rendered.text
-        assert "cluster-operators-1" not in rendered.text
+        assert "All observed ClusterOperators are Available" in rendered.text
+        assert "cluster-operators-1" in rendered.text
 
-    assert len(provider.adhoc_plan_calls) == 1
-    assert provider.adhoc_plan_calls[0]["read_candidates"][0]["target"] == (
-        "List a bounded sample of ClusterOperator resources"
-    )
-    assert explorer.calls == []
+    assert provider.adhoc_plan_calls == []
+    assert len(provider.adhoc_answer_calls) == 1
+    assert explorer.calls == [ReadIntent(
+        tool="cluster_operator_health_summary", limit=200,
+    )]
 
 
 def test_ask_uses_safely_reduced_active_profile_and_shows_warning(

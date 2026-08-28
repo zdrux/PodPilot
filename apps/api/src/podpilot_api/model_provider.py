@@ -263,14 +263,22 @@ class MetricTargetSemantics(BaseModel):
 
     scope: Literal[
         "cluster", "namespace", "pod", "workload", "node", "node_role",
-        "persistent_volume_claim",
+        "persistent_volume_claim", "kafka_cluster", "route", "ingress_controller",
+        "machine_config_pool", "horizontal_pod_autoscaler", "cluster_operator",
+        "control_plane", "monitoring", "logging",
     ]
     kind: Literal[
         "Cluster", "Namespace", "Pod", "Deployment", "StatefulSet", "DaemonSet",
-        "Job", "Node", "PersistentVolumeClaim",
+        "Job", "Node", "PersistentVolumeClaim", "Kafka", "Route",
+        "IngressController", "MachineConfigPool", "HorizontalPodAutoscaler",
+        "ClusterOperator", "APIServer", "Etcd",
+        "Scheduler", "Prometheus", "LokiStack",
     ]
     namespace: str | None = Field(default=None, max_length=253)
     name: str | None = Field(default=None, max_length=253)
+    reference_id: str | None = Field(
+        default=None, pattern=r"^(?:ref|rel)-[a-f0-9]{20}$"
+    )
     role: Literal["worker", "master", "infra"] | None = None
     container: str | None = Field(default=None, max_length=253)
 
@@ -284,19 +292,32 @@ class MetricTargetSemantics(BaseModel):
 
     @model_validator(mode="after")
     def require_target_coordinates(self) -> "MetricTargetSemantics":
-        if self.scope in {"namespace", "pod", "workload", "persistent_volume_claim"}:
-            if not self.namespace:
+        if self.scope in {
+            "namespace", "pod", "workload", "persistent_volume_claim",
+            "kafka_cluster", "route", "horizontal_pod_autoscaler",
+        }:
+            if not self.namespace and not self.reference_id:
                 raise ValueError("the selected metric target requires a namespace")
-        if self.scope in {"pod", "workload", "node", "persistent_volume_claim"}:
-            if not self.name:
+        if self.scope in {
+            "pod", "workload", "node", "persistent_volume_claim", "kafka_cluster",
+            "route", "ingress_controller", "machine_config_pool",
+            "horizontal_pod_autoscaler", "cluster_operator",
+        }:
+            if not self.name and not self.reference_id:
                 raise ValueError("the selected metric target requires an exact name")
         if self.scope == "node_role" and not self.role:
             raise ValueError("a node-role metric target requires an exact registered role")
         if self.scope != "node_role" and self.role:
             raise ValueError("role is valid only for a node-role metric target")
-        if self.scope in {"cluster", "node", "node_role"} and self.namespace:
+        if self.scope in {
+            "cluster", "node", "node_role", "ingress_controller",
+            "machine_config_pool", "cluster_operator", "control_plane",
+            "monitoring", "logging",
+        } and self.namespace:
             raise ValueError("the selected metric target does not accept a namespace")
-        if self.scope in {"cluster", "namespace", "node_role"} and self.name:
+        if self.scope in {
+            "cluster", "namespace", "node_role", "control_plane", "monitoring", "logging",
+        } and self.name:
             raise ValueError("the selected metric target does not accept a name")
         if self.container and self.scope != "pod":
             raise ValueError("an exact container is valid only for a Pod metric target")
@@ -308,6 +329,15 @@ class MetricTargetSemantics(BaseModel):
             "node": {"Node"},
             "node_role": {"Node"},
             "persistent_volume_claim": {"PersistentVolumeClaim"},
+            "kafka_cluster": {"Kafka"},
+            "route": {"Route"},
+            "ingress_controller": {"IngressController"},
+            "machine_config_pool": {"MachineConfigPool"},
+            "horizontal_pod_autoscaler": {"HorizontalPodAutoscaler"},
+            "cluster_operator": {"ClusterOperator"},
+            "control_plane": {"APIServer", "Etcd", "Scheduler"},
+            "monitoring": {"Prometheus"},
+            "logging": {"LokiStack"},
         }[self.scope]
         if self.kind not in expected_kinds:
             raise ValueError("metric target kind is incompatible with its scope")
@@ -323,12 +353,30 @@ class MetricRequestSemantics(BaseModel):
         "network_receive", "network_transmit", "container_restarts",
         "pod_readiness", "persistent_volume_usage", "node_cpu_utilization",
         "node_memory_utilization", "application_log_volume",
+        "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
+        "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
+        "ingress_request_rate", "ingress_error_rate",
+        "machineconfigpool_updated", "machineconfigpool_degraded",
+        "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
+        "workload_availability", "persistent_volume_inode_usage",
+        "cluster_operator_available", "cluster_operator_degraded",
+        "cluster_operator_progressing", "apiserver_request_rate",
+        "apiserver_error_rate", "apiserver_latency", "etcd_db_size",
+        "etcd_fsync_latency", "apiserver_inflight_requests",
+        "scheduler_pending_pods", "scheduler_attempt_rate", "scheduler_error_rate",
+        "scheduler_latency", "etcd_has_leader", "etcd_leader_changes",
+        "monitoring_targets_up", "monitoring_targets_down",
+        "prometheus_head_series", "prometheus_ingestion_rate",
+        "prometheus_rule_evaluation_failures", "alertmanager_active_alerts",
+        "logging_ingestion_rate", "logging_query_latency",
     ]] = Field(min_length=1, max_length=4)
     target: MetricTargetSemantics
     operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
     statistic: Literal["current", "average", "maximum", "minimum"] = "current"
     group_by: list[Literal[
-        "cluster", "namespace", "pod", "container", "node"
+        "cluster", "namespace", "pod", "container", "node", "topic", "partition",
+        "consumer_group", "route", "pool", "operator", "code",
+        "job", "instance", "queue", "result", "component", "tenant", "request_kind",
     ]] = Field(default_factory=list, max_length=3)
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
     threshold_value: float | None = None
@@ -1845,8 +1893,19 @@ class OpenAIResponsesProvider:
                     "Cluster target, the corresponding node utilization signal, operation=rank, group_by=node, "
                     "and the requested result limit. For pod or workload ranking use cpu_usage or "
                     "memory_working_set; application-log ranking uses application_log_volume. Normal code maps "
-                    "these to registered bounded rankings. Never invent omitted target coordinates. The legacy "
-                    "metric_query fields remain a compatibility fallback; leave them null when metric_request "
+                    "these to registered bounded rankings. Never invent omitted target coordinates. "
+                    "For Strimzi topic utilization use kafka_cluster scope with the exact Kafka namespace/name; "
+                    "for an elliptical follow-up, put the intended supplied ref-/rel- id in the metric target's "
+                    "reference_id instead of reconstructing its coordinates. "
+                    "Select topic message/byte rates, storage, lag, or under-replicated partitions and group by "
+                    "topic, partition, or consumer_group as requested. Route/IngressController, MachineConfigPool, "
+                    "HorizontalPodAutoscaler, workload availability, PVC inode usage, ClusterOperator, API server, "
+                    "scheduler, etcd, OpenShift Prometheus/Alertmanager, and LokiStack questions use their "
+                    "corresponding typed targets and registered signals. Unknown or third-party CRDs must use "
+                    "inventory/configuration plus supplied opaque object/relationship references unless an explicit "
+                    "registered metric target exists; never infer metric names from a Kind. "
+                    "Exporter-dependent metrics may legitimately return no samples. The legacy metric_query "
+                    "fields remain a compatibility fallback; leave them null when metric_request "
                     "fully describes the question. For a request to rank the largest pod CPU or memory consumers, set "
                     "metric_query to the matching top-consumer metric, metric_scope=cluster when the "
                     "operator asks for each selected cluster, and result_limit to the requested top N. "
@@ -2455,7 +2514,15 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "memory_working_set for container-backed workload use. To rank Nodes cluster-wide, use a Cluster "
                 "target with the corresponding node utilization signal, operation=rank, group_by=node, and the "
                 "requested result limit. Other ranking uses operation=rank and normal code selects the registered "
-                "ranking template. Never invent omitted coordinates. Leave the "
+                "ranking template. Never invent omitted coordinates. "
+                "For Strimzi topic utilization use kafka_cluster with the exact Kafka namespace/name and registered "
+                "topic signals; an elliptical target may select a supplied ref-/rel- id in target.reference_id. "
+                "Use topic throughput, storage, lag, or replication-health signals. Route/IngressController, "
+                "MachineConfigPool, HorizontalPodAutoscaler, workload availability, PVC inode usage, ClusterOperator, "
+                "API server, scheduler, etcd, OpenShift Prometheus/Alertmanager, and LokiStack questions use their "
+                "corresponding typed targets and signals. Route unknown CRDs through inventory/configuration and "
+                "supplied opaque relationships unless a registered metric target exists; never infer PromQL from "
+                "the Kind. Leave the "
                 "legacy metric fields null when metric_request is complete. For pod CPU or "
                 "memory ranking requests, return metric_query, metric_scope, and result_limit; use cluster "
                 "scope for each selected cluster. Leave those fields null otherwise. "

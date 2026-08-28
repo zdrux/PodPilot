@@ -32,6 +32,85 @@ _UNITS = {
     "top_memory_consumers": "bytes",
     "node_cpu_utilization": "percent",
     "node_memory_utilization": "percent",
+    "kafka_topic_messages_in": "messages_per_second",
+    "kafka_topic_bytes_in": "bytes_per_second",
+    "kafka_topic_bytes_out": "bytes_per_second",
+    "kafka_topic_storage": "bytes",
+    "kafka_consumer_lag": "records",
+    "kafka_under_replicated_partitions": "partitions",
+    "ingress_request_rate": "requests_per_second",
+    "ingress_error_rate": "requests_per_second",
+    "machineconfigpool_updated": "percent",
+    "machineconfigpool_degraded": "machines",
+    "hpa_current_replicas": "replicas",
+    "hpa_desired_replicas": "replicas",
+    "hpa_max_replicas": "replicas",
+    "workload_availability": "percent",
+    "persistent_volume_inode_usage": "percent",
+    "cluster_operator_available": "ratio",
+    "cluster_operator_degraded": "ratio",
+    "cluster_operator_progressing": "ratio",
+    "apiserver_request_rate": "requests_per_second",
+    "apiserver_error_rate": "requests_per_second",
+    "apiserver_latency": "seconds",
+    "etcd_db_size": "bytes",
+    "etcd_fsync_latency": "seconds",
+    "apiserver_inflight_requests": "requests",
+    "scheduler_pending_pods": "pods",
+    "scheduler_attempt_rate": "requests_per_second",
+    "scheduler_error_rate": "requests_per_second",
+    "scheduler_latency": "seconds",
+    "etcd_has_leader": "ratio",
+    "etcd_leader_changes": "events_per_second",
+    "monitoring_targets_up": "targets",
+    "monitoring_targets_down": "targets",
+    "prometheus_head_series": "series",
+    "prometheus_ingestion_rate": "samples_per_second",
+    "prometheus_rule_evaluation_failures": "events_per_second",
+    "alertmanager_active_alerts": "alerts",
+    "logging_ingestion_rate": "bytes_per_second",
+    "logging_query_latency": "seconds",
+}
+
+_PREREQUISITES = {
+    "kafka_topic_messages_in": "Strimzi broker JMX Prometheus metrics",
+    "kafka_topic_bytes_in": "Strimzi broker JMX Prometheus metrics",
+    "kafka_topic_bytes_out": "Strimzi broker JMX Prometheus metrics",
+    "kafka_topic_storage": "Strimzi broker JMX Prometheus metrics",
+    "kafka_consumer_lag": "Strimzi Kafka Exporter metrics",
+    "kafka_under_replicated_partitions": "Strimzi Kafka Exporter metrics",
+    "ingress_request_rate": "OpenShift router HAProxy metrics",
+    "ingress_error_rate": "OpenShift router HAProxy metrics",
+    "machineconfigpool_updated": "Machine Config Operator metrics",
+    "machineconfigpool_degraded": "Machine Config Operator metrics",
+    "hpa_current_replicas": "kube-state-metrics HPA metrics",
+    "hpa_desired_replicas": "kube-state-metrics HPA metrics",
+    "hpa_max_replicas": "kube-state-metrics HPA metrics",
+    "workload_availability": "kube-state-metrics workload metrics",
+    "persistent_volume_inode_usage": "kubelet volume statistics",
+    "cluster_operator_available": "openshift-state-metrics ClusterOperator metrics",
+    "cluster_operator_degraded": "openshift-state-metrics ClusterOperator metrics",
+    "cluster_operator_progressing": "openshift-state-metrics ClusterOperator metrics",
+    "apiserver_request_rate": "Kubernetes API server metrics",
+    "apiserver_error_rate": "Kubernetes API server metrics",
+    "apiserver_latency": "Kubernetes API server metrics",
+    "etcd_db_size": "etcd metrics",
+    "etcd_fsync_latency": "etcd metrics",
+    "apiserver_inflight_requests": "Kubernetes API server metrics",
+    "scheduler_pending_pods": "Kubernetes scheduler metrics",
+    "scheduler_attempt_rate": "Kubernetes scheduler metrics",
+    "scheduler_error_rate": "Kubernetes scheduler metrics",
+    "scheduler_latency": "Kubernetes scheduler metrics",
+    "etcd_has_leader": "etcd metrics",
+    "etcd_leader_changes": "etcd metrics",
+    "monitoring_targets_up": "OpenShift cluster-monitoring target metrics",
+    "monitoring_targets_down": "OpenShift cluster-monitoring target metrics",
+    "prometheus_head_series": "OpenShift Prometheus self-metrics or recording rules",
+    "prometheus_ingestion_rate": "OpenShift Prometheus self-metrics or recording rules",
+    "prometheus_rule_evaluation_failures": "OpenShift Prometheus rule-evaluation metrics",
+    "alertmanager_active_alerts": "OpenShift Alertmanager self-metrics",
+    "logging_ingestion_rate": "LokiStack distributor metrics scraped by cluster monitoring",
+    "logging_query_latency": "LokiStack query metrics scraped by cluster monitoring",
 }
 
 
@@ -109,6 +188,40 @@ def _aggregate(
     return f"{function}({expression})"
 
 
+def _domain_aggregate(
+    expression: str,
+    intent: ReadIntent,
+    *,
+    default_labels: tuple[str, ...] = (),
+    function: str = "sum",
+    apply_rank: bool = True,
+) -> str:
+    label_map = {
+        "namespace": "namespace", "topic": "topic", "partition": "partition",
+        "consumer_group": "consumergroup", "route": "route", "pool": "pool",
+        "operator": "name", "code": "code", "node": "node",
+        "job": "job", "instance": "instance", "queue": "queue", "result": "result",
+        "component": "component", "tenant": "tenant", "request_kind": "request_kind",
+    }
+    labels = [
+        label_map[value] for value in intent.metric_group_by if value in label_map
+    ] or list(default_labels)
+    aggregate = (
+        f"{function} by ({', '.join(labels)}) ({expression})"
+        if labels else f"{function}({expression})"
+    )
+    return (
+        f"topk({intent.limit}, {aggregate})"
+        if apply_rank and intent.metric_operation == "rank" else aggregate
+    )
+
+
+def _metric_selector(**values: str | None) -> str:
+    return ",".join(
+        f"{key}={json.dumps(value)}" for key, value in values.items() if value
+    )
+
+
 def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
     metric = intent.metric
     container = _selector(intent, container=True)
@@ -171,13 +284,44 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             supported={"namespace", "pod"},
         )
     if metric == "persistent_volume_usage":
-        selector = (
-            f"namespace={json.dumps(intent.namespace)},"
-            f"persistentvolumeclaim={json.dumps(intent.name)}"
+        selector = _metric_selector(
+            namespace=intent.namespace, persistentvolumeclaim=intent.name,
         )
+        labels = (
+            "namespace", "persistentvolumeclaim"
+        ) if intent.metric_scope != "persistent_volume_claim" else ()
+        used = _domain_aggregate(
+            f"kubelet_volume_stats_used_bytes{{{selector}}}", intent,
+            default_labels=labels, apply_rank=False,
+        )
+        capacity = _domain_aggregate(
+            f"kubelet_volume_stats_capacity_bytes{{{selector}}}", intent,
+            default_labels=labels, apply_rank=False,
+        )
+        expression = f"100 * {used} / clamp_min({capacity}, 1)"
         return (
-            f"100 * sum(kubelet_volume_stats_used_bytes{{{selector}}}) "
-            f"/ clamp_min(sum(kubelet_volume_stats_capacity_bytes{{{selector}}}), 1)"
+            f"topk({intent.limit}, {expression})"
+            if intent.metric_operation == "rank" else expression
+        )
+    if metric == "persistent_volume_inode_usage":
+        selector = _metric_selector(
+            namespace=intent.namespace, persistentvolumeclaim=intent.name,
+        )
+        labels = (
+            "namespace", "persistentvolumeclaim"
+        ) if intent.metric_scope != "persistent_volume_claim" else ()
+        used = _domain_aggregate(
+            f"kubelet_volume_stats_inodes_used{{{selector}}}", intent,
+            default_labels=labels, apply_rank=False,
+        )
+        total = _domain_aggregate(
+            f"kubelet_volume_stats_inodes{{{selector}}}", intent,
+            default_labels=labels, apply_rank=False,
+        )
+        expression = f"100 * {used} / clamp_min({total}, 1)"
+        return (
+            f"topk({intent.limit}, {expression})"
+            if intent.metric_operation == "rank" else expression
         )
     if metric == "top_cpu_consumers":
         expression = _scoped(
@@ -249,6 +393,215 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         return (
             f"100 * (1 - sum(node_memory_MemAvailable_bytes * {membership}) "
             f"/ clamp_min(sum(node_memory_MemTotal_bytes * {membership}), 1))"
+        )
+    if metric in {
+        "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
+    }:
+        source_metric = {
+            "kafka_topic_messages_in": "kafka_server_brokertopicmetrics_messagesin_total",
+            "kafka_topic_bytes_in": "kafka_server_brokertopicmetrics_bytesin_total",
+            "kafka_topic_bytes_out": "kafka_server_brokertopicmetrics_bytesout_total",
+        }[metric]
+        selector = _metric_selector(
+            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+        )
+        return _domain_aggregate(
+            f"rate({source_metric}{{{selector},topic!=\"\"}}[{window}])",
+            intent, default_labels=("topic",),
+        )
+    if metric == "kafka_topic_storage":
+        selector = _metric_selector(
+            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+        )
+        return _domain_aggregate(
+            f"kafka_log_log_size_value{{{selector},topic!=\"\"}}",
+            intent, default_labels=("topic",),
+        )
+    if metric == "kafka_consumer_lag":
+        selector = _metric_selector(
+            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+        )
+        return _domain_aggregate(
+            f"kafka_consumergroup_lag{{{selector},topic!=\"\"}}",
+            intent, default_labels=("topic", "consumergroup"),
+        )
+    if metric == "kafka_under_replicated_partitions":
+        selector = _metric_selector(
+            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+        )
+        return _domain_aggregate(
+            f"kafka_topic_partition_under_replicated_partition{{{selector},topic!=\"\"}}",
+            intent, default_labels=("topic",),
+        )
+    if metric in {"ingress_request_rate", "ingress_error_rate"}:
+        selectors = []
+        if intent.metric_scope == "route":
+            selectors.extend([
+                f"namespace={json.dumps(intent.namespace)}",
+                f"route={json.dumps(intent.name)}",
+            ])
+        else:
+            selectors.append(f'pod=~"router-{intent.name}-.*"')
+        if metric == "ingress_error_rate":
+            selectors.append('code=~"5.."')
+        return _domain_aggregate(
+            "rate(haproxy_server_http_responses_total{"
+            f"{','.join(selectors)}}}[{window}])",
+            intent, default_labels=("namespace", "route"),
+        )
+    if metric in {"machineconfigpool_updated", "machineconfigpool_degraded"}:
+        selector = f"pool={json.dumps(intent.name)}"
+        if metric == "machineconfigpool_degraded":
+            return f"max(mco_degraded_machine_count{{{selector}}})"
+        return (
+            f"100 * max(mco_updated_machine_count{{{selector}}}) / "
+            f"clamp_min(max(mco_machine_count{{{selector}}}), 1)"
+        )
+    if metric in {"hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas"}:
+        source_metric = {
+            "hpa_current_replicas": "kube_horizontalpodautoscaler_status_current_replicas",
+            "hpa_desired_replicas": "kube_horizontalpodautoscaler_status_desired_replicas",
+            "hpa_max_replicas": "kube_horizontalpodautoscaler_spec_max_replicas",
+        }[metric]
+        selector = _metric_selector(
+            namespace=intent.namespace, horizontalpodautoscaler=intent.name,
+        )
+        return f"max({source_metric}{{{selector}}})"
+    if metric == "workload_availability":
+        selector_key = {
+            "Deployment": "deployment", "StatefulSet": "statefulset",
+            "DaemonSet": "daemonset",
+        }.get(intent.kind)
+        if not selector_key:
+            raise MetricTrendError("Workload availability is not registered for this Kind.")
+        selector = _metric_selector(namespace=intent.namespace, **{selector_key: intent.name})
+        available_metric, desired_metric = {
+            "Deployment": (
+                "kube_deployment_status_replicas_available", "kube_deployment_spec_replicas",
+            ),
+            "StatefulSet": (
+                "kube_statefulset_status_replicas_ready", "kube_statefulset_replicas",
+            ),
+            "DaemonSet": (
+                "kube_daemonset_status_number_available",
+                "kube_daemonset_status_desired_number_scheduled",
+            ),
+        }[intent.kind]
+        return (
+            f"100 * max({available_metric}{{{selector}}}) / "
+            f"clamp_min(max({desired_metric}{{{selector}}}), 1)"
+        )
+    if metric in {
+        "cluster_operator_available", "cluster_operator_degraded",
+        "cluster_operator_progressing",
+    }:
+        condition = {
+            "cluster_operator_available": "Available",
+            "cluster_operator_degraded": "Degraded",
+            "cluster_operator_progressing": "Progressing",
+        }[metric]
+        selector = _metric_selector(
+            name=intent.name if intent.metric_scope == "cluster_operator" else None,
+            condition=condition,
+        )
+        return _domain_aggregate(
+            f"cluster_operator_conditions{{{selector}}}", intent,
+            default_labels=("name",), function="max",
+        )
+    if metric in {"apiserver_request_rate", "apiserver_error_rate"}:
+        code = ',code=~"5.."' if metric == "apiserver_error_rate" else ""
+        return _domain_aggregate(
+            f"rate(apiserver_request_total{{job=\"apiserver\"{code}}}[{window}])",
+            intent, default_labels=("verb", "resource", "code"),
+        )
+    if metric == "apiserver_latency":
+        labels = [
+            value for value in intent.metric_group_by if value in {"verb", "resource"}
+        ] or ["verb", "resource"]
+        return (
+            f"histogram_quantile(0.99, sum by (le, {', '.join(labels)}) ("
+            f"rate(apiserver_request_duration_seconds_bucket{{job=\"apiserver\"}}[{window}])"
+            "))"
+        )
+    if metric == "etcd_db_size":
+        return "max(etcd_mvcc_db_total_size_in_bytes)"
+    if metric == "etcd_fsync_latency":
+        return (
+            "histogram_quantile(0.99, sum by (le, instance) ("
+            f"rate(etcd_disk_wal_fsync_duration_seconds_bucket[{window}])"
+            "))"
+        )
+    if metric == "apiserver_inflight_requests":
+        return _domain_aggregate(
+            'apiserver_current_inflight_requests{job="apiserver"}', intent,
+            default_labels=("request_kind",), function="max",
+        )
+    if metric == "scheduler_pending_pods":
+        return _domain_aggregate(
+            'scheduler_pending_pods{job=~".*scheduler.*"}', intent,
+            default_labels=("queue",), function="max",
+        )
+    if metric in {"scheduler_attempt_rate", "scheduler_error_rate"}:
+        result_selector = ',result="error"' if metric == "scheduler_error_rate" else ""
+        return _domain_aggregate(
+            "rate(scheduler_schedule_attempts_total{"
+            f'job=~".*scheduler.*"{result_selector}}}[{window}])',
+            intent, default_labels=("result",),
+        )
+    if metric == "scheduler_latency":
+        labels = [
+            value for value in intent.metric_group_by if value == "result"
+        ] or ["result"]
+        return (
+            f"histogram_quantile(0.99, sum by (le, {', '.join(labels)}) ("
+            "rate(scheduler_scheduling_attempt_duration_seconds_bucket{"
+            f'job=~".*scheduler.*"}}[{window}])'
+            "))"
+        )
+    if metric == "etcd_has_leader":
+        return "min(etcd_server_has_leader)"
+    if metric == "etcd_leader_changes":
+        return _domain_aggregate(
+            f"rate(etcd_server_leader_changes_seen_total[{window}])", intent,
+            default_labels=("instance",),
+        )
+    if metric in {"monitoring_targets_up", "monitoring_targets_down"}:
+        target = _domain_aggregate(
+            'up{namespace=~"openshift-monitoring|openshift-user-workload-monitoring"}',
+            intent, default_labels=("namespace", "job", "instance"),
+            function="max", apply_rank=False,
+        )
+        expression = f"1 - ({target})" if metric == "monitoring_targets_down" else target
+        return (
+            f"topk({intent.limit}, {expression})"
+            if intent.metric_operation == "rank" else expression
+        )
+    if metric == "prometheus_head_series":
+        return "sum(openshift:prometheus_tsdb_head_series:sum)"
+    if metric == "prometheus_ingestion_rate":
+        return f"sum(rate(openshift:prometheus_tsdb_head_samples_appended_total:sum[{window}]))"
+    if metric == "prometheus_rule_evaluation_failures":
+        return _domain_aggregate(
+            "rate(prometheus_rule_evaluation_failures_total{"
+            'namespace=~"openshift-monitoring|openshift-user-workload-monitoring"}'
+            f"[{window}])",
+            intent, default_labels=("namespace", "pod"),
+        )
+    if metric == "alertmanager_active_alerts":
+        return 'sum(alertmanager_alerts{namespace="openshift-monitoring"})'
+    if metric == "logging_ingestion_rate":
+        return _domain_aggregate(
+            f"rate(loki_distributor_bytes_received_total[{window}])", intent,
+            default_labels=("tenant",),
+        )
+    if metric == "logging_query_latency":
+        labels = [
+            value for value in intent.metric_group_by if value in {"job", "component", "tenant"}
+        ] or ["job"]
+        return (
+            f"histogram_quantile(0.99, sum by (le, {', '.join(labels)}) ("
+            f"rate(loki_logql_querystats_latency_seconds_bucket[{window}])"
+            "))"
         )
     raise MetricTrendError("The requested metric is not registered.")
 
@@ -335,7 +688,15 @@ class BoundedMetricTrendReader:
                 "The metric result reached its configured series or point ceiling; the trend may be incomplete."
             )
         if not all_values:
-            limitations.append("Thanos returned no finite samples for the requested metric and scope.")
+            prerequisite = _PREREQUISITES.get(intent.metric)
+            limitations.append(
+                "Thanos returned no finite samples for the requested metric and scope."
+                + (
+                    f" This capability requires {prerequisite}; verify that it is enabled, "
+                    "scraped, and uses the supported metric profile."
+                    if prerequisite else ""
+                )
+            )
         if step_seconds != intent.step_seconds:
             limitations.append(
                 f"The requested resolution was increased to {step_seconds} seconds to keep the trend bounded."
@@ -344,6 +705,8 @@ class BoundedMetricTrendReader:
             "cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
             intent.name if intent.metric_scope in {"node", "node_role"} else
+            intent.name if intent.namespace is None and intent.name else
+            intent.metric_scope if intent.namespace is None and intent.name is None else
             f"{intent.namespace}/{intent.name}"
         )
         return ReadResult(observations=(AdHocObservation(

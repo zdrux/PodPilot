@@ -10,6 +10,7 @@ import urllib3
 from kubernetes import client, config, watch as kubernetes_watch
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
+from kubernetes.dynamic.exceptions import ResourceNotFoundError
 from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
@@ -45,6 +46,25 @@ _DENIED_KINDS = {
 _SENSITIVE_KEYS = re.compile(
     r"(?i)^(?:.*(?:password|passwd|token|secret|api[_-]?key|private[_-]?key).*)$"
 )
+_POD_WAITING_ERROR_REASONS = {
+    "CrashLoopBackOff",
+    "CreateContainerConfigError",
+    "CreateContainerError",
+    "ErrImagePull",
+    "ImagePullBackOff",
+    "InvalidImageName",
+    "RunContainerError",
+}
+_POD_STARTUP_WAITING_REASONS = {"ContainerCreating", "PodInitializing"}
+_POD_HEALTH_GRACE_SECONDS = 300
+_HEALTH_OBJECT_COORDINATES = {
+    "Node": ("v1", "nodes"),
+    "ClusterOperator": ("config.openshift.io/v1", "clusteroperators"),
+    "Machine": ("machine.openshift.io/v1beta1", "machines"),
+    "Deployment": ("apps/v1", "deployments"),
+    "StatefulSet": ("apps/v1", "statefulsets"),
+    "DaemonSet": ("apps/v1", "daemonsets"),
+}
 
 
 def _remote_discovery_error(exc: ApiException) -> str:
@@ -198,6 +218,386 @@ def _pod_log_candidate_projection(raw: dict[str, Any], namespace: str | None) ->
             (int(item.get("restartCount") or 0) for item in statuses),
             default=0,
         ),
+    })
+
+
+def _timestamp_age_seconds(value: object, now: datetime) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - parsed.astimezone(timezone.utc)).total_seconds())
+
+
+def _nonnegative_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pod_health_anomaly(
+    raw: dict[str, Any], *, collected_at: datetime,
+) -> dict[str, Any] | None:
+    """Classify current Pod/container state without treating Pod phase as health."""
+
+    metadata = raw.get("metadata") or {}
+    status = raw.get("status") or {}
+    phase = str(status.get("phase") or "Unknown")[:64]
+    age_seconds = _timestamp_age_seconds(
+        metadata.get("creationTimestamp") or metadata.get("creation_timestamp"),
+        collected_at,
+    )
+    issues: list[dict[str, Any]] = []
+    seen_issues: set[tuple[str, str, str]] = set()
+
+    def add_issue(
+        reason: object, *, severity: str, container: object = None,
+        container_type: str = "pod",
+    ) -> None:
+        reason_text = str(reason or "Unknown")[:128]
+        container_text = str(container or "")[:253]
+        key = (reason_text, container_text, container_type)
+        if key in seen_issues:
+            return
+        seen_issues.add(key)
+        issue: dict[str, Any] = {"reason": reason_text, "severity": severity}
+        if container_text:
+            issue["container"] = container_text
+            issue["containerType"] = container_type
+        issues.append(issue)
+
+    primary_statuses = status.get("containerStatuses") or status.get("container_statuses") or []
+    status_groups = (
+        ("container", primary_statuses),
+        (
+            "initContainer",
+            status.get("initContainerStatuses")
+            or status.get("init_container_statuses") or [],
+        ),
+    )
+    all_statuses: list[dict[str, Any]] = []
+    for container_type, statuses in status_groups:
+        if not isinstance(statuses, list):
+            continue
+        for container_status in statuses:
+            if not isinstance(container_status, dict):
+                continue
+            all_statuses.append(container_status)
+            state = container_status.get("state") or {}
+            if not isinstance(state, dict):
+                continue
+            waiting = state.get("waiting")
+            if isinstance(waiting, dict):
+                waiting_reason = str(waiting.get("reason") or "Waiting")[:128]
+                if waiting_reason in _POD_WAITING_ERROR_REASONS:
+                    add_issue(
+                        waiting_reason, severity="critical",
+                        container=container_status.get("name"),
+                        container_type=container_type,
+                    )
+                elif (
+                    waiting_reason not in _POD_STARTUP_WAITING_REASONS
+                    or age_seconds is None
+                    or age_seconds >= _POD_HEALTH_GRACE_SECONDS
+                ):
+                    add_issue(
+                        waiting_reason, severity="warning",
+                        container=container_status.get("name"),
+                        container_type=container_type,
+                    )
+            terminated = state.get("terminated")
+            if (
+                isinstance(terminated, dict)
+                and phase != "Succeeded"
+                and _nonnegative_int(
+                    terminated.get("exitCode") or terminated.get("exit_code")
+                ) != 0
+            ):
+                add_issue(
+                    terminated.get("reason") or "NonZeroExit", severity="critical",
+                    container=container_status.get("name"),
+                    container_type=container_type,
+                )
+
+    if phase in {"Failed", "Unknown"}:
+        add_issue(f"PodPhase{phase}", severity="critical")
+    elif (
+        phase == "Pending"
+        and (age_seconds is None or age_seconds >= _POD_HEALTH_GRACE_SECONDS)
+    ):
+        add_issue("Pending", severity="warning")
+
+    conditions = status.get("conditions") or []
+    if isinstance(conditions, list):
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                continue
+            if (
+                condition.get("type") == "PodScheduled"
+                and str(condition.get("status")) == "False"
+            ):
+                add_issue(condition.get("reason") or "Unschedulable", severity="critical")
+
+    primary = [item for item in primary_statuses if isinstance(item, dict)] if isinstance(
+        primary_statuses, list
+    ) else []
+    ready_count = sum(1 for item in primary if item.get("ready") is True)
+    if (
+        phase == "Running"
+        and primary
+        and ready_count < len(primary)
+        and not issues
+        and (age_seconds is None or age_seconds >= _POD_HEALTH_GRACE_SECONDS)
+    ):
+        add_issue("NotReady", severity="warning")
+
+    deletion_age = _timestamp_age_seconds(
+        metadata.get("deletionTimestamp") or metadata.get("deletion_timestamp"),
+        collected_at,
+    )
+    if deletion_age is not None and deletion_age >= _POD_HEALTH_GRACE_SECONDS:
+        add_issue("Terminating", severity="warning")
+    if not issues:
+        return None
+
+    restart_count = sum(
+        _nonnegative_int(item.get("restartCount") or item.get("restart_count"))
+        for item in all_statuses
+    )
+    return _sanitize({
+        "namespace": metadata.get("namespace") or metadata.get("namespace_"),
+        "name": metadata.get("name"),
+        "phase": phase,
+        "readyContainers": ready_count,
+        "totalContainers": len(primary),
+        "restartCount": restart_count,
+        "severity": (
+            "critical" if any(item["severity"] == "critical" for item in issues)
+            else "warning"
+        ),
+        "issues": issues[:12],
+    })
+
+
+def _status_conditions(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    status = raw.get("status") or {}
+    conditions = status.get("conditions") or []
+    return {
+        str(condition.get("type")): condition
+        for condition in conditions
+        if isinstance(condition, dict) and condition.get("type")
+    } if isinstance(conditions, list) else {}
+
+
+def _condition_issue(
+    reason: str, *, severity: str, condition: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    issue: dict[str, Any] = {"reason": reason[:128], "severity": severity}
+    condition_reason = str((condition or {}).get("reason") or "")[:128]
+    if condition_reason:
+        issue["conditionReason"] = condition_reason
+    return issue
+
+
+def _node_health_anomaly(raw: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = raw.get("metadata") or {}
+    spec = raw.get("spec") or {}
+    conditions = _status_conditions(raw)
+    issues: list[dict[str, Any]] = []
+    ready = conditions.get("Ready")
+    ready_status = str((ready or {}).get("status") or "Unknown")
+    if ready_status != "True":
+        issues.append(_condition_issue(
+            f"Ready{ready_status}", severity="critical", condition=ready,
+        ))
+    for condition_type in ("MemoryPressure", "DiskPressure", "PIDPressure"):
+        condition = conditions.get(condition_type)
+        if condition and str(condition.get("status")) == "True":
+            issues.append(_condition_issue(
+                condition_type, severity="critical", condition=condition,
+            ))
+    network = conditions.get("NetworkUnavailable")
+    if network and str(network.get("status")) == "True":
+        issues.append(_condition_issue(
+            "NetworkUnavailable", severity="critical", condition=network,
+        ))
+    if spec.get("unschedulable") is True:
+        issues.append(_condition_issue("SchedulingDisabled", severity="warning"))
+    if not issues:
+        return None
+    return _sanitize({
+        "kind": "Node",
+        "name": metadata.get("name"),
+        "state": f"Ready={ready_status}",
+        "severity": (
+            "critical" if any(item["severity"] == "critical" for item in issues)
+            else "warning"
+        ),
+        "issues": issues[:12],
+    })
+
+
+def _cluster_operator_health_anomaly(raw: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = raw.get("metadata") or {}
+    conditions = _status_conditions(raw)
+    issues: list[dict[str, Any]] = []
+    available = conditions.get("Available")
+    available_status = str((available or {}).get("status") or "Unknown")
+    if available_status != "True":
+        issues.append(_condition_issue(
+            f"Available{available_status}", severity="critical", condition=available,
+        ))
+    degraded = conditions.get("Degraded")
+    if degraded and str(degraded.get("status")) == "True":
+        issues.append(_condition_issue(
+            "Degraded", severity="critical", condition=degraded,
+        ))
+    progressing = conditions.get("Progressing")
+    if progressing and str(progressing.get("status")) == "True":
+        issues.append(_condition_issue(
+            "Progressing", severity="warning", condition=progressing,
+        ))
+    if not issues:
+        return None
+    return _sanitize({
+        "kind": "ClusterOperator",
+        "name": metadata.get("name"),
+        "state": (
+            f"Available={available_status}, "
+            f"Degraded={str((degraded or {}).get('status') or 'Unknown')}, "
+            f"Progressing={str((progressing or {}).get('status') or 'Unknown')}"
+        ),
+        "severity": (
+            "critical" if any(item["severity"] == "critical" for item in issues)
+            else "warning"
+        ),
+        "issues": issues[:12],
+    })
+
+
+def _machine_health_anomaly(
+    raw: dict[str, Any], *, collected_at: datetime,
+) -> dict[str, Any] | None:
+    metadata = raw.get("metadata") or {}
+    status = raw.get("status") or {}
+    phase = str(status.get("phase") or "Unknown")[:64]
+    age_seconds = _timestamp_age_seconds(
+        metadata.get("creationTimestamp") or metadata.get("creation_timestamp"),
+        collected_at,
+    )
+    issues: list[dict[str, Any]] = []
+    if phase == "Failed":
+        issues.append(_condition_issue(
+            str(status.get("errorReason") or status.get("error_reason") or "MachineFailed"),
+            severity="critical",
+        ))
+    elif phase in {"Provisioning", "Provisioned", "Deleting", "Unknown"} and (
+        age_seconds is None or age_seconds >= 900
+    ):
+        issues.append(_condition_issue(
+            f"Machine{phase}", severity="warning",
+        ))
+    if phase == "Running" and not (
+        status.get("nodeRef") or status.get("node_ref")
+    ):
+        issues.append(_condition_issue("NodeReferenceMissing", severity="warning"))
+    for condition in _status_conditions(raw).values():
+        condition_status = str(condition.get("status") or "Unknown")
+        severity = str(condition.get("severity") or "")
+        if condition_status == "False" and severity in {"Error", "Warning"}:
+            issues.append(_condition_issue(
+                str(condition.get("type") or "ConditionFalse"),
+                severity="critical" if severity == "Error" else "warning",
+                condition=condition,
+            ))
+    if not issues:
+        return None
+    node_ref = status.get("nodeRef") or status.get("node_ref") or {}
+    return _sanitize({
+        "kind": "Machine",
+        "namespace": metadata.get("namespace") or metadata.get("namespace_"),
+        "name": metadata.get("name"),
+        "state": phase,
+        "node": node_ref.get("name") if isinstance(node_ref, dict) else None,
+        "severity": (
+            "critical" if any(item["severity"] == "critical" for item in issues)
+            else "warning"
+        ),
+        "issues": issues[:12],
+    })
+
+
+def _workload_health_anomaly(kind: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = raw.get("metadata") or {}
+    spec = raw.get("spec") or {}
+    status = raw.get("status") or {}
+    desired = _nonnegative_int(
+        status.get("desiredNumberScheduled")
+        if kind == "DaemonSet" else spec.get("replicas", 1)
+    )
+    ready = _nonnegative_int(
+        status.get("numberReady") if kind == "DaemonSet" else status.get("readyReplicas")
+    )
+    availability_value = (
+        status.get("numberAvailable")
+        if kind == "DaemonSet" else status.get("availableReplicas")
+    )
+    available = ready if availability_value is None else _nonnegative_int(availability_value)
+    updated = _nonnegative_int(
+        status.get("updatedNumberScheduled")
+        if kind == "DaemonSet" else status.get("updatedReplicas")
+    )
+    issues: list[dict[str, Any]] = []
+    if ready < desired:
+        issues.append(_condition_issue(
+            "ReadyReplicasBelowDesired",
+            severity="critical" if desired > 0 and ready == 0 else "warning",
+        ))
+    if available < desired:
+        issues.append(_condition_issue(
+            "AvailableReplicasBelowDesired",
+            severity="critical" if desired > 0 and available == 0 else "warning",
+        ))
+    if updated < desired:
+        issues.append(_condition_issue("RolloutIncomplete", severity="warning"))
+    generation = _nonnegative_int(metadata.get("generation"))
+    observed_generation = _nonnegative_int(
+        status.get("observedGeneration") or status.get("observed_generation")
+    )
+    if generation and observed_generation < generation:
+        issues.append(_condition_issue("StatusStale", severity="warning"))
+    if kind == "DaemonSet" and _nonnegative_int(status.get("numberMisscheduled")):
+        issues.append(_condition_issue("PodsMisscheduled", severity="warning"))
+    conditions = _status_conditions(raw)
+    for condition_type, bad_status in (
+        ("Available", "False"), ("Progressing", "False"), ("ReplicaFailure", "True"),
+    ):
+        condition = conditions.get(condition_type)
+        if condition and str(condition.get("status")) == bad_status:
+            issues.append(_condition_issue(
+                f"{condition_type}{bad_status}", severity="critical", condition=condition,
+            ))
+    if not issues:
+        return None
+    return _sanitize({
+        "kind": kind,
+        "namespace": metadata.get("namespace") or metadata.get("namespace_"),
+        "name": metadata.get("name"),
+        "state": f"{ready}/{desired} Ready",
+        "desired": desired,
+        "ready": ready,
+        "available": available,
+        "updated": updated,
+        "severity": (
+            "critical" if any(item["severity"] == "critical" for item in issues)
+            else "warning"
+        ),
+        "issues": issues[:12],
     })
 
 
@@ -666,6 +1066,16 @@ class KubernetesReadOnlyExplorer:
                     raise ReadOnlyExplorerError("The authenticated monitoring adapter is unavailable.")
                 return self._metric_reader.execute(intent)
             self._ensure_clients()
+            if intent.tool == "pod_health_summary":
+                return self._pod_health_summary(intent)
+            if intent.tool == "node_health_summary":
+                return self._node_health_summary(intent)
+            if intent.tool == "cluster_operator_health_summary":
+                return self._cluster_operator_health_summary(intent)
+            if intent.tool == "machine_health_summary":
+                return self._machine_health_summary(intent)
+            if intent.tool == "workload_health_summary":
+                return self._workload_health_summary(intent)
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)
             if intent.tool == "watch_resources":
@@ -1039,6 +1449,389 @@ class KubernetesReadOnlyExplorer:
                 )
             )
         return ReadResult(tuple(observations))
+
+    def _collect_health_objects(
+        self,
+        *,
+        api_version: str,
+        kind: str,
+        namespace: str | None,
+        evaluator: Any,
+        collected_at: datetime,
+    ) -> tuple[int, bool, list[dict[str, Any]]]:
+        assert self._dynamic is not None
+        resource = self._dynamic.resources.get(api_version=api_version, kind=kind)
+        scan_limit = self._max_search_scan_objects
+        scanned = 0
+        token: str | None = None
+        seen_tokens: set[str] = set()
+        detected: list[dict[str, Any]] = []
+        scan_complete = True
+        while scanned < scan_limit:
+            kwargs: dict[str, object] = {"limit": min(100, scan_limit - scanned)}
+            if namespace:
+                kwargs["namespace"] = namespace
+            if token:
+                kwargs["_continue"] = token
+            response = resource.get(**kwargs)
+            page = list(getattr(response, "items", []) or [])
+            bounded_page = page[: scan_limit - scanned]
+            for obj in bounded_page:
+                raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+                anomaly = evaluator(raw, collected_at)
+                if anomaly is not None:
+                    detected.append(anomaly)
+            scanned += len(bounded_page)
+            token = _continue_token(response)
+            if len(bounded_page) < len(page):
+                scan_complete = False
+                break
+            if not token:
+                break
+            if not bounded_page:
+                scan_complete = False
+                break
+            if token in seen_tokens or scanned >= scan_limit:
+                scan_complete = False
+                break
+            seen_tokens.add(token)
+        return scanned, scan_complete, detected
+
+    def _health_summary_result(
+        self,
+        *,
+        intent: ReadIntent,
+        tool: str,
+        summary_kind: str,
+        scope: str,
+        source: str,
+        scanned: int,
+        scan_complete: bool,
+        detected: list[dict[str, Any]],
+        collected_at: datetime,
+        scanned_by_kind: dict[str, int] | None = None,
+        unavailable_kinds: list[str] | None = None,
+    ) -> ReadResult:
+        detected.sort(key=lambda item: (
+            0 if item.get("severity") == "critical" else 1,
+            str(item.get("kind") or summary_kind),
+            str(item.get("namespace") or ""),
+            str(item.get("name") or ""),
+        ))
+        reason_counts: dict[str, int] = {}
+        severity_counts: dict[str, int] = {}
+        for anomaly in detected:
+            severity = str(anomaly.get("severity") or "warning")
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            for reason in {
+                str(issue.get("reason") or "Unknown")
+                for issue in anomaly.get("issues") or []
+                if isinstance(issue, dict)
+            }:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+        returned: list[dict[str, Any]] = []
+        returned_bytes = 0
+        payload_budget = max(2_000, self._max_payload_bytes - 8_000)
+        for anomaly in detected:
+            if len(returned) >= intent.limit:
+                break
+            encoded_bytes = len(json.dumps(
+                anomaly, sort_keys=True, default=str
+            ).encode("utf-8"))
+            if returned and returned_bytes + encoded_bytes > payload_budget:
+                break
+            returned.append(anomaly)
+            returned_bytes += encoded_bytes
+        anomalies_complete = len(returned) == len(detected)
+        unavailable = list(dict.fromkeys(unavailable_kinds or []))
+        limitations: list[str] = []
+        if unavailable:
+            limitations.append(
+                "The following health APIs were not available to the configured cluster reader: "
+                + ", ".join(unavailable) + "."
+            )
+        if not scan_complete:
+            limitations.append(
+                f"The {summary_kind} health scan reached a configured object scan ceiling; "
+                "additional resources were not evaluated."
+            )
+        if not anomalies_complete:
+            limitations.append(
+                f"PodPilot detected {len(detected)} anomalous {summary_kind} resources but "
+                f"returned details for only {len(returned)} within the result and evidence ceilings."
+            )
+        summary = (
+            f"Detected {len(detected)} anomalous {summary_kind} resources after evaluating "
+            f"{scanned} in {scope}."
+            if detected else
+            f"Detected no {summary_kind} health anomalies after evaluating {scanned} in {scope}."
+        )
+        if unavailable and not scanned:
+            summary = f"The {summary_kind} health API was unavailable to the cluster reader."
+        data: dict[str, object] = {
+            "healthSummaryVersion": 1,
+            "kind": summary_kind,
+            "scope": scope,
+            "resourceAvailable": not bool(unavailable),
+            "unavailableKinds": unavailable,
+            "scannedCount": scanned,
+            "scanLimit": self._max_search_scan_objects,
+            "scanComplete": scan_complete and not unavailable,
+            "anomalyCount": len(detected),
+            "returnedAnomalyCount": len(returned),
+            "anomaliesComplete": anomalies_complete,
+            "byReason": dict(sorted(reason_counts.items())),
+            "bySeverity": dict(sorted(severity_counts.items())),
+            "anomalies": returned,
+            "objects": [
+                {
+                    "kind": item.get("kind") or summary_kind,
+                    "apiVersion": _HEALTH_OBJECT_COORDINATES.get(
+                        str(item.get("kind") or summary_kind), (None, None)
+                    )[0],
+                    "resource": _HEALTH_OBJECT_COORDINATES.get(
+                        str(item.get("kind") or summary_kind), (None, None)
+                    )[1],
+                    "namespace": item.get("namespace"),
+                    "name": item.get("name"),
+                }
+                for item in returned
+            ],
+        }
+        if scanned_by_kind is not None:
+            data["scannedByKind"] = scanned_by_kind
+            data["scanLimitAppliesPerKind"] = True
+        return ReadResult((AdHocObservation(
+            id=f"cluster-{uuid4()}",
+            tool=tool,
+            summary=summary,
+            source=source,
+            collected_at=collected_at,
+            data=data,
+        ),), tuple(limitations))
+
+    def _node_health_summary(self, intent: ReadIntent) -> ReadResult:
+        collected_at = datetime.now(timezone.utc)
+        scanned, complete, detected = self._collect_health_objects(
+            api_version="v1", kind="Node", namespace=None,
+            evaluator=lambda raw, _now: _node_health_anomaly(raw),
+            collected_at=collected_at,
+        )
+        return self._health_summary_result(
+            intent=intent, tool="node_health_summary", summary_kind="Node",
+            scope="cluster", source="kubernetes:v1:Node/health:cluster",
+            scanned=scanned, scan_complete=complete, detected=detected,
+            collected_at=collected_at,
+        )
+
+    def _cluster_operator_health_summary(self, intent: ReadIntent) -> ReadResult:
+        collected_at = datetime.now(timezone.utc)
+        try:
+            scanned, complete, detected = self._collect_health_objects(
+                api_version="config.openshift.io/v1", kind="ClusterOperator",
+                namespace=None,
+                evaluator=lambda raw, _now: _cluster_operator_health_anomaly(raw),
+                collected_at=collected_at,
+            )
+            unavailable: list[str] = []
+        except ResourceNotFoundError:
+            scanned, complete, detected = 0, False, []
+            unavailable = ["config.openshift.io/v1 ClusterOperator"]
+        return self._health_summary_result(
+            intent=intent, tool="cluster_operator_health_summary",
+            summary_kind="ClusterOperator", scope="cluster",
+            source="kubernetes:config.openshift.io/v1:ClusterOperator/health:cluster",
+            scanned=scanned, scan_complete=complete, detected=detected,
+            collected_at=collected_at, unavailable_kinds=unavailable,
+        )
+
+    def _machine_health_summary(self, intent: ReadIntent) -> ReadResult:
+        namespace = _safe_identifier(intent.namespace, "namespace", required=False)
+        collected_at = datetime.now(timezone.utc)
+        try:
+            scanned, complete, detected = self._collect_health_objects(
+                api_version="machine.openshift.io/v1beta1", kind="Machine",
+                namespace=namespace,
+                evaluator=lambda raw, now: _machine_health_anomaly(
+                    raw, collected_at=now,
+                ),
+                collected_at=collected_at,
+            )
+            unavailable: list[str] = []
+        except ResourceNotFoundError:
+            scanned, complete, detected = 0, False, []
+            unavailable = ["machine.openshift.io/v1beta1 Machine"]
+        scope = namespace or "cluster"
+        return self._health_summary_result(
+            intent=intent, tool="machine_health_summary", summary_kind="Machine",
+            scope=scope,
+            source=f"kubernetes:machine.openshift.io/v1beta1:Machine/health:{scope}",
+            scanned=scanned, scan_complete=complete, detected=detected,
+            collected_at=collected_at, unavailable_kinds=unavailable,
+        )
+
+    def _workload_health_summary(self, intent: ReadIntent) -> ReadResult:
+        namespace = _safe_identifier(intent.namespace, "namespace", required=False)
+        collected_at = datetime.now(timezone.utc)
+        kinds = [intent.kind] if intent.kind else [
+            "Deployment", "StatefulSet", "DaemonSet",
+        ]
+        scanned_total = 0
+        all_complete = True
+        detected: list[dict[str, Any]] = []
+        scanned_by_kind: dict[str, int] = {}
+        unavailable: list[str] = []
+        for kind in kinds:
+            assert kind is not None
+            try:
+                scanned, complete, kind_detected = self._collect_health_objects(
+                    api_version="apps/v1", kind=kind, namespace=namespace,
+                    evaluator=lambda raw, _now, selected_kind=kind: (
+                        _workload_health_anomaly(selected_kind, raw)
+                    ),
+                    collected_at=collected_at,
+                )
+            except ResourceNotFoundError:
+                scanned, complete, kind_detected = 0, False, []
+                unavailable.append(f"apps/v1 {kind}")
+            scanned_by_kind[kind] = scanned
+            scanned_total += scanned
+            all_complete = all_complete and complete
+            detected.extend(kind_detected)
+        scope = namespace or "cluster"
+        summary_kind = intent.kind or "Workload"
+        return self._health_summary_result(
+            intent=intent, tool="workload_health_summary", summary_kind=summary_kind,
+            scope=scope, source=f"kubernetes:apps/v1:Workload/health:{scope}",
+            scanned=scanned_total, scan_complete=all_complete, detected=detected,
+            collected_at=collected_at, scanned_by_kind=scanned_by_kind,
+            unavailable_kinds=unavailable,
+        )
+
+    def _pod_health_summary(self, intent: ReadIntent) -> ReadResult:
+        """Scan bounded Pod pages and retain anomaly-first, compact evidence."""
+
+        assert self._dynamic is not None
+        namespace = _safe_identifier(intent.namespace, "namespace", required=False)
+        resource = self._dynamic.resources.get(api_version="v1", kind="Pod")
+        scan_limit = self._max_search_scan_objects
+        scanned = 0
+        token: str | None = None
+        seen_tokens: set[str] = set()
+        detected: list[dict[str, Any]] = []
+        collected_at = datetime.now(timezone.utc)
+        scan_complete = True
+        while scanned < scan_limit:
+            kwargs: dict[str, object] = {"limit": min(100, scan_limit - scanned)}
+            if namespace:
+                kwargs["namespace"] = namespace
+            if token:
+                kwargs["_continue"] = token
+            response = resource.get(**kwargs)
+            page = list(getattr(response, "items", []) or [])
+            remaining = scan_limit - scanned
+            bounded_page = page[:remaining]
+            for obj in bounded_page:
+                raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
+                anomaly = _pod_health_anomaly(raw, collected_at=collected_at)
+                if anomaly is not None:
+                    detected.append(anomaly)
+            scanned += len(bounded_page)
+            token = _continue_token(response)
+            if len(bounded_page) < len(page):
+                scan_complete = False
+                break
+            if not token:
+                break
+            if not bounded_page:
+                scan_complete = False
+                break
+            if token in seen_tokens:
+                scan_complete = False
+                break
+            seen_tokens.add(token)
+            if scanned >= scan_limit:
+                scan_complete = False
+                break
+
+        detected.sort(key=lambda item: (
+            0 if item.get("severity") == "critical" else 1,
+            -int(item.get("restartCount") or 0),
+            str(item.get("namespace") or ""),
+            str(item.get("name") or ""),
+        ))
+        reason_counts: dict[str, int] = {}
+        severity_counts: dict[str, int] = {}
+        for anomaly in detected:
+            severity = str(anomaly.get("severity") or "warning")
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            pod_reasons = {
+                str(issue.get("reason") or "Unknown")
+                for issue in anomaly.get("issues") or []
+                if isinstance(issue, dict)
+            }
+            for reason in pod_reasons:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+        returned: list[dict[str, Any]] = []
+        returned_bytes = 0
+        anomaly_payload_budget = max(2_000, self._max_payload_bytes - 8_000)
+        for anomaly in detected:
+            if len(returned) >= intent.limit:
+                break
+            encoded_bytes = len(json.dumps(
+                anomaly, sort_keys=True, default=str
+            ).encode("utf-8"))
+            if returned and returned_bytes + encoded_bytes > anomaly_payload_budget:
+                break
+            returned.append(anomaly)
+            returned_bytes += encoded_bytes
+        anomalies_complete = len(returned) == len(detected)
+        scope = namespace or "cluster"
+        limitations: list[str] = []
+        if not scan_complete:
+            limitations.append(
+                f"The Pod health scan reached its {scan_limit}-object scan ceiling; "
+                "additional Pods were not evaluated."
+            )
+        if not anomalies_complete:
+            limitations.append(
+                f"PodPilot detected {len(detected)} anomalous Pods but returned details for "
+                f"only {len(returned)} within the result and evidence payload ceilings."
+            )
+        summary = (
+            f"Detected {len(detected)} anomalous Pods after evaluating {scanned} Pods in {scope}."
+            if detected else
+            f"Detected no Pod health anomalies after evaluating {scanned} Pods in {scope}."
+        )
+        observation = AdHocObservation(
+            id=f"cluster-{uuid4()}",
+            tool="pod_health_summary",
+            summary=summary,
+            source=f"kubernetes:v1:Pod/health:{scope}",
+            collected_at=collected_at,
+            data={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "healthSummaryVersion": 1,
+                "scope": scope,
+                "scannedCount": scanned,
+                "scanLimit": scan_limit,
+                "scanComplete": scan_complete,
+                "anomalyCount": len(detected),
+                "returnedAnomalyCount": len(returned),
+                "anomaliesComplete": anomalies_complete,
+                "byReason": dict(sorted(reason_counts.items())),
+                "bySeverity": dict(sorted(severity_counts.items())),
+                "anomalies": returned,
+                "objects": [
+                    {"namespace": item.get("namespace"), "name": item.get("name")}
+                    for item in returned
+                ],
+            },
+        )
+        return ReadResult((observation,), tuple(limitations))
 
     def _pod_logs(self, intent: ReadIntent) -> ReadResult:
         assert self._core is not None

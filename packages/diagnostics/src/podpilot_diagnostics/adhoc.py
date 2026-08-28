@@ -137,7 +137,9 @@ class ReadIntent(BaseModel):
     tool: Literal[
         "discover_resources", "get_resource", "list_resources", "search_resources",
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
-        "query_audit_events",
+        "query_audit_events", "pod_health_summary", "node_health_summary",
+        "cluster_operator_health_summary", "machine_health_summary",
+        "workload_health_summary",
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -162,15 +164,35 @@ class ReadIntent(BaseModel):
         "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
         "top_memory_consumers", "top_log_volume_by_namespace",
         "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
+        "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
+        "ingress_request_rate", "ingress_error_rate",
+        "machineconfigpool_updated", "machineconfigpool_degraded",
+        "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
+        "workload_availability", "persistent_volume_inode_usage",
+        "cluster_operator_available", "cluster_operator_degraded",
+        "cluster_operator_progressing", "apiserver_request_rate",
+        "apiserver_error_rate", "apiserver_latency", "etcd_db_size",
+        "etcd_fsync_latency", "apiserver_inflight_requests",
+        "scheduler_pending_pods", "scheduler_attempt_rate", "scheduler_error_rate",
+        "scheduler_latency", "etcd_has_leader", "etcd_leader_changes",
+        "monitoring_targets_up", "monitoring_targets_down",
+        "prometheus_head_series", "prometheus_ingestion_rate",
+        "prometheus_rule_evaluation_failures", "alertmanager_active_alerts",
+        "logging_ingestion_rate", "logging_query_latency",
     ] | None = None
     metric_scope: Literal[
         "cluster", "pod", "namespace", "deployment", "workload", "node", "node_role",
-        "persistent_volume_claim"
+        "persistent_volume_claim", "kafka_cluster", "route", "ingress_controller",
+        "machine_config_pool", "horizontal_pod_autoscaler", "cluster_operator",
+        "control_plane", "monitoring", "logging",
     ] | None = None
     metric_operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
     metric_statistic: Literal["current", "average", "maximum", "minimum"] = "current"
     metric_group_by: list[Literal[
-        "cluster", "namespace", "pod", "container", "node"
+        "cluster", "namespace", "pod", "container", "node", "topic", "partition",
+        "consumer_group", "route", "pool", "operator", "code",
+        "job", "instance", "queue", "result", "component", "tenant", "request_kind",
     ]] = Field(default_factory=list, max_length=3)
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
     threshold_value: float | None = None
@@ -236,17 +258,85 @@ class ReadIntent(BaseModel):
         if self.tool == "query_metrics":
             if not self.metric or not self.metric_scope:
                 raise ValueError("query_metrics requires metric and metric_scope")
-            if self.metric_scope not in {"cluster", "node", "node_role"} and not self.namespace:
+            cluster_scopes = {
+                "cluster", "node", "node_role", "ingress_controller",
+                "machine_config_pool", "cluster_operator", "control_plane",
+                "monitoring", "logging",
+            }
+            if self.metric_scope not in cluster_scopes and not self.namespace:
                 raise ValueError("the selected metric scope requires an exact namespace")
             if self.metric_scope in {
                 "pod", "deployment", "workload", "node", "node_role",
-                "persistent_volume_claim"
+                "persistent_volume_claim", "kafka_cluster", "route",
+                "ingress_controller", "machine_config_pool",
+                "horizontal_pod_autoscaler", "cluster_operator",
             } and not self.name:
                 raise ValueError("the selected metric scope requires an exact name")
+            if self.metric_scope in {
+                "ingress_controller", "machine_config_pool", "cluster_operator",
+                "control_plane", "monitoring", "logging",
+            } and self.namespace:
+                raise ValueError("the selected cluster metric scope does not accept a namespace")
             if self.metric_scope == "workload" and self.kind not in {
                 "Deployment", "StatefulSet", "DaemonSet", "Job"
             }:
                 raise ValueError("workload metric scope requires a registered controller kind")
+            expected_scope_kinds = {
+                "kafka_cluster": "Kafka", "route": "Route",
+                "ingress_controller": "IngressController",
+                "machine_config_pool": "MachineConfigPool",
+                "horizontal_pod_autoscaler": "HorizontalPodAutoscaler",
+                "cluster_operator": "ClusterOperator",
+            }
+            expected_kind = expected_scope_kinds.get(self.metric_scope)
+            if expected_kind and self.kind != expected_kind:
+                raise ValueError(
+                    f"{self.metric_scope} metric scope requires kind {expected_kind}"
+                )
+            metric_scopes = {
+                "kafka_topic_messages_in": {"kafka_cluster"},
+                "kafka_topic_bytes_in": {"kafka_cluster"},
+                "kafka_topic_bytes_out": {"kafka_cluster"},
+                "kafka_topic_storage": {"kafka_cluster"},
+                "kafka_consumer_lag": {"kafka_cluster"},
+                "kafka_under_replicated_partitions": {"kafka_cluster"},
+                "ingress_request_rate": {"route", "ingress_controller"},
+                "ingress_error_rate": {"route", "ingress_controller"},
+                "machineconfigpool_updated": {"machine_config_pool"},
+                "machineconfigpool_degraded": {"machine_config_pool"},
+                "hpa_current_replicas": {"horizontal_pod_autoscaler"},
+                "hpa_desired_replicas": {"horizontal_pod_autoscaler"},
+                "hpa_max_replicas": {"horizontal_pod_autoscaler"},
+                "workload_availability": {"deployment", "workload"},
+                "cluster_operator_available": {"cluster_operator", "cluster"},
+                "cluster_operator_degraded": {"cluster_operator", "cluster"},
+                "cluster_operator_progressing": {"cluster_operator", "cluster"},
+                "apiserver_request_rate": {"control_plane"},
+                "apiserver_error_rate": {"control_plane"},
+                "apiserver_latency": {"control_plane"},
+                "etcd_db_size": {"control_plane"},
+                "etcd_fsync_latency": {"control_plane"},
+                "apiserver_inflight_requests": {"control_plane"},
+                "scheduler_pending_pods": {"control_plane"},
+                "scheduler_attempt_rate": {"control_plane"},
+                "scheduler_error_rate": {"control_plane"},
+                "scheduler_latency": {"control_plane"},
+                "etcd_has_leader": {"control_plane"},
+                "etcd_leader_changes": {"control_plane"},
+                "monitoring_targets_up": {"monitoring"},
+                "monitoring_targets_down": {"monitoring"},
+                "prometheus_head_series": {"monitoring"},
+                "prometheus_ingestion_rate": {"monitoring"},
+                "prometheus_rule_evaluation_failures": {"monitoring"},
+                "alertmanager_active_alerts": {"monitoring"},
+                "logging_ingestion_rate": {"logging"},
+                "logging_query_latency": {"logging"},
+            }
+            allowed_scopes = metric_scopes.get(self.metric)
+            if allowed_scopes and self.metric_scope not in allowed_scopes:
+                raise ValueError(
+                    f"{self.metric} does not support {self.metric_scope} scope"
+                )
             if (self.namespace and not _METRIC_IDENTIFIER.fullmatch(self.namespace)) or (
                 self.name and not _METRIC_IDENTIFIER.fullmatch(self.name)
             ):
@@ -277,10 +367,24 @@ class ReadIntent(BaseModel):
                         "or a cluster ranking grouped by node"
                     )
             if self.metric == "persistent_volume_usage":
-                if self.metric_scope != "persistent_volume_claim":
-                    raise ValueError("persistent_volume_usage requires persistent_volume_claim scope")
-            elif self.metric_scope == "persistent_volume_claim":
-                raise ValueError("persistent_volume_claim scope supports only persistent_volume_usage")
+                if self.metric_scope not in {
+                    "persistent_volume_claim", "namespace", "cluster"
+                }:
+                    raise ValueError(
+                        "persistent_volume_usage requires claim, namespace, or cluster scope"
+                    )
+            if self.metric == "persistent_volume_inode_usage" and self.metric_scope not in {
+                "persistent_volume_claim", "namespace", "cluster"
+            }:
+                raise ValueError(
+                    "persistent_volume_inode_usage requires claim, namespace, or cluster scope"
+                )
+            elif self.metric_scope == "persistent_volume_claim" and self.metric not in {
+                "persistent_volume_usage", "persistent_volume_inode_usage"
+            }:
+                raise ValueError(
+                    "persistent_volume_claim scope supports only volume utilization metrics"
+                )
             if self.metric_scope in {"node", "node_role"} and any(
                 grouping not in {"cluster", "node"} for grouping in self.metric_group_by
             ):
@@ -340,6 +444,28 @@ class ReadIntent(BaseModel):
                 raise ValueError("discover_resources accepts only a discovery_query and limit")
         elif self.discovery_query:
             raise ValueError("discovery_query is valid only for discover_resources")
+        health_summary_tools = {
+            "pod_health_summary", "node_health_summary",
+            "cluster_operator_health_summary", "machine_health_summary",
+            "workload_health_summary",
+        }
+        if self.tool in health_summary_tools and any((
+            self.resource, self.api_version, self.name,
+            self.label_selector, self.container, self.previous,
+        )):
+            raise ValueError(
+                "health summary reads accept only their typed scope and result limit"
+            )
+        if self.tool != "workload_health_summary" and self.tool in health_summary_tools and self.kind:
+            raise ValueError("kind is valid only for workload_health_summary")
+        if self.tool == "workload_health_summary" and self.kind not in {
+            None, "Deployment", "StatefulSet", "DaemonSet",
+        }:
+            raise ValueError(
+                "workload_health_summary kind must be Deployment, StatefulSet, or DaemonSet"
+            )
+        if self.tool in {"node_health_summary", "cluster_operator_health_summary"} and self.namespace:
+            raise ValueError(f"{self.tool} is cluster-scoped and does not accept a namespace")
         if self.tool != "watch_resources" and self.watch_seconds != 10:
             raise ValueError("watch_seconds is valid only for watch_resources")
         if self.tool != "pod_logs" and self.since_seconds is not None:
@@ -1305,6 +1431,59 @@ _CROSS_NAMESPACE_CONNECTIVITY_QUERY = re.compile(
     re.IGNORECASE,
 )
 _POD_LOG_WORD_QUERY = re.compile(r"\b(?:logs?|logging)\b", re.IGNORECASE)
+_POD_HEALTH_QUERY = re.compile(
+    r"(?=.*\bpods\b)(?=.*\b(?:health|healthy|unhealthy|status|states?|"
+    r"crash(?:ed|es|ing|loop(?:backoff)?)?|fail(?:ed|ing|ures?)?|"
+    r"restart(?:ed|ing|s)?|not\s+ready|imagepullbackoff|errimagepull|"
+    r"pending|problems?|issues?)\b)",
+    re.IGNORECASE,
+)
+_POD_HEALTH_NAMESPACE_STOP_WORDS = {
+    "all", "any", "cluster", "clusters", "current", "currently", "the",
+}
+_NODE_HEALTH_QUERY = re.compile(
+    r"(?=.*\bnodes\b)(?=.*\b(?:health|healthy|unhealthy|status|states?|"
+    r"ready|not\s+ready|degraded|pressure|unavailable|problems?|issues?)\b)",
+    re.IGNORECASE,
+)
+_CLUSTER_OPERATOR_HEALTH_QUERY = re.compile(
+    r"(?=.*\b(?:clusteroperators?|cluster\s+operators?)\b)"
+    r"(?=.*\b(?:health|healthy|unhealthy|status|states?|available|unavailable|"
+    r"degraded|progressing|problems?|issues?)\b)",
+    re.IGNORECASE,
+)
+_MACHINE_HEALTH_QUERY = re.compile(
+    r"(?=.*\bmachines\b)(?=.*\b(?:health|healthy|unhealthy|status|states?|"
+    r"ready|failed|failing|provisioning|deleting|stuck|problems?|issues?)\b)",
+    re.IGNORECASE,
+)
+_WORKLOAD_HEALTH_QUERY = re.compile(
+    r"(?=.*\b(?:deployments?|statefulsets?|stateful\s+sets?|daemonsets?|"
+    r"daemon\s+sets?|workloads)\b)"
+    r"(?=.*\b(?:health|healthy|unhealthy|status|states?|ready|available|"
+    r"unavailable|degraded|failing|failed|rollout|stuck|problems?|issues?)\b)",
+    re.IGNORECASE,
+)
+_HEALTH_NAMESPACE_QUERY = re.compile(
+    rf"\b(?:pods|machines|deployments|statefulsets|stateful\s+sets|"
+    rf"daemonsets|daemon\s+sets?|workloads)\b"
+    rf".{{0,120}}?\b(?:in|from)\s+(?:the\s+)?"
+    rf"(?:(?:namespace|project)\s+)?[`'\"]?"
+    rf"(?P<namespace>{_KUBERNETES_NAME_PATTERN})[`'\"]?",
+    re.IGNORECASE,
+)
+
+
+def _health_namespace_from_question(question: str) -> str | None:
+    explicit = _EXPLICIT_NAMESPACE_QUERY.search(question)
+    namespace = (
+        explicit.group("prefix") or explicit.group("suffix") if explicit else None
+    )
+    if namespace is None:
+        shorthand = _HEALTH_NAMESPACE_QUERY.search(question)
+        namespace = shorthand.group("namespace") if shorthand else None
+    normalized = namespace.lower() if namespace else None
+    return None if normalized in _POD_HEALTH_NAMESPACE_STOP_WORDS else normalized
 _EXPLICIT_NAMESPACE_QUERY = re.compile(
     rf"\b(?:in|from)\s+(?:the\s+)?(?:"
     rf"namespace\s+(?P<prefix>{_KUBERNETES_NAME_PATTERN})|"
@@ -1473,6 +1652,85 @@ def plan_known_read(
     metric_result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    if _POD_HEALTH_QUERY.search(question) and not _POD_LOG_WORD_QUERY.search(question):
+        namespace = _health_namespace_from_question(question)
+        return (
+            ReadPlan(
+                goal_type="health",
+                scope_summary=(
+                    f"Summarize current Pod health in namespace {namespace}."
+                    if namespace else "Summarize current Pod health across the cluster."
+                ),
+                intents=[ReadIntent(
+                    tool="pod_health_summary",
+                    namespace=namespace.lower() if namespace else None,
+                    limit=min(200, inventory_limit),
+                )],
+            ),
+            True,
+        )
+    if _NODE_HEALTH_QUERY.search(question):
+        return (
+            ReadPlan(
+                goal_type="health",
+                scope_summary="Summarize current Node health across the cluster.",
+                intents=[ReadIntent(
+                    tool="node_health_summary", limit=min(200, inventory_limit),
+                )],
+            ),
+            True,
+        )
+    if _CLUSTER_OPERATOR_HEALTH_QUERY.search(question):
+        return (
+            ReadPlan(
+                goal_type="health",
+                scope_summary="Summarize current ClusterOperator health.",
+                intents=[ReadIntent(
+                    tool="cluster_operator_health_summary",
+                    limit=min(200, inventory_limit),
+                )],
+            ),
+            True,
+        )
+    if _MACHINE_HEALTH_QUERY.search(question):
+        namespace = _health_namespace_from_question(question)
+        return (
+            ReadPlan(
+                goal_type="health",
+                scope_summary=(
+                    f"Summarize current Machine health in namespace {namespace}."
+                    if namespace else "Summarize current Machine health across the cluster."
+                ),
+                intents=[ReadIntent(
+                    tool="machine_health_summary", namespace=namespace,
+                    limit=min(200, inventory_limit),
+                )],
+            ),
+            True,
+        )
+    if _WORKLOAD_HEALTH_QUERY.search(question):
+        namespace = _health_namespace_from_question(question)
+        normalized = re.sub(r"[^a-z]", "", question.lower())
+        kind = (
+            "StatefulSet" if "statefulset" in normalized else
+            "DaemonSet" if "daemonset" in normalized else
+            "Deployment" if "deployment" in normalized else None
+        )
+        target = f"{kind} health" if kind else "controller workload health"
+        return (
+            ReadPlan(
+                goal_type="health",
+                scope_summary=(
+                    f"Summarize current {target} in namespace {namespace}."
+                    if namespace else f"Summarize current {target} across the cluster."
+                ),
+                intents=[ReadIntent(
+                    tool="workload_health_summary", namespace=namespace, kind=kind,
+                    limit=min(200, inventory_limit),
+                )],
+            ),
+            True,
+        )
     node_ranking = _NODE_UTILIZATION_RANKING_QUERY.search(question)
     if node_ranking:
         metric_name = node_ranking.group("metric").lower()

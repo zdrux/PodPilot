@@ -2311,6 +2311,21 @@ def _deterministic_metric_summary_answer(
         "persistent_volume_usage": "PVC utilization",
         "node_cpu_utilization": "Node CPU utilization",
         "node_memory_utilization": "Node memory utilization",
+        "apiserver_inflight_requests": "API server inflight requests",
+        "scheduler_pending_pods": "Scheduler pending Pods",
+        "scheduler_attempt_rate": "Scheduler attempt rate",
+        "scheduler_error_rate": "Scheduler error rate",
+        "scheduler_latency": "Scheduler p99 latency",
+        "etcd_has_leader": "etcd members with a leader",
+        "etcd_leader_changes": "etcd leader-change rate",
+        "monitoring_targets_up": "Monitoring targets up",
+        "monitoring_targets_down": "Monitoring targets down",
+        "prometheus_head_series": "Prometheus active series",
+        "prometheus_ingestion_rate": "Prometheus ingestion rate",
+        "prometheus_rule_evaluation_failures": "Prometheus rule evaluation failures",
+        "alertmanager_active_alerts": "Alertmanager active alerts",
+        "logging_ingestion_rate": "Loki ingestion rate",
+        "logging_query_latency": "Loki p99 query latency",
     }
     operator_functions = {
         "gt": lambda value, threshold: value > threshold,
@@ -2605,6 +2620,257 @@ def _deterministic_inventory_answer(
         "answer_mode": "evidence_based",
         "content": "\n".join(lines),
         "citations": [str(observation["id"])],
+    }
+
+
+def _deterministic_pod_health_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render Pod health from the typed scan; absence requires complete coverage."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") == "pod_health_summary"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") == "pod_health_summary"
+        and isinstance(item.get("data"), dict)
+    ]
+    if not observations:
+        return None
+
+    anomaly_total = sum(
+        int(item["data"].get("anomalyCount") or 0) for item in observations
+    )
+    scanned_total = sum(
+        int(item["data"].get("scannedCount") or 0) for item in observations
+    )
+    scans_complete = all(item["data"].get("scanComplete") is True for item in observations)
+    cluster_names = {
+        str(item.get("cluster_name") or "") for item in observations
+        if item.get("cluster_name")
+    }
+    multi_cluster = len(cluster_names) > 1
+    if anomaly_total:
+        coverage = (
+            f" across {scanned_total} evaluated Pods"
+            + ("." if scans_complete else "; the configured scan ceiling left additional Pods unevaluated.")
+        )
+        lines = [
+            f"**PodPilot found {anomaly_total} Pod{'s' if anomaly_total != 1 else ''} "
+            f"with current health anomalies{coverage}**",
+            "",
+        ]
+    elif scans_complete:
+        lines = [
+            f"**No current Pod health anomalies were found across all {scanned_total} "
+            "evaluated Pods.**",
+            "",
+        ]
+    else:
+        lines = [
+            f"**No Pod health anomalies were found among {scanned_total} evaluated Pods, but "
+            "the scan was incomplete, so a cluster-wide absence cannot be concluded.**",
+            "",
+        ]
+
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    for observation in observations:
+        data = observation["data"]
+        cluster_name = str(observation.get("cluster_name") or "current")
+        for anomaly in data.get("anomalies") or []:
+            if not isinstance(anomaly, dict):
+                continue
+            reasons = sorted({
+                str(issue.get("reason") or "Unknown")
+                for issue in anomaly.get("issues") or []
+                if isinstance(issue, dict)
+            })
+            rows.append((
+                cluster_name,
+                str(anomaly.get("namespace") or "cluster"),
+                str(anomaly.get("name") or "unknown"),
+                str(anomaly.get("phase") or "Unknown"),
+                f"{int(anomaly.get('readyContainers') or 0)}/{int(anomaly.get('totalContainers') or 0)}",
+                str(int(anomaly.get("restartCount") or 0)),
+                ", ".join(reasons) or "Unknown",
+            ))
+    if rows:
+        if multi_cluster:
+            lines.extend([
+                "| Cluster | Namespace | Pod | Phase | Ready | Restarts | Current signals |",
+                "|---|---|---|---|---:|---:|---|",
+            ])
+            lines.extend(
+                f"| `{cluster}` | `{namespace}` | `{name}` | {phase} | {ready} | {restarts} | {reasons} |"
+                for cluster, namespace, name, phase, ready, restarts, reasons in rows[:100]
+            )
+        else:
+            lines.extend([
+                "| Namespace | Pod | Phase | Ready | Restarts | Current signals |",
+                "|---|---|---|---:|---:|---|",
+            ])
+            lines.extend(
+                f"| `{namespace}` | `{name}` | {phase} | {ready} | {restarts} | {reasons} |"
+                for _cluster, namespace, name, phase, ready, restarts, reasons in rows[:100]
+            )
+        if len(rows) > 100:
+            lines.extend(["", f"Only the first 100 of {len(rows)} returned anomaly records are shown."])
+
+    returned_total = sum(
+        int(item["data"].get("returnedAnomalyCount") or 0) for item in observations
+    )
+    if returned_total < anomaly_total:
+        lines.extend([
+            "",
+            f"Details for {returned_total} of {anomaly_total} detected anomalous Pods fit the "
+            "bounded evidence result.",
+        ])
+    return {
+        "answer_mode": "evidence_based",
+        "conclusion_status": (
+            "confirmed" if anomaly_total or scans_complete else "unresolved"
+        ),
+        "content": "\n".join(lines).strip(),
+        "citations": [str(item["id"]) for item in observations],
+    }
+
+
+def _deterministic_resource_health_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render non-Pod typed health summaries with complete-coverage semantics."""
+
+    health_tools = {
+        "node_health_summary",
+        "cluster_operator_health_summary",
+        "machine_health_summary",
+        "workload_health_summary",
+    }
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("tool") in health_tools
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") in health_tools
+        and isinstance(item.get("data"), dict)
+    ]
+    if not observations:
+        return None
+    anomaly_total = sum(
+        int(item["data"].get("anomalyCount") or 0) for item in observations
+    )
+    scanned_total = sum(
+        int(item["data"].get("scannedCount") or 0) for item in observations
+    )
+    scans_complete = all(item["data"].get("scanComplete") is True for item in observations)
+    unavailable = sorted({
+        str(kind)
+        for item in observations
+        for kind in (item["data"].get("unavailableKinds") or [])
+    })
+    kinds = sorted({str(item["data"].get("kind") or "resource") for item in observations})
+    subject = ", ".join(kinds)
+    if anomaly_total:
+        lines = [
+            f"**PodPilot found {anomaly_total} {subject} health anomal"
+            f"{'ies' if anomaly_total != 1 else 'y'} among {scanned_total} evaluated resources.**",
+            "",
+        ]
+        if not scans_complete:
+            lines.append(
+                "The positive finding is confirmed, but one or more scans were incomplete."
+            )
+            lines.append("")
+    elif scans_complete:
+        lines = [
+            f"**No current {subject} health anomalies were found across all "
+            f"{scanned_total} evaluated resources.**",
+            "",
+        ]
+    elif unavailable and not scanned_total:
+        lines = [
+            f"**PodPilot could not evaluate {subject} health because the required API "
+            "was unavailable to the configured cluster reader.**",
+            "",
+        ]
+    else:
+        lines = [
+            f"**No {subject} health anomalies were found among {scanned_total} evaluated "
+            "resources, but coverage was incomplete, so absence cannot be concluded.**",
+            "",
+        ]
+    if unavailable:
+        lines.extend(["Unavailable APIs: " + ", ".join(f"`{item}`" for item in unavailable), ""])
+
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    cluster_names = {
+        str(item.get("cluster_name") or "") for item in observations
+        if item.get("cluster_name")
+    }
+    multi_cluster = len(cluster_names) > 1
+    for observation in observations:
+        cluster = str(observation.get("cluster_name") or "current")
+        for anomaly in observation["data"].get("anomalies") or []:
+            if not isinstance(anomaly, dict):
+                continue
+            reasons = sorted({
+                str(issue.get("reason") or "Unknown")
+                for issue in anomaly.get("issues") or []
+                if isinstance(issue, dict)
+            })
+            rows.append((
+                cluster,
+                str(anomaly.get("kind") or observation["data"].get("kind") or "Resource"),
+                str(anomaly.get("namespace") or "—"),
+                str(anomaly.get("name") or "unknown"),
+                str(anomaly.get("state") or "Unknown"),
+                ", ".join(reasons) or "Unknown",
+            ))
+    if rows:
+        if multi_cluster:
+            lines.extend([
+                "| Cluster | Kind | Namespace | Name | State | Current signals |",
+                "|---|---|---|---|---|---|",
+            ])
+            lines.extend(
+                f"| `{cluster}` | {kind} | `{namespace}` | `{name}` | {state} | {reasons} |"
+                for cluster, kind, namespace, name, state, reasons in rows[:100]
+            )
+        else:
+            lines.extend([
+                "| Kind | Namespace | Name | State | Current signals |",
+                "|---|---|---|---|---|",
+            ])
+            lines.extend(
+                f"| {kind} | `{namespace}` | `{name}` | {state} | {reasons} |"
+                for _cluster, kind, namespace, name, state, reasons in rows[:100]
+            )
+    returned_total = sum(
+        int(item["data"].get("returnedAnomalyCount") or 0) for item in observations
+    )
+    if returned_total < anomaly_total:
+        lines.extend([
+            "",
+            f"Details for {returned_total} of {anomaly_total} detected anomalous resources "
+            "fit the bounded evidence result.",
+        ])
+    return {
+        "answer_mode": "evidence_based",
+        "conclusion_status": (
+            "confirmed" if anomaly_total or scans_complete else "unresolved"
+        ),
+        "content": "\n".join(lines).strip(),
+        "citations": [str(item["id"]) for item in observations],
     }
 
 
@@ -3221,6 +3487,14 @@ def _format_metric_value(value: object, unit: str) -> str:
         return f"{numeric:.2f} {labels[index]}"
     if unit == "bytes_per_second":
         return f"{_format_metric_value(numeric, 'bytes')}/s"
+    if unit == "messages_per_second":
+        return f"{numeric:.2f} msg/s"
+    if unit == "requests_per_second":
+        return f"{numeric:.2f} req/s"
+    if unit == "events_per_second":
+        return f"{numeric:.2f} events/s"
+    if unit == "samples_per_second":
+        return f"{numeric:.2f} samples/s"
     if unit == "percent":
         return f"{numeric:.2f}%"
     if unit == "cores":
@@ -3247,7 +3521,11 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "nodename": "node",
         "consumer_group": "consumer_group",
         "consumergroup": "consumer_group",
+        "persistentvolumeclaim": "pvc",
+        "horizontalpodautoscaler": "hpa",
     }
+    if metric_name.startswith("cluster_operator_"):
+        label_aliases["name"] = "operator"
     label_names = {
         "node": "Node",
         "namespace": "Namespace",
@@ -3263,6 +3541,18 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "endpoint": "Endpoint",
         "job": "Job",
         "pvc": "PVC",
+        "hpa": "HPA",
+        "route": "Route",
+        "pool": "Pool",
+        "operator": "Operator",
+        "code": "Code",
+        "verb": "Verb",
+        "resource": "Resource",
+        "queue": "Queue",
+        "result": "Result",
+        "component": "Component",
+        "tenant": "Tenant",
+        "request_kind": "Request kind",
         "target": "Target",
     }
     canonical_keys = {
@@ -3277,7 +3567,9 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     preferred_order = (
         "node", "namespace", "pod", "container", "topic", "partition",
         "consumer_group", "broker", "cluster", "service", "instance",
-        "endpoint", "job",
+        "endpoint", "job", "route", "pool", "operator", "pvc", "hpa",
+        "verb", "resource", "code",
+        "queue", "result", "component", "tenant", "request_kind",
     )
     dimension_keys = [key for key in preferred_order if key in canonical_keys]
     dimension_keys.extend(sorted(canonical_keys - set(dimension_keys)))
@@ -3322,6 +3614,15 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
             return display_dimension(
                 labels.get("consumer_group") or labels.get("consumergroup") or "—"
             )
+        aliased = next((
+            labels.get(raw_key)
+            for raw_key, canonical_key in label_aliases.items()
+            if canonical_key == key
+            and labels.get(raw_key) is not None
+            and labels.get(raw_key) != ""
+        ), None)
+        if aliased is not None:
+            return display_dimension(aliased)
         return display_dimension(labels.get(key))
     current_values = [
         float(item["current"])
@@ -3373,6 +3674,44 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "network_transmit": "Network Transmit Rate",
         "container_restarts": "Container Restarts",
         "persistent_volume_usage": "PVC Utilization",
+        "persistent_volume_inode_usage": "PVC Inode Utilization",
+        "kafka_topic_messages_in": "Kafka Topic Message Rate",
+        "kafka_topic_bytes_in": "Kafka Topic Ingress Rate",
+        "kafka_topic_bytes_out": "Kafka Topic Egress Rate",
+        "kafka_topic_storage": "Kafka Topic Storage",
+        "kafka_consumer_lag": "Kafka Consumer Lag",
+        "kafka_under_replicated_partitions": "Kafka Under-Replicated Partitions",
+        "ingress_request_rate": "Ingress Request Rate",
+        "ingress_error_rate": "Ingress 5xx Rate",
+        "machineconfigpool_updated": "MachineConfigPool Updated",
+        "machineconfigpool_degraded": "MachineConfigPool Degraded Machines",
+        "hpa_current_replicas": "HPA Current Replicas",
+        "hpa_desired_replicas": "HPA Desired Replicas",
+        "hpa_max_replicas": "HPA Maximum Replicas",
+        "workload_availability": "Workload Replica Availability",
+        "cluster_operator_available": "ClusterOperator Available",
+        "cluster_operator_degraded": "ClusterOperator Degraded",
+        "cluster_operator_progressing": "ClusterOperator Progressing",
+        "apiserver_request_rate": "API Server Request Rate",
+        "apiserver_error_rate": "API Server 5xx Rate",
+        "apiserver_latency": "API Server p99 Latency",
+        "etcd_db_size": "etcd Database Size",
+        "etcd_fsync_latency": "etcd p99 WAL Fsync Latency",
+        "apiserver_inflight_requests": "API Server Inflight Requests",
+        "scheduler_pending_pods": "Scheduler Pending Pods",
+        "scheduler_attempt_rate": "Scheduler Attempt Rate",
+        "scheduler_error_rate": "Scheduler Error Rate",
+        "scheduler_latency": "Scheduler p99 Latency",
+        "etcd_has_leader": "etcd Leader Availability",
+        "etcd_leader_changes": "etcd Leader Change Rate",
+        "monitoring_targets_up": "Monitoring Targets Up",
+        "monitoring_targets_down": "Monitoring Targets Down",
+        "prometheus_head_series": "Prometheus Active Series",
+        "prometheus_ingestion_rate": "Prometheus Ingestion Rate",
+        "prometheus_rule_evaluation_failures": "Prometheus Rule Evaluation Failures",
+        "alertmanager_active_alerts": "Alertmanager Active Alerts",
+        "logging_ingestion_rate": "Loki Ingestion Rate",
+        "logging_query_latency": "Loki p99 Query Latency",
     }.get(metric_name, metric_name.replace("_", " ").title())
     namespace_only = metric_name == "top_log_volume_by_namespace"
     return {
@@ -3946,7 +4285,11 @@ def _grounded_read_candidates(
     # A bounded list/search is discovery. Its server-normalized object references
     # authorize exact GET candidates on the next round without trusting model prose.
     for observation in evidence:
-        if observation.get("tool") not in {"list_resources", "search_resources"}:
+        if observation.get("tool") not in {
+            "list_resources", "search_resources", "pod_health_summary",
+            "node_health_summary", "cluster_operator_health_summary",
+            "machine_health_summary", "workload_health_summary",
+        }:
             continue
         data = observation.get("data")
         if not isinstance(data, dict):
@@ -3960,17 +4303,21 @@ def _grounded_read_candidates(
         for ref in (data.get("objects") or [])[:8]:
             if not isinstance(ref, dict) or not ref.get("name"):
                 continue
+            ref_kind = str(ref.get("kind") or kind)
+            ref_api_version = str(ref.get("apiVersion") or api_version or "") or None
+            ref_resource = str(ref.get("resource") or resource or "") or None
             namespace = ref.get("namespace")
             if not namespace and data.get("scope") not in {None, "cluster"}:
                 namespace = data.get("scope")
             add(
                 ReadIntent(
-                    tool="get_resource", resource=resource, api_version=api_version,
-                    kind=kind, namespace=str(namespace) if namespace else None,
+                    tool="get_resource", resource=ref_resource,
+                    api_version=ref_api_version, kind=ref_kind,
+                    namespace=str(namespace) if namespace else None,
                     name=str(ref["name"]),
                 ),
                 capability="resource_read",
-                target=f"{kind}:{namespace or 'cluster'}/{ref['name']}",
+                target=f"{ref_kind}:{namespace or 'cluster'}/{ref['name']}",
                 reason="A bounded discovery read returned this exact object coordinate.",
                 evidence_ids=[evidence_id] if evidence_id else [],
                 relation="discovery_result",
@@ -4342,6 +4689,20 @@ def _read_progress_message(intent) -> str:
     if intent.tool == "query_audit_events":
         target = f"for {intent.audit_username}" if intent.audit_username else "across all users"
         return f"Reading bounded cluster audit activity {target}."
+    if intent.tool == "pod_health_summary":
+        scope = f" in namespace {intent.namespace}" if intent.namespace else " across the cluster"
+        return f"Evaluating current Pod health{scope}."
+    if intent.tool == "node_health_summary":
+        return "Evaluating current Node health across the cluster."
+    if intent.tool == "cluster_operator_health_summary":
+        return "Evaluating current ClusterOperator health."
+    if intent.tool == "machine_health_summary":
+        scope = f" in namespace {intent.namespace}" if intent.namespace else " across the cluster"
+        return f"Evaluating current Machine health{scope}."
+    if intent.tool == "workload_health_summary":
+        resource = intent.kind or "controller workload"
+        scope = f" in namespace {intent.namespace}" if intent.namespace else " across the cluster"
+        return f"Evaluating current {resource} health{scope}."
     resource = intent.kind or intent.resource or "cluster resource"
     scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
     if intent.tool == "pod_logs":
@@ -4362,7 +4723,12 @@ def _investigation_unit_cost(intent: ReadIntent) -> int:
 
     if intent.tool == "watch_resources":
         return 3
-    if intent.tool in {"pod_logs", "http_probe", "query_metrics", "query_audit_events"}:
+    if intent.tool in {
+        "pod_logs", "http_probe", "query_metrics", "query_audit_events",
+        "pod_health_summary", "node_health_summary",
+        "cluster_operator_health_summary", "machine_health_summary",
+        "workload_health_summary",
+    }:
         return 2
     return 1
 
@@ -4427,6 +4793,11 @@ def _investigation_capability_ledger(
         tool_state("get_resource"),
         tool_state("list_resources"),
         tool_state("search_resources"),
+        tool_state("pod_health_summary"),
+        tool_state("node_health_summary"),
+        tool_state("cluster_operator_health_summary"),
+        tool_state("machine_health_summary"),
+        tool_state("workload_health_summary"),
         tool_state("watch_resources"),
         tool_state(
             "pod_logs",
@@ -5067,7 +5438,26 @@ def _validate_inquiry_grounding(
         target = inquiry.metric_request.target
         for field_name in ("namespace", "name", "container"):
             value = getattr(target, field_name)
-            if value and value.casefold() not in grounding_text:
+            grounded_by_reference = bool(
+                (
+                    selected_reference
+                    and field_name in {"name", "namespace"}
+                    and value == selected_reference.get(field_name)
+                )
+                or (
+                    selected_relationship_reference
+                    and field_name in {"name", "namespace"}
+                    and value == selected_relationship_reference.get({
+                        "name": "target_name",
+                        "namespace": "target_namespace",
+                    }[field_name])
+                )
+            )
+            if (
+                value
+                and value.casefold() not in grounding_text
+                and not grounded_by_reference
+            ):
                 raise ModelProviderError(
                     f"Capability selection invented an ungrounded metric target {field_name}."
                 )
@@ -5212,7 +5602,7 @@ def _bind_inquiry_object_reference(
     ), None)
     if selected is None:
         raise ModelProviderError("Capability selection invented an object_reference_id.")
-    return inquiry.model_copy(update={
+    updates: dict[str, object] = {
         "resource_query": str(selected.get("kind") or inquiry.resource_query or "Resource"),
         "object_name": str(selected.get("name") or "") or None,
         "namespace": (
@@ -5221,7 +5611,76 @@ def _bind_inquiry_object_reference(
         ),
         "cardinality": "exact_one",
         "needs_object_details": True,
+    }
+    if inquiry.metric_request is not None:
+        target = inquiry.metric_request.target
+        selected_kind = str(selected.get("kind") or "")
+        if selected_kind != target.kind:
+            raise ModelProviderError(
+                "The selected object reference does not match the metric target Kind."
+            )
+        target = target.model_copy(update={
+            "name": str(selected.get("name") or "") or None,
+            "namespace": (
+                None if selected.get("namespace") in {None, "cluster"}
+                else str(selected["namespace"])
+            ),
+        })
+        updates["metric_request"] = inquiry.metric_request.model_copy(
+            update={"target": target}
+        )
+    return inquiry.model_copy(update=updates)
+
+
+def _bind_metric_target_reference(
+    inquiry: InquirySemantics,
+    object_references: list[dict[str, object]],
+    relationship_references: list[dict[str, object]],
+) -> InquirySemantics:
+    """Bind a metric target's opaque prior-object reference to trusted coordinates."""
+
+    if inquiry.metric_request is None or not inquiry.metric_request.target.reference_id:
+        return inquiry
+    target = inquiry.metric_request.target
+    reference_id = target.reference_id
+    if reference_id.startswith("ref-"):
+        selected = next((
+            item for item in object_references if item.get("id") == reference_id
+        ), None)
+        kind_key, namespace_key, name_key = "kind", "namespace", "name"
+    else:
+        selected = next((
+            item for item in relationship_references if item.get("id") == reference_id
+        ), None)
+        kind_key, namespace_key, name_key = (
+            "target_kind", "target_namespace", "target_name"
+        )
+    if selected is None:
+        raise ModelProviderError("Metric semantics invented a target reference_id.")
+    selected_kind = str(selected.get(kind_key) or "")
+    if selected_kind != target.kind:
+        raise ModelProviderError(
+            "The selected metric target reference does not match its Kind."
+        )
+    namespace = selected.get(namespace_key)
+    bound_target = target.model_copy(update={
+        "reference_id": None,
+        "namespace": None if namespace in {None, "cluster"} else str(namespace),
+        "name": str(selected.get(name_key) or "") or None,
     })
+    updates: dict[str, object] = {
+        "resource_query": selected_kind,
+        "namespace": bound_target.namespace,
+        "object_name": bound_target.name,
+        "metric_request": inquiry.metric_request.model_copy(
+            update={"target": bound_target}
+        ),
+    }
+    updates[
+        "object_reference_id" if reference_id.startswith("ref-")
+        else "relationship_reference_id"
+    ] = reference_id
+    return inquiry.model_copy(update=updates)
 
 
 def _bind_inquiry_scope_reference(
@@ -5298,7 +5757,31 @@ def _bind_inquiry_relationship_reference(
         "cardinality": "exact_one" if target_name else "collection",
         "needs_object_details": bool(target_name),
     }
+    if inquiry.metric_request is not None:
+        metric_target = inquiry.metric_request.target
+        if target_kind != metric_target.kind:
+            raise ModelProviderError(
+                "The selected relationship does not match the metric target Kind."
+            )
+        metric_target = metric_target.model_copy(update={
+            "name": target_name,
+            "namespace": None if namespace in {None, "cluster"} else str(namespace),
+        })
+        updates["metric_request"] = inquiry.metric_request.model_copy(
+            update={"target": metric_target}
+        )
     return inquiry.model_copy(update=updates)
+
+
+def _explicit_metric_question(question: str) -> bool:
+    """Recognize requests whose requested value can only come from telemetry."""
+
+    return bool(re.search(
+        r"(?i)\b(?:utili[sz]ation|throughput|consumer\s+lag|request\s+rate|"
+        r"message\s+rate|bytes?\s+(?:in|out)|iops|latency|error\s+rate|"
+        r"under[- ]replicated|cpu\s+(?:usage|consum)|memory\s+(?:usage|consum))",
+        question,
+    ))
 
 
 async def _classify_ad_hoc_inquiry(
@@ -5337,11 +5820,19 @@ async def _classify_ad_hoc_inquiry(
     for attempt in range(1, 3):
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
+            classified = _bind_metric_target_reference(
+                classified, object_references, relationship_references
+            )
             classified = _bind_inquiry_object_reference(classified, object_references)
             classified = _bind_inquiry_scope_reference(classified, object_references)
             classified = _bind_inquiry_relationship_reference(
                 classified, relationship_references
             )
+            if _explicit_metric_question(question) and classified.mode != "metrics":
+                raise ModelProviderError(
+                    "The question explicitly requests telemetry; select metrics mode instead "
+                    "of inventory or configuration."
+                )
             _validate_inquiry_grounding(
                 classified,
                 question=question,
@@ -5411,16 +5902,40 @@ def _semantic_metric_read_plan(
                     "memory_working_set": "top_memory_consumers",
                     "application_log_volume": "top_log_volume_by_namespace",
                 }
-                if any(signal not in rank_signals for signal in signals):
+                rankable_domain_signals = {
+                    "persistent_volume_usage", "persistent_volume_inode_usage",
+                    "kafka_topic_messages_in", "kafka_topic_bytes_in",
+                    "kafka_topic_bytes_out", "kafka_topic_storage",
+                    "kafka_consumer_lag", "kafka_under_replicated_partitions",
+                    "ingress_request_rate", "ingress_error_rate",
+                    "cluster_operator_available", "cluster_operator_degraded",
+                    "cluster_operator_progressing", "apiserver_request_rate",
+                    "apiserver_error_rate", "apiserver_latency",
+                    "apiserver_inflight_requests", "scheduler_pending_pods",
+                    "scheduler_attempt_rate", "scheduler_error_rate", "scheduler_latency",
+                    "etcd_leader_changes", "monitoring_targets_up", "monitoring_targets_down",
+                    "prometheus_rule_evaluation_failures", "logging_ingestion_rate",
+                    "logging_query_latency",
+                }
+                if any(
+                    signal not in rank_signals
+                    and signal not in rankable_domain_signals
+                    for signal in signals
+                ):
                     return None
-                signals = [rank_signals[signal] for signal in signals]
+                signals = [rank_signals.get(signal, signal) for signal in signals]
         elif "application_log_volume" in signals:
             return None
         if len(signals) != len(set(signals)):
             signals = list(dict.fromkeys(signals))
-        if scope == "persistent_volume_claim" and signals != ["persistent_volume_usage"]:
+        volume_signals = {"persistent_volume_usage", "persistent_volume_inode_usage"}
+        if scope == "persistent_volume_claim" and any(
+            signal not in volume_signals for signal in signals
+        ):
             return None
-        if "persistent_volume_usage" in signals and scope != "persistent_volume_claim":
+        if any(signal in volume_signals for signal in signals) and scope not in {
+            "persistent_volume_claim", "namespace", "cluster"
+        }:
             return None
         if scope == "node_role" and any(
             signal not in {"node_cpu_utilization", "node_memory_utilization"}
@@ -5441,6 +5956,114 @@ def _semantic_metric_read_plan(
         ):
             return None
         if scope == "persistent_volume_claim" and request.group_by:
+            return None
+        signal_scopes = {
+            "kafka_topic_messages_in": {"kafka_cluster"},
+            "kafka_topic_bytes_in": {"kafka_cluster"},
+            "kafka_topic_bytes_out": {"kafka_cluster"},
+            "kafka_topic_storage": {"kafka_cluster"},
+            "kafka_consumer_lag": {"kafka_cluster"},
+            "kafka_under_replicated_partitions": {"kafka_cluster"},
+            "ingress_request_rate": {"route", "ingress_controller"},
+            "ingress_error_rate": {"route", "ingress_controller"},
+            "machineconfigpool_updated": {"machine_config_pool"},
+            "machineconfigpool_degraded": {"machine_config_pool"},
+            "hpa_current_replicas": {"horizontal_pod_autoscaler"},
+            "hpa_desired_replicas": {"horizontal_pod_autoscaler"},
+            "hpa_max_replicas": {"horizontal_pod_autoscaler"},
+            "workload_availability": {"workload"},
+            "cluster_operator_available": {"cluster_operator", "cluster"},
+            "cluster_operator_degraded": {"cluster_operator", "cluster"},
+            "cluster_operator_progressing": {"cluster_operator", "cluster"},
+            "apiserver_request_rate": {"control_plane"},
+            "apiserver_error_rate": {"control_plane"},
+            "apiserver_latency": {"control_plane"},
+            "etcd_db_size": {"control_plane"},
+            "etcd_fsync_latency": {"control_plane"},
+            "apiserver_inflight_requests": {"control_plane"},
+            "scheduler_pending_pods": {"control_plane"},
+            "scheduler_attempt_rate": {"control_plane"},
+            "scheduler_error_rate": {"control_plane"},
+            "scheduler_latency": {"control_plane"},
+            "etcd_has_leader": {"control_plane"},
+            "etcd_leader_changes": {"control_plane"},
+            "monitoring_targets_up": {"monitoring"},
+            "monitoring_targets_down": {"monitoring"},
+            "prometheus_head_series": {"monitoring"},
+            "prometheus_ingestion_rate": {"monitoring"},
+            "prometheus_rule_evaluation_failures": {"monitoring"},
+            "alertmanager_active_alerts": {"monitoring"},
+            "logging_ingestion_rate": {"logging"},
+            "logging_query_latency": {"logging"},
+        }
+        if any(
+            signal in signal_scopes and scope not in signal_scopes[signal]
+            for signal in signals
+        ):
+            return None
+        if "workload_availability" in signals and target.kind not in {
+            "Deployment", "StatefulSet", "DaemonSet"
+        }:
+            return None
+        if scope == "control_plane":
+            api_signals = {
+                "apiserver_request_rate", "apiserver_error_rate", "apiserver_latency",
+            }
+            etcd_signals = {"etcd_db_size", "etcd_fsync_latency"}
+            etcd_signals.update({"etcd_has_leader", "etcd_leader_changes"})
+            scheduler_signals = {
+                "scheduler_pending_pods", "scheduler_attempt_rate",
+                "scheduler_error_rate", "scheduler_latency",
+            }
+            api_signals.add("apiserver_inflight_requests")
+            if target.kind == "APIServer" and any(
+                signal in etcd_signals | scheduler_signals for signal in signals
+            ):
+                return None
+            if target.kind == "Etcd" and any(
+                signal in api_signals | scheduler_signals for signal in signals
+            ):
+                return None
+            if target.kind == "Scheduler" and any(
+                signal in api_signals | etcd_signals for signal in signals
+            ):
+                return None
+        grouping_support = {
+            "kafka_topic_messages_in": {"topic"},
+            "kafka_topic_bytes_in": {"topic"},
+            "kafka_topic_bytes_out": {"topic"},
+            "kafka_topic_storage": {"topic", "partition"},
+            "kafka_consumer_lag": {"topic", "partition", "consumer_group"},
+            "kafka_under_replicated_partitions": {"topic", "partition"},
+            "ingress_request_rate": {"namespace", "route", "code"},
+            "ingress_error_rate": {"namespace", "route", "code"},
+            "cluster_operator_available": {"operator"},
+            "cluster_operator_degraded": {"operator"},
+            "cluster_operator_progressing": {"operator"},
+            "apiserver_request_rate": {"verb", "resource", "code"},
+            "apiserver_error_rate": {"verb", "resource", "code"},
+            "apiserver_latency": {"verb", "resource"},
+            "apiserver_inflight_requests": {"request_kind"},
+            "scheduler_pending_pods": {"queue"},
+            "scheduler_attempt_rate": {"result"},
+            "scheduler_error_rate": {"result"},
+            "scheduler_latency": {"result"},
+            "etcd_leader_changes": {"instance"},
+            "monitoring_targets_up": {"namespace", "job", "instance"},
+            "monitoring_targets_down": {"namespace", "job", "instance"},
+            "prometheus_rule_evaluation_failures": {"namespace", "pod"},
+            "logging_ingestion_rate": {"tenant"},
+            "logging_query_latency": {"job", "component", "tenant"},
+            "etcd_has_leader": set(),
+            "prometheus_head_series": set(),
+            "prometheus_ingestion_rate": set(),
+            "alertmanager_active_alerts": set(),
+        }
+        if request.group_by and any(
+            signal in grouping_support
+            and any(value not in grouping_support[signal] for value in request.group_by)
+            for signal in signals
+        ):
             return None
         if "pod_readiness" in signals and "container" in request.group_by:
             return None
@@ -5470,7 +6093,13 @@ def _semantic_metric_read_plan(
             tool="query_metrics",
             metric=signal,
             metric_scope=metric_scope,
-            kind=target.kind if scope == "workload" else None,
+            kind=(
+                target.kind if scope in {
+                    "workload", "kafka_cluster", "route", "ingress_controller",
+                    "machine_config_pool", "horizontal_pod_autoscaler",
+                    "cluster_operator",
+                } else None
+            ),
             namespace=target.namespace,
             name=name,
             container=target.container,
@@ -5853,7 +6482,8 @@ def _explicit_inventory_question(question: str) -> bool:
 
     if re.search(
         r"(?i)\b(?:health|healthy|status|configuration|configure|configured|"
-        r"details?|why|how|logs?|metrics?)\b",
+        r"details?|why|how|logs?|metrics?|utili[sz]ation|usage|throughput|"
+        r"latency|lag|rates?|iops|capacity|replicas?)\b",
         question,
     ):
         return False
@@ -5925,9 +6555,22 @@ async def _collect_bounded_cluster_reads(
         )
         else None
     )
+    health_summary_tools = {
+        "pod_health_summary", "node_health_summary",
+        "cluster_operator_health_summary", "machine_health_summary",
+        "workload_health_summary",
+    }
+    health_summary_override = (
+        known_read
+        if known_read is not None
+        and known_read[0].intents
+        and all(intent.tool in health_summary_tools for intent in known_read[0].intents)
+        else None
+    )
     legacy_fallback = known_read if inquiry is None else None
     deterministic_plan = (
-        node_metric_override
+        health_summary_override
+        or node_metric_override
         or semantic_audit_plan
         or semantic_metric_plan
         or (
@@ -6017,7 +6660,11 @@ async def _collect_bounded_cluster_reads(
         conversation=conversation,
         inventory_limit=settings.adhoc_inventory_max_objects,
     )
-    if semantic_resource_plan is not None and node_metric_override is None:
+    if (
+        semantic_resource_plan is not None
+        and node_metric_override is None
+        and health_summary_override is None
+    ):
         deterministic_plan = semantic_resource_plan
 
     # Once live discovery resolves an explicit inventory question, normal code owns
@@ -6777,6 +7424,9 @@ async def _collect_bounded_cluster_reads(
                     if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"
                     if intent.tool == "discover_resources" else
+                    f"{intent.tool} scope={intent.namespace or 'cluster'} "
+                    f"kind={intent.kind or '*'} result_limit={intent.limit}"
+                    if intent.tool in health_summary_tools else
                     f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
                     f"{intent.namespace or 'cluster'}/{intent.name or '*'}"
                     + (f" container={intent.container}" if intent.container else "")
@@ -7703,6 +8353,16 @@ def create_app(
                 }
                 if inquiry is not None:
                     answer_context["inquiry"] = inquiry.model_dump()
+                fast_pod_health_answer = (
+                    _deterministic_pod_health_answer(evidence=evidence, activity=activity)
+                    if not followup_action else None
+                )
+                fast_resource_health_answer = (
+                    _deterministic_resource_health_answer(
+                        evidence=evidence, activity=activity,
+                    )
+                    if not followup_action else None
+                )
                 fast_inventory_answer = (
                     _deterministic_inventory_answer(
                         evidence=evidence,
@@ -7764,7 +8424,9 @@ def create_app(
                     else None
                 )
                 fast_deterministic_answer = (
-                    fast_audit_answer
+                    fast_pod_health_answer
+                    or fast_resource_health_answer
+                    or fast_audit_answer
                     or fast_metric_answer
                     or fast_configmap_answer
                     or fast_inventory_answer
@@ -7777,7 +8439,9 @@ def create_app(
                     )
                     validated = {
                         **fast_deterministic_answer,
-                        "conclusion_status": "confirmed",
+                        "conclusion_status": fast_deterministic_answer.get(
+                            "conclusion_status", "confirmed"
+                        ),
                         "limitations": _dedupe_limitations(limitations),
                         "recommended_next_checks": [],
                         "investigation_gaps": [],

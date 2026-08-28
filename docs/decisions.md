@@ -1012,3 +1012,47 @@ copy numeric values. Machine, Service/Route traffic, OpenShift control-plane, Ka
 metrics still require explicit capability packs that declare their source series, object
 relationships, cardinality limits, and availability checks; API discovery alone is never treated
 as proof that corresponding telemetry exists.
+
+## 2026-08-28 - Domain metrics use registered profiles; unknown CRDs remain evidence-first
+
+Context: Operators need Kafka, platform control-plane, monitoring, and logging telemetry, while the
+set of installed third-party CRDs is open-ended. Treating API discovery or a model-proposed metric
+name as sufficient would conflate object existence with exporter availability and would allow
+unreviewed PromQL semantics.
+
+Decision: Extend the composable metric registry with reviewed profiles for Kafka, ingress,
+MachineConfigPool, HPA/workload, storage, ClusterOperator, API server, scheduler, etcd, Prometheus,
+Alertmanager, and LokiStack signals. Each profile owns metric names, fixed or typed label matchers,
+aggregation, units, groupings, bounds, and an exporter-aware empty-result limitation. Keep unknown
+CRDs on the universal discovery, exact object/status, configuration, and opaque relationship path.
+An unknown CRD may gain metrics only through a reviewed profile; neither the model nor API discovery
+can create one dynamically.
+
+Consequences: Platform and operator telemetry can share one table and semantic request without
+exposing PromQL. Missing scrape profiles are reported as limitations instead of zero values.
+Third-party resources remain investigable without bespoke deterministic workflows, while telemetry
+for an unfamiliar operator fails closed until its semantics are deliberately registered.
+
+## 2026-08-28 - Health summaries share an envelope, not resource heuristics
+
+Context: A generic Pod LIST retained detailed state in API order until its evidence payload filled.
+Large clusters could therefore show a healthy prefix while omitting later CrashLooping containers,
+and increasing the payload merely moved the failure boundary. Pod phase alone is also insufficient:
+a container in `CrashLoopBackOff` commonly belongs to a `Running`-phase Pod.
+
+Decision: Add typed deterministic `pod_health_summary`, `node_health_summary`,
+`cluster_operator_health_summary`, `machine_health_summary`, and `workload_health_summary` reads.
+Each pages through a separately bounded scan, counts every detected anomaly, and returns only
+compact anomaly records within an independent result/payload ceiling. Normal code renders the
+existence/absence conclusion; absence is confirmed only for complete coverage. The shared envelope
+contains scope, API availability, scanned count, scan completeness, anomaly count, returned anomaly
+count, grouped reasons/severity, and compact anomaly records. Do not define a universal Kubernetes
+health predicate: Pods use container state, Nodes and ClusterOperators use their authoritative
+conditions, Machines use lifecycle plus Node linkage, and workload controllers use rollout state.
+
+Consequences: Healthy resource cardinality no longer consumes model context or hides later failures,
+and the model cannot turn incomplete coverage or a missing OpenShift API into a negative health
+claim. Nodes and ClusterOperators remain cluster-scoped; Machines and workload controllers support
+namespace filters. Combined workload scans apply the scan ceiling per controller kind. A Node
+`Ready=False`, a Machine provisioning condition, and a Pod container waiting reason remain distinct
+health semantics.

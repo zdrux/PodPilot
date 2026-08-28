@@ -843,6 +843,9 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     assert request["max_tokens"] == 1000
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
     assert "cluster_audit_events" in request["messages"][0]["content"]
+    classifier_prompt = request["messages"][0]["content"].casefold()
+    assert "unknown crds" in classifier_prompt
+    assert "never infer promql from the kind" in classifier_prompt
 
 
 def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:

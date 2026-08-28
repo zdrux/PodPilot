@@ -787,6 +787,123 @@ def test_known_resource_coordinates_are_canonicalized() -> None:
     assert normalized.limit == 3
 
 
+def test_pod_health_summary_accepts_only_scope_and_result_limit() -> None:
+    assert ReadIntent(
+        tool="pod_health_summary", namespace="payments", limit=50
+    ).namespace == "payments"
+
+    with pytest.raises(ValueError, match="accept only their typed scope"):
+        ReadIntent(
+            tool="pod_health_summary", resource="pods", namespace="payments"
+        )
+
+
+@pytest.mark.parametrize("question", [
+    "Are any pods on the cluster crashing currently?",
+    "Show unhealthy pods",
+    "What is the health status of the pods?",
+])
+def test_known_pod_health_questions_compile_to_typed_summary(question: str) -> None:
+    planned = plan_known_read(question, inventory_limit=500)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "health"
+    assert plan.intents == [ReadIntent(tool="pod_health_summary", limit=200)]
+
+
+@pytest.mark.parametrize("question", [
+    "Are pods crashing in namespace payments?",
+    "Show crashing pods in payments",
+    'Show crashing pods in "my-namespace"',
+    "Show unhealthy pods from project team-a",
+])
+def test_known_pod_health_question_preserves_explicit_namespace(question: str) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    expected = (
+        "my-namespace" if "my-namespace" in question else
+        "team-a" if "team-a" in question else "payments"
+    )
+    assert planned[0].intents == [ReadIntent(
+        tool="pod_health_summary", namespace=expected, limit=200,
+    )]
+
+
+def test_pod_health_cluster_word_is_not_treated_as_a_namespace() -> None:
+    planned = plan_known_read("Show crashing pods in the cluster")
+
+    assert planned is not None
+    assert planned[0].intents == [ReadIntent(tool="pod_health_summary", limit=200)]
+
+
+@pytest.mark.parametrize(("question", "expected"), [
+    ("Show unhealthy nodes", ReadIntent(tool="node_health_summary", limit=200)),
+    (
+        "Show degraded cluster operators",
+        ReadIntent(tool="cluster_operator_health_summary", limit=200),
+    ),
+    (
+        "Show failed machines in openshift-machine-api",
+        ReadIntent(
+            tool="machine_health_summary", namespace="openshift-machine-api", limit=200,
+        ),
+    ),
+    (
+        'Show unhealthy deployments in "my-namespace"',
+        ReadIntent(
+            tool="workload_health_summary", kind="Deployment",
+            namespace="my-namespace", limit=200,
+        ),
+    ),
+    (
+        "Show unhealthy stateful sets in payments",
+        ReadIntent(
+            tool="workload_health_summary", kind="StatefulSet",
+            namespace="payments", limit=200,
+        ),
+    ),
+    (
+        "Show daemon set health in platform",
+        ReadIntent(
+            tool="workload_health_summary", kind="DaemonSet",
+            namespace="platform", limit=200,
+        ),
+    ),
+])
+def test_known_resource_health_questions_compile_to_typed_summary(
+    question: str, expected: ReadIntent,
+) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    assert planned[1] is True
+    assert planned[0].intents == [expected]
+
+
+def test_health_summary_scope_validation_matches_resource_scope() -> None:
+    assert ReadIntent(
+        tool="workload_health_summary", kind="StatefulSet", namespace="payments",
+    ).namespace == "payments"
+    assert ReadIntent(
+        tool="machine_health_summary", namespace="openshift-machine-api",
+    ).namespace == "openshift-machine-api"
+    with pytest.raises(ValidationError, match="does not accept a namespace"):
+        ReadIntent(tool="node_health_summary", namespace="payments")
+    with pytest.raises(ValidationError, match="does not accept a namespace"):
+        ReadIntent(tool="cluster_operator_health_summary", namespace="payments")
+    with pytest.raises(ValidationError, match="kind must be"):
+        ReadIntent(tool="workload_health_summary", kind="ReplicaSet")
+
+
+def test_pod_log_request_does_not_compile_to_health_summary() -> None:
+    planned = plan_known_read("Show logs for crashing pods")
+
+    assert planned is None
+
+
 def test_cluster_wide_namespace_placeholder_is_omitted_for_list_reads() -> None:
     proposed = ReadIntent(
         tool="list_resources",
@@ -1341,10 +1458,16 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
     assert intent.metric == "cpu_usage"
     with pytest.raises(ValidationError, match="requires metric and metric_scope"):
         ReadIntent(tool="query_metrics")
-    with pytest.raises(ValidationError, match="persistent_volume_usage requires"):
+    namespace_volumes = ReadIntent(
+        tool="query_metrics", metric="persistent_volume_usage",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", limit=5,
+    )
+    assert namespace_volumes.limit == 5
+    with pytest.raises(ValidationError, match="claim, namespace, or cluster"):
         ReadIntent(
             tool="query_metrics", metric="persistent_volume_usage",
-            metric_scope="namespace", namespace="payments",
+            metric_scope="pod", namespace="payments", name="api-1",
         )
     node = ReadIntent(
         tool="query_metrics", metric="top_cpu_consumers",
@@ -1391,6 +1514,49 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         ReadIntent(
             tool="query_metrics", metric="top_log_volume_by_namespace",
             metric_scope="namespace", namespace="payments",
+        )
+
+
+def test_platform_metric_scopes_require_typed_coordinates() -> None:
+    kafka = ReadIntent(
+        tool="query_metrics", metric="kafka_consumer_lag",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+        metric_operation="rank", metric_group_by=["topic", "consumer_group"],
+    )
+    assert kafka.kind == "Kafka"
+    route = ReadIntent(
+        tool="query_metrics", metric="ingress_request_rate",
+        metric_scope="route", kind="Route",
+        namespace="payments", name="api",
+    )
+    assert route.name == "api"
+    monitoring = ReadIntent(
+        tool="query_metrics", metric="monitoring_targets_down",
+        metric_scope="monitoring", metric_operation="rank",
+        metric_group_by=["job", "instance"],
+    )
+    assert monitoring.namespace is None
+    logging = ReadIntent(
+        tool="query_metrics", metric="logging_ingestion_rate",
+        metric_scope="logging", metric_group_by=["tenant"],
+    )
+    assert logging.metric_scope == "logging"
+    with pytest.raises(ValidationError, match="requires kind Kafka"):
+        ReadIntent(
+            tool="query_metrics", metric="kafka_topic_storage",
+            metric_scope="kafka_cluster", kind="Route",
+            namespace="vc-streams", name="vc-cluster",
+        )
+    with pytest.raises(ValidationError, match="does not support"):
+        ReadIntent(
+            tool="query_metrics", metric="etcd_db_size",
+            metric_scope="route", kind="Route", namespace="payments", name="api",
+        )
+    with pytest.raises(ValidationError, match="does not support"):
+        ReadIntent(
+            tool="query_metrics", metric="logging_query_latency",
+            metric_scope="monitoring",
         )
 
 

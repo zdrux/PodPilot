@@ -993,6 +993,36 @@ accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
 object field paths, including paths through nested objects and lists. For a Route URL, the
 model can select an exact hostname search. Search evidence reports
 both match count and scanned count, plus whether a ceiling stopped the scan.
+
+Cluster-wide or namespace-scoped Pod health questions use the deterministic
+`pod_health_summary` read rather than a generic Pod inventory. It evaluates every Pod reached
+within `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS`, then retains only compact anomalous records and
+aggregate counts. `CrashLoopBackOff` and other container waiting failures are evaluated from
+container and init-container status even when the Pod phase remains `Running`. Successfully
+completed Pods are not treated as unhealthy. The result distinguishes scan completeness from
+the separate anomaly-detail result/payload ceiling; PodPilot confirms that no anomalies exist
+only when the scan is complete. Raising the evidence payload is therefore not required for large
+healthy inventories. The Kubernetes transport currently receives ordinary Pod API objects and
+compacts them immediately; the model receives only the bounded health summary.
+
+The same anomaly-first envelope is used by `node_health_summary`,
+`cluster_operator_health_summary`, `machine_health_summary`, and
+`workload_health_summary`, but each has its own evaluator:
+
+- Nodes are cluster-scoped and use `Ready`, pressure, network-unavailable, and schedulability
+  conditions.
+- ClusterOperators are cluster-scoped and use `Available`, `Degraded`, and `Progressing`.
+- Machines use `machine.openshift.io/v1beta1`, can be limited to a namespace, and evaluate phase,
+  age of transitional phases, error conditions, and Node linkage. A missing Machine API is
+  unavailable coverage rather than a healthy empty result.
+- Deployments, StatefulSets, and DaemonSets can be scanned together or by kind, cluster-wide or in
+  one namespace. Their evaluator compares desired, ready, available, and updated replicas,
+  observed generation, controller conditions, and DaemonSet misscheduling.
+
+All summaries use `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS`; a combined workload summary applies the
+ceiling independently to each controller kind. Healthy objects contribute only aggregate coverage
+counts. The model receives bounded anomaly records, not the full YAML collection.
+
 OpenShift ingress and browser Route lookups are qualified as
 `routes.route.openshift.io`. `routes.serving.knative.dev` is reserved for questions that
 explicitly concern Knative or Serving. If logs report an ambiguous plural, inspect the
@@ -1010,10 +1040,16 @@ not a live connectivity result or a complete explanation of an HTTP 500.
 Metric trend questions use authenticated Thanos `/api/v1/query_range` through the
 `podpilot-investigator` ServiceAccount. Supported metrics are CPU usage, requests, limits,
 and throttling; memory working set, requests, and limits; network receive/transmit rate;
-container restarts; PVC utilization percentage; Pod readiness; and top namespace,
-Deployment, or node CPU/memory consumers. Pod, namespace, and Deployment scopes require an exact namespace; Pod and
+container restarts; PVC byte/inode utilization; Pod readiness; workload availability; HPA
+current/desired/maximum replicas; Kafka topic message/byte rates, storage, consumer lag, and
+under-replicated partitions; Route or IngressController request/error rates; MachineConfigPool
+updated/degraded state; ClusterOperator conditions; API server/scheduler/etcd request, queue,
+latency, leadership, and size signals; Prometheus target, ingestion, active-series, rule-evaluation,
+and Alertmanager state; and LokiStack ingestion and query latency. Pod, namespace, and Deployment
+scopes require an exact namespace; Pod and
 Deployment scopes also require a name. Node scope requires an exact node name and may
-optionally narrow to a namespace. PVC utilization requires an exact namespace/claim.
+optionally narrow to a namespace. Exact PVC utilization requires a namespace/claim; namespace and
+cluster storage requests may rank claims instead.
 Deployment totals and rankings follow ReplicaSet/Pod ownership, including multiple ReplicaSets during a
 rollout. Namespace and node rankings identify monitored namespace/Pod/container consumers. They cannot
 identify arbitrary operating-system processes unless separate process-level telemetry is
@@ -1053,6 +1089,23 @@ failure identifies the configured timeout instead of reporting generic gateway u
 `podpilot-runtime`. PodPilot may increase the
 requested step to stay within the point ceiling. Thanos retention, unavailable metrics,
 series/response ceilings, and access failures are returned as explicit limitations.
+
+Domain packs depend on the cluster's installed scrape profile. Kafka broker topic throughput and
+storage require Strimzi JMX Exporter metrics; consumer lag requires Kafka Exporter metrics. Router,
+machine-config, kube-state-metrics/openshift-state-metrics, API server, scheduler, etcd, Prometheus,
+Alertmanager, and LokiStack series must be present in Thanos for their corresponding packs. A
+successful Kubernetes object read does not imply
+that telemetry exists. If the registered query returns no samples, PodPilot names the expected
+exporter/profile rather than treating the object as idle or allowing the model to invent PromQL.
+Metric label names can vary across operator/exporter releases; unsupported profiles require a new
+reviewed server-owned template or label alias, not an operator-supplied query.
+
+Unknown CRDs use the generic safe resource path: live API discovery resolves the served resource,
+bounded LIST/GET reads expose redacted spec/status evidence, and opaque observed relationships can
+be traversed without model-authored API coordinates, field paths, or selector values. PodPilot does
+not dynamically convert an unknown Kind into PromQL. If a third-party operator exposes useful
+telemetry, add a reviewed capability profile declaring its stable metric names, label mapping,
+units, aggregation, cardinality bounds, and exporter prerequisite.
 
 ### Ask PodPilot job progress
 

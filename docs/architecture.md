@@ -174,8 +174,10 @@ is separate from PromQL and never attaches the service-account token or model
 credentials to a request.
 
 Ask PodPilot later reuses the authenticated adapter through `query_metrics`. The model
-selects only a registered metric, cluster/pod/namespace/Deployment/node/PVC scope, exact coordinates, range, and
-step. Normal code compiles server-owned PromQL and calls `/api/v1/query_range`, accepts only
+selects only a registered metric capability, typed target, exact coordinates or opaque trusted
+prior-object reference, range, grouping, and limit. Registered targets include Kubernetes workload,
+node, PVC, Strimzi Kafka, Route/IngressController, MachineConfigPool, HPA, ClusterOperator, API
+server, and etcd scopes. Normal code compiles server-owned PromQL and calls `/api/v1/query_range`, accepts only
 matrix results, caps series/points/body/time, redacts labels, and persists normalized points
 plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
 is increased automatically when necessary to keep the series within its point ceiling.
@@ -185,8 +187,8 @@ only vector results, and persists namespace, payload bytes, average byte rate, t
 completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
 Normal code parses common explicit relative periods before deterministic execution, while the
 semantic classifier carries `metric_range_seconds` for other wording. Requested values remain
-subject to the typed five-minute minimum and deployment maximum; absent periods use the documented
-one-hour default.
+subject to the typed five-minute minimum and deployment maximum; absent metric periods use five
+minutes.
 Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
 Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
 and memory queries support cluster, namespace, Deployment, and node scopes. Top-consumer
@@ -194,6 +196,20 @@ queries aggregate application containers into namespace/Pod totals and honor the
 rank count. Common namespace top-consumer
 questions compile deterministically so a planner schema failure cannot prevent the typed query.
 These are container/workload observations, not host process telemetry.
+
+Domain capability packs remain separate from Kubernetes API discovery: discovering a Kind does not
+prove that its exporter is scraped. Each pack therefore owns its expected metric names, label
+matchers, aggregation, units, and a prerequisite-aware empty-result limitation. Kafka broker topic
+rates/storage require Strimzi JMX Exporter series, consumer lag requires Kafka Exporter series,
+workload/HPA/storage/OpenShift-object state requires the corresponding kube-state-metrics or
+openshift-state-metrics collectors, ingress requires router metrics, control-plane signals require
+the platform API server/scheduler/etcd scrape jobs, monitoring health uses Prometheus and
+Alertmanager self-metrics, and logging health uses LokiStack metrics scraped into Thanos. The model
+cannot substitute metric names or raw PromQL when a cluster uses a different telemetry profile.
+Unknown CRDs remain fully available to bounded discovery, exact object/status reads, configuration
+inspection, and evidence-derived relationship traversal. They do not become metric targets merely
+because the API server advertises their Kind; a reviewed capability pack must define series,
+labels, units, aggregation, and prerequisites first.
 Overall node CPU/memory utilization comes from bounded node-exporter templates joined to
 `node_uname_info`. Resource-exhaustion planning should collect both overall utilization and
 top workload consumers; any unexplained difference may be host, kernel, cache, or unmonitored

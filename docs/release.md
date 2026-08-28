@@ -377,6 +377,16 @@ names cannot override them. Invalid targets must trigger one repair without
 spending the read budget; repeated invalid targets must use no more than three
 relevant exact candidates. Tests must distinguish planner rejection, `pods/log`
 RBAC denial, missing previous streams, and successful current/previous collection.
+Pod-health gates must place a `Running`-phase `CrashLoopBackOff` Pod after enough healthy Pods to
+exceed the ordinary detail payload and prove that the typed summary still detects it. They must
+cover init-container failures, successful Job completion, anomaly result truncation, and a Pod
+beyond the scan ceiling. A zero-anomaly result may be confirmed only when `scanComplete` is true;
+an incomplete scan must produce an unresolved absence conclusion.
+Resource-health gates must cover Node readiness/pressure, ClusterOperator availability/degradation,
+Machine failure and missing-API behavior, and Deployment/StatefulSet/DaemonSet rollout state.
+Machine and workload tests must prove namespace propagation; Node and ClusterOperator intents must
+reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
+summary must preserve the complete-coverage rule before confirming absence.
 
 ## Rollback
 

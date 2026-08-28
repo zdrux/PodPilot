@@ -319,6 +319,163 @@ def test_cluster_node_utilization_ranking_uses_topk_grouped_by_node(metric, need
     assert "kube_node_role" not in query
 
 
+@pytest.mark.parametrize(
+    ("intent", "needles"),
+    [
+        (
+            ReadIntent(
+                tool="query_metrics", metric="kafka_topic_messages_in",
+                metric_scope="kafka_cluster", kind="Kafka",
+                namespace="vc-streams", name="vc-cluster",
+                metric_operation="rank", metric_group_by=["topic"], limit=5,
+            ),
+            ("topk(5", "kafka_server_brokertopicmetrics_messagesin_total", "by (topic)"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="kafka_consumer_lag",
+                metric_scope="kafka_cluster", kind="Kafka",
+                namespace="vc-streams", name="vc-cluster",
+                metric_group_by=["topic", "consumer_group"],
+            ),
+            ("kafka_consumergroup_lag", "by (topic, consumergroup)"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="ingress_error_rate",
+                metric_scope="route", kind="Route",
+                namespace="payments", name="api",
+            ),
+            ("haproxy_server_http_responses_total", 'route="api"', 'code=~"5.."'),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="machineconfigpool_updated",
+                metric_scope="machine_config_pool", kind="MachineConfigPool", name="worker",
+            ),
+            ("mco_updated_machine_count", "mco_machine_count", 'pool="worker"'),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="hpa_desired_replicas",
+                metric_scope="horizontal_pod_autoscaler", kind="HorizontalPodAutoscaler",
+                namespace="payments", name="api",
+            ),
+            ("kube_horizontalpodautoscaler_status_desired_replicas",),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="workload_availability",
+                metric_scope="workload", kind="Deployment",
+                namespace="payments", name="api",
+            ),
+            ("kube_deployment_status_replicas_available", "kube_deployment_spec_replicas"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="persistent_volume_inode_usage",
+                metric_scope="persistent_volume_claim",
+                namespace="payments", name="data",
+            ),
+            ("kubelet_volume_stats_inodes_used", "kubelet_volume_stats_inodes"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="cluster_operator_degraded",
+                metric_scope="cluster_operator", kind="ClusterOperator", name="network",
+            ),
+            ("cluster_operator_conditions", 'condition="Degraded"', 'name="network"'),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="apiserver_latency",
+                metric_scope="control_plane",
+            ),
+            ("histogram_quantile(0.99", "apiserver_request_duration_seconds_bucket"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="etcd_fsync_latency",
+                metric_scope="control_plane",
+            ),
+            ("histogram_quantile(0.99", "etcd_disk_wal_fsync_duration_seconds_bucket"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="apiserver_inflight_requests",
+                metric_scope="control_plane", metric_group_by=["request_kind"],
+            ),
+            ("apiserver_current_inflight_requests", "by (request_kind)"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="scheduler_pending_pods",
+                metric_scope="control_plane", metric_group_by=["queue"],
+            ),
+            ("scheduler_pending_pods", "by (queue)"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="scheduler_latency",
+                metric_scope="control_plane", metric_group_by=["result"],
+            ),
+            ("histogram_quantile(0.99", "scheduler_scheduling_attempt_duration_seconds_bucket"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="monitoring_targets_down",
+                metric_scope="monitoring", metric_operation="rank",
+                metric_group_by=["job", "instance"], limit=10,
+            ),
+            ("topk(10", "1 - (max by (job, instance)", "openshift-monitoring"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="prometheus_ingestion_rate",
+                metric_scope="monitoring",
+            ),
+            ("openshift:prometheus_tsdb_head_samples_appended_total:sum", "rate("),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="logging_ingestion_rate",
+                metric_scope="logging", metric_group_by=["tenant"],
+            ),
+            ("loki_distributor_bytes_received_total", "by (tenant)"),
+        ),
+        (
+            ReadIntent(
+                tool="query_metrics", metric="logging_query_latency",
+                metric_scope="logging", metric_group_by=["job"],
+            ),
+            ("loki_logql_querystats_latency_seconds_bucket", "by (le, job)"),
+        ),
+    ],
+)
+def test_platform_metric_packs_use_server_owned_queries(intent, needles) -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(intent)
+
+    query = source.calls[0]["promql"]
+    assert all(needle in query for needle in needles)
+
+
+def test_exporter_dependent_metric_explains_missing_prerequisite() -> None:
+    source = FakeRangeSource()
+    source.series = ()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_consumer_lag",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+    ))
+
+    assert "requires Strimzi Kafka Exporter metrics" in result.limitations[0]
+
+
 @pytest.mark.parametrize("kind", ["StatefulSet", "DaemonSet", "Job"])
 def test_workload_scope_joins_direct_controller_owned_pods(kind) -> None:
     source = FakeRangeSource()
