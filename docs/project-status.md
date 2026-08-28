@@ -74,6 +74,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   Inquiry operations are authoritative over the redundant coarse mode, so defensible
   compound classifications such as investigate+logs normalize to logs instead of
   failing the profile probe or discarding useful production semantics.
+  Compact action-selection prompts retain bounded completed-read history and structured
+  candidate capability/evidence metadata, prioritize relevant grounded action IDs, and
+  explicitly prohibit repeating successful discovery through authored object reads.
   A schema-invalid correction after a valid premature stop may fall back to one exact
   operator-grounded discovery anchor. After successful evidence collection, independently valid action
   selections survive a malformed sibling read, and a fully invalid corrected selection may continue

@@ -693,18 +693,23 @@ def test_candidate_mode_uses_compact_hybrid_action_and_object_read_schema() -> N
     assert "intents" not in schema["properties"]
     instructions = completions.requests[0]["messages"][0]["content"]
     assert "encode every requested step" in instructions
-    assert "Prefer exact supplied action IDs" in instructions
+    assert "Never repeat a successful entry" in instructions
+    assert "before considering an object read" in instructions
     assert "discover_resources" in instructions
     assert "Never request Secrets" in instructions
     assert len(instructions) < 1800
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
     assert set(payload) == {
-        "actions", "facts", "object_read_policy", "question", "resource_catalog",
+        "actions", "completed_reads", "facts", "object_read_policy", "question",
+        "resource_catalog", "selection_policy",
     }
     assert "relationship_graph" not in payload
     assert "capability_ledger" not in payload
     assert "tool_policy" not in payload
     assert payload["actions"][0]["id"] == "read-0123456789abcdefabcd"
+    assert payload["actions"][0]["capability"] == "service_spec"
+    assert payload["actions"][0]["target"] == "Service openshift-ingress/gateway"
+    assert "exact actions[].id" in payload["selection_policy"]
 
 
 def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
@@ -725,6 +730,7 @@ def test_empty_action_set_does_not_reopen_the_broad_typed_planner() -> None:
     assert "intents" not in schema["properties"]
     payload = json.loads(completions.requests[0]["messages"][1]["content"])
     assert payload["actions"] == []
+    assert "No grounded action is available" in payload["selection_policy"]
     assert "tool_policy" not in payload
 
 
@@ -829,9 +835,17 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
         } for index in range(20)],
         "read_candidates": [{
             "id": "read-0123456789abcdefabcd",
+            "capability": "pod_logs",
             "target": "Pod production/api",
             "reason": "Inspect runtime errors.",
+            "relation": "has_logs",
             "supporting_evidence_ids": ["evidence-1"],
+        }],
+        "completed_reads": [{
+            "tool": "list_resources",
+            "status": "succeeded",
+            "target": "Pods in namespace production",
+            "evidence_ids": ["evidence-1"],
         }],
         "capability_ledger": {"pod_logs": "available"},
         "relationship_graph": {"nodes": ["many"]},
@@ -842,13 +856,25 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
     final = _minimal_answer_payload(context)
 
     assert set(planner) == {
-        "question", "facts", "actions", "resource_catalog", "object_read_policy",
+        "question", "facts", "actions", "completed_reads", "resource_catalog",
+        "object_read_policy", "selection_policy",
     }
     assert len(planner["facts"]) <= 6
     assert planner["actions"] == [{
         "id": "read-0123456789abcdefabcd",
-        "label": "Pod production/api — Inspect runtime errors.",
+        "capability": "pod_logs",
+        "target": "Pod production/api",
+        "reason": "Inspect runtime errors.",
+        "relation": "has_logs",
+        "supporting_evidence_ids": ["evidence-1"],
     }]
+    assert planner["completed_reads"] == [{
+        "tool": "list_resources",
+        "status": "succeeded",
+        "target": "Pods in namespace production",
+        "evidence_ids": ["evidence-1"],
+    }]
+    assert "Do not repeat discovery" in planner["selection_policy"]
     assert set(final) == {
         "question", "clusters", "facts", "collection_issues", "prior_answer",
     }
@@ -1030,6 +1056,13 @@ def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
     assert planning_contexts[1]["read_candidates"][0]["id"] == (
         "read-0123456789abcdefabcd"
     )
+    assert planning_contexts[1]["read_candidates"][0]["capability"] == "pod_logs"
+    assert planning_contexts[1]["completed_reads"] == [{
+        "tool": "list_resources",
+        "status": "succeeded",
+        "target": "Pods in namespace payments",
+        "evidence_ids": ["probe-pods"],
+    }]
 
 
 def test_ask_schema_probe_identifies_answer_phase() -> None:
@@ -1078,6 +1111,29 @@ def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
     assert detail == (
         "ActionSelection probe failed. "
         "The model did not plan discovery before an ungrounded Pod log read."
+    )
+
+
+def test_ask_schema_probe_rejects_repeated_discovery_instead_of_grounded_action() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
+
+    def repeated_discovery_plan(_profile, _key, context):
+        return ReadPlan(
+            scope_summary="List the namespace Pods again.",
+            intents=[ReadIntent(
+                tool="list_resources", resource="pods", namespace="payments",
+            )],
+        )
+
+    provider.plan_ad_hoc = repeated_discovery_plan  # type: ignore[method-assign]
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is False
+    assert detail == (
+        "ActionSelection probe failed. "
+        "The model did not select the exact grounded read candidate."
     )
 
 
