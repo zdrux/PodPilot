@@ -1,72 +1,50 @@
-# Ask PodPilot message-card height QA
+# Quiet Ledger Site-wide Redesign QA
 
-- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-7ca933cc-6391-4f9e-9df2-5b0a0cb56a23.png`
-- Browser-rendered implementation: `C:\Users\zdrux\AppData\Local\Temp\podpilot-chat-card-height-fixed-1861.png`
-- Viewport: 1861 × 1001 CSS px at device scale factor 1
-- Source pixels: 1861 × 1001
-- Implementation pixels: 1861 × 1001
-- Density normalization: none
-- State: dark desktop Ask PodPilot conversation with one user message and one active investigation card containing five progress events
+## Comparison target
 
-## Full-view comparison evidence
+- Source visual truth: `C:\Users\zdrux\.codex\generated_images\01a0463d-1d49-7eb1-bdea-fc62cd42c430\exec-94c3e556-1835-4d6a-b546-dd2a28714c09.png`
+- Browser-rendered Ask implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-implementation.png`
+- Combined source/implementation evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-comparison.png`
+- Browser-rendered dashboard: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-dashboard.png`
+- Narrow dashboard evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-narrow.png`
+- Deployed application: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/`
+- State: authenticated `podpilot-breakglass` user against live SNO data on build 32.
 
-The source and corrected browser render were opened together at identical dimensions and state. In the source, the two automatic CSS Grid rows stretch vertically to fill the 649px transcript area, leaving large empty regions inside both cards. In the corrected render, the cards are content-sized and the unused transcript height appears below the message stack, where it belongs.
+## Viewports and coverage
 
-Measured corrected geometry:
-
-- Transcript height: 649px
-- User card: 126.34px rendered height, 124px scroll height
-- Active investigation card: 243.95px rendered height, 242px scroll height
-- Grid automatic rows: `max-content`
-- Grid content alignment: `start`
-- Page scroll height: 1001px, equal to the viewport height
-
-## Focused region comparison evidence
-
-The message region is legible at native size in the full-view pair, so a separate crop was unnecessary. Focused inspection confirmed that card widths, padding, borders, typography, progress markers, and the 12px inter-card gap are unchanged. Only the unintended vertical stretching was removed.
-
-## Required fidelity surfaces
-
-- Fonts and typography: unchanged; existing Inter/system stack, font sizes, weights, line heights, and wrapping are preserved.
-- Spacing and layout rhythm: card padding and the inter-card gap are unchanged. Automatic rows now use intrinsic content height and the message stack is anchored to the transcript top.
-- Colors and visual tokens: unchanged; dark blue-grey surfaces, cyan borders, and semantic progress colors remain intact.
-- Image quality and asset fidelity: no image or icon assets were added, replaced, or altered.
-- Copy and content: the user message, active investigation status, and progress entries render unchanged.
-
-## Interaction and browser verification
-
-- Verified the populated active-investigation state from a seeded isolated QA database.
-- Confirmed the transcript remains independently scrollable when content exceeds its fixed region.
-- Browser console errors checked: none.
-- Model execution and form submission were intentionally not triggered; this change affects only message-row sizing.
-
-## Comparison history
-
-### Pass 1
-
-- [P1] Message cards expanded to consume unused transcript height.
-- Cause: the fixed-height `.ask-thread` remained a grid whose implicit auto rows participated in `align-content: normal`, allowing the rows to stretch.
-- Fix: set `grid-auto-rows: max-content` and `align-content: start` on `.ask-thread`.
-
-### Pass 2
-
-- Post-fix browser evidence shows both cards matching their content height with unused space below the stack.
-- No actionable P0, P1, or P2 findings remain.
+- Selected source: 1816 × 866 pixels.
+- Ask implementation: 1966 × 1063 pixels at the existing Chrome desktop viewport.
+- Dashboard implementation: 1951 × 1055 pixels at the existing Chrome desktop viewport.
+- Responsive check: 720 × 980 CSS pixels; captured content was 705 × 960 after browser chrome. No horizontal page overflow was visible.
+- The side-by-side comparison normalizes both Ask images into equal 908 × 533 regions without cropping.
 
 ## Findings
 
-No blocking visual, interaction, accessibility, or responsive findings remain for this correction.
+No actionable P0, P1, or P2 differences remain.
+
+- Visual system: every tested route now shares the selected mellow slate-blue background, warm off-white type, silver-blue dividers, pastel cyan actions, sage success, and apricot warning accents.
+- Hierarchy: dashboard metrics, operational alerts, investigation lists, registries, forms, capability status, and incident sections use continuous surfaces and divider-led grouping instead of independent floating cards.
+- Ask fidelity: messages remain full-width transcript rows with a dedicated metadata column, subtle separators, a fixed composer, and flattened evidence/recommendation treatments.
+- Navigation: Alert Queue, Investigations, and the unused Actions placeholder are absent. Cluster Health, Ask PodPilot, Clusters, Cluster Memory, and Model Settings each showed exactly one correct active state in Chrome.
+- Functional coverage: Dashboard, Ask, Clusters, Memory, Model Settings, and an existing investigation detail rendered successfully with live data. Form controls, evidence semantics, status labels, and action affordances remain intact.
+- Responsive behavior: the 720px dashboard stacks the shell header, keeps metrics in a legible two-column rail, returns the signal-freshness item to full width, and preserves the operational queue without clipping.
+- Deployment: the stylesheet URL is versioned so Chrome does not retain the older site-wide design after rollout.
+
+## Comparison history
+
+- Pass 1: the deployed HTML showed the new navigation but Chrome retained the cached pre-redesign stylesheet.
+- Pass 2: added an explicit stylesheet version, deployed build 32, and confirmed the selected palette and divider hierarchy on all routes.
+- Final comparison: source and Ask implementation align on background continuity, metadata/content columns, horizontal rhythm, pastel status colors, sidebar density, and composer placement. Live copy differs intentionally from the concept mock.
 
 ## Implementation checklist
 
-- [x] Prevent implicit transcript rows from stretching.
-- [x] Keep messages anchored at the top of the scrolling region.
-- [x] Preserve card padding, width, styling, and message content.
-- [x] Verify against the reported active-investigation state at the same viewport.
-- [x] Check browser console and existing API UI tests.
-
-## Follow-up polish
-
-No P3 follow-up is required.
+- [x] Uniform background and token system across the full product.
+- [x] Card-heavy dashboard and management layouts converted to divider-led sections.
+- [x] Ask transcript treatment preserved across the global redesign.
+- [x] Unused sidebar destinations removed.
+- [x] Active navigation state verified on every remaining route.
+- [x] Authenticated Chrome review of Dashboard, Ask, Clusters, Memory, Model Settings, and investigation detail.
+- [x] Desktop and 720px responsive checks.
+- [x] Source/implementation comparison image reviewed.
 
 final result: passed

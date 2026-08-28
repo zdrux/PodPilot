@@ -961,6 +961,19 @@ _MIN_METRIC_RANGE_SECONDS = 300
 _MAX_METRIC_RANGE_SECONDS = 7_776_000
 _DEFAULT_METRIC_RESULT_LIMIT = 10
 _KUBERNETES_NAME_PATTERN = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
+_NODE_LABEL_TARGET_QUERIES = (
+    re.compile(
+        rf"\blabels?\b.*?\b(?:on|for|of)\s+(?:the\s+)?nodes?\s+"
+        rf"[`'\"]?(?P<name>{_KUBERNETES_NAME_PATTERN})[`'\"]?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\bnodes?\s+(?:named\s+|called\s+)?"
+        rf"[`'\"]?(?P<name>{_KUBERNETES_NAME_PATTERN})[`'\"]?"
+        rf"(?:'s)?\s+labels?\b",
+        re.IGNORECASE,
+    ),
+)
 _POD_IN_NAMESPACE_QUERY = re.compile(
     rf"\bpod\s+[`'\"]?(?P<pod>{_KUBERNETES_NAME_PATTERN})[`'\"]?\s+"
     rf"(?:in|from)\s+(?:the\s+)?(?:namespace\s+)?"
@@ -1160,6 +1173,25 @@ def plan_known_read(
                     metric_scope="cluster",
                     range_seconds=metric_range_seconds,
                     limit=metric_result_limit,
+                )],
+            ),
+            True,
+        )
+    for pattern in _NODE_LABEL_TARGET_QUERIES:
+        node_match = pattern.search(question)
+        if node_match is None:
+            continue
+        node_name = node_match.group("name").lower()
+        return (
+            ReadPlan(
+                goal_type="explain",
+                scope_summary=f"Read labels from the exact Node {node_name}.",
+                intents=[ReadIntent(
+                    tool="get_resource",
+                    resource="nodes",
+                    api_version="v1",
+                    kind="Node",
+                    name=node_name,
                 )],
             ),
             True,
