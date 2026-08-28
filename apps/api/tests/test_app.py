@@ -9389,12 +9389,47 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
             content="",
         )
         assert probed.json()["status"] == "ready"
-        assert probed.json()["diagnostic_call_count"] == 1
+        assert probed.json()["diagnostic_call_count"] == 0
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            profile = db_session.get(ModelProfile, 1)
+            assert profile is not None
+            captured_probe = json.loads(profile.last_probe_diagnostics_json)
+            assert captured_probe["outcome"] == "ready"
+            assert captured_probe["calls"] == []
+            profile.last_probe_diagnostics_json = json.dumps({
+                "call_count": 1,
+                "usage_reported_calls": 1,
+                "usage": {
+                    "input_tokens": 42, "output_tokens": 9, "total_tokens": 51,
+                    "cached_tokens": 0, "reasoning_tokens": 0,
+                },
+                "largest_input_tokens": 42,
+                "outcome": "reduced_capability",
+                "calls": [{
+                    "operation": "workflow.ReadPlan.schema_retry",
+                    "method": "POST", "endpoint": "/v1/chat/completions",
+                    "http_status": 200, "duration_ms": 75, "failed": True,
+                    "schema": "ReadPlan", "response_model": "test-model",
+                    "response_id": "response-123", "request_id": "request-123",
+                    "error": "The returned plan failed the capability check.",
+                    "response_preview": '{"decision":"answer_from_evidence"}',
+                    "usage": {"input_tokens": 42, "output_tokens": 9, "total_tokens": 51},
+                }],
+            }, sort_keys=True)
+            db_session.commit()
+        engine.dispose()
         diagnostics_page = client.get(
             "/settings/model?edit=1", headers={"x-forwarded-user": "ada"}
         )
         assert "Request diagnostics" in diagnostics_page.text
-        assert "probe.summary" in diagnostics_page.text
+        assert "1 provider request" in diagnostics_page.text
+        assert "probe.summary" not in diagnostics_page.text
+        assert 'class="failed"' in diagnostics_page.text
+        assert "response-123" in diagnostics_page.text
+        assert "request-123" in diagnostics_page.text
+        assert "Redacted response preview" in diagnostics_page.text
+        assert "<details open>" in diagnostics_page.text
         assert "Authorization headers and request bodies are never stored" in diagnostics_page.text
 
     engine = build_engine(settings)
@@ -9404,7 +9439,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         assert "test-api-token" not in profile.capabilities_json
         probe_diagnostics = json.loads(profile.last_probe_diagnostics_json)
         assert probe_diagnostics["call_count"] == 1
-        assert probe_diagnostics["calls"][0]["operation"] == "probe.summary"
+        assert probe_diagnostics["calls"][0]["operation"] == "workflow.ReadPlan.schema_retry"
         assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == 2
     engine.dispose()
 

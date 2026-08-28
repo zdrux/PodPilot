@@ -8611,6 +8611,7 @@ def create_app(
             config_snapshot.api_type,
             config_snapshot.chat_model,
         )
+        failed_operation_prefix: str | None = None
         with capture_model_diagnostics(include_content=True) as probe_calls:
             try:
                 api_key = await run_in_threadpool(credentials.get, credential_key)
@@ -8623,6 +8624,13 @@ def create_app(
                     report.ask_schema_error
                     or "The endpoint lacks one or more required capabilities."
                 )
+                if error:
+                    if report.ask_schema_error:
+                        failed_operation_prefix = "workflow."
+                    elif not report.structured_output:
+                        failed_operation_prefix = "workflow.ModelInterpretation"
+                    elif report.embeddings is False:
+                        failed_operation_prefix = "capability.embeddings"
                 log_method = LOGGER.info if report.ready else LOGGER.warning
                 log_method(
                     "podpilot.model_probe.complete actor=%s profile_id=%s outcome=%s "
@@ -8646,12 +8654,26 @@ def create_app(
                     profile_id,
                     error,
                 )
-        probe_calls.append({
-            "operation": "probe.summary",
-            "result": outcome,
-            "error": error,
-        })
+        if error:
+            # Attach the capability failure to the provider request that produced it.
+            # A synthetic summary is not a request and only duplicated last_error in
+            # the diagnostics UI.
+            failed_call = next(
+                (
+                    call
+                    for call in reversed(probe_calls)
+                    if failed_operation_prefix is None
+                    or str(call.get("operation") or "").startswith(
+                        failed_operation_prefix
+                    )
+                ),
+                None,
+            )
+            if failed_call is not None:
+                failed_call["error"] = error
+                failed_call["failed"] = True
         probe_diagnostics = summarize_model_diagnostics(probe_calls)
+        probe_diagnostics["outcome"] = outcome
         now = datetime.now(timezone.utc)
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)

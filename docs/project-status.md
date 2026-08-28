@@ -78,6 +78,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   uses a smaller synthetic answer budget during probes, canonicalizes known
   Kubernetes/OpenShift Kind and apiVersion pairs, and keeps model-authored plan
   caveats separate from trusted evidence-collection limitations.
+  Model probe diagnostics count only actual provider requests, attach a failed
+  capability result to the responsible workflow request, expose redacted provider
+  identifiers and response previews, avoid duplicate failure toasts, and use a
+  transient dismissible success notice.
   Approvers can delete active or inactive profiles in the GUI. Active deletion
   selects the most recently probed ready fallback when available, otherwise the
   application continues in its deterministic model-free mode.
