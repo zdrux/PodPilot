@@ -9079,9 +9079,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-progress-current" in template
     assert "data-progress-title" in template
     assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
-    assert "{% for event in active_run.events %}" in template
+    assert "data-progress-phase" in template
+    assert "phase_events[-3:]" in template
     assert "active_run.events[-6:]" not in template
-    assert "log.firstElementChild?.remove()" not in script
+    assert "progressItemsPerPhase = 3" in script
+    assert "items.children.length > progressItemsPerPhase" in script
+    assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script

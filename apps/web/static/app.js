@@ -623,6 +623,37 @@
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
+    const progressItemsPerPhase = 3;
+    const appendPhaseUpdate = (event, seq) => {
+      if (!log || !event.message) return;
+      const phaseName = event.phase || "investigating";
+      const phaseGroups = Array.from(log.querySelectorAll("[data-progress-phase]"));
+      let group = phaseGroups.find((item) => item.dataset.progressPhase === phaseName);
+      if (!group) {
+        group = document.createElement("li");
+        group.className = "progress-phase";
+        group.dataset.progressPhase = phaseName;
+        const heading = document.createElement("div");
+        heading.className = "progress-phase-heading";
+        const marker = document.createElement("span");
+        marker.setAttribute("aria-hidden", "true");
+        const label = document.createElement("small");
+        label.textContent = phaseName.replaceAll("_", " ");
+        heading.append(marker, label);
+        const items = document.createElement("ul");
+        items.className = "progress-phase-updates";
+        items.dataset.progressItems = "";
+        group.append(heading, items);
+        log.append(group);
+      }
+      const items = group.querySelector("[data-progress-items]");
+      if (!items) return;
+      const item = document.createElement("li");
+      if (Number.isFinite(seq)) item.dataset.seq = String(seq);
+      item.textContent = event.message;
+      items.append(item);
+      while (items.children.length > progressItemsPerPhase) items.firstElementChild?.remove();
+    };
     const addProgress = (event) => {
       const seq = Number.parseInt(event.seq, 10);
       if (Number.isFinite(seq) && seq <= lastSeq) return;
@@ -631,18 +662,7 @@
         progressTitle.textContent = event.phase === "queued" ? "Waiting to investigate" : "Live investigation";
       }
       if (current) current.textContent = event.message || "Investigation in progress.";
-      if (log && event.message) {
-        const item = document.createElement("li");
-        if (Number.isFinite(seq)) item.dataset.seq = String(seq);
-        item.dataset.phase = event.phase || "investigating";
-        const copy = document.createElement("div");
-        const phase = document.createElement("small");
-        phase.textContent = (event.phase || "investigating").replaceAll("_", " ");
-        copy.append(phase, document.createTextNode(event.message));
-        item.append(document.createElement("span"), copy);
-        log.append(item);
-        while (log.children.length > 6) log.firstElementChild?.remove();
-      }
+      appendPhaseUpdate(event, seq);
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
     };
