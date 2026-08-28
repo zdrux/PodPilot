@@ -201,6 +201,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   host processes; that would require separate process-exporter/eBPF or node diagnostics.
   Overall node-exporter CPU/memory utilization can be paired with those rankings to reveal
   pressure not explained by monitored workload containers.
+- Ask PodPilot can rank namespaces by application-log payload volume over a bounded period.
+  Normal code owns the fixed Loki `bytes_over_time` query, authenticates through the OpenShift
+  LokiStack gateway, persists only aggregate namespace bytes/rates, renders multi-cluster tables,
+  and never returns log lines or accepts model-authored LogQL. The investigator retains
+  `cluster-monitoring-view` and adds the read-only application, infrastructure, and audit
+  OpenShift Logging views.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
   response rather than conversation metadata. Questions are unlimited per

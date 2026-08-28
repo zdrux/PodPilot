@@ -60,7 +60,7 @@
                 <div>
                   <span class="evidence-tool">Observed metric</span>
                   <h3 id="metric-result-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }}</h3>
-                  <p>Current values compared within this bounded result. Average and peak cover the collected period.</p>
+                  <p>{% if cited.metric_ranking.namespace_only %}Application-log payload volume observed during the bounded period; this is not compressed storage consumption.{% else %}Current values compared within this bounded result. Average and peak cover the collected period.{% endif %}</p>
                 </div>
                 <button class="button secondary compact-button" type="button"
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
@@ -68,17 +68,17 @@
               </div>
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
-                  <thead><tr><th>Rank</th><th>Namespace</th><th>Pod</th><th>Container</th><th>Average</th><th>Current</th><th>Peak</th></tr></thead>
+                  <thead><tr><th>Rank</th><th>Namespace</th>{% if not cited.metric_ranking.namespace_only %}<th>Pod</th><th>Container</th>{% endif %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if not cited.metric_ranking.namespace_only %}<th>Peak</th>{% endif %}</tr></thead>
                   <tbody>
                   {% for row in cited.metric_ranking.rows %}
                     <tr>
                       <td>{{ row.rank }}</td>
                       <td><code>{{ row.namespace }}</code></td>
-                      <td><code>{{ row.pod }}</code></td>
-                      <td><code>{{ row.container }}</code></td>
+                      {% if not cited.metric_ranking.namespace_only %}<td><code>{{ row.pod }}</code></td>
+                      <td><code>{{ row.container }}</code></td>{% endif %}
                       <td>{{ row.average }}</td>
-                      <td class="metric-current"><progress max="{{ cited.metric_ranking.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.pod }} current value {{ row.current }}"></progress><strong>{{ row.current }}</strong></td>
-                      <td>{{ row.maximum }}</td>
+                      <td class="metric-current"><progress max="{{ cited.metric_ranking.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.namespace }} current value {{ row.current }}"></progress><strong>{{ row.current }}</strong></td>
+                      {% if not cited.metric_ranking.namespace_only %}<td>{{ row.maximum }}</td>{% endif %}
                     </tr>
                   {% endfor %}
                   </tbody>

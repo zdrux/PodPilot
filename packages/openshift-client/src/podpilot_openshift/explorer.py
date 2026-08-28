@@ -16,6 +16,7 @@ from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
 from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
 from podpilot_openshift.http_probe import BoundedHttpProbe
+from podpilot_openshift.log_metrics import BoundedLogVolumeReader, LogMetricsQueryError
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader, MetricTrendError
 
 
@@ -530,6 +531,7 @@ class KubernetesReadOnlyExplorer:
         max_search_scan_objects: int = 2_000,
         http_probe: BoundedHttpProbe | None = None,
         metric_reader: BoundedMetricTrendReader | None = None,
+        log_metric_reader: BoundedLogVolumeReader | None = None,
         watch_factory: Any = kubernetes_watch.Watch,
     ) -> None:
         self._dynamic = dynamic_client
@@ -541,6 +543,7 @@ class KubernetesReadOnlyExplorer:
         self._max_search_scan_objects = max_search_scan_objects
         self._http_probe = http_probe or BoundedHttpProbe()
         self._metric_reader = metric_reader
+        self._log_metric_reader = log_metric_reader
         self._watch_factory = watch_factory
 
     @classmethod
@@ -617,6 +620,12 @@ class KubernetesReadOnlyExplorer:
             if intent.tool == "http_probe":
                 return self._http_probe.execute(intent)
             if intent.tool == "query_metrics":
+                if intent.metric == "top_log_volume_by_namespace":
+                    if self._log_metric_reader is None:
+                        raise ReadOnlyExplorerError(
+                            "The authenticated log analytics adapter is unavailable."
+                        )
+                    return self._log_metric_reader.execute(intent)
                 if self._metric_reader is None:
                     raise ReadOnlyExplorerError("The authenticated monitoring adapter is unavailable.")
                 return self._metric_reader.execute(intent)
@@ -631,6 +640,8 @@ class KubernetesReadOnlyExplorer:
         except ResourceCatalogError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except MetricTrendError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
+        except LogMetricsQueryError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
             resource_name = intent.resource or intent.kind or "resource"

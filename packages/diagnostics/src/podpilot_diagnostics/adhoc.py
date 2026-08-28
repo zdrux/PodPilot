@@ -159,7 +159,8 @@ class ReadIntent(BaseModel):
         "memory_working_set", "memory_requests", "memory_limits",
         "network_receive", "network_transmit", "container_restarts",
         "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
-        "top_memory_consumers", "node_cpu_utilization", "node_memory_utilization",
+        "top_memory_consumers", "top_log_volume_by_namespace",
+        "node_cpu_utilization", "node_memory_utilization",
     ] | None = None
     metric_scope: Literal[
         "cluster", "pod", "namespace", "deployment", "node", "persistent_volume_claim"
@@ -238,6 +239,10 @@ class ReadIntent(BaseModel):
                     raise ValueError(
                         "the selected top-consumer metric requires cluster, namespace, deployment, or node scope"
                     )
+            if self.metric == "top_log_volume_by_namespace" and self.metric_scope != "cluster":
+                raise ValueError(
+                    "top_log_volume_by_namespace requires cluster scope"
+                )
             if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
                 if self.metric_scope != "node":
                     raise ValueError("the selected node utilization metric requires node scope")
@@ -908,6 +913,15 @@ _NAMESPACE_TOP_CONSUMERS_QUERY = re.compile(
     r"(?P<namespace_second>[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?)\b",
     re.IGNORECASE,
 )
+_CLUSTER_LOG_VOLUME_QUERY = re.compile(
+    r"\b(?:which|what)\s+(?:namespaces?|projects?)\b.*?"
+    r"\b(?:producing|generating|writing)\b.*?\b(?:logs?|logging)\b|"
+    r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
+    r"\bby\s+(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b|"
+    r"\b(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b.*?"
+    r"\bby\s+(?:namespaces?|projects?)\b",
+    re.IGNORECASE,
+)
 _KUBERNETES_NAME_PATTERN = r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?"
 _POD_IN_NAMESPACE_QUERY = re.compile(
     rf"\bpod\s+[`'\"]?(?P<pod>{_KUBERNETES_NAME_PATTERN})[`'\"]?\s+"
@@ -1050,6 +1064,23 @@ def plan_known_read(
     """Compile unambiguous inventory and alert-scoped reads without model syntax."""
 
     lowered = question.lower()
+    if _CLUSTER_LOG_VOLUME_QUERY.search(question):
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    "Rank namespaces by application-log payload volume across the cluster."
+                ),
+                intents=[ReadIntent(
+                    tool="query_metrics",
+                    metric="top_log_volume_by_namespace",
+                    metric_scope="cluster",
+                    range_seconds=3600,
+                    limit=10,
+                )],
+            ),
+            True,
+        )
     network_policy_plan = _cross_namespace_network_policy_plan(question)
     if network_policy_plan is not None:
         return network_policy_plan, False

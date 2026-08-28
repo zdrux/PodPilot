@@ -1735,6 +1735,60 @@ def test_semantic_cluster_metric_plan_preserves_requested_top_n() -> None:
     assert plan.intents[0].limit == 5
 
 
+def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics",
+        resource_query="Namespace",
+        needs_object_details=False,
+        evidence_goal="Rank namespaces by application-log volume.",
+        metric_query="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        result_limit=10,
+    ))
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        limit=10,
+    )]
+
+
+def test_log_volume_evidence_view_and_deterministic_answer() -> None:
+    evidence = [{
+        "id": "log-metric-central", "tool": "query_metrics",
+        "cluster_id": "central", "cluster_name": "Central DEV",
+        "source": "loki:application/query/top_log_volume_by_namespace",
+        "data": {
+            "metric": "top_log_volume_by_namespace", "scope": "cluster",
+            "unit": "bytes", "limit": 10, "complete": True,
+            "rangeSeconds": 3600,
+            "ranking": [{
+                "labels": {"namespace": "payments"},
+                "current": 1048576, "average": 1024, "maximum": None,
+            }],
+        },
+    }]
+    activity = [{
+        "tool": "query_metrics", "status": "succeeded",
+        "evidence_ids": ["log-metric-central"],
+    }]
+
+    view = _adhoc_evidence_view(evidence[0])
+    answer = _deterministic_metric_ranking_answer(evidence=evidence, activity=activity)
+
+    assert view["metric_ranking"]["namespace_only"] is True
+    assert view["metric_ranking"]["rows"][0]["average"] == "1.00 KiB/s"
+    assert answer is not None
+    assert "application-log volume by namespace and cluster" in answer["content"]
+    assert "1.00 MiB" in answer["content"]
+    assert "1.00 KiB/s" in answer["content"]
+    assert "not compressed storage consumption" in answer["content"]
+
+
 def test_deterministic_metric_ranking_renders_clusters_and_no_data() -> None:
     evidence = [
         {

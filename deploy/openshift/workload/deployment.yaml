@@ -62,6 +62,31 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_metrics_max_points_per_series
+            - name: PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_logs_max_range_seconds
+            - name: PODPILOT_LOKI_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: loki_url
+            - name: PODPILOT_LOKI_ROUTE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: loki_route_name
+            - name: PODPILOT_LOKI_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: loki_timeout_seconds
+            - name: PODPILOT_LOKI_MAX_SERIES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: loki_max_series
             - name: PODPILOT_ADHOC_MAX_ROUNDS
               valueFrom:
                 configMapKeyRef:

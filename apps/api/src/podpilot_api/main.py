@@ -98,6 +98,7 @@ from podpilot_openshift.credentials import (
 )
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.http_probe import BoundedHttpProbe
+from podpilot_openshift.log_metrics import BoundedLogVolumeReader, LokiQueryClient
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
@@ -1737,7 +1738,7 @@ def _deterministic_metric_ranking_answer(
         and item.get("tool") == "query_metrics"
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") in {
-            "top_cpu_consumers", "top_memory_consumers",
+            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
         }
     ]
     if not observations:
@@ -1747,7 +1748,11 @@ def _deterministic_metric_ranking_answer(
     if any(str(item["data"].get("metric")) != metric for item in observations):
         return None
     unit = str(observations[0]["data"].get("unit") or "")
-    title = "CPU" if metric == "top_cpu_consumers" else "memory"
+    title = {
+        "top_cpu_consumers": "CPU",
+        "top_memory_consumers": "memory",
+        "top_log_volume_by_namespace": "application-log volume",
+    }[metric]
     rows: list[str] = []
     citations: list[str] = []
     incomplete = False
@@ -1772,6 +1777,13 @@ def _deterministic_metric_ranking_answer(
         for rank, item in enumerate(ranked, 1):
             labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
             namespace = str(labels.get("namespace") or "—")
+            if metric == "top_log_volume_by_namespace":
+                rows.append(
+                    f"| `{cluster_name}` | {rank} | `{namespace}` | "
+                    f"{_format_metric_value(item.get('current'), unit)} | "
+                    f"{_format_metric_value(item.get('average'), 'bytes_per_second')} |"
+                )
+                continue
             pod = str(labels.get("pod") or "—")
             rows.append(
                 f"| `{cluster_name}` | {rank} | `{namespace}` | `{pod}` | "
@@ -1779,14 +1791,24 @@ def _deterministic_metric_ranking_answer(
             )
 
     qualifier = f"top {requested_limit} " if requested_limit else ""
-    content = (
-        f"## {qualifier}{title}-consuming pods by cluster\n\n"
-        "| OpenShift cluster | Rank | Namespace | Pod | Current usage |\n"
-        "|---|---:|---|---|---:|\n"
-        + "\n".join(rows)
-        + "\n\nValues are pod-level totals aggregated across application containers over the "
-        "bounded metrics window. Each cluster was queried independently."
-    )
+    if metric == "top_log_volume_by_namespace":
+        content = (
+            f"## {qualifier}{title} by namespace and cluster\n\n"
+            "| OpenShift cluster | Rank | Namespace | Payload volume | Average rate |\n"
+            "|---|---:|---|---:|---:|\n"
+            + "\n".join(rows)
+            + "\n\nValues are application-log payload bytes observed by Loki during the bounded "
+            "period, not compressed storage consumption. Each cluster was queried independently."
+        )
+    else:
+        content = (
+            f"## {qualifier}{title}-consuming pods by cluster\n\n"
+            "| OpenShift cluster | Rank | Namespace | Pod | Current usage |\n"
+            "|---|---:|---|---|---:|\n"
+            + "\n".join(rows)
+            + "\n\nValues are pod-level totals aggregated across application containers over the "
+            "bounded metrics window. Each cluster was queried independently."
+        )
     if incomplete:
         content += (
             " One or more monitoring responses reached a configured series or point ceiling, "
@@ -2608,6 +2630,12 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     if not isinstance(ranking, list) or not ranking:
         return None
     unit = str(data.get("unit") or "")
+    metric_name = str(data.get("metric") or "metric")
+    average_unit = (
+        "bytes_per_second"
+        if metric_name == "top_log_volume_by_namespace"
+        else unit
+    )
     rows: list[dict[str, object]] = []
     current_values = [
         float(item["current"])
@@ -2640,17 +2668,17 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
             "namespace": str(labels.get("namespace") or "—"),
             "pod": str(labels.get("pod") or "—"),
             "container": str(labels.get("container") or "—"),
-            "average": _format_metric_value(item.get("average"), unit),
+            "average": _format_metric_value(item.get("average"), average_unit),
             "current": _format_metric_value(current, unit),
             "maximum": _format_metric_value(item.get("maximum"), unit),
             "progress": progress,
         })
     if not rows:
         return None
-    metric_name = str(data.get("metric") or "metric")
     metric_title = {
         "top_cpu_consumers": "Top CPU Consumers",
         "top_memory_consumers": "Top Memory Consumers",
+        "top_log_volume_by_namespace": "Top Application-Log Volume by Namespace",
     }.get(metric_name, metric_name.replace("_", " ").title())
     return {
         "title": metric_title,
@@ -2658,6 +2686,13 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "scale_max": scale_max,
         "rows": rows,
         "complete": data.get("complete") is True,
+        "namespace_only": metric_name == "top_log_volume_by_namespace",
+        "average_label": (
+            "Average rate" if metric_name == "top_log_volume_by_namespace" else "Average"
+        ),
+        "current_label": (
+            "Payload volume" if metric_name == "top_log_volume_by_namespace" else "Current"
+        ),
     }
 
 
@@ -3960,17 +3995,23 @@ def _semantic_metric_read_plan(
     if (
         inquiry is None
         or inquiry.mode != "metrics"
-        or inquiry.metric_query not in {"top_cpu_consumers", "top_memory_consumers"}
+        or inquiry.metric_query not in {
+            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace"
+        }
         or inquiry.metric_scope != "cluster"
     ):
         return None
     limit = inquiry.result_limit or 10
-    metric_label = "CPU" if inquiry.metric_query == "top_cpu_consumers" else "memory"
+    metric_label = {
+        "top_cpu_consumers": "pod CPU consumers",
+        "top_memory_consumers": "pod memory consumers",
+        "top_log_volume_by_namespace": "namespaces by application-log volume",
+    }[inquiry.metric_query]
     return (
         ReadPlan(
             goal_type="compare",
             scope_summary=(
-                f"Rank the top {limit} pod {metric_label} consumers across this cluster."
+                f"Rank the top {limit} {metric_label} across this cluster."
             ),
             intents=[ReadIntent(
                 tool="query_metrics",
@@ -5101,6 +5142,16 @@ def create_app(
             max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
             max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
         ),
+        log_metric_reader=BoundedLogVolumeReader(
+            LokiQueryClient(
+                base_url=app_settings.loki_url,
+                token_path=app_settings.service_account_token_path,
+                ca_path=app_settings.service_ca_path,
+                timeout_seconds=app_settings.loki_timeout_seconds,
+                max_series=app_settings.loki_max_series,
+            ),
+            max_range_seconds=app_settings.adhoc_logs_max_range_seconds,
+        ),
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
     templates.env.filters["safe_markdown"] = render_safe_markdown
@@ -5131,6 +5182,17 @@ def create_app(
                 ),
                 max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
                 max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
+            ),
+            log_metric_reader=BoundedLogVolumeReader(
+                LokiQueryClient.for_remote_cluster(
+                    api_url=cluster.api_url,
+                    token=token,
+                    api_tls_verify=cluster.tls_verify,
+                    route_name=app_settings.loki_route_name,
+                    timeout_seconds=app_settings.loki_timeout_seconds,
+                    max_series=app_settings.loki_max_series,
+                ),
+                max_range_seconds=app_settings.adhoc_logs_max_range_seconds,
             ),
         )
 

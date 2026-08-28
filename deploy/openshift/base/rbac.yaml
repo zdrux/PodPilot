@@ -29,6 +29,51 @@ roleRef:
   name: cluster-monitoring-view
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-cluster-logging-application-view
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: podpilot-investigator
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-logging-application-view
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-cluster-logging-infrastructure-view
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: podpilot-investigator
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-logging-infrastructure-view
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-cluster-logging-audit-view
+  labels:
+    app.kubernetes.io/name: podpilot
+subjects:
+  - kind: ServiceAccount
+    name: podpilot-investigator
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-logging-audit-view
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: podpilot-alertmanager-api-view

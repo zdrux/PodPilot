@@ -151,6 +151,11 @@ range/step/series/point/body bounds, label redaction, statistics and trend summa
 clear distinction between usage versus configured requests/limits. Tests must prove the model
 and browser cannot submit PromQL or receive the ServiceAccount token.
 Deployment tests must cover ReplicaSet/Pod ownership joins rather than name-prefix matching.
+Log-volume gates must verify authenticated LokiStack application-tenant requests, server-owned
+`bytes_over_time` LogQL, vector validation, namespace/series/body/time bounds, deterministic
+multi-cluster rendering, and the absence of raw log lines. Manifest tests must retain
+`cluster-monitoring-view` and bind the investigator only to the read-only OpenShift Logging
+application, infrastructure, and audit ClusterRoles.
 Node tests must cover bounded top CPU/memory rankings, optional namespace narrowing, retained
 namespace/Pod/container labels, and operator-visible wording that does not misrepresent
 container telemetry as host process inspection.

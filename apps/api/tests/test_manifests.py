@@ -6,6 +6,31 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_investigator_has_monitoring_and_logging_view_bindings() -> None:
+    documents = list(yaml.safe_load_all(
+        (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()
+    ))
+    bindings = {
+        item["roleRef"]["name"]: item
+        for item in documents
+        if item.get("kind") == "ClusterRoleBinding"
+    }
+    expected_roles = {
+        "cluster-monitoring-view",
+        "cluster-logging-application-view",
+        "cluster-logging-infrastructure-view",
+        "cluster-logging-audit-view",
+    }
+
+    assert expected_roles <= set(bindings)
+    for role_name in expected_roles:
+        assert bindings[role_name]["subjects"] == [{
+            "kind": "ServiceAccount",
+            "name": "podpilot-investigator",
+            "namespace": "ai-ops",
+        }]
+
+
 def test_alertmanager_access_uses_an_explicit_namespaced_role() -> None:
     documents = list(yaml.safe_load_all(
         (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()

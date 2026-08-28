@@ -18,8 +18,10 @@ There are two separate authorization paths:
    reads configured LDAP-synchronized groups only to grant an elevated role.
    Human users do not receive `cluster-reader` or workload permissions.
 2. **Cluster investigation access** belongs to the
-   `ai-ops/podpilot-investigator` ServiceAccount. ClusterRoleBindings attach the
-   built-in `cluster-reader` and `cluster-monitoring-view` ClusterRoles. A narrow
+`ai-ops/podpilot-investigator` ServiceAccount. ClusterRoleBindings attach the
+built-in `cluster-reader`, `cluster-monitoring-view`,
+`cluster-logging-application-view`, `cluster-logging-infrastructure-view`, and
+`cluster-logging-audit-view` ClusterRoles. A narrow
    Role in `openshift-monitoring` grants `get`/`list` on only
    `monitoring.coreos.com` `alertmanagers/api` named `main`. A separate Role can
    read and patch only `ai-ops/podpilot-model-credentials`.
@@ -27,8 +29,12 @@ There are two separate authorization paths:
 Platform Alertmanager runs in `openshift-monitoring`, not `openshift-logging`.
 No logging-namespace Role is required for Alertmanager. Ordinary container logs
 are read through the Kubernetes `pods/log` subresource under `cluster-reader`.
-Direct Loki/Log Store querying is not implemented and would require a separate,
-future authorization design.
+Aggregate Loki application-log analytics are implemented for the registered
+`top_log_volume_by_namespace` metric. They use only server-owned LogQL and retain no log
+lines. The installation must expose a standard `openshift-logging/logging-loki` Route and
+grant the registered identity `cluster-logging-application-view` plus cluster-wide LokiStack
+OpenShift authorization. The base runtime identity also receives the read-only infrastructure
+and audit logging views. Arbitrary LogQL and raw Log Store queries remain unavailable.
 
 ## 2. Prerequisites
 

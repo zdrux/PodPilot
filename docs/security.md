@@ -15,6 +15,10 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 - Monitoring access remains read-only and split by platform API: the Thanos API
   uses `cluster-monitoring-view`, while Alertmanager uses the namespaced
   `openshift-monitoring/podpilot-alertmanager-api-view` Role.
+- OpenShift Logging remains read-only through `cluster-logging-application-view`,
+  `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. The application
+  tenant supplies aggregate namespace-volume evidence; infrastructure and audit access add
+  investigation visibility but no mutation authority.
 
 ## Credentials That Must Never Be Committed
 
@@ -434,6 +438,11 @@ model-provided selectors. Namespace, Deployment, and node consumer rankings expo
 already-authorized monitoring labels and must be described as container/Pod attribution.
 No node shell, `/proc` access,
 host PID inspection, privileged DaemonSet, or process-level credential is introduced.
+Namespace log-volume rankings preserve the typed metric boundary. The model selects only the
+registered metric, period, and limit; server code owns LogQL and authenticates to the LokiStack
+gateway. Responses are capped and reduced to namespace/byte aggregates, with no log lines returned
+or persisted. Cluster-wide Loki authorization can technically permit raw queries, so production
+deployments should isolate this credential behind PodPilot and restrict direct gateway access.
 Projected Route destination names are treated only as observed Kubernetes object references
 eligible for the existing exact read broker. They do not authorize mutation, arbitrary name
 construction, credential access, or traffic to a new destination.

@@ -181,6 +181,12 @@ The current deployment uses these variables:
 - `PODPILOT_THANOS_TIMEOUT_SECONDS`, default `8`
 - `PODPILOT_THANOS_MAX_SERIES`, default `20`, with a hard accepted range of
   `1` through `100`; the adapter also enforces a fixed 64 KiB response ceiling
+- `PODPILOT_LOKI_URL`, defaulting to
+  `https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
+- `PODPILOT_LOKI_ROUTE_NAME`, default `logging-loki`, for registered remote clusters
+- `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `8`
+- `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
+- `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
@@ -233,6 +239,12 @@ the Kubernetes client's `BearerToken` authentication setting, producing an
 `Authorization: Bearer …` header whether TLS verification is enabled or explicitly
 disabled. Disabling verification changes certificate and hostname validation only; it
 does not remove or alter bearer authentication.
+
+Remote namespace log-volume questions additionally require the standard `logging-loki` Route,
+`cluster-logging-application-view`, and cluster-wide LokiStack OpenShift authorization for the
+registered identity. The base runtime identity is also bound to
+`cluster-logging-infrastructure-view` and `cluster-logging-audit-view`. OpenShift names the audit
+role `cluster-logging-audit-view`; there is no `cluster-monitoring-audit-view` role.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname
@@ -882,6 +894,11 @@ installed. Overall node CPU and memory utilization uses node-exporter metrics. F
 using everything” questions, PodPilot collects both the overall node value and top workload
 containers; a gap can represent kernel, filesystem cache, host services, or unmonitored work.
 Requests and limits are configuration gauges, not measured usage.
+
+`top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
+payload bytes observed during the bounded period. Its average is bytes per second; the total is
+not compressed object-store consumption, and the tool returns no log lines. The default period is
+one hour and `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS` caps it at 24 hours.
 
 `PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS` defaults to 2592000 (30 days) and accepts up to
 7776000 (90 days). `PODPILOT_ADHOC_METRICS_MAX_POINTS_PER_SERIES` defaults to 300 and accepts

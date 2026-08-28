@@ -947,6 +947,36 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
             tool="query_metrics", metric="top_memory_consumers",
             metric_scope="pod", namespace="payments", name="api-1",
         )
+    log_volume = ReadIntent(
+        tool="query_metrics", metric="top_log_volume_by_namespace",
+        metric_scope="cluster", limit=10,
+    )
+    assert log_volume.namespace is None
+    with pytest.raises(ValidationError, match="requires cluster scope"):
+        ReadIntent(
+            tool="query_metrics", metric="top_log_volume_by_namespace",
+            metric_scope="namespace", namespace="payments",
+        )
+
+
+@pytest.mark.parametrize("question", [
+    "Which namespaces are producing the biggest volume of logs on the cluster?",
+    "Rank namespaces by application log volume",
+    "Show log bytes by namespace",
+])
+def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: str) -> None:
+    planned = plan_known_read(question)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        range_seconds=3600,
+        limit=10,
+    )]
 
 
 @pytest.mark.parametrize(

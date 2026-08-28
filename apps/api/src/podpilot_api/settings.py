@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     thanos_url: str = "https://thanos-querier.openshift-monitoring.svc:9091"
     thanos_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     thanos_max_series: int = Field(default=20, ge=1, le=100)
+    loki_url: str = (
+        "https://logging-loki-gateway-http.openshift-logging.svc:8080"
+        "/api/logs/v1/application"
+    )
+    loki_route_name: str = "logging-loki"
+    loki_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    loki_max_series: int = Field(default=50, ge=1, le=100)
     workload_max_events: int = Field(default=30, ge=1, le=100)
     workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)
     workload_max_log_bytes: int = Field(default=16_384, ge=1024, le=65_536)
@@ -57,6 +64,7 @@ class Settings(BaseSettings):
     adhoc_search_max_scan_objects: int = Field(default=2000, ge=250, le=5000)
     adhoc_metrics_max_range_seconds: int = Field(default=2_592_000, ge=3600, le=7_776_000)
     adhoc_metrics_max_points_per_series: int = Field(default=300, ge=50, le=1000)
+    adhoc_logs_max_range_seconds: int = Field(default=86_400, ge=3600, le=2_592_000)
     adhoc_context_messages: int = Field(default=10, ge=4, le=30)
     adhoc_context_summary_chars: int = Field(default=4000, ge=1000, le=12000)
     adhoc_rate_limit_per_minute: int = Field(default=10, ge=1, le=60)

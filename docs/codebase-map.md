@@ -9,7 +9,7 @@ Update when: top-level structure, core tooling, or verification commands change.
 | --- | --- | --- |
 | `apps/api/` | AI orchestration and HTTP API | Milestone 10 alert and standalone evidence-cited investigation flow |
 | `apps/web/` | operator investigation UI | alert queue, evidence-cited chat, executable safe-check plan, approval, and cancellation |
-| `packages/openshift-client/` | Kubernetes, Thanos, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
+| `packages/openshift-client/` | Kubernetes, Thanos, LokiStack, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
 | `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, diagnostic plan, interpretation, and remediation contracts |
 | `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, portable remote overlay, build, and lab storage | Remote reader deployment plus separate lab-only paths |
 | `evals/` | incident fixtures and expected outcomes | synthetic workload alerts plus live remediation and TargetDown fixtures |
@@ -57,6 +57,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
   TLS-validated, response-bounded Thanos instant/range-query adapter.
 - `packages/openshift-client/src/podpilot_openshift/metric_trends.py`: registered
   metric templates, bounded range execution, normalized points, statistics, and trends.
+- `packages/openshift-client/src/podpilot_openshift/log_metrics.py`: authenticated,
+  aggregate-only LokiStack namespace-volume query and bounded evidence normalization.
 - `packages/openshift-client/src/podpilot_openshift/discovery.py`: cached,
   policy-filtered live API catalog and safe resource-name resolution.
 - `packages/openshift-client/src/podpilot_openshift/explorer.py`: bounded dynamic

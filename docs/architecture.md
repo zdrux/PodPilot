@@ -18,7 +18,8 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 - **API/orchestrator**: accepts investigation requests, selects bounded diagnostic tools, enforces budgets and policy, and streams results.
 - **Web UI**: Jinja2/HTMX views served by the API show alert context, streamed investigation progress, evidence provenance, uncertainty, and suggested operator actions.
-- **OpenShift client**: reads the Kubernetes API plus Thanos and Alertmanager, validates TLS, and normalizes failures.
+- **OpenShift client**: reads the Kubernetes API plus Thanos, the OpenShift LokiStack
+  gateway, and Alertmanager, validates TLS, and normalizes failures.
 - **Diagnostics engine**: implements deterministic checks and correlation independent of any model provider.
 - **Model adapter**: presents one internal contract over configured OpenAI-compatible endpoints, capability probes each profile, and turns normalized evidence into explanations while preserving citations and redaction rules.
 - **Evaluation harness**: replays sanitized incidents and scores evidence use, diagnosis quality, safety, and abstention.
@@ -91,6 +92,8 @@ health, alert investigations, or remediation in this release. Typed Ask metrics 
 remote cluster's registered bearer token: PodPilot discovers the cluster's
 `openshift-monitoring/thanos-querier` Route through its Kubernetes API, then queries that
 authenticated Route through the same bounded metrics adapter used by the runtime cluster.
+Aggregate application-log rankings similarly discover the conventional
+`openshift-logging/logging-loki` Route and use the registered cluster bearer token.
 
 Cluster memory stores curated Markdown or text as immutable
 versions in SQLite and indexes heading-aware bounded chunks with FTS5. Approvers
@@ -175,6 +178,10 @@ step. Normal code compiles server-owned PromQL and calls `/api/v1/query_range`, 
 matrix results, caps series/points/body/time, redacts labels, and persists normalized points
 plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
 is increased automatically when necessary to keep the series within its point ceiling.
+The registered `top_log_volume_by_namespace` metric is an aggregate-only exception backed by
+the LokiStack application tenant. Normal code owns its fixed `bytes_over_time` LogQL, accepts
+only vector results, and persists namespace, payload bytes, average byte rate, time bounds, and
+completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
 Deployment templates join `kube_replicaset_owner` and `kube_pod_owner`, avoiding unreliable
 Pod-name-prefix inference. Node templates join workload series with `kube_pod_info`; top CPU
 and memory queries support cluster, namespace, Deployment, and node scopes. Top-consumer

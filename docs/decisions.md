@@ -157,6 +157,25 @@ configuration and Event context. Automatic reads remain deterministic, auditable
 deduplicated, capped, and inside `cluster-reader`; the feature does not add arbitrary
 shell, exec, Secret, or network access.
 
+## 2026-08-27 - Namespace log-volume rankings use server-owned aggregate LogQL
+
+Context: Operators need to find namespaces producing the most logs, but Kubernetes
+`pods/log` reads cannot provide complete historical cluster-wide volume and arbitrary LogQL
+would expose raw logs, unbounded cost, and a new injection surface.
+
+Decision: Register `top_log_volume_by_namespace` as a typed cluster metric. Normal code sends
+one fixed `bytes_over_time` application-tenant query through the authenticated OpenShift
+LokiStack gateway and retains only namespace, payload bytes, average byte rate, time bounds,
+and completeness. The default range is one hour and the deployment cap is 24 hours. Bind the
+investigator to OpenShift's read-only application, infrastructure, and audit logging roles;
+retain its existing `cluster-monitoring-view` binding. OpenShift's supported audit role is
+`cluster-logging-audit-view`, not `cluster-monitoring-audit-view`.
+
+Consequences: Ask can render deterministic multi-cluster log-volume tables without returning
+log lines or accepting model-authored LogQL. The values describe observed payload bytes, not
+compressed storage. Cluster-wide gateway authorization still carries broader technical read
+capacity, so production network and workload isolation must protect the identity.
+
 ## 2026-08-25 - Typed metric trends use server-owned PromQL
 
 Context: Operators need pod, namespace, and volume trends over a requested period, but
