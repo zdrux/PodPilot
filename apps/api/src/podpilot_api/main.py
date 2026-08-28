@@ -3411,23 +3411,25 @@ def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object
     """Render separately analyzed logs as hypotheses with evidence provenance."""
 
     issues = analysis.get("issues") if isinstance(analysis.get("issues"), list) else []
-    lines = [
-        "## Model-assisted log analysis",
-        "",
-        str(analysis.get("overview") or "The bounded Pod log excerpts were analyzed for potential issues."),
-    ]
+    lines = ["## Model-assisted log analysis"]
     citations: list[str] = []
     overview = str(analysis.get("overview") or "")
-    overview_has_signal = bool(re.search(
-        r"(?i)\b(?:denied|unauthorized|forbidden|errors?|fail(?:ed|ures?)?|401|403|permission)\b",
+    overview_explicitly_clean = bool(re.search(
+        r"(?i)\b(?:no|did not|does not|none)\b.{0,80}"
+        r"\b(?:meaningful |potential |operational )?(?:anomal(?:y|ies)|issues?|problems?|signals?)\b",
         overview,
     ))
-    if not issues and overview_has_signal:
+    if issues:
         lines.extend((
             "",
-            "The overview noted a possible operational signal, but no structured issue could be "
-            "verified against an exact cited log excerpt. Treat the overview as a hypothesis and "
-            "continue correlating it with resource, event, metric, or probe evidence.",
+            overview or "The bounded Pod log excerpts contain potential operational issues.",
+        ))
+    elif not overview_explicitly_clean or int(analysis.get("rejected_issue_count") or 0) > 0:
+        lines.extend((
+            "",
+            "The analyzer mentioned a possible operational signal but did not provide an exact, "
+            "verifiable supporting log excerpt. PodPilot therefore did not accept or present it as "
+            "a log finding.",
         ))
         citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
     elif not issues:
@@ -3439,6 +3441,7 @@ def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object
     for issue in issues[:10]:
         if not isinstance(issue, dict):
             continue
+        excerpt = str(issue.get("supporting_excerpt") or "").replace("```", "''' ")
         lines.extend((
             "",
             f"### {str(issue.get('severity') or 'info').title()} · "
@@ -3447,9 +3450,11 @@ def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object
             f"- **Potential issue:** {str(issue.get('summary') or '')}",
             f"- **Potential impact:** {str(issue.get('potential_impact') or '')}",
             f"- **Confidence:** {str(issue.get('confidence') or 'low')}",
-            "- **Supporting log excerpt:** `"
-            + str(issue.get("supporting_excerpt") or "").replace("`", "'")
-            + "`",
+            "- **Supporting log excerpt:**",
+            "",
+            "```text",
+            excerpt,
+            "```",
         ))
         citations.extend(str(item) for item in issue.get("evidence_ids", []))
     lines.extend((

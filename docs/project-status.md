@@ -315,6 +315,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   log findings are always composed into the reply with exact coordinates, bounded
   technical details, and citations, so a Route fallback cannot hide them. Equivalent displayed
   limitations are semantically deduplicated.
+- Dedicated Pod-log analysis now requires every mentioned anomaly to include a structured issue and
+  an exact quoted passage from cited evidence. Validated excerpts render as visible text blocks;
+  unsupported overview-only clues are withheld instead of being followed by a contradictory
+  “no issue identified” message. Empty issue lists require an explicitly clean overview, so vague
+  phrases such as “problem patterns” cannot bypass the excerpt requirement. Diagnostic final-answer
+  guidance also treats `Ready=false` as a symptom rather than a causal explanation.
 - Final-answer context is now separately constrained to eight evidence fact cards within a 7.5 KB
   aggregate target, cluster ID/name attribution, three collection issues, and an optional bounded
   prior answer or retry code. Graph, ledger, catalog,

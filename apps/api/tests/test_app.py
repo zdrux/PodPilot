@@ -1089,8 +1089,74 @@ def test_log_analysis_plural_failure_overview_is_not_reported_as_no_issue() -> N
         "rejected_issue_count": 1,
     })
 
-    assert "Treat the overview as a hypothesis" in section["content"]
+    assert "did not provide an exact, verifiable supporting log excerpt" in section["content"]
+    assert "repeated certificate failures" not in section["content"]
     assert "No potential operational issue" not in section["content"]
+    assert section["citations"] == ["cluster-log-1"]
+
+
+def test_log_analysis_authentication_overview_without_issue_is_not_presented_as_finding() -> None:
+    section = _model_log_analysis_section({
+        "overview": "The log excerpt shows a cascade of authentication-related warnings.",
+        "issues": [],
+        "analyzed_evidence_ids": ["cluster-log-1"],
+        "rejected_issue_count": 0,
+    })
+
+    assert "did not provide an exact, verifiable supporting log excerpt" in section["content"]
+    assert "authentication-related warnings" not in section["content"]
+    assert "No potential operational issue" not in section["content"]
+
+
+def test_log_analysis_vague_problem_pattern_overview_requires_an_exact_excerpt() -> None:
+    section = _model_log_analysis_section({
+        "overview": (
+            "The log excerpt shows two distinct problem patterns that are likely contributing "
+            "to the pod's NotReady state in the cah-dev namespace:"
+        ),
+        "issues": [],
+        "analyzed_evidence_ids": ["cluster-log-1"],
+        "rejected_issue_count": 0,
+    })
+
+    assert "did not provide an exact, verifiable supporting log excerpt" in section["content"]
+    assert "two distinct problem patterns" not in section["content"]
+    assert "No potential operational issue" not in section["content"]
+
+
+def test_log_analysis_accepts_explicit_clean_overview_with_no_issues() -> None:
+    section = _model_log_analysis_section({
+        "overview": "No meaningful operational anomaly was identified in the bounded excerpts.",
+        "issues": [],
+        "analyzed_evidence_ids": ["cluster-log-1"],
+        "rejected_issue_count": 0,
+    })
+
+    assert "No potential operational issue was identified" in section["content"]
+    assert "did not provide an exact, verifiable supporting log excerpt" not in section["content"]
+
+
+def test_log_analysis_renders_validated_supporting_excerpt_as_visible_code_block() -> None:
+    section = _model_log_analysis_section({
+        "overview": "The SQL datasource authentication is failing.",
+        "issues": [{
+            "evidence_ids": ["cluster-log-1"],
+            "severity": "error",
+            "category": "authentication",
+            "summary": "The application cannot authenticate to SQL Server.",
+            "potential_impact": "The readiness check cannot confirm datasource health.",
+            "supporting_excerpt": (
+                "Login failed for user 'svc_app'.\n"
+                "Datasource health check returned unhealthy"
+            ),
+            "confidence": "high",
+        }],
+        "analyzed_evidence_ids": ["cluster-log-1"],
+        "rejected_issue_count": 0,
+    })
+
+    assert "```text\nLogin failed for user 'svc_app'.\n" in section["content"]
+    assert "Datasource health check returned unhealthy\n```" in section["content"]
     assert section["citations"] == ["cluster-log-1"]
 
 

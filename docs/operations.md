@@ -868,7 +868,12 @@ The request is capped across excerpts and treats log text as untrusted data. Pod
 only issue citations from the supplied log IDs and displays a supporting excerpt only when it
 can be found verbatim after whitespace normalization in the cited evidence. The resulting
 **Model-assisted log analysis** describes semantic potential issues and confidence without
-claiming root cause. After successful analysis, raw tails are omitted from the main final-answer
+claiming root cause. Every anomaly mentioned by the analyzer must be a structured issue with an
+exact supporting passage; accepted passages are displayed as text blocks. An overview-only clue is
+not presented as a finding because it cannot show the operator the implicated log lines. With an
+empty issue list, only an overview that explicitly reports no meaningful anomaly is accepted; vague
+language such as “problem patterns” cannot bypass the excerpt requirement. After
+successful analysis, raw tails are omitted from the main final-answer
 request and replaced by the validated structured analysis; persisted evidence remains complete.
 Failure of this optional analysis does not fail the investigation.
 
