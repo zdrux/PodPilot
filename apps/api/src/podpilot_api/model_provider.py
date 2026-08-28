@@ -308,6 +308,22 @@ class InquirySemantics(BaseModel):
 
     @model_validator(mode="after")
     def restrict_audit_semantics(self) -> "InquirySemantics":
+        # operation is the more specific semantic signal. Models reasonably
+        # classify compound requests such as "find the failing Pod and show its
+        # logs" as investigate+logs; normalize that redundant pair instead of
+        # rejecting an otherwise grounded classification.
+        operation_mode = {
+            "inventory": "inventory",
+            "object_fields": "investigate",
+            "logs": "logs",
+            "events": "investigate",
+            "metrics": "metrics",
+            "audit": "audit",
+            "probe": "investigate",
+            "explain": "explain",
+        }.get(self.operation)
+        if operation_mode is not None:
+            self.mode = operation_mode
         if self.mode != "audit" and any((
             self.audit_username,
             self.audit_operation_scope,
@@ -316,12 +332,6 @@ class InquirySemantics(BaseModel):
             self.continues_prior_audit_query,
         )):
             raise ValueError("audit fields are valid only for audit inquiries")
-        if self.operation == "logs" and self.mode != "logs":
-            raise ValueError("the logs operation requires logs mode")
-        if self.operation == "metrics" and self.mode != "metrics":
-            raise ValueError("the metrics operation requires metrics mode")
-        if self.operation == "audit" and self.mode != "audit":
-            raise ValueError("the audit operation requires audit mode")
         if self.operation != "logs" and any((
             self.container, self.previous_logs, self.log_range_seconds,
         )):
@@ -1329,8 +1339,11 @@ class OpenAIResponsesProvider:
                     "workload log inspection is requested; audit for Kubernetes/OpenShift audit events, "
                     "user actions, or API activity; metrics for measured utilization or trends; and "
                     "explain for conceptual questions. Extract a short resource concept such as Kafka, "
-                    "Pod, Route, or Authorino when present. Also return a semantic read shape: operation, "
-                    "cardinality, exact object_name and namespace when explicitly present in the question "
+                    "Pod, Route, or Authorino when present. Also return a semantic read shape. "
+                    "Use the matching mode for a specific logs, metrics, audit, inventory, or explain "
+                    "operation; for a compound symptom-and-logs request, use logs because logs are the "
+                    "requested evidence operation. Return operation, cardinality, exact object_name and "
+                    "namespace when explicitly present in the question "
                     "or recent context, and requested_fields as dot-separated Kubernetes paths such as "
                     "metadata.labels, spec.template.spec.containers, or status.conditions. Use object_fields "
                     "for requested metadata/spec/status, exact_one for one named object, and collection for "
@@ -1833,7 +1846,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "configuration; logs for workload log inspection; audit for Kubernetes/OpenShift audit "
                 "events, user actions, or API activity; metrics for measured utilization "
                 "or trends; explain for conceptual questions. Return a semantic read shape in addition "
-                "to mode: operation, cardinality, resource_query, exact object_name and namespace only "
+                "to mode. Use the matching mode for a specific logs, metrics, audit, inventory, or "
+                "explain operation; for a compound symptom-and-logs request, use logs because logs are "
+                "the requested evidence operation. Return operation, cardinality, resource_query, exact "
+                "object_name and namespace only "
                 "when supplied by the question or recent context, requested_fields as dot-separated "
                 "Kubernetes paths, and log container/previous/time bounds when applicable. Use "
                 "object_fields for requested metadata/spec/status and exact_one for one named object. "

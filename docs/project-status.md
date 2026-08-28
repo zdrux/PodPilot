@@ -71,6 +71,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   and shows an explicit result notification,
   emits sanitized phase/outcome events for provider troubleshooting, and gives
   Chat Completions models one bounded field/type plus static cross-field schema correction attempt.
+  Inquiry operations are authoritative over the redundant coarse mode, so defensible
+  compound classifications such as investigate+logs normalize to logs instead of
+  failing the profile probe or discarding useful production semantics.
   A schema-invalid correction after a valid premature stop may fall back to one exact
   operator-grounded discovery anchor. After successful evidence collection, independently valid action
   selections survive a malformed sibling read, and a fully invalid corrected selection may continue

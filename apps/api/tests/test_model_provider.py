@@ -608,6 +608,52 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
 
 
+@pytest.mark.parametrize(("operation", "expected_mode"), [
+    ("inventory", "inventory"),
+    ("object_fields", "investigate"),
+    ("logs", "logs"),
+    ("events", "investigate"),
+    ("metrics", "metrics"),
+    ("audit", "audit"),
+    ("probe", "investigate"),
+    ("explain", "explain"),
+])
+def test_inquiry_operation_normalizes_redundant_mode(
+    operation: str, expected_mode: str,
+) -> None:
+    inquiry = InquirySemantics(
+        mode="investigate",
+        operation=operation,
+        evidence_goal="Collect the requested read-only evidence.",
+    )
+
+    assert inquiry.mode == expected_mode
+
+
+def test_compound_investigation_log_classification_is_recoverable() -> None:
+    inquiry = OpenAIChatCompletionsProvider._validate_structured_content(
+        InquirySemantics,
+        json.dumps({
+            "mode": "investigate",
+            "operation": "logs",
+            "cardinality": "unknown",
+            "resource_query": "Pod",
+            "object_name": None,
+            "namespace": "payments",
+            "container": None,
+            "previous_logs": False,
+            "needs_object_details": True,
+            "evidence_goal": "Identify the failing Pod and retrieve its recent logs.",
+        }),
+    )
+
+    assert inquiry.mode == "logs"
+    assert inquiry.operation == "logs"
+    assert inquiry.namespace == "payments"
+    assert inquiry.object_name is None
+    assert inquiry.planner_goal == "logs"
+
+
 def test_chat_completions_accepts_one_fenced_structured_object() -> None:
     content = """```json
 {"mode":"audit","operation":"audit","cardinality":"collection",\
