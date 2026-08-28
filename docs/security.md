@@ -263,6 +263,10 @@ already-redacted observations and server-known broker state. They remain server-
 receives only compact evidence, opaque action labels, and a bounded policy-filtered readable API
 catalog. Graph frontier hints, structured
 investigation gaps, model-authored prose, and cluster content remain non-executable.
+The capability classifier may additionally receive up to 24 opaque references for non-Secret exact
+objects already present in that redacted relationship graph. A model-selected reference ID is bound
+server-side to the retained kind, namespace, and name and still passes live discovery, deny, RBAC,
+and read-only broker validation; model-authored replacement coordinates are not trusted.
 Suggested-check buttons are
 compiled only from unread server-owned candidates and are scoped to the source assistant message and
 conversation owner. Their CSRF-protected endpoint reloads the persisted descriptor, verifies the

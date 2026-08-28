@@ -266,6 +266,7 @@ class InquirySemantics(BaseModel):
     ] | None = None
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
+    object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
@@ -400,6 +401,7 @@ class CapabilitySelection(BaseModel):
     ]
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
+    object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
@@ -1618,8 +1620,11 @@ class OpenAIResponsesProvider:
                     "Pod, Route, or Authorino when present. Also return a semantic read shape. "
                     "For a compound symptom-and-logs request, select workload_logs because logs are the "
                     "requested evidence operation. Return cardinality, exact object_name and "
-                    "namespace when explicitly present in the question "
-                    "or recent context, and requested_fields as dot-separated Kubernetes paths such as "
+                    "namespace when explicitly present in the question or recent context. When an "
+                    "elliptical follow-up refers to one entry in recent_object_references, return that "
+                    "entry's exact opaque id in object_reference_id instead of reconstructing its name. "
+                    "Leave object_reference_id null when no supplied entry is the intended object. Return "
+                    "requested_fields as dot-separated Kubernetes paths such as "
                     "metadata.labels, spec.template.spec.containers, or status.conditions. Use object_fields "
                     "for requested metadata/spec/status, exact_one for one named object, and collection for "
                     "plural inventory. Extract label_selector only for an explicit label key/value filter. "
@@ -2197,8 +2202,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "including referenced ConfigMaps and objects named in recent context; and explanation for "
                 "conceptual questions. Prefer a specific capability over cluster_investigation. For a "
                 "compound symptom-and-logs request, choose workload_logs. Return cardinality, resource_query, exact "
-                "object_name and namespace only "
-                "when supplied by the question or recent context, requested_fields as dot-separated "
+                "object_name and namespace only when supplied by the question or recent context. For an "
+                "elliptical follow-up that refers to an entry in recent_object_references, select its exact "
+                "opaque id in object_reference_id instead of copying coordinates; otherwise leave that field "
+                "null. Return requested_fields as dot-separated "
                 "Kubernetes paths, and log container/previous/time bounds when applicable. Use "
                 "object_fields for requested metadata/spec/status and exact_one for one named object. "
                 "Extract label_selector only from an explicit label key/value filter. For events use "

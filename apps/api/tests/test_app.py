@@ -231,6 +231,63 @@ def test_configuration_guidance_can_resolve_named_object_from_recent_context() -
     assert len(provider.context["recent_context"]) == 4
 
 
+def test_elliptical_configuration_followup_selects_grounded_object_reference() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.context = None
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.context = context
+            reference = next(
+                item for item in context["recent_object_references"]
+                if item["relation"] == "configures_from"
+            )
+            return InquirySemantics(
+                mode="explain", operation="configuration_guidance",
+                object_reference_id=reference["id"],
+                evidence_goal="Show the configuration from the referenced ConfigMap.",
+            )
+
+    evidence = [{
+        "id": "cluster-kafka",
+        "tool": "get_resource",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "metadata": {"namespace": "tm-streams-dev", "name": "tm-streams-dev-cluster"},
+            "spec": {"kafka": {"metricsConfig": {"valueFrom": {
+                "configMapKeyRef": {"name": "tm-streams-dev-metrics-config", "key": "metrics.yml"}
+            }}}},
+        },
+    }]
+    provider = Provider()
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Show me that configuration in the ConfigMap.",
+        conversation=[{
+            "role": "assistant",
+            "content": "The Kafka resource references tm-streams-dev-metrics-config.",
+        }],
+        cluster_names=["Central"],
+        evidence=evidence,
+    ))
+
+    assert inquiry is not None
+    assert inquiry.mode == "explain"
+    assert inquiry.resource_query == "ConfigMap"
+    assert inquiry.object_name == "tm-streams-dev-metrics-config"
+    assert inquiry.namespace == "tm-streams-dev"
+    assert inquiry.cardinality == "exact_one"
+    assert provider.context["recent_object_references"][0]["name"] == (
+        "tm-streams-dev-metrics-config"
+    )
+
+
 def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
     class Provider:
         def __init__(self) -> None:
@@ -3120,6 +3177,64 @@ def test_named_object_configuration_guidance_compiles_generic_exact_get() -> Non
         tool="get_resource", resource="deployments", api_version="apps/v1",
         kind="Deployment", namespace="payments", name="checkout",
     )]
+
+
+def test_named_configmap_guidance_stops_after_exact_get() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="explain", operation="configuration_guidance", cardinality="exact_one",
+            resource_query="ConfigMap", object_name="tm-streams-dev-metrics-config",
+            namespace="tm-streams-dev", needs_object_details=True,
+            evidence_goal="Show the referenced ConfigMap configuration.",
+        ),
+        resource_catalog=[{
+            "resource": "configmaps", "apiVersion": "v1", "kind": "ConfigMap",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show me that configuration in the ConfigMap.",
+        conversation=[{
+            "role": "assistant",
+            "content": "ConfigMap tm-streams-dev/tm-streams-dev-metrics-config is referenced.",
+        }],
+        inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.goal_type == "explain"
+    assert plan.intents == [ReadIntent(
+        tool="get_resource", resource="configmaps", api_version="v1", kind="ConfigMap",
+        namespace="tm-streams-dev", name="tm-streams-dev-metrics-config",
+    )]
+
+
+def test_incomplete_inventory_cannot_support_named_object_absence_claim() -> None:
+    evidence_id = "cluster-configmaps"
+    validated = _validated_adhoc_answer(
+        AdHocAnswer(
+            answer_mode="evidence_based",
+            answer=(
+                "None of the returned ConfigMaps is named tm-streams-dev-metrics-config, "
+                "so it is not present."
+            ),
+            cited_evidence_ids=[evidence_id],
+        ),
+        known_evidence_ids={evidence_id},
+        observations=[{
+            "id": evidence_id,
+            "tool": "list_resources",
+            "data": {
+                "kind": "ConfigMap", "names": ["one", "two"],
+                "objectListComplete": False, "truncated": True,
+            },
+        }],
+    )
+
+    assert validated["answer_mode"] == "evidence_based"
+    assert validated["conclusion_status"] == "unresolved"
+    assert "cannot establish that the object is absent" in validated["content"]
+    assert "incomplete or truncated inventory" in " ".join(validated["limitations"])
 
 
 def test_configuration_guidance_follows_exact_nested_configmap_reference() -> None:

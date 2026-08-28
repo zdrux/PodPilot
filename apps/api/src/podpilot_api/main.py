@@ -427,6 +427,20 @@ def _validated_adhoc_answer(
         citations=citations,
         observations=observations or [],
     )
+    incomplete_inventory_absence = _incomplete_inventory_supports_absence_claim(
+        content=content,
+        citations=citations,
+        observations=observations or [],
+    )
+    if incomplete_inventory_absence:
+        content = (
+            "The bounded inventory did not include the requested object, but that inventory was "
+            "incomplete and cannot establish that the object is absent. PodPilot needs an exact-object "
+            "read or a complete search before making an existence claim."
+        )
+        claim_limitations.append(
+            "An incomplete or truncated inventory cannot prove that a named object is absent."
+        )
     if (
         rbac_limitation
         and mode == "insufficient_evidence"
@@ -448,7 +462,7 @@ def _validated_adhoc_answer(
     return {
         "answer_mode": mode,
         "conclusion_status": (
-            answer.conclusion_status
+            "unresolved" if incomplete_inventory_absence else answer.conclusion_status
             or ("unresolved" if original_mode == "insufficient_evidence" else "confirmed")
         ),
         "content": content,
@@ -462,6 +476,37 @@ def _validated_adhoc_answer(
         ],
         "investigation_gaps": investigation_gaps,
     }
+
+
+def _incomplete_inventory_supports_absence_claim(
+    *, content: str, citations: list[str], observations: list[dict[str, object]],
+) -> bool:
+    """Reject absence conclusions grounded only in incomplete inventory evidence."""
+
+    if not citations or not re.search(
+        r"(?i)\b(?:none\b.{0,160}\b(?:named|matching)|not present|does not exist|"
+        r"was not found|cannot be found|no matching)\b",
+        content,
+        re.DOTALL,
+    ):
+        return False
+    cited = [
+        item for item in observations if str(item.get("id") or "") in citations
+    ]
+    if not cited or any(
+        item.get("tool") not in {"list_resources", "search_resources"}
+        for item in cited
+    ):
+        return False
+    return any(
+        isinstance(item.get("data"), dict)
+        and (
+            item["data"].get("truncated")
+            or item["data"].get("objectListComplete") is False
+            or item["data"].get("searchComplete") is False
+        )
+        for item in cited
+    )
 
 
 def _merge_validated_recommendations(
@@ -4443,6 +4488,7 @@ def _validate_inquiry_grounding(
     question: str,
     conversation: list[dict[str, str]],
     prior_audit_query: dict[str, object] | None,
+    object_references: list[dict[str, object]] | None = None,
 ) -> None:
     """Reject model-invented exact coordinates without interpreting operator wording."""
 
@@ -4462,15 +4508,31 @@ def _validate_inquiry_grounding(
         str(prior_audit_query.get("namespace") or "").casefold()
         if prior_audit_query and inquiry.continues_prior_audit_query else ""
     )
+    selected_reference = next((
+        item for item in (object_references or [])
+        if item.get("id") == inquiry.object_reference_id
+    ), None)
+    if inquiry.object_reference_id and selected_reference is None:
+        raise ModelProviderError("Capability selection invented an object_reference_id.")
     for field_name in ("object_name", "namespace", "container", "label_selector"):
         value = getattr(inquiry, field_name)
+        grounded_by_reference = bool(
+            selected_reference
+            and field_name in {"object_name", "namespace"}
+            and value == selected_reference.get(
+                "name" if field_name == "object_name" else "namespace"
+            )
+        )
         inherited_audit_namespace = (
             field_name == "namespace"
             and inquiry.mode == "audit"
             and value
             and value.casefold() == prior_namespace
         )
-        if value and value.casefold() not in grounding_text and not inherited_audit_namespace:
+        if (
+            value and value.casefold() not in grounding_text
+            and not inherited_audit_namespace and not grounded_by_reference
+        ):
             raise ModelProviderError(
                 f"Capability selection invented an ungrounded {field_name}."
             )
@@ -4484,6 +4546,84 @@ def _validate_inquiry_grounding(
         )
 
 
+def _recent_object_references(
+    evidence: list[dict[str, object]], *, limit: int = 24
+) -> list[dict[str, object]]:
+    """Expose bounded trusted object coordinates as opaque model-selectable references."""
+
+    graph = derive_evidence_relationship_graph(evidence)
+    relations_by_target: dict[str, tuple[str, list[str]]] = {}
+    for edge in graph.get("edges") or []:
+        if not isinstance(edge, dict) or not edge.get("target"):
+            continue
+        target = str(edge["target"])
+        relation = str(edge.get("relation") or "related_to")[:64]
+        evidence_ids = [str(item)[:128] for item in edge.get("evidence_ids") or []]
+        current = relations_by_target.get(target)
+        if current is None or relation == "configures_from":
+            relations_by_target[target] = (relation, evidence_ids)
+    references: list[dict[str, object]] = []
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict) or not node.get("name"):
+            continue
+        kind = str(node.get("kind") or "Resource")[:128]
+        if kind.casefold() == "secret":
+            continue
+        namespace = str(node.get("namespace") or "cluster")[:253]
+        name = str(node["name"])[:253]
+        relation, evidence_ids = relations_by_target.get(
+            str(node.get("id") or ""),
+            (
+                "observed",
+                [str(item)[:128] for item in node.get("evidence_ids") or []],
+            ),
+        )
+        coordinate = json.dumps(
+            {"kind": kind, "namespace": namespace, "name": name}, sort_keys=True
+        )
+        references.append({
+            "id": f"ref-{hashlib.sha256(coordinate.encode('utf-8')).hexdigest()[:20]}",
+            "kind": kind,
+            "namespace": namespace,
+            "name": name,
+            "relation": relation,
+            "observed": bool(node.get("observed")),
+            "supporting_evidence_ids": evidence_ids,
+        })
+    references.sort(key=lambda item: (
+        0 if item.get("relation") == "configures_from" else 1,
+        0 if item.get("observed") else 1,
+        str(item.get("kind") or ""), str(item.get("namespace") or ""),
+        str(item.get("name") or ""),
+    ))
+    return references[:limit]
+
+
+def _bind_inquiry_object_reference(
+    inquiry: InquirySemantics,
+    object_references: list[dict[str, object]],
+) -> InquirySemantics:
+    """Compile one model-selected opaque reference into exact trusted coordinates."""
+
+    if not inquiry.object_reference_id:
+        return inquiry
+    selected = next((
+        item for item in object_references if item.get("id") == inquiry.object_reference_id
+    ), None)
+    if selected is None:
+        raise ModelProviderError("Capability selection invented an object_reference_id.")
+    return inquiry.model_copy(update={
+        "resource_query": str(selected.get("kind") or inquiry.resource_query or "Resource"),
+        "object_name": str(selected.get("name") or "") or None,
+        "namespace": (
+            None if selected.get("namespace") in {None, "cluster"}
+            else str(selected["namespace"])
+        ),
+        "cardinality": "exact_one",
+        "needs_object_details": True,
+    })
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -4493,12 +4633,14 @@ async def _classify_ad_hoc_inquiry(
     conversation: list[dict[str, str]],
     cluster_names: list[str],
     prior_audit_query: dict[str, object] | None = None,
+    evidence: list[dict[str, object]] | None = None,
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
 
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
         return None
+    object_references = _recent_object_references(evidence or [])
     context = {
         "question": redact_text(question)[:1000],
         "recent_context": [
@@ -4509,17 +4651,20 @@ async def _classify_ad_hoc_inquiry(
             for item in conversation[-4:]
         ],
         "selected_clusters": [str(name)[:120] for name in cluster_names[:10]],
+        "recent_object_references": object_references,
     }
     if prior_audit_query is not None:
         context["prior_audit_query"] = prior_audit_query
     for attempt in range(1, 3):
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
+            classified = _bind_inquiry_object_reference(classified, object_references)
             _validate_inquiry_grounding(
                 classified,
                 question=question,
                 conversation=conversation,
                 prior_audit_query=prior_audit_query,
+                object_references=object_references,
             )
             return classified
         except ModelProviderError as exc:
@@ -4531,7 +4676,8 @@ async def _classify_ad_hoc_inquiry(
                     "Return one schema-valid registered capability selection. Correct the prior error: "
                     f"{str(exc)[:300]} Use only exact coordinates grounded in the supplied question or "
                     "recent context. Preserve prior_audit_query for an elliptical audit follow-up and "
-                    "override only explicitly changed fields."
+                    "override only explicitly changed fields. For an elliptical object follow-up, select "
+                    "one exact id from recent_object_references instead of reconstructing coordinates."
                 )
     return None
 
@@ -4778,6 +4924,7 @@ def _semantic_resource_read_plan(
             )
         continue_for_referenced_configuration = (
             inquiry.operation == "configuration_guidance"
+            and str(catalog_intent.kind or "").casefold() != "configmap"
         )
         return (
             ReadPlan(
@@ -6305,6 +6452,7 @@ def create_app(
                         conversation=history,
                         cluster_names=[item.name for item in selected_clusters],
                         prior_audit_query=prior_audit_query,
+                        evidence=evidence,
                     )
                     inquiry = _resolve_audit_inquiry(
                         question=source_question,
@@ -9559,6 +9707,7 @@ def create_app(
                     question=message_text,
                     conversation=conversation,
                     cluster_names=[app_settings.cluster_name],
+                    evidence=list(analysis_payload.get("observations", [])),
                 )
                 original_evidence_ids = {
                     str(item.get("id")) for item in analysis_payload.get("observations", [])

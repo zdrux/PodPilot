@@ -238,9 +238,13 @@ repair attempt, the existing bounded deterministic inventory/known-read path rem
 capability compatibility fallback; it cannot authorize broader reads and its absence is not treated
 as evidence that the requested data does not exist.
 For `configuration_guidance`, the model may resolve a resource type, object name, and namespace from
-the current question or the four-message recent-context window. Normal code validates those exact
-coordinates against the operator-visible conversation and the live safe discovery catalog, then reads
-the named object through the same broker. The final model may combine that observed configuration with
+the current question or the four-message recent-context window. For elliptical follow-ups such as
+“show that ConfigMap,” the classifier also receives bounded opaque IDs for non-sensitive exact objects
+already present in the trusted evidence relationship graph. It selects an ID rather than reconstructing
+coordinates; normal code binds that ID to the retained kind, namespace, and name, resolves the live safe
+discovery catalog, and reads the named object through the same broker. An exact ConfigMap request is
+terminal after that GET, while a parent custom-resource guidance read may remain open long enough to
+select an explicitly referenced ConfigMap. The final model may combine observed configuration with
 bounded curated knowledge and general Kubernetes/OpenShift knowledge, but must label proposed YAML as
 unapplied guidance and cite evidence for every claim about current cluster state. This path is generic
 across discoverable resource kinds and does not use keyword or sentence-pattern recognizers.
@@ -555,7 +559,9 @@ identities are visible. After live API discovery resolves an explicit inventory 
 executes the same bounded resource LIST independently on each selected cluster instead of asking the
 model to rediscover that syntax per cluster. A readable catalog with no matching resource type becomes
 explicit cited discovery evidence; it is rendered separately from an installed/readable API that returns
-zero objects and never causes an unrelated catalog resource to be read. Normal code then composes a bounded **Backend log
+zero objects and never causes an unrelated catalog resource to be read. A truncated LIST or incomplete
+field search cannot support a named-object absence claim; validation replaces that conclusion with an
+unresolved statement requiring an exact GET or complete search. Normal code then composes a bounded **Backend log
 findings** section into either the accepted model answer or deterministic fallback, preserving
 exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
 supporting evidence citations.
