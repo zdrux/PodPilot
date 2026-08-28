@@ -1200,6 +1200,26 @@ def test_adhoc_answer_surfaces_rbac_denial_and_removes_internal_evidence_paths()
     assert "observations.0" not in str(validated["content"])
 
 
+def test_adhoc_answer_does_not_call_unrelated_rbac_failure_blocking() -> None:
+    denial = (
+        "OpenShift RBAC denied the configured identity permission to list "
+        "configs.operator.openshift.io at cluster-wide scope (HTTP 403)."
+    )
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        answer="The exact ConfigMap contains the requested exporter configuration.",
+        cited_evidence_ids=["cluster-configmap"],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={"cluster-configmap"},
+        collection_limitations=[denial],
+    )
+
+    assert not str(validated["content"]).startswith("**Access blocked")
+
+
 def test_adhoc_answer_removes_provider_recommendations_from_narrative() -> None:
     answer = AdHocAnswer(
         answer_mode="evidence_based",
@@ -1666,6 +1686,34 @@ def test_model_fact_cards_replace_raw_observations_with_bounded_material_facts()
     assert facts["TLS termination"] == "edge"
     assert "data" not in cards[0]
     assert len(json.dumps(cards[0])) < 3000
+
+
+def test_model_fact_cards_include_bounded_exact_configmap_data() -> None:
+    cards = _model_fact_cards(
+        [{
+            "id": "configmap-1", "tool": "get_resource", "cluster_name": "central",
+            "summary": "Read the exporter ConfigMap.",
+            "data": {
+                "apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": {
+                    "namespace": "kafka-observability",
+                    "name": "kafka-observability-metrics-config",
+                },
+                "data": {
+                    "metrics-config.yml": (
+                        "lowercaseOutputName: true\nrules:\n"
+                        "  - pattern: kafka.server<type=(.+), name=(.+)><>Value\n"
+                    ),
+                },
+            },
+        }],
+        activity=[{"status": "succeeded", "evidence_ids": ["configmap-1"]}],
+    )
+
+    details = cards[0]["material_details"][0]
+    assert details["kind"] == "ConfigMap"
+    assert "kafka.server" in details["data"]["metrics-config.yml"]
+    assert len(json.dumps(cards[0]).encode("utf-8")) <= 3_000
 
 
 def test_model_fact_cards_preserve_requested_node_labels() -> None:
@@ -3057,12 +3105,123 @@ def test_named_object_configuration_guidance_compiles_generic_exact_get() -> Non
 
     assert compiled is not None
     plan, terminal = compiled
-    assert terminal is True
+    assert terminal is False
     assert plan.goal_type == "explain"
     assert plan.intents == [ReadIntent(
         tool="get_resource", resource="deployments", api_version="apps/v1",
         kind="Deployment", namespace="payments", name="checkout",
     )]
+
+
+def test_configuration_guidance_follows_exact_nested_configmap_reference() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            referenced = next((
+                item for item in context.get("read_candidates") or []
+                if item.get("relation") == "configures_from"
+            ), None)
+            if referenced is not None:
+                return ReadPlan(
+                    goal_type="explain", scope_summary="Read the referenced exporter configuration.",
+                    candidate_ids=[referenced["id"]],
+                )
+            config_id = next((
+                item.get("id") for item in context.get("facts") or []
+                if "exporter ConfigMap" in str(item.get("summary") or "")
+            ), None)
+            return ReadPlan(
+                goal_type="explain", decision="answer_from_evidence",
+                scope_summary="The exact exporter configuration is available.",
+                supporting_evidence_ids=[config_id] if config_id else [],
+                stop_reason="evidence_sufficient",
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "namespaced": True, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.kind == "Kafka":
+                return ReadResult((AdHocObservation(
+                    id="cluster-kafka", tool="get_resource",
+                    summary="Read the exact Kafka resource.",
+                    source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:kafka-observability/kafka-observability-cluster",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                        "metadata": {
+                            "namespace": "kafka-observability",
+                            "name": "kafka-observability-cluster",
+                        },
+                        "spec": {"kafka": {"metricsConfig": {"valueFrom": {
+                            "configMapKeyRef": {
+                                "name": "kafka-observability-metrics-config",
+                                "key": "metrics-config.yml",
+                            },
+                        }}}},
+                    },
+                ),))
+            return ReadResult((AdHocObservation(
+                id="cluster-exporter-config", tool="get_resource",
+                summary="Read the exporter ConfigMap.",
+                source="kubernetes:v1:ConfigMap:kafka-observability/kafka-observability-metrics-config",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "v1", "kind": "ConfigMap",
+                    "metadata": {
+                        "namespace": "kafka-observability",
+                        "name": "kafka-observability-metrics-config",
+                    },
+                    "data": {"metrics-config.yml": "lowercaseOutputName: true"},
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider, cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="config-reference",
+        question=(
+            "Show the exporter configuration for kafka-observability-cluster "
+            "in namespace kafka-observability."
+        ),
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            mode="explain", operation="configuration_guidance", cardinality="exact_one",
+            resource_query="Kafka", object_name="kafka-observability-cluster",
+            namespace="kafka-observability", needs_object_details=True,
+            evidence_goal="Read the exact exporter configuration.",
+        ),
+    ))
+
+    assert [(item.kind, item.name) for item in explorer.calls] == [
+        ("Kafka", "kafka-observability-cluster"),
+        ("ConfigMap", "kafka-observability-metrics-config"),
+    ]
+    assert any(item["id"] == "cluster-exporter-config" for item in result.evidence)
+    assert provider.contexts[0]["read_candidates"][0]["relation"] == "configures_from"
 
 
 def test_semantic_named_resource_without_namespace_compiles_grounded_search() -> None:
@@ -6579,6 +6738,50 @@ def test_grounded_candidates_keep_query_relevant_catalog_reads_with_owner_edges(
     assert all(item.intent.namespace == "kuadrant-system" for item in catalog_targets)
     assert any(item.relation == "owned_by" for item in candidates)
     assert all(item.intent.kind != "Node" for item in candidates)
+
+
+def test_exact_configmap_reference_outranks_generic_catalog_and_discovery_results() -> None:
+    candidates = _grounded_read_candidates(
+        question="Show the exporter configuration for the named cluster.",
+        evidence=[{
+            "id": "configmaps", "tool": "list_resources",
+            "data": {
+                "apiVersion": "v1", "kind": "ConfigMap", "resource": "configmaps",
+                "scope": "kafka-observability",
+                "objects": [{
+                    "namespace": "kafka-observability", "name": "unrelated-config",
+                }],
+            },
+        }],
+        relationship_graph={
+            "nodes": [],
+            "frontier": [{
+                "relation": "configures_from",
+                "target": (
+                    "ConfigMap:kafka-observability/"
+                    "kafka-observability-metrics-config"
+                ),
+                "evidence_ids": ["kafka-1"],
+                "read_hint": {
+                    "tool": "get_resource", "resource": "configmaps",
+                    "api_version": "v1", "kind": "ConfigMap",
+                    "namespace": "kafka-observability",
+                    "name": "kafka-observability-metrics-config",
+                },
+            }],
+        },
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+        catalog_entries=[{
+            "resource": "configs.operator.openshift.io",
+            "apiVersion": "operator.openshift.io/v1", "kind": "Config",
+            "namespaced": False, "verbs": ["get", "list"],
+        }],
+    )
+
+    assert candidates[0].relation == "configures_from"
+    assert candidates[0].intent.name == "kafka-observability-metrics-config"
+    assert all(candidate.relation != "catalog_match" for candidate in candidates)
 
 
 def test_bounded_discovery_results_become_exact_get_candidates() -> None:

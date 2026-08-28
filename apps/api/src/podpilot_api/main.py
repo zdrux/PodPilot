@@ -67,6 +67,7 @@ from podpilot_diagnostics.adhoc import (
     ReadOnlyExplorer,
     ReadPlan,
     automatic_read_followups,
+    config_map_references_from_spec,
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
     normalize_read_intent,
@@ -426,7 +427,12 @@ def _validated_adhoc_answer(
         citations=citations,
         observations=observations or [],
     )
-    if rbac_limitation and rbac_limitation not in content:
+    if (
+        rbac_limitation
+        and mode == "insufficient_evidence"
+        and not citations
+        and rbac_limitation not in content
+    ):
         content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
     investigation_gaps: list[InvestigationGap] = []
     for gap in answer.investigation_gaps[:5]:
@@ -3074,6 +3080,32 @@ def _model_fact_cards(
                     detail["status"] = _compact_provider_value(
                         resource["status"], string_limit=300, list_limit=6
                     )
+                if (
+                    str(detail.get("kind") or "").casefold() == "configmap"
+                    and isinstance(resource.get("data"), dict)
+                ):
+                    # LIST evidence never carries ConfigMap contents. For an exact
+                    # GET, retain a small redacted projection so the answer model can
+                    # explain the requested configuration rather than only its name.
+                    projected_data: dict[str, object] = {}
+                    remaining_data_bytes = 1_800
+                    for key, value in list(resource["data"].items())[:12]:
+                        projected = _compact_provider_value(
+                            value,
+                            string_limit=max(100, min(1_600, remaining_data_bytes - 20)),
+                            list_limit=8,
+                        )
+                        encoded_value = json.dumps(projected, default=str).encode("utf-8")
+                        if len(encoded_value) > remaining_data_bytes and isinstance(projected, str):
+                            projected = projected[:max(0, remaining_data_bytes - 20)] + "…"
+                            encoded_value = json.dumps(projected).encode("utf-8")
+                        if len(encoded_value) > remaining_data_bytes:
+                            continue
+                        projected_data[str(key)[:253]] = projected
+                        remaining_data_bytes -= len(encoded_value)
+                        if remaining_data_bytes < 100:
+                            break
+                    detail["data"] = projected_data
                 if isinstance(resource.get("ports"), list):
                     detail["ports"] = _compact_provider_value(
                         resource["ports"], string_limit=200, list_limit=8
@@ -3102,7 +3134,18 @@ def _model_fact_cards(
                 card["names"] = [str(value)[:253] for value in data["names"][:20]]
         encoded = json.dumps(card, sort_keys=True, default=str).encode("utf-8")
         if len(encoded) > 3_000:
-            if requested_metadata_fields and card.get("material_details"):
+            config_details = [
+                detail for detail in card.get("material_details") or []
+                if isinstance(detail, dict) and detail.get("data")
+            ]
+            if config_details:
+                detail = config_details[0]
+                card["material_details"] = [{
+                    key: value
+                    for key, value in detail.items()
+                    if key in {"kind", "namespace", "name", "data"}
+                }]
+            elif requested_metadata_fields and card.get("material_details"):
                 card["material_details"] = [
                     {
                         key: value
@@ -3453,7 +3496,13 @@ def _grounded_read_candidates(
         ),
         key=lambda item: (-item[0], str(item[1].get("resource") or "")),
     )
-    selected_catalog = [entry for score, entry in ranked_catalog if score > 0][:4]
+    has_exact_configuration_reference = any(
+        candidate.relation == "configures_from" for candidate in candidates
+    )
+    selected_catalog = (
+        [] if has_exact_configuration_reference else
+        [entry for score, entry in ranked_catalog if score > 0][:4]
+    )
     if not selected_catalog and not candidates:
         selected_catalog = [entry for _score, entry in ranked_catalog[:6]]
     observed_namespaces = {
@@ -3520,11 +3569,11 @@ def _grounded_read_candidates(
         0 if item.capability == "initial_discovery" and not evidence else 1,
         post_protocol_priority.get(item.capability, 10) if protocol_proven else 0,
         {
-            "discovery_result": 0,
-            "catalog_match": 1,
-            "mounts_from": 2,
-            "configures_from": 2,
-            "owned_by": 3,
+            "configures_from": 0,
+            "mounts_from": 1,
+            "discovery_result": 2,
+            "catalog_match": 3,
+            "owned_by": 4,
         }.get(item.relation or "", 4),
         item.capability,
         item.id,
@@ -4074,6 +4123,8 @@ def _bind_plan_log_intents(
         spec = value.get("spec")
         if not isinstance(spec, dict):
             return
+        for config_map_name in config_map_references_from_spec(spec):
+            add_target(config_map_name, namespace)
         volumes = spec.get("volumes")
         if isinstance(volumes, list):
             for volume in volumes:
@@ -4717,6 +4768,9 @@ def _semantic_resource_read_plan(
                 ),
                 False,
             )
+        continue_for_referenced_configuration = (
+            inquiry.operation == "configuration_guidance"
+        )
         return (
             ReadPlan(
                 goal_type=inquiry.planner_goal,
@@ -4730,7 +4784,7 @@ def _semantic_resource_read_plan(
                     name=name,
                 )],
             ),
-            True,
+            not continue_for_referenced_configuration,
         )
     return (
         ReadPlan(

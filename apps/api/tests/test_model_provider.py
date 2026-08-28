@@ -8,6 +8,7 @@ from podpilot_api.model_provider import (
     ActionSelection,
     AdHocAnswer,
     AdHocLogAnalysis,
+    AuthoredObjectRead,
     CapabilityReport,
     ConciseAdHocAnswer,
     InquirySemantics,
@@ -556,6 +557,16 @@ def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
 
     assert answer.answer_mode == "general_guidance"
     assert answer.cited_evidence_ids == []
+
+
+def test_authored_collection_read_normalizes_model_wildcards() -> None:
+    authored = AuthoredObjectRead(
+        tool="list_resources", resource="configmaps", api_version="v1",
+        kind="ConfigMap", namespace="*", name="*",
+    )
+
+    assert authored.namespace is None
+    assert authored.name is None
 
 
 def test_chat_completions_analyzes_logs_in_a_dedicated_structured_request() -> None:

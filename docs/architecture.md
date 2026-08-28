@@ -243,6 +243,12 @@ the named object through the same broker. The final model may combine that obser
 bounded curated knowledge and general Kubernetes/OpenShift knowledge, but must label proposed YAML as
 unapplied guidance and cite evidence for every claim about current cluster state. This path is generic
 across discoverable resource kinds and does not use keyword or sentence-pattern recognizers.
+An exact custom-resource read also derives bounded relationships from structured ConfigMap reference
+objects in its observed spec. The model receives the referenced ConfigMap as an opaque exact action and
+chooses whether it is needed; a `configuration_guidance` read remains open for that selection. Explicit
+`configures_from` actions outrank generic catalog and list-result candidates during malformed-plan
+recovery. An exact ConfigMap GET contributes a bounded, recursively redacted `data` projection to final
+fact cards; LIST responses continue to expose metadata only.
 For `cluster_audit_events`, normal code compiles the grounded namespace, username, operation,
 outcome, period, and limit into a fixed Loki audit query. Loki applies those filters before its
 backward result limit and compact line projection; PodPilot revalidates them while projecting

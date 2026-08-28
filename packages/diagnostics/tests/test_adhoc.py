@@ -77,6 +77,47 @@ def test_relationship_graph_exposes_configmap_reference_but_not_secret_read() ->
     }
 
 
+def test_relationship_graph_follows_nested_custom_resource_configmap_reference() -> None:
+    graph = derive_evidence_relationship_graph([{
+        "id": "kafka-1",
+        "tool": "get_resource",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2",
+            "kind": "Kafka",
+            "metadata": {
+                "namespace": "kafka-observability",
+                "name": "kafka-observability-cluster",
+            },
+            "spec": {
+                "kafka": {
+                    "metricsConfig": {
+                        "type": "jmxPrometheusExporter",
+                        "valueFrom": {
+                            "configMapKeyRef": {
+                                "name": "kafka-observability-metrics-config",
+                                "key": "metrics-config.yml",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }])
+
+    edge = next(
+        item for item in graph["frontier"]
+        if item["target"] == (
+            "ConfigMap:kafka-observability/kafka-observability-metrics-config"
+        )
+    )
+    assert edge["relation"] == "configures_from"
+    assert edge["read_hint"] == {
+        "tool": "get_resource", "resource": "configmaps", "api_version": "v1",
+        "kind": "ConfigMap", "namespace": "kafka-observability",
+        "name": "kafka-observability-metrics-config",
+    }
+
+
 def test_candidate_selection_normalizes_plan_to_collect() -> None:
     plan = ReadPlan(
         scope_summary="Select the grounded backend Service read.",

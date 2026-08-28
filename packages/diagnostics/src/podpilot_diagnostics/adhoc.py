@@ -599,6 +599,34 @@ def pod_log_candidates_from_evidence(
     return candidates
 
 
+def config_map_references_from_spec(value: object) -> tuple[str, ...]:
+    """Extract bounded explicit ConfigMap references from arbitrary Kubernetes specs."""
+
+    names: list[str] = []
+    visited = 0
+
+    def visit(candidate: object, depth: int = 0) -> None:
+        nonlocal visited
+        if depth > 10 or visited >= 300 or len(names) >= 20:
+            return
+        visited += 1
+        if isinstance(candidate, dict):
+            for key, item in list(candidate.items())[:100]:
+                normalized_key = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+                if normalized_key in {"configmapkeyref", "configmapref", "configmap"}:
+                    if isinstance(item, dict) and item.get("name"):
+                        name = str(item["name"])[:253]
+                        if name not in names:
+                            names.append(name)
+                visit(item, depth + 1)
+        elif isinstance(candidate, (list, tuple)):
+            for item in list(candidate)[:100]:
+                visit(item, depth + 1)
+
+    visit(value)
+    return tuple(names)
+
+
 def derive_evidence_relationship_graph(
     evidence: list[dict[str, object]],
     *,
@@ -818,6 +846,18 @@ def derive_evidence_relationship_graph(
                             "namespace": namespace, "name": reference.get("sourceName"),
                         }
                     add_edge(source, target, "configures_from", evidence_id, read_hint)
+
+            # Custom resources commonly store their configuration in a referenced
+            # ConfigMap without using a Pod-template field. Follow only explicit,
+            # structured ConfigMap reference objects from the observed spec; never
+            # infer names from free text or ConfigMap contents.
+            for config_map_name in config_map_references_from_spec(spec):
+                target = add_node("ConfigMap", namespace, config_map_name)
+                add_edge(source, target, "configures_from", evidence_id, {
+                    "tool": "get_resource", "resource": "configmaps",
+                    "api_version": "v1", "kind": "ConfigMap",
+                    "namespace": namespace, "name": config_map_name,
+                })
 
     bounded_nodes = list(nodes.values())[:max_nodes]
     bounded_ids = {str(node["id"]) for node in bounded_nodes}

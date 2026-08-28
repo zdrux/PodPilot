@@ -426,11 +426,16 @@ resource, confirms the requested `get`, `list`, or `watch` verb is advertised, r
 ambiguous names unless group-qualified, and still relies on the investigator
 ServiceAccount's RBAC for the final authorization decision. Recursive redaction
 and compact payload ceilings apply to discovered built-ins and CRDs alike.
+ConfigMap LIST evidence contains metadata only. After an exact broker-authorized ConfigMap GET, the
+final-answer model may receive at most a small bounded projection of `data`; recursive sensitive-key and
+value redaction runs before that projection. Secret objects remain denied regardless of references or RBAC.
 An API `403` becomes an explicit operator-facing limitation naming the
 `podpilot-investigator` ServiceAccount, requested read verb, resource, scope, and
 the need for an administrator-granted permission. The answer validator prepends
-that RBAC boundary when no evidence could be collected rather than replacing it
-with a generic request for a narrower question.
+that RBAC boundary only when the answer remains uncited and insufficient. Unrelated denied reads remain
+visible as limitations without replacing a supported answer. When no evidence could be collected, the
+validator preserves the blocking boundary rather than replacing it with a generic request for a narrower
+question.
 Model intent classification does not authorize access. Planner decisions and
 supporting evidence IDs are schema-validated; unsupported operational answers
 are repaired once. If both initial plans stop before collecting evidence, a

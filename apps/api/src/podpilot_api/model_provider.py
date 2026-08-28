@@ -173,12 +173,14 @@ class AuthoredObjectRead(BaseModel):
     def normalize_cluster_wide_namespace(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        if (
-            value.get("namespace") == "*"
-            and value.get("tool") in {"list_resources", "search_resources"}
+        if value.get("tool") in {"list_resources", "search_resources"} and (
+            value.get("namespace") == "*" or value.get("name") == "*"
         ):
             normalized = dict(value)
-            normalized["namespace"] = None
+            if normalized.get("namespace") == "*":
+                normalized["namespace"] = None
+            if normalized.get("name") == "*":
+                normalized["name"] = None
             return normalized
         return value
 
@@ -810,13 +812,16 @@ _ADHOC_CANDIDATE_PLANNER_INSTRUCTIONS = (
     "action_ids or object_reads; prose about a future step is not executable. When actions is non-empty, "
     "select relevant exact action IDs before considering an object read. Never repeat a successful entry "
     "from completed_reads. Author an object read only for novel evidence not represented by a relevant "
-    "supplied action. You may author up to three "
+    "supplied action. When any supplied action exactly names the needed object, return its ID and do not "
+    "author that object again. You may author up to three "
     "object_reads using only discover_resources, get_resource, list_resources, or search_resources. "
     "Use the supplied resource_catalog for exact resource types. A named GET requires an exact known name "
     "and namespace; otherwise discover or list first and inspect the returned object on a later round. "
     "Never request Secrets, identity/token/access-review resources, subresources, logs, probes, metrics, "
     "commands, or mutations through object_reads. Return empty action_ids and object_reads only when no "
-    "material safe read would improve the answer."
+    "material safe read would improve the answer. For configuration_guidance, when a supplied "
+    "configures_from action points to the exact referenced configuration requested by the operator, "
+    "select that action before answering from the parent object."
 )
 
 
@@ -955,7 +960,8 @@ def _minimal_action_payload(context: dict[str, object]) -> dict[str, object]:
         ),
         "selection_policy": (
             "Select one or more exact actions[].id values in action_ids when a relevant grounded "
-            "action is available. Do not repeat discovery already listed in completed_reads."
+            "action is available. For an exact relevant action, leave object_reads empty. Do not repeat "
+            "discovery already listed in completed_reads."
             if actions else
             "No grounded action is available. Author only a novel object read that advances the "
             "question, or return both arrays empty when no material read remains."
@@ -1542,8 +1548,9 @@ class OpenAIResponsesProvider:
                     "reads Kubernetes/OpenShift API activity, audit records, user actions, operations, or "
                     "changes; endpoint_probe checks an HTTP endpoint; cluster_investigation investigates "
                     "symptoms, causes, or health when no more specific capability applies; "
-                    "configuration_guidance explains how to configure a specific named Kubernetes/OpenShift "
-                    "object, including an object identified in recent context; "
+                    "configuration_guidance explains how to configure, or retrieves the exact configuration "
+                    "used by, a specific named Kubernetes/OpenShift object, including configuration held in "
+                    "a referenced ConfigMap and objects identified in recent context; "
                     "explanation answers conceptual questions without live evidence. Extract a short "
                     "resource concept such as Kafka, "
                     "Pod, Route, or Authorino when present. Also return a semantic read shape. "
@@ -2053,9 +2060,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "cluster_events for Kubernetes Events; cluster_metrics for utilization or trends; "
                 "cluster_audit_events for API activity, audit records, user actions, operations, or "
                 "changes; endpoint_probe for HTTP checks; cluster_investigation for symptoms, causes, "
-                "or health when no specific capability applies; configuration_guidance for instructions "
-                "or declarative guidance about configuring a specific named object, including one named "
-                "in recent context; and explanation for "
+                "or health when no specific capability applies; configuration_guidance for instructions, "
+                "declarative guidance, or retrieving exact configuration used by a specific named object, "
+                "including referenced ConfigMaps and objects named in recent context; and explanation for "
                 "conceptual questions. Prefer a specific capability over cluster_investigation. For a "
                 "compound symptom-and-logs request, choose workload_logs. Return cardinality, resource_query, exact "
                 "object_name and namespace only "

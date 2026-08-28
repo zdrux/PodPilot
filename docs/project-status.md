@@ -157,6 +157,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   code grounds them in the conversation, resolves the resource through live discovery, and performs the
   same bounded read used for any other object kind. Final answers distinguish unapplied general guidance
   from cited observed state; Kafka-specific keyword projection and answer replacement have been removed.
+- Configuration traversal now detects explicit nested ConfigMap references in any observed custom-resource
+  spec, offers the exact referenced object ahead of generic discovery candidates, and keeps configuration
+  inquiries open for that model-selected read. Exact ConfigMap GET evidence contributes bounded redacted
+  `data` to final fact cards, while LIST evidence remains metadata-only. Partial unrelated RBAC failures no
+  longer replace an otherwise supported answer with an “Access blocked” headline.
 - Inventory classification now guarantees the base catalog-resolved LIST on every selected cluster.
   The classifier's detail flag controls only an optional follow-up phase, so it can no longer suppress
   inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and
