@@ -1886,6 +1886,35 @@ def test_unscoped_exact_read_inherits_namespace_from_bounded_list_scope() -> Non
     assert grounded.intents[0].namespace == "vc-streams"
 
 
+def test_model_authored_get_uses_exact_discovered_api_coordinates() -> None:
+    plan = ReadPlan(
+        scope_summary="Inspect the discovered Kafka resource.",
+        intents=[ReadIntent(
+            tool="get_resource", resource="Kafka", api_version="v1", kind="Kafka",
+            namespace="vc-streams", name="vc-cluster",
+        )],
+    )
+    evidence = [{
+        "id": "cluster-kafka-list", "tool": "list_resources",
+        "data": {
+            "resource": "kafkas.kafka.strimzi.io",
+            "apiVersion": "kafka.strimzi.io/v1", "kind": "Kafka",
+            "scope": "vc-streams", "objects": [{"name": "vc-cluster"}],
+        },
+    }]
+
+    grounded, errors, _ = _bind_plan_log_intents(
+        plan, [], question="Does this Kafka cluster export Prometheus metrics?", evidence=evidence,
+    )
+
+    assert errors == []
+    assert grounded.intents == [ReadIntent(
+        tool="get_resource", resource="kafkas.kafka.strimzi.io",
+        api_version="kafka.strimzi.io/v1", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+    )]
+
+
 def test_ambiguous_unscoped_exact_read_requires_a_grounded_candidate() -> None:
     plan = ReadPlan(
         scope_summary="Inspect the discovered Kafka resource.",
@@ -2656,6 +2685,36 @@ def test_kafka_metrics_answer_separates_exporter_from_scraping(
     else:
         assert "Not configured in the Kafka CR" in str(rendered["content"])
     assert rendered["citations"] == ["cluster-kafka-detail"]
+
+
+def test_kafka_metrics_answer_deduplicates_repeated_exact_object_evidence() -> None:
+    data = {
+        "apiVersion": "kafka.strimzi.io/v1", "kind": "Kafka",
+        "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+        "spec": {"kafka": {"metricsConfig": {
+            "type": "jmxPrometheusExporter",
+            "valueFrom": {"configMapKeyRef": {"name": "kafka-metrics"}},
+        }}},
+    }
+    rendered = _deterministic_kafka_metrics_answer(
+        question="Do the Kafka clusters have Prometheus metrics exporting set up?",
+        evidence=[
+            {"id": "first", "cluster_id": "central", "cluster_name": "Central DEV",
+             "tool": "get_resource", "data": {
+                 **data, "apiVersion": "kafka.strimzi.io/v1beta2",
+             }},
+            {"id": "second", "cluster_id": "central", "cluster_name": "Central DEV",
+             "tool": "get_resource", "data": data},
+        ],
+        activity=[
+            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["first"]},
+            {"tool": "get_resource", "status": "succeeded", "evidence_ids": ["second"]},
+        ],
+    )
+
+    assert rendered is not None
+    assert str(rendered["content"]).count("`vc-streams/vc-cluster`") == 1
+    assert rendered["citations"] == ["second"]
 
 
 def test_kafka_metrics_final_context_omits_unrelated_custom_resource_fields() -> None:

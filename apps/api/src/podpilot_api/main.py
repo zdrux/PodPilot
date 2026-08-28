@@ -1767,9 +1767,28 @@ def _deterministic_kafka_metrics_answer(
         and item.get("tool") == "get_resource"
         and isinstance(item.get("data"), dict)
         and str(item["data"].get("kind") or "").casefold() == "kafka"
-    ][:12]
+    ]
     if not observations:
         return None
+
+    # A model may ask for an already-read object using a different resource spelling or API
+    # version. Collection now canonicalizes that request, but keep rendering idempotent for
+    # historical runs and any evidence captured before that guard executes.
+    unique_observations: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
+    for observation in observations:
+        data = observation["data"]
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        api_version = str(data.get("apiVersion") or data.get("api_version") or "")
+        api_group = api_version.partition("/")[0] if "/" in api_version else "core"
+        key = (
+            str(observation.get("cluster_id") or observation.get("cluster_name") or "").casefold(),
+            api_group.casefold(),
+            str(data.get("kind") or "").casefold(),
+            str(metadata.get("namespace") or "").casefold(),
+            str(metadata.get("name") or "").casefold(),
+        )
+        unique_observations[key] = observation
+    observations = list(unique_observations.values())[:12]
 
     rows: list[str] = []
     citations: list[str] = []
@@ -3859,6 +3878,37 @@ def _bind_plan_log_intents(
     rejected: list[ReadIntent] = []
     observed_names: set[str] = set()
     observed_scopes: dict[str, set[str]] = {}
+    observed_objects: list[dict[str, str | None]] = []
+
+    def add_observed_object(
+        *,
+        resource: object,
+        api_version: object,
+        kind: object,
+        namespace: object,
+        name: object,
+    ) -> None:
+        """Retain exact coordinates emitted by trusted discovery/read evidence."""
+
+        if not name or not resource or not api_version or not kind:
+            return
+        identity = {
+            "resource": str(resource),
+            "api_version": str(api_version),
+            "kind": str(kind),
+            "namespace": str(namespace) if namespace else None,
+            "name": str(name),
+        }
+        key = tuple(str(identity[field] or "").casefold() for field in (
+            "resource", "api_version", "kind", "namespace", "name",
+        ))
+        if not any(
+            tuple(str(item[field] or "").casefold() for field in (
+                "resource", "api_version", "kind", "namespace", "name",
+            )) == key
+            for item in observed_objects
+        ):
+            observed_objects.append(identity)
 
     def add_target(name: object, namespace: object = None) -> None:
         if not name:
@@ -3967,6 +4017,22 @@ def _bind_plan_log_intents(
                     ref_namespace = data.get("scope")
                 if ref_namespace:
                     observed_scopes.setdefault(ref_name, set()).add(str(ref_namespace))
+                add_observed_object(
+                    resource=data.get("resource"),
+                    api_version=data.get("apiVersion") or data.get("api_version"),
+                    kind=ref.get("kind") or data.get("kind"),
+                    namespace=ref_namespace,
+                    name=ref.get("name"),
+                )
+        if observation.get("tool") == "get_resource":
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            add_observed_object(
+                resource=data.get("resource"),
+                api_version=data.get("apiVersion") or data.get("api_version"),
+                kind=data.get("kind"),
+                namespace=metadata.get("namespace"),
+                name=metadata.get("name"),
+            )
         add_object_targets(data)
         items = data.get("items")
         if isinstance(items, list):
@@ -4010,6 +4076,40 @@ def _bind_plan_log_intents(
                     "The named resource exists in multiple observed namespaces; select an exact "
                     "grounded candidate ID instead of issuing a cluster-scoped GET."
                 )
+        if (
+            error is None
+            and resolved is not None
+            and resolved.tool in {"get_resource", "watch_resources"}
+            and resolved.name
+        ):
+            matches = [
+                item for item in observed_objects
+                if str(item["name"] or "").casefold() == resolved.name.casefold()
+                and (
+                    not resolved.namespace
+                    or str(item["namespace"] or "").casefold() == resolved.namespace.casefold()
+                )
+                and (
+                    not resolved.kind
+                    or str(item["kind"] or "").casefold() == resolved.kind.casefold()
+                )
+            ]
+            if len(matches) == 1:
+                # Discovery owns the served API coordinates. The model chooses the observed
+                # object; it does not get to invent another resource spelling or API version.
+                resolved = resolved.model_copy(update=matches[0])
+            elif len(matches) > 1:
+                coordinates = {
+                    tuple(str(item[field] or "").casefold() for field in (
+                        "resource", "api_version", "kind", "namespace", "name",
+                    ))
+                    for item in matches
+                }
+                if len(coordinates) > 1:
+                    error = (
+                        "The named resource matches multiple observed API coordinates; select an "
+                        "exact grounded candidate ID instead of authoring the object read."
+                    )
         if (
             error is None
             and resolved is not None

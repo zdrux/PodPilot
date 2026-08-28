@@ -371,6 +371,11 @@ intent signatures are retained across rounds and the answer-gap pass; a duplicat
 bounded `no_progress` feedback so the model can select a novel candidate or explicitly stop. When a
 model twice stops despite a medium/high structured gap with a matching grounded candidate, PodPilot
 selects the highest-priority candidate deterministically and discloses that recovery in limitations.
+Exact model-authored GET/watch requests for previously discovered objects are rewritten to the
+resource, served API version, kind, namespace, and name emitted by trusted discovery evidence before
+their intent signature is calculated. This prevents alternate model spellings from bypassing
+duplicate detection or producing a second evidence row for the same Kubernetes object. Deterministic
+object summaries also deduplicate exact identities as a final presentation safeguard.
 
 The action-selection prompt asks the model to select useful supplied reads or author a bounded object
 discovery/read when the supplied actions omit a material path. Query-relevant catalog actions remain
