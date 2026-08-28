@@ -267,6 +267,10 @@ The capability classifier may additionally receive up to 24 opaque references fo
 objects already present in that redacted relationship graph. A model-selected reference ID is bound
 server-side to the retained kind, namespace, and name and still passes live discovery, deny, RBAC,
 and read-only broker validation; model-authored replacement coordinates are not trusted.
+For related collection queries, the model may select a separate parent scope ID and a syntactically
+valid Kubernetes label key. Server code supplies the label value exclusively from the selected trusted
+parent name, carries its namespace into the LIST, rejects parent names that cannot be label values, and
+retains the existing result ceiling and broker checks. The model cannot author or replace that value.
 Suggested-check buttons are
 compiled only from unread server-owned candidates and are scoped to the source assistant message and
 conversation owner. Their CSRF-protected endpoint reloads the persisted descriptor, verifies the

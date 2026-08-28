@@ -4512,15 +4512,36 @@ def _validate_inquiry_grounding(
         item for item in (object_references or [])
         if item.get("id") == inquiry.object_reference_id
     ), None)
+    selected_scope_reference = next((
+        item for item in (object_references or [])
+        if item.get("id") == inquiry.scope_reference_id
+    ), None)
     if inquiry.object_reference_id and selected_reference is None:
         raise ModelProviderError("Capability selection invented an object_reference_id.")
+    if inquiry.scope_reference_id and selected_scope_reference is None:
+        raise ModelProviderError("Capability selection invented a scope_reference_id.")
     for field_name in ("object_name", "namespace", "container", "label_selector"):
         value = getattr(inquiry, field_name)
         grounded_by_reference = bool(
-            selected_reference
-            and field_name in {"object_name", "namespace"}
-            and value == selected_reference.get(
-                "name" if field_name == "object_name" else "namespace"
+            (
+                selected_reference
+                and field_name in {"object_name", "namespace"}
+                and value == selected_reference.get(
+                    "name" if field_name == "object_name" else "namespace"
+                )
+            )
+            or (
+                selected_scope_reference
+                and field_name == "namespace"
+                and value == selected_scope_reference.get("namespace")
+            )
+            or (
+                selected_scope_reference
+                and field_name == "label_selector"
+                and value == (
+                    f"{inquiry.relationship_selector_key}="
+                    f"{selected_scope_reference.get('name')}"
+                )
             )
         )
         inherited_audit_namespace = (
@@ -4624,6 +4645,41 @@ def _bind_inquiry_object_reference(
     })
 
 
+def _bind_inquiry_scope_reference(
+    inquiry: InquirySemantics,
+    object_references: list[dict[str, object]],
+) -> InquirySemantics:
+    """Bind a related collection to one trusted parent namespace and label value."""
+
+    if not inquiry.scope_reference_id:
+        return inquiry
+    selected = next((
+        item for item in object_references if item.get("id") == inquiry.scope_reference_id
+    ), None)
+    if selected is None:
+        raise ModelProviderError("Capability selection invented a scope_reference_id.")
+    parent_name = str(selected.get("name") or "")
+    if not re.fullmatch(r"[A-Za-z0-9](?:[-_.A-Za-z0-9]{0,61}[A-Za-z0-9])?", parent_name):
+        raise ModelProviderError(
+            "The selected parent name cannot be represented as a Kubernetes label value."
+        )
+    selector_key = inquiry.relationship_selector_key
+    if not selector_key:
+        raise ModelProviderError(
+            "A related collection requires a Kubernetes relationship selector key."
+        )
+    return inquiry.model_copy(update={
+        "namespace": (
+            None if selected.get("namespace") in {None, "cluster"}
+            else str(selected["namespace"])
+        ),
+        "object_name": None,
+        "cardinality": "collection",
+        "label_selector": f"{selector_key}={parent_name}",
+        "needs_object_details": False,
+    })
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -4659,6 +4715,7 @@ async def _classify_ad_hoc_inquiry(
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
             classified = _bind_inquiry_object_reference(classified, object_references)
+            classified = _bind_inquiry_scope_reference(classified, object_references)
             _validate_inquiry_grounding(
                 classified,
                 question=question,
@@ -4677,7 +4734,9 @@ async def _classify_ad_hoc_inquiry(
                     f"{str(exc)[:300]} Use only exact coordinates grounded in the supplied question or "
                     "recent context. Preserve prior_audit_query for an elliptical audit follow-up and "
                     "override only explicitly changed fields. For an elliptical object follow-up, select "
-                    "one exact id from recent_object_references instead of reconstructing coordinates."
+                    "one exact id from recent_object_references instead of reconstructing coordinates. "
+                    "For a related collection, use scope_reference_id plus a Kubernetes relationship "
+                    "selector key; never copy or invent the parent's selector value."
                 )
     return None
 
@@ -4828,8 +4887,13 @@ def _semantic_resource_read_plan(
     def grounded(value: str | None) -> bool:
         return bool(value and value.casefold() in grounding_text)
 
-    name = inquiry.object_name if grounded(inquiry.object_name) else None
-    namespace = inquiry.namespace if grounded(inquiry.namespace) else None
+    name = inquiry.object_name if (
+        inquiry.object_reference_id or grounded(inquiry.object_name)
+    ) else None
+    namespace = inquiry.namespace if (
+        inquiry.object_reference_id or inquiry.scope_reference_id
+        or grounded(inquiry.namespace)
+    ) else None
     if inquiry.operation == "events":
         if str(catalog_intent.kind or "").casefold() != "event":
             return None

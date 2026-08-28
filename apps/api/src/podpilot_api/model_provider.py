@@ -267,6 +267,8 @@ class InquirySemantics(BaseModel):
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    relationship_selector_key: str | None = Field(default=None, max_length=317)
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
@@ -313,6 +315,25 @@ class InquirySemantics(BaseModel):
                 result.append(normalized)
         return result
 
+    @field_validator("relationship_selector_key")
+    @classmethod
+    def normalize_relationship_selector_key(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        if not normalized:
+            return None
+        prefix, separator, name = normalized.rpartition("/")
+        if not separator:
+            prefix, name = "", normalized
+        if (
+            len(prefix) > 253 or len(name) > 63
+            or not re.fullmatch(r"[A-Za-z0-9](?:[-_.A-Za-z0-9]*[A-Za-z0-9])?", name)
+            or (prefix and not re.fullmatch(
+                r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", prefix
+            ))
+        ):
+            raise ValueError("relationship selector key must be a Kubernetes label key")
+        return normalized
+
     @field_validator("audit_username")
     @classmethod
     def normalize_audit_username(cls, value: str | None) -> str | None:
@@ -358,6 +379,16 @@ class InquirySemantics(BaseModel):
             "explain": "explanation",
             "investigate": "cluster_investigation",
         }[self.mode]
+        if self.object_reference_id and self.scope_reference_id:
+            raise ValueError("object and scope references are mutually exclusive")
+        if self.scope_reference_id and (
+            self.capability != "resource_inventory" or not self.relationship_selector_key
+        ):
+            raise ValueError(
+                "scope references require resource_inventory and a relationship selector key"
+            )
+        if self.relationship_selector_key and not self.scope_reference_id:
+            raise ValueError("relationship selector key requires a scope reference")
         if self.mode != "audit" and any((
             self.audit_username,
             self.audit_operation_scope,
@@ -402,6 +433,8 @@ class CapabilitySelection(BaseModel):
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
+    relationship_selector_key: str | None = Field(default=None, max_length=317)
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
@@ -439,8 +472,23 @@ class CapabilitySelection(BaseModel):
     def normalize_requested_fields(cls, values: list[str]) -> list[str]:
         return InquirySemantics.normalize_requested_fields(values)
 
+    @field_validator("relationship_selector_key")
+    @classmethod
+    def normalize_relationship_selector_key(cls, value: str | None) -> str | None:
+        return InquirySemantics.normalize_relationship_selector_key(value)
+
     @model_validator(mode="after")
     def restrict_capability_arguments(self) -> "CapabilitySelection":
+        if self.object_reference_id and self.scope_reference_id:
+            raise ValueError("object and scope references are mutually exclusive")
+        if self.scope_reference_id and (
+            self.capability != "resource_inventory" or not self.relationship_selector_key
+        ):
+            raise ValueError(
+                "scope references require resource_inventory and a relationship selector key"
+            )
+        if self.relationship_selector_key and not self.scope_reference_id:
+            raise ValueError("relationship selector key requires a scope reference")
         if self.capability != "cluster_audit_events" and any((
             self.audit_username,
             self.audit_operation_scope,
@@ -1623,7 +1671,12 @@ class OpenAIResponsesProvider:
                     "namespace when explicitly present in the question or recent context. When an "
                     "elliptical follow-up refers to one entry in recent_object_references, return that "
                     "entry's exact opaque id in object_reference_id instead of reconstructing its name. "
-                    "Leave object_reference_id null when no supplied entry is the intended object. Return "
+                    "Leave object_reference_id null when no supplied entry is the intended object. "
+                    "For a collection related to one prior object, such as topics belonging to a Kafka, "
+                    "return that object's id in scope_reference_id, keep the requested child resource in "
+                    "resource_query, set cardinality=collection, and put only the exact Kubernetes label "
+                    "key that relates child objects to the parent in relationship_selector_key. Do not copy "
+                    "the parent name into a selector; server code binds the trusted value. "
                     "requested_fields as dot-separated Kubernetes paths such as "
                     "metadata.labels, spec.template.spec.containers, or status.conditions. Use object_fields "
                     "for requested metadata/spec/status, exact_one for one named object, and collection for "
@@ -2205,7 +2258,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "object_name and namespace only when supplied by the question or recent context. For an "
                 "elliptical follow-up that refers to an entry in recent_object_references, select its exact "
                 "opaque id in object_reference_id instead of copying coordinates; otherwise leave that field "
-                "null. Return requested_fields as dot-separated "
+                "null. For a collection related to a prior object, return the parent's id in "
+                "scope_reference_id, preserve the requested child resource_query, set cardinality=collection, "
+                "and return only the relationship's Kubernetes label key in relationship_selector_key; "
+                "server code supplies the trusted parent name as its value. Return requested_fields as dot-separated "
                 "Kubernetes paths, and log container/previous/time bounds when applicable. Use "
                 "object_fields for requested metadata/spec/status and exact_one for one named object. "
                 "Extract label_selector only from an explicit label key/value filter. For events use "

@@ -248,6 +248,13 @@ select an explicitly referenced ConfigMap. The final model may combine observed 
 bounded curated knowledge and general Kubernetes/OpenShift knowledge, but must label proposed YAML as
 unapplied guidance and cite evidence for every claim about current cluster state. This path is generic
 across discoverable resource kinds and does not use keyword or sentence-pattern recognizers.
+Related collection follow-ups use a separate opaque scope reference. The model preserves the requested
+child resource type, selects the already-observed parent ID, and supplies only the Kubernetes label key
+that expresses the relationship. Normal code binds the retained parent namespace and name as the label
+value and compiles one bounded namespaced LIST. For example, topics belonging to a selected Strimzi
+Kafka compile to `KafkaTopic` objects in the Kafka namespace with the model-selected relationship key
+and server-bound Kafka name. Invalid, incomplete, or invented scope selections receive the existing
+bounded semantic correction attempt rather than being executed.
 An exact custom-resource read also derives bounded relationships from structured ConfigMap reference
 objects in its observed spec. The model receives the referenced ConfigMap as an opaque exact action and
 chooses whether it is needed; a `configuration_guidance` read remains open for that selection. Explicit

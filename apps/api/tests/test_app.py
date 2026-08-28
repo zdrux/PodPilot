@@ -288,6 +288,93 @@ def test_elliptical_configuration_followup_selects_grounded_object_reference() -
     )
 
 
+def test_related_inventory_followup_binds_parent_scope_and_selector_value() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.context = None
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.context = context
+            parent = next(
+                item for item in context["recent_object_references"]
+                if item["kind"] == "Kafka"
+                and item["name"] == "kafka-observability-cluster"
+            )
+            return InquirySemantics(
+                mode="inventory", operation="inventory", cardinality="collection",
+                resource_query="KafkaTopic", scope_reference_id=parent["id"],
+                relationship_selector_key="strimzi.io/cluster",
+                evidence_goal="List topics related to the selected Kafka cluster.",
+            )
+
+    evidence = [{
+        "id": "cluster-kafka-inventory",
+        "tool": "list_resources",
+        "data": {
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+            "scope": "cluster", "objectListComplete": True,
+            "items": [{
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "metadata": {
+                    "namespace": "kafka-observability",
+                    "name": "kafka-observability-cluster",
+                },
+            }],
+        },
+    }]
+    provider = Provider()
+    conversation = [{
+        "role": "assistant",
+        "content": (
+            "Kafka kafka-observability/kafka-observability-cluster is ready."
+        ),
+    }]
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="Show topics configured for the kafka-observability-cluster Kafka cluster.",
+        conversation=conversation,
+        cluster_names=["Central"],
+        evidence=evidence,
+    ))
+
+    assert inquiry is not None
+    assert inquiry.resource_query == "KafkaTopic"
+    assert inquiry.namespace == "kafka-observability"
+    assert inquiry.object_name is None
+    assert inquiry.label_selector == (
+        "strimzi.io/cluster=kafka-observability-cluster"
+    )
+    compiled = _semantic_resource_read_plan(
+        inquiry,
+        resource_catalog=[{
+            "resource": "kafkatopics.kafka.strimzi.io",
+            "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "KafkaTopic",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question="Show topics configured for the kafka-observability-cluster Kafka cluster.",
+        conversation=conversation,
+        inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.goal_type == "inventory"
+    assert plan.intents == [ReadIntent(
+        tool="list_resources", resource="kafkatopics.kafka.strimzi.io",
+        api_version="kafka.strimzi.io/v1beta2", kind="KafkaTopic",
+        namespace="kafka-observability",
+        label_selector="strimzi.io/cluster=kafka-observability-cluster",
+        limit=500,
+    )]
+
+
 def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
     class Provider:
         def __init__(self) -> None:

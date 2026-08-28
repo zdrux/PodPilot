@@ -10,6 +10,7 @@ from podpilot_api.model_provider import (
     AdHocLogAnalysis,
     AuthoredObjectRead,
     CapabilityReport,
+    CapabilitySelection,
     ConciseAdHocAnswer,
     InquirySemantics,
     ModelInterpretation,
@@ -774,7 +775,8 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     request = completions.requests[0]
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
-        "capability", "cardinality", "resource_query", "object_reference_id", "object_name",
+        "capability", "cardinality", "resource_query", "object_reference_id",
+        "scope_reference_id", "relationship_selector_key", "object_name",
         "namespace", "requested_fields", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
         "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
@@ -784,6 +786,26 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     assert request["max_tokens"] == 1000
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
     assert "cluster_audit_events" in request["messages"][0]["content"]
+
+
+def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:
+    selected = CapabilitySelection(
+        capability="resource_inventory",
+        cardinality="collection",
+        resource_query="KafkaTopic",
+        scope_reference_id="ref-0123456789abcdefabcd",
+        relationship_selector_key="strimzi.io/cluster",
+        evidence_goal="List topics associated with the selected Kafka resource.",
+    )
+
+    inquiry = selected.to_inquiry_semantics()
+
+    assert inquiry.mode == "inventory"
+    assert inquiry.operation == "inventory"
+    assert inquiry.cardinality == "collection"
+    assert inquiry.resource_query == "KafkaTopic"
+    assert inquiry.scope_reference_id == "ref-0123456789abcdefabcd"
+    assert inquiry.relationship_selector_key == "strimzi.io/cluster"
 
 
 def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> None:
