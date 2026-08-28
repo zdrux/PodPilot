@@ -1,54 +1,50 @@
-# Quiet Ledger Chat Redesign QA
+# Quiet Ledger Site-wide Redesign QA
 
-## Comparison Target
+## Comparison target
 
 - Source visual truth: `C:\Users\zdrux\.codex\generated_images\01a0463d-1d49-7eb1-bdea-fc62cd42c430\exec-94c3e556-1835-4d6a-b546-dd2a28714c09.png`
-- Browser-rendered implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-implementation.png`
-- Combined comparison evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-comparison.png`
-- Narrow-width evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-narrow.png`
-- Deployed route: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/ask/8ed4502c-e328-4e55-a617-22d6f87b8a63`
-- State: authenticated `podpilot-breakglass` user, existing six-message Ask conversation, newest response visible, evidence drawer closed.
+- Browser-rendered Ask implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-implementation.png`
+- Combined source/implementation evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-comparison.png`
+- Browser-rendered dashboard: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-dashboard.png`
+- Narrow dashboard evidence: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-narrow.png`
+- Deployed application: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/`
+- State: authenticated `podpilot-breakglass` user against live SNO data on build 32.
 
-## Viewport And Normalization
+## Viewports and coverage
 
-- Source pixels: 1816 x 866 at 72 DPI.
-- Implementation pixels and CSS viewport: 2048 x 976 at device scale 1 and 72 DPI.
-- The source was normalized to 2048 x 976 for the side-by-side comparison. Its aspect ratio differs by less than 0.1%, so no meaningful crop or density correction was needed.
-- Responsive check: 720 x 900 CSS pixels at device scale 1; body width remained 720 pixels with no horizontal page overflow.
+- Selected source: 1816 × 866 pixels.
+- Ask implementation: 1966 × 1063 pixels at the existing Chrome desktop viewport.
+- Dashboard implementation: 1951 × 1055 pixels at the existing Chrome desktop viewport.
+- Responsive check: 720 × 980 CSS pixels; captured content was 705 × 960 after browser chrome. No horizontal page overflow was visible.
+- The side-by-side comparison normalizes both Ask images into equal 908 × 533 regions without cropping.
 
 ## Findings
 
 No actionable P0, P1, or P2 differences remain.
 
-- Fonts and typography: the implementation preserves the source's compact operator hierarchy, 15px readable transcript body, small metadata, and monospace treatment for technical values. Live answer content is longer than the mock data but wraps without clipping.
-- Spacing and layout rhythm: messages occupy full-width transcript rows, the author/time/status metadata uses a dedicated left column, and low-contrast horizontal dividers replace the previous rounded message containers. Header, thread, and composer form one continuous surface.
-- Colors and visual tokens: the deployed Ask page uses the selected mellow slate-blue surface, silver-blue dividers, warm off-white text, pastel cyan actions, sage evidence states, and subdued apricot limitations without glow or high-contrast section blocks.
-- Image quality and assets: the selected direction contains no raster content that must be recreated. The existing PodPilot brand mark remains sharp at both tested widths.
-- Copy and content: live operational copy and persisted conversation data were intentionally preserved instead of replacing them with the mock's audit example.
-- Interaction and accessibility: the 40-item evidence drawer opened and closed correctly, the raw-response switch toggled, the composer enabled its action after text entry, keyboard-semantic controls remained intact, and Chrome reported no console warnings or errors.
-- Responsive behavior: at 720 x 900 the sidebar collapses to the brand/identity header, transcript metadata stacks above message content, the composer controls remain reachable, and no horizontal page overflow occurs.
+- Visual system: every tested route now shares the selected mellow slate-blue background, warm off-white type, silver-blue dividers, pastel cyan actions, sage success, and apricot warning accents.
+- Hierarchy: dashboard metrics, operational alerts, investigation lists, registries, forms, capability status, and incident sections use continuous surfaces and divider-led grouping instead of independent floating cards.
+- Ask fidelity: messages remain full-width transcript rows with a dedicated metadata column, subtle separators, a fixed composer, and flattened evidence/recommendation treatments.
+- Navigation: Alert Queue, Investigations, and the unused Actions placeholder are absent. Cluster Health, Ask PodPilot, Clusters, Cluster Memory, and Model Settings each showed exactly one correct active state in Chrome.
+- Functional coverage: Dashboard, Ask, Clusters, Memory, Model Settings, and an existing investigation detail rendered successfully with live data. Form controls, evidence semantics, status labels, and action affordances remain intact.
+- Responsive behavior: the 720px dashboard stacks the shell header, keeps metrics in a legible two-column rail, returns the signal-freshness item to full width, and preserves the operational queue without clipping.
+- Deployment: the stylesheet URL is versioned so Chrome does not retain the older site-wide design after rollout.
 
-## Focused Region Comparison
+## Comparison history
 
-A separate crop was not required. Both halves of `design-qa-comparison.png` preserve the desktop screen at native 976px height, and the transcript metadata, dividers, status colors, table, evidence row, and composer remain readable at that scale. The narrow capture separately verifies the responsive stacking behavior.
+- Pass 1: the deployed HTML showed the new navigation but Chrome retained the cached pre-redesign stylesheet.
+- Pass 2: added an explicit stylesheet version, deployed build 32, and confirmed the selected palette and divider hierarchy on all routes.
+- Final comparison: source and Ask implementation align on background continuity, metadata/content columns, horizontal rhythm, pastel status colors, sidebar density, and composer placement. Live copy differs intentionally from the concept mock.
 
-## Comparison History
+## Implementation checklist
 
-- Pass 1: no P0/P1/P2 mismatches found. The implementation matched the selected direction's continuous background, two-column transcript hierarchy, divider rhythm, pastel palette, and fixed composer without a corrective visual iteration.
-
-## Follow-up Polish
-
-- P3: the existing sidebar uses legacy text glyphs for several navigation icons. Replacing the entire product icon set with a coherent packaged icon family would improve consistency, but it is outside the selected chat-surface redesign and does not block this pass.
-- P3: very long authenticated usernames truncate in the compact desktop identity footer, matching existing behavior; a future identity-menu pass could expose the full name on hover or focus.
-
-## Implementation Checklist
-
-- [x] Uniform Ask background across header, thread, and composer.
-- [x] Full-width message rows with subtle horizontal separators.
-- [x] Dedicated desktop metadata column and narrow-width stacking.
-- [x] Flattened evidence and recommendation treatments.
-- [x] Authenticated Chrome interaction verification.
-- [x] Desktop and narrow-width overflow checks.
-- [x] Console warning/error check.
+- [x] Uniform background and token system across the full product.
+- [x] Card-heavy dashboard and management layouts converted to divider-led sections.
+- [x] Ask transcript treatment preserved across the global redesign.
+- [x] Unused sidebar destinations removed.
+- [x] Active navigation state verified on every remaining route.
+- [x] Authenticated Chrome review of Dashboard, Ask, Clusters, Memory, Model Settings, and investigation detail.
+- [x] Desktop and 720px responsive checks.
+- [x] Source/implementation comparison image reviewed.
 
 final result: passed

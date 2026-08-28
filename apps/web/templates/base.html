@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=quiet-ledger-2">
   <script src="{{ url_for('static', path='/app.js') }}" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -25,14 +25,6 @@
         <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
           <span class="nav-icon" aria-hidden="true">⌁</span>
           Cluster health
-        </a>
-        <a class="nav-link" href="/#alert-queue">
-          <span class="nav-icon" aria-hidden="true">!</span>
-          Alert queue
-        </a>
-        <a class="nav-link" href="/#recent-investigations">
-          <span class="nav-icon" aria-hidden="true">◎</span>
-          Investigations
         </a>
         <div class="nav-tree {% if request.url.path.startswith('/ask') %}expanded{% endif %}">
           <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
@@ -67,11 +59,6 @@
           </div>
           {% endif %}
         </div>
-        <span class="nav-link disabled" aria-disabled="true">
-          <span class="nav-icon" aria-hidden="true">↗</span>
-          Actions
-        </span>
-
         <p class="nav-label section-gap">Manage</p>
         {% if user is defined and user.role.value >= 30 %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
@@ -83,7 +70,7 @@
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory
         </a>
-        <a class="nav-link" href="/settings/model">
+        <a class="nav-link {% if request.url.path == '/settings/model' %}active{% endif %}" href="/settings/model">
           <span class="nav-icon" aria-hidden="true">⚙</span>
           Model settings
         </a>

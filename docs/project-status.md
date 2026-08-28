@@ -519,6 +519,16 @@ current repository and cluster state.
   Classification retries once after invalid JSON, and a failed unrelated classification cannot cite
   prior audit evidence.
 
+## 2026-08-28 Site-wide Quiet Ledger redesign
+
+- Extended the selected Quiet Ledger direction from Ask to the complete operator UI: Cluster Health, cluster registry, cluster memory, model registry, and investigation detail pages now share one mellow slate-blue surface and divider-led hierarchy.
+- Replaced floating dashboard metrics and page panels with continuous rails, subtle silver-blue separators, and flatter status treatments while preserving evidence, provenance, forms, action controls, and live cluster data.
+- Removed the unused Alert Queue, Investigations, and disabled Actions entries from primary navigation. Correct active states are now present for every remaining route, including Model Settings.
+- Versioned the stylesheet request so an existing Chrome session receives the redesign immediately after rollout instead of retaining the earlier cached CSS.
+- SNO binary build `podpilot-32` is deployed at digest `sha256:0b9240a085ee297ee9a740a12b4bab057d48e44a42120cb7503491e0a2f5eca7`.
+- Authenticated Chrome QA covered Dashboard, Ask, Clusters, Memory, Model Settings, an investigation detail, and the 720px responsive dashboard. `design-qa.md` records the passed source/implementation comparison.
+- Model-free verification remains green: 425 tests passed with 84% coverage.
+
 ## Known Limitations
 
 - Single-cluster, single-replica PoC with SNO-local storage and no production

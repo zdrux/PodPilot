@@ -667,3 +667,74 @@ body { font-size: 15px; }
 .side-empty p { font-size: 13px; }
 .metric-heading, .alert-main p, .checklist-panel li { font-size: 13px; }
 .metric-card p, .alert-meta span, .role-scope p { font-size: 12px; }
+
+/* Quiet Ledger — one calm, divider-led surface across the complete product. */
+:root {
+  --bg: #172538;
+  --surface: #172538;
+  --surface-raised: #1b2a3e;
+  --surface-soft: #203047;
+  --border: #304158;
+  --border-bright: #42556f;
+  --text: #edf1f4;
+  --muted: #a8b3bf;
+  --subtle: #7f8da0;
+  --cyan: #67cbd8;
+  --cyan-soft: rgba(103, 203, 216, .1);
+  --green: #78c9a3;
+  --orange: #e9a379;
+  --shadow: none;
+  --radius: 0;
+}
+
+html, body { background: var(--surface); }
+body { background-image: none; }
+.sidebar { border-color: #2b3b50; background: #111d2c; backdrop-filter: none; }
+.main { background: var(--surface); }
+.brand-mark { border-radius: 9px; background: #67cbd8; box-shadow: none; }
+.nav-link { border-radius: 7px; color: #b7c1cb; }
+.nav-link.active { border-color: rgba(103, 203, 216, .2); color: #f3f5f5; background: rgba(103, 203, 216, .1); }
+.nav-session-list li, .nav-subtree-heading a, .avatar { border-radius: 7px; }
+
+.panel, .metric-card { border-color: var(--border); border-radius: 0; background: transparent; box-shadow: none; }
+.panel-header { padding-inline: 0; }
+.button { border-radius: 7px; }
+.button.secondary { background: rgba(20, 33, 51, .42); }
+.tag { border-radius: 5px; background: rgba(17, 29, 44, .55); }
+.notice { border-width: 1px 0; border-radius: 0; background: rgba(233, 163, 121, .055); }
+
+.metrics { gap: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.metric-card { min-height: 126px; padding: 20px 18px; border-width: 0 1px 0 0; }
+.metric-card:last-child { border-right: 0; }
+.metric-card.healthy { border-color: var(--border); }
+.metric-value { margin-top: 17px; }
+
+.content-grid, .settings-grid, .model-registry-layout, .memory-layout, .investigation-grid {
+  gap: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.content-grid > *, .settings-grid > *, .model-registry-layout > *, .memory-layout > *, .investigation-grid > * { border: 0; }
+.content-grid > * + *, .settings-grid > * + *, .model-registry-layout > * + *, .memory-layout > * + *, .investigation-grid > * + * { border-left: 1px solid var(--border); }
+.content-grid .panel-header, .settings-grid .panel-header, .model-registry-layout .panel-header, .memory-layout .panel-header, .investigation-grid .panel-header { padding-inline: 20px; }
+.memory-search-panel, .investigation-summary, .investigation-plan, .model-analysis, .investigation-chat, .action-panel { border-width: 1px 0; margin-top: 20px; }
+.memory-search-panel .panel-header, .investigation-plan .panel-header, .model-analysis .panel-header, .investigation-chat .panel-header, .action-panel .panel-header { padding-inline: 20px; }
+.investigation-summary { padding-inline: 20px; }
+.memory-results li, .action-card, .metric-result { border-width: 0 0 1px; border-radius: 0; background: transparent; }
+.memory-results li:last-child, .action-card:last-child { border-bottom: 0; }
+.model-profile-list li, .memory-document-list li a { border-radius: 6px; }
+.role-scope { border-width: 1px 0 0; border-radius: 0; background: transparent; }
+.alert-meta span, .empty-steps span { background: rgba(17, 29, 44, .58); }
+.evidence-dialog { background: #172538; box-shadow: -18px 0 48px rgba(7, 14, 23, .34); }
+
+@media (max-width: 1050px) {
+  .settings-grid > * + *, .model-registry-layout > * + *, .memory-layout > * + *, .content-grid > *, .investigation-grid > * + * { border-left: 0; }
+  .settings-grid > * + *, .model-registry-layout > * + *, .memory-layout > * + *, .content-grid > * + *, .investigation-grid > * + * { border-top: 1px solid var(--border); }
+}
+
+@media (max-width: 720px) {
+  .metrics { grid-template-columns: 1fr 1fr; }
+  .metric-card { min-height: 112px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .metric-card:nth-child(odd) { border-right: 1px solid var(--border); }
+  .metric-card:last-child { grid-column: 1 / -1; border-bottom: 0; }
+}
