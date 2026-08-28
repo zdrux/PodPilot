@@ -45,6 +45,7 @@ from podpilot_api.main import (
     _grounded_read_candidates,
     _investigation_capability_ledger,
     _investigation_unit_cost,
+    _inventory_plan_scope_errors,
     _latest_audit_query_semantics,
     _merge_validated_recommendations,
     _model_log_analysis_section,
@@ -4029,6 +4030,101 @@ def test_existence_question_renders_identifiable_multi_cluster_inventory() -> No
     assert "| `Simplii East DEV` | `Kafka` | `events` | `events-kafka` | Unknown |" in content
     assert "must not be interpreted as healthy or unhealthy" in content
     assert rendered["citations"] == ["central-kafka", "east-kafka"]
+
+
+def test_kafka_inventory_omits_unrelated_clusterrole_list_evidence() -> None:
+    evidence = [
+        {
+            "id": "central-kafka", "cluster_id": "central",
+            "cluster_name": "Simplii Central DEV", "tool": "list_resources",
+            "data": {
+                "kind": "Kafka", "scope": "cluster", "names": ["orders-kafka"],
+                "objects": [{"namespace": "orders", "name": "orders-kafka"}],
+            },
+        },
+        {
+            "id": "east-roles", "cluster_id": "east",
+            "cluster_name": "CM APP East DEV", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterRole", "scope": "cluster",
+                "names": ["admin", "aggregate-view"],
+                "objects": [{"name": "admin"}, {"name": "aggregate-view"}],
+            },
+        },
+    ]
+
+    rendered = _deterministic_inventory_answer(
+        question="List Kafka clusters on each OpenShift cluster.",
+        preferred_kind="Kafka",
+        inventory_only=True,
+        evidence=evidence,
+        activity=[
+            {"tool": "list_resources", "status": "succeeded", "evidence_ids": [item["id"]]}
+            for item in evidence
+        ],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "**Found:** 1 matching resource on 1 of 2 queried OpenShift clusters." in content
+    assert "orders-kafka" in content
+    assert "No compatible requested-kind inventory evidence" in content
+    assert "ClusterRole" not in content
+    assert "aggregate-view" not in content
+
+
+def test_kafka_inventory_candidates_do_not_include_clusterroles() -> None:
+    candidates = _grounded_read_candidates(
+        question="List Kafka clusters on each OpenShift cluster.",
+        evidence=[{
+            "id": "roles-list", "tool": "list_resources",
+            "data": {
+                "resource": "clusterroles.rbac.authorization.k8s.io",
+                "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+                "scope": "cluster", "objects": [{"name": "admin"}],
+            },
+        }],
+        relationship_graph={"nodes": [], "frontier": [], "reverse_frontier": []},
+        recovery_anchor_plan=None,
+        seen_intents=set(),
+        preferred_resource_query="Kafka",
+        catalog_entries=[
+            {
+                "resource": "clusterroles.rbac.authorization.k8s.io",
+                "apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole",
+                "namespaced": False, "verbs": ["get", "list"],
+            },
+            {
+                "resource": "kafkas.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "namespaced": True, "verbs": ["get", "list"],
+            },
+        ],
+    )
+
+    assert [candidate.intent.kind for candidate in candidates] == ["Kafka"]
+
+
+def test_model_authored_inventory_plan_cannot_change_requested_kind() -> None:
+    plan = ReadPlan(
+        goal_type="inventory",
+        scope_summary="List a different catalog resource.",
+        intents=[ReadIntent(
+            tool="list_resources",
+            resource="clusterroles.rbac.authorization.k8s.io",
+            api_version="rbac.authorization.k8s.io/v1",
+            kind="ClusterRole",
+            limit=500,
+        )],
+    )
+    inquiry = InquirySemantics(
+        mode="inventory", resource_query="Kafka", needs_object_details=False,
+        evidence_goal="List Kafka resources on the selected clusters.",
+    )
+
+    assert _inventory_plan_scope_errors(plan, inquiry) == [
+        "Inventory read Kind 'ClusterRole' does not match the requested resource Kind 'Kafka'."
+    ]
 
 
 def test_inventory_collection_uses_live_catalog_without_model_planning() -> None:

@@ -1504,6 +1504,7 @@ def _deterministic_provider_failure_answer(
             evidence=evidence,
             activity=activity,
             inventory_only=inventory_only,
+            preferred_kind=preferred_kind,
         )
     )
     if specialized is None:
@@ -2447,6 +2448,7 @@ def _deterministic_inventory_answer(
     activity: list[dict[str, object]],
     question: str = "",
     inventory_only: bool | None = None,
+    preferred_kind: str | None = None,
 ) -> dict[str, object] | None:
     """Render validated list evidence when the model cannot produce a useful answer."""
 
@@ -2461,12 +2463,20 @@ def _deterministic_inventory_answer(
         if entry.get("status") == "succeeded" and entry.get("tool") == "list_resources"
         for evidence_id in (entry.get("evidence_ids") or [])
     }
-    observations = [
+    all_observations = [
         item for item in reversed(evidence)
         if str(item.get("id")) in current_ids
         and item.get("tool") == "list_resources"
         and isinstance(item.get("data"), dict)
         and isinstance(item["data"].get("names"), list)
+    ]
+    observations = [
+        item for item in all_observations
+        if not preferred_kind
+        or _resource_kind_matches_query(item["data"].get("kind"), preferred_kind)
+    ]
+    incompatible_observations = [
+        item for item in all_observations if item not in observations
     ]
     discovery_ids = {
         str(evidence_id)
@@ -2482,7 +2492,7 @@ def _deterministic_inventory_answer(
         and isinstance(item.get("data"), dict)
         and item["data"].get("inventoryMatch") == "none"
     ]
-    if not observations and not discovery_misses:
+    if not observations and not discovery_misses and not incompatible_observations:
         return None
 
     def inventory_rows(data: dict[str, object]) -> list[tuple[str, str, str]]:
@@ -2516,7 +2526,7 @@ def _deterministic_inventory_answer(
             rows.append((namespace[:253], name, ready))
         return rows
 
-    inventory_sources = [*observations, *discovery_misses]
+    inventory_sources = [*observations, *discovery_misses, *incompatible_observations]
     source_cluster_ids = {
         str(item.get("cluster_id") or item.get("cluster_name") or "cluster")
         for item in inventory_sources
@@ -2555,6 +2565,26 @@ def _deterministic_inventory_answer(
                 f"| `{cluster_name}` | — | — | "
                 "_No matching readable API resource type_ | Not applicable |"
             )
+        represented_cluster_ids = {
+            str(item.get("cluster_id") or item.get("cluster_name") or "cluster")
+            for item in [*observations, *discovery_misses]
+        }
+        for observation in reversed(incompatible_observations):
+            cluster_name = str(
+                observation.get("cluster_name")
+                or observation.get("cluster_id")
+                or "cluster"
+            )
+            cluster_id = str(observation.get("cluster_id") or cluster_name)
+            if cluster_id in represented_cluster_ids:
+                continue
+            represented_cluster_ids.add(cluster_id)
+            citations.append(str(observation["id"]))
+            requested_kind = str(preferred_kind or "requested resource")[:253]
+            rows.append(
+                f"| `{cluster_name}` | `{requested_kind}` | — | "
+                "_No compatible requested-kind inventory evidence_ | Not applicable |"
+            )
         return {
             "answer_mode": "evidence_based",
             "content": (
@@ -2569,6 +2599,23 @@ def _deterministic_inventory_answer(
                 "a Ready condition; it must not be interpreted as healthy or unhealthy."
             ),
             "citations": citations,
+        }
+    if incompatible_observations and not observations and not discovery_misses:
+        observation = incompatible_observations[0]
+        cluster_name = str(
+            observation.get("cluster_name")
+            or observation.get("cluster_id")
+            or "cluster"
+        )
+        requested_kind = str(preferred_kind or "requested resource")[:253]
+        return {
+            "answer_mode": "insufficient_evidence",
+            "content": (
+                f"## {requested_kind} inventory\n\n"
+                f"No compatible `{requested_kind}` inventory evidence was collected on "
+                f"`{cluster_name}`. Reads of unrelated resource Kinds were omitted."
+            ),
+            "citations": [str(observation["id"])],
         }
     if discovery_misses:
         observation = discovery_misses[0]
@@ -4140,11 +4187,33 @@ def _resource_query_terms(value: object) -> set[str]:
     return terms
 
 
+_GENERIC_RESOURCE_SCOPE_TERMS = {
+    "cluster", "instance", "object", "resource", "running", "workload",
+}
+
+
+def _focused_resource_query_terms(value: object) -> set[str]:
+    """Remove inventory prose that must not make an unrelated Kind relevant."""
+
+    return _resource_query_terms(value) - _GENERIC_RESOURCE_SCOPE_TERMS
+
+
+def _resource_kind_matches_query(kind: object, resource_query: object) -> bool:
+    """Require the observed Kind to preserve the operator's requested resource noun."""
+
+    def normalized_identifier(value: object) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+    normalized_kind = normalized_identifier(kind)
+    normalized_query = normalized_identifier(resource_query)
+    return bool(normalized_kind) and normalized_kind == normalized_query
+
+
 def _catalog_relevance(question: str, entry: dict[str, object]) -> int:
     """Score only explicit lexical matches; unrelated catalog APIs stay out of context."""
 
-    question_terms = _resource_query_terms(question)
-    resource_terms = _resource_query_terms(
+    question_terms = _focused_resource_query_terms(question)
+    resource_terms = _focused_resource_query_terms(
         f"{entry.get('resource') or ''} {entry.get('kind') or ''}"
     )
     overlap = question_terms.intersection(resource_terms)
@@ -4169,6 +4238,7 @@ def _grounded_read_candidates(
     seen_intents: set[str],
     investigation_gaps: list[InvestigationGap] | None = None,
     catalog_entries: list[dict[str, object]] | None = None,
+    preferred_resource_query: str | None = None,
     limit: int = 12,
 ) -> list[_GroundedReadCandidate]:
     """Build compact non-executable choices backed only by trusted server state."""
@@ -4435,6 +4505,10 @@ def _grounded_read_candidates(
         kind = str(entry.get("kind") or "")
         if not resource or not kind:
             continue
+        if preferred_resource_query and not _resource_kind_matches_query(
+            kind, preferred_resource_query,
+        ):
+            continue
         try:
             intent = ReadIntent(
                 tool="list_resources",
@@ -4476,6 +4550,14 @@ def _grounded_read_candidates(
         "resource_read": 4,
         "http_probe": 5,
     }
+    if preferred_resource_query:
+        candidates = [
+            candidate for candidate in candidates
+            if not candidate.intent.kind
+            or _resource_kind_matches_query(
+                candidate.intent.kind, preferred_resource_query,
+            )
+        ]
     candidates.sort(key=lambda item: (
         0 if item.capability in gap_capabilities else 1,
         0 if item.capability == "initial_discovery" and not evidence else 1,
@@ -4703,6 +4785,33 @@ def _compile_grounded_candidate_plan(
     intents = [by_id[candidate_id].intent for candidate_id in plan.candidate_ids]
     intents.extend(plan.intents)
     return plan.model_copy(update={"candidate_ids": [], "intents": intents}), []
+
+
+def _inventory_plan_scope_errors(
+    plan: ReadPlan,
+    inquiry: InquirySemantics | None,
+) -> list[str]:
+    """Reject inventory LISTs that drift away from the requested resource Kind."""
+
+    if (
+        inquiry is None
+        or inquiry.mode != "inventory"
+        or not inquiry.resource_query
+    ):
+        return []
+    errors: list[str] = []
+    for intent in plan.intents:
+        if (
+            intent.tool not in {"get_resource", "list_resources", "search_resources"}
+            or not intent.kind
+        ):
+            continue
+        if not _resource_kind_matches_query(intent.kind, inquiry.resource_query):
+            errors.append(
+                f"Inventory read Kind {intent.kind!r} does not match the requested "
+                f"resource Kind {inquiry.resource_query!r}."
+            )
+    return errors
 
 
 def _read_progress_message(intent) -> str:
@@ -6980,6 +7089,11 @@ async def _collect_bounded_cluster_reads(
                     seen_intents=seen_intents,
                     investigation_gaps=investigation_gaps,
                     catalog_entries=catalog_entries,
+                    preferred_resource_query=(
+                        inquiry.resource_query
+                        if inquiry is not None and inquiry.mode == "inventory"
+                        else None
+                    ),
                 )
                 gap_capabilities = {
                     gap.capability for gap in (investigation_gaps or [])
@@ -7045,6 +7159,7 @@ async def _collect_bounded_cluster_reads(
                     question=question,
                     evidence=evidence,
                 )
+                binding_errors.extend(_inventory_plan_scope_errors(bound_plan, inquiry))
                 target_errors = [*candidate_errors, *binding_errors]
                 rejected_log_intents.extend(rejected)
                 prepared_signatures: list[str] = []
@@ -8424,6 +8539,9 @@ def create_app(
                         inventory_only=(
                             inquiry.mode == "inventory" if inquiry is not None else None
                         ),
+                        preferred_kind=(
+                            inquiry.resource_query if inquiry is not None else None
+                        ),
                     )
                     if not followup_action
                     and (
@@ -8873,6 +8991,9 @@ def create_app(
                     question=message_text,
                     inventory_only=(
                         inquiry.mode == "inventory" if inquiry is not None else None
+                    ),
+                    preferred_kind=(
+                        inquiry.resource_query if inquiry is not None else None
                     ),
                 )
                 metric_ranking_answer = _deterministic_metric_ranking_answer(

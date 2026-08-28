@@ -351,7 +351,11 @@ sufficient, that deterministic table is the final answer: PodPilot skips the gen
 final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
 completed inventory request. Multi-cluster totals distinguish clusters queried from
 clusters with matches. A missing projected Ready condition is displayed as `Unknown`,
-never as proof that the object is running or unhealthy.
+never as proof that the object is running or unhealthy. Inventory planning and malformed-plan
+recovery preserve the classifier's requested resource Kind: generic scope words such as `cluster`
+cannot make `ClusterRole` relevant to a Kafka-cluster request, model-authored LISTs for an
+incompatible Kind are rejected, and the deterministic renderer omits any incompatible LIST
+evidence that survives collection.
 Model-authored cluster-wide LIST and search reads may use `namespace: "*"` as shorthand; normal
 code converts that placeholder to the broker's canonical omitted namespace before validation.
 
@@ -400,7 +404,9 @@ frontier. Chat Completions retains independently valid action IDs and object rea
 schema-repair attempt. If no valid selection survives but exact unread candidates were derived from
 trusted observations, PodPilot performs one highest-priority candidate through the normal broker and
 returns that evidence to the next model round. Rejected model fields never supply coordinates, and the
-recovery is disclosed in limitations and audit logs.
+recovery is disclosed in limitations and audit logs. For inventory goals, this recovery frontier is
+restricted to candidates compatible with the requested resource Kind; it never substitutes a merely
+lexically adjacent API type.
 
 For diagnostic, log, and explanation goals, the first evidence-supported request to stop is
 subject to one model sufficiency review. The review receives the same observations, findings,
