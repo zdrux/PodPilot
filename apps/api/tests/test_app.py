@@ -4237,6 +4237,164 @@ def test_semantic_exact_named_resource_compiles_get_through_live_catalog() -> No
     )]
 
 
+def test_generic_named_pod_failure_compiles_exact_get_and_continues_diagnosis() -> None:
+    question = (
+        'find out why the pod "ids-simplii-66b77b9886-8bd6s" in the '
+        '"cah-dev" namespace is NotReady?'
+    )
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            capability="cluster_investigation", mode="investigate", operation=None,
+            cardinality="exact_one", resource_query="Pod",
+            object_name="ids-simplii-66b77b9886-8bd6s", namespace="cah-dev",
+            needs_object_details=True,
+            evidence_goal="Determine why the exact Pod is NotReady.",
+        ),
+        resource_catalog=[{
+            "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question=question, conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is False
+    assert plan.intents == [ReadIntent(
+        tool="get_resource", resource="pods", api_version="v1", kind="Pod",
+        namespace="cah-dev", name="ids-simplii-66b77b9886-8bd6s",
+    )]
+
+
+def test_named_notready_pod_collects_only_exact_pod_logs_and_events() -> None:
+    pod_name = "ids-simplii-66b77b9886-8bd6s"
+    question = (
+        f'find out why the pod "{pod_name}" in the "cah-dev" namespace is NotReady?'
+    )
+
+    class Provider:
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            self.contexts.append(context)
+            event_candidate = next((
+                item for item in context["read_candidates"]
+                if item["capability"] == "cluster_events"
+            ), None)
+            if event_candidate is not None:
+                return ReadPlan(
+                    goal_type="diagnose",
+                    scope_summary="Read Events involving only the exact NotReady Pod.",
+                    candidate_ids=[event_candidate["id"]],
+                )
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                stop_reason="evidence_sufficient",
+                scope_summary="The exact Pod, container logs, and related Events were read.",
+                supporting_evidence_ids=[
+                    evidence_id
+                    for item in context["observations"]
+                    for evidence_id in [item.get("id")]
+                    if evidence_id
+                ],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+                "namespaced": True, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.tool == "get_resource":
+                return ReadResult((AdHocObservation(
+                    id="exact-pod", tool="get_resource", summary="Read the exact Pod.",
+                    source=f"kubernetes:v1:Pod:cah-dev/{pod_name}",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "apiVersion": "v1", "kind": "Pod",
+                        "metadata": {"namespace": "cah-dev", "name": pod_name},
+                        "spec": {"containers": [{"name": "ids-simplii"}]},
+                        "status": {
+                            "phase": "Running",
+                            "conditions": [{
+                                "type": "Ready", "status": "False",
+                                "reason": "ContainersNotReady",
+                            }],
+                            "containerStatuses": [{
+                                "name": "ids-simplii", "ready": False,
+                                "restartCount": 0,
+                            }],
+                        },
+                    },
+                ),))
+            if intent.tool == "pod_logs":
+                return ReadResult((AdHocObservation(
+                    id="exact-log", tool="pod_logs", summary="Read bounded Pod logs.",
+                    source=f"kubernetes:v1:Pod/log:cah-dev/{pod_name}?current",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "container": "ids-simplii", "previous": False,
+                        "tail": "Login failed for SQL datasource",
+                    },
+                ),))
+            assert intent.tool == "search_resources"
+            return ReadResult((AdHocObservation(
+                id="exact-events", tool="search_resources",
+                summary="Read Events involving the exact Pod.",
+                source="kubernetes:v1:Event:cah-dev/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "kind": "Event", "scope": "cah-dev", "names": [],
+                    "matchField": "involvedObject.name", "matchValue": pod_name,
+                    "objectListComplete": True,
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=provider, cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[], adhoc_inventory_max_objects=500,
+        ),
+        actor="ivy", workflow_id="named-notready-pod", question=question,
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            capability="cluster_investigation", mode="investigate", operation=None,
+            cardinality="exact_one", resource_query="Pod", object_name=pod_name,
+            namespace="cah-dev", needs_object_details=True,
+            evidence_goal="Determine why the exact Pod is NotReady.",
+        ),
+    ))
+
+    assert explorer.calls[0].tool == "get_resource"
+    assert {call.tool for call in explorer.calls[1:]} == {
+        "pod_logs", "search_resources",
+    }
+    assert all(call.tool != "list_resources" for call in explorer.calls)
+    event_call = next(call for call in explorer.calls if call.tool == "search_resources")
+    assert event_call.namespace == "cah-dev"
+    assert event_call.match_field == "involvedObject.name"
+    assert event_call.match_value == pod_name
+    assert {item["id"] for item in result.evidence} == {
+        "exact-pod", "exact-log", "exact-events",
+    }
+
+
 def test_named_object_configuration_guidance_compiles_generic_exact_get() -> None:
     compiled = _semantic_resource_read_plan(
         InquirySemantics(
@@ -5208,7 +5366,7 @@ def test_inventory_fallback_enumerates_custom_resources_without_question_classif
     assert rendered["citations"] == ["cluster-kafka-1"]
 
 
-def test_free_form_model_planned_list_uses_configured_broker_ceiling() -> None:
+def test_free_form_diagnostic_list_retains_small_model_sample() -> None:
     class FreeFormPlanner:
         def __init__(self) -> None:
             self.calls = 0
@@ -5300,7 +5458,7 @@ def test_free_form_model_planned_list_uses_configured_broker_ceiling() -> None:
     assert len(explorer.calls) == 1
     assert explorer.calls[0].resource == "kafkatopics"
     assert explorer.calls[0].namespace == "kafka-observability"
-    assert explorer.calls[0].limit == 500
+    assert explorer.calls[0].limit == 20
     assert result.evidence[-1]["data"]["names"] == ["audit-events"]
 
 
@@ -8339,7 +8497,17 @@ def test_failure_question_offers_healthy_exact_pod_log_candidate() -> None:
     )
 
     assert any(candidate.capability == "pod_logs" for candidate in failure_candidates)
+    event_candidates = [
+        candidate for candidate in failure_candidates
+        if candidate.capability == "cluster_events"
+    ]
+    assert [candidate.intent for candidate in event_candidates] == [ReadIntent(
+        tool="search_resources", resource="events", api_version="v1", kind="Event",
+        namespace="maas", match_field="involvedObject.name",
+        match_value="model-server-abc", match_operator="exact", limit=20,
+    )]
     assert all(candidate.capability != "pod_logs" for candidate in neutral_candidates)
+    assert all(candidate.capability != "cluster_events" for candidate in neutral_candidates)
 
 
 def test_grounded_candidates_keep_query_relevant_catalog_reads_with_owner_edges() -> None:

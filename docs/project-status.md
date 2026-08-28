@@ -345,6 +345,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   endpoint, Pod, log, metric, and probe checks are not called unavailable. Medium/high structured
   answer gaps—and capability-matched suggested checks—can trigger one bounded typed collection phase
   and answer regeneration. Gap, graph, and recommendation prose remains non-executable.
+- Exact named-Pod failure questions now retain their operator-grounded namespace/name even when the
+  capability classifier returns generic investigation semantics. They begin with one exact Pod GET,
+  offer only bounded logs for observed containers and an exact `involvedObject.name` Event search,
+  and never promote a diagnostic 20-object catalog sample to the 500-object inventory ceiling.
 - Grounded traversal now uses one compact resource-agnostic action-selection contract. Normal code
   offers at most twelve opaque reads derived from exact operator anchors, observed relationships,
   unresolved evidence needs, implicated logs, and bounded catalog matches. The model may select up to

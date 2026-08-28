@@ -4120,7 +4120,7 @@ class _GroundedReadCandidate:
 
 _FAILURE_DIAGNOSTIC_PATTERN = re.compile(
     r"\b(?:internal server error|5xx|5\d\d|errors?|fail(?:ed|ing|ure)?|"
-    r"crash(?:ed|ing|loop)?|timeout|unavailable)\b",
+    r"crash(?:ed|ing|loop)?|timeout|unavailable|unhealthy|not\s*ready|readiness)\b",
     re.IGNORECASE,
 )
 
@@ -4286,6 +4286,34 @@ def _grounded_read_candidates(
             evidence_ids=[log_candidate.evidence_id],
             relation="has_logs",
         )
+
+    # A failure question about an exact observed Pod should correlate only Events
+    # involving that Pod. A namespace-wide Event LIST is both noisy and unnecessary.
+    if failure_logs_relevant:
+        for observation in evidence:
+            if observation.get("tool") != "get_resource":
+                continue
+            data = observation.get("data")
+            if not isinstance(data, dict) or str(data.get("kind") or "") != "Pod":
+                continue
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            namespace = str(metadata.get("namespace") or "")
+            pod_name = str(metadata.get("name") or "")
+            evidence_id = str(observation.get("id") or "")
+            if not namespace or not pod_name:
+                continue
+            add(
+                ReadIntent(
+                    tool="search_resources", resource="events", api_version="v1", kind="Event",
+                    namespace=namespace, match_field="involvedObject.name",
+                    match_value=pod_name, match_operator="exact", limit=20,
+                ),
+                capability="cluster_events",
+                target=f"Events involving Pod:{namespace}/{pod_name}",
+                reason="The exact observed Pod can be correlated with only its related Events.",
+                evidence_ids=[evidence_id] if evidence_id else [],
+                relation="has_events",
+            )
 
     # A bounded list/search is discovery. Its server-normalized object references
     # authorize exact GET candidates on the next round without trusting model prose.
@@ -6261,11 +6289,22 @@ def _semantic_resource_read_plan(
 ) -> tuple[ReadPlan, bool] | None:
     """Compile grounded semantic coordinates through the live safe resource catalog."""
 
+    generic_exact_diagnostic = bool(
+        inquiry is not None
+        and inquiry.mode == "investigate"
+        and inquiry.operation is None
+        and inquiry.resource_query
+        and inquiry.object_name
+        and inquiry.namespace
+    )
     if (
         inquiry is None
-        or inquiry.operation not in {
+        or (
+            inquiry.operation not in {
             "inventory", "object_fields", "logs", "events", "configuration_guidance"
-        }
+            }
+            and not generic_exact_diagnostic
+        )
         or not inquiry.resource_query
     ):
         return None
@@ -6376,9 +6415,11 @@ def _semantic_resource_read_plan(
             ),
             False,
         )
-    exact_one = inquiry.cardinality == "exact_one" or inquiry.operation in {
-        "object_fields", "configuration_guidance"
-    }
+    exact_one = (
+        generic_exact_diagnostic
+        or inquiry.cardinality == "exact_one"
+        or inquiry.operation in {"object_fields", "configuration_guidance"}
+    )
     if exact_one:
         if not name:
             return None
@@ -6406,6 +6447,10 @@ def _semantic_resource_read_plan(
             inquiry.operation == "configuration_guidance"
             and str(catalog_intent.kind or "").casefold() != "configmap"
         )
+        continue_diagnostic_investigation = (
+            str(catalog_intent.kind or "").casefold() == "pod"
+            and _failure_logs_are_relevant(question)
+        )
         return (
             ReadPlan(
                 goal_type=inquiry.planner_goal,
@@ -6419,7 +6464,10 @@ def _semantic_resource_read_plan(
                     name=name,
                 )],
             ),
-            not continue_for_referenced_configuration,
+            not (
+                continue_for_referenced_configuration
+                or continue_diagnostic_investigation
+            ),
         )
     return (
         ReadPlan(
@@ -7349,12 +7397,12 @@ async def _collect_bounded_cluster_reads(
             intent = normalize_read_intent(proposed_intent)
             if (
                 intent.tool == "list_resources"
+                and inventory_request
                 and intent.limit == ReadIntent.model_fields["limit"].default
             ):
-                # The read broker, not a wording classifier, owns the bounded LIST policy.
-                # Replace the schema's implicit 20-object default so free-form questions
-                # receive the configured inventory window. Preserve a deliberate planner
-                # limit used by purpose-built diagnostic reads.
+                # Explicit inventories use the configured collection window. Diagnostic
+                # discovery retains its deliberately small sample instead of expanding to
+                # a cluster-wide inventory merely because 20 is also the schema default.
                 intent = intent.model_copy(
                     update={"limit": settings.adhoc_inventory_max_objects}
                 )

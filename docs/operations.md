@@ -991,6 +991,14 @@ server-generated Markdown table containing every collected name. If the table
 states that the object list is incomplete, increase the ceiling deliberately
 rather than removing the bound.
 
+The inventory ceiling applies only to explicit inventory requests. A diagnostic
+catalog LIST retains its small requested sample and is never promoted to 500 merely
+because its limit equals the schema default. A failure question containing an exact
+Pod name and namespace starts with one exact Pod GET even when model classification
+returns generic `cluster_investigation`. PodPilot then uses the observed container
+coordinates for bounded logs and searches Events by exact `involvedObject.name`;
+it does not list every Pod in the cluster or every Event in the namespace.
+
 Field searches use a separate scan ceiling so a small result can be found beyond the
 ordinary inventory window. `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS` defaults to 2000 and
 accepts 250–5000; in OpenShift set `data.adhoc_search_max_scan_objects` in
