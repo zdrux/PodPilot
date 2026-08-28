@@ -9,10 +9,12 @@ from podpilot_api.model_provider import (
     AdHocLogAnalysis,
     CapabilityReport,
     InquirySemantics,
+    ModelInterpretation,
     ModelProfileConfig,
     ModelProviderError,
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
+    OpenAIResponsesProvider,
     _minimal_action_payload,
     _minimal_answer_payload,
     capture_raw_model_responses,
@@ -58,6 +60,20 @@ class RecordingCompletions:
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
+
+
+class RecordingResponses:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def parse(self, **kwargs):
+        self.requests.append(kwargs)
+        return SimpleNamespace(output_parsed=ModelInterpretation(
+            summary="The supplied evidence is bounded.",
+            operational_context="Capability test",
+            recommended_checks=["none"],
+            caveats=[],
+        ))
 
 
 class LogAnalysisCompletions(RecordingCompletions):
@@ -229,7 +245,9 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
 
     answer = provider.answer_ad_hoc(
-        profile(), "secret-token", {"observations": [{"id": "cluster-pod-1"}]}
+        profile(reasoning_effort="high"),
+        "secret-token",
+        {"observations": [{"id": "cluster-pod-1"}]},
     )
 
     assert isinstance(answer, AdHocAnswer)
@@ -243,6 +261,50 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert set(schema["properties"]) == {"answer", "citations"}
     assert "PodPilot handles checks separately" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
+    assert request["reasoning_effort"] == "high"
+
+
+def test_responses_adapter_sends_configured_reasoning_effort() -> None:
+    responses = RecordingResponses()
+    client = SimpleNamespace(responses=responses)
+    provider = OpenAIResponsesProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.interpret(
+        profile(api_type="responses", reasoning_effort="medium"),
+        "secret-token",
+        {"observations": []},
+    )
+
+    assert responses.requests[0]["reasoning"] == {"effort": "medium"}
+
+
+def test_adapters_omit_reasoning_when_provider_default_is_selected() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.answer_ad_hoc(
+        profile(), "secret-token", {"observations": [{"id": "cluster-pod-1"}]}
+    )
+
+    assert "reasoning_effort" not in completions.requests[0]
+
+
+def test_explicit_reasoning_uses_profile_output_budget_for_hidden_tokens() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    provider.answer_ad_hoc(
+        profile(max_output_tokens=4096, reasoning_effort="high"),
+        "secret-token",
+        {"observations": [{"id": "cluster-pod-1"}]},
+    )
+
+    assert completions.requests[0]["max_tokens"] == 4096
 
 
 def test_minimal_answer_payload_keeps_bounded_material_details() -> None:

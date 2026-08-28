@@ -54,6 +54,7 @@ class ModelProfile(Base):
     tls_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="system")
     custom_ca_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     max_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=128_000)
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
     tool_calling_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vision_hint: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)

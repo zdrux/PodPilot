@@ -50,6 +50,7 @@ from podpilot_api.main import (
     _model_fact_cards,
     _parse_tags,
     _partition_investigation_gaps,
+    _profile_is_usable,
     _reconcile_validated_answer_gaps,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
@@ -107,6 +108,24 @@ from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:
+    profile = ModelProfile(
+        provider_label="Internal", base_url="https://models.example.test/v1",
+        chat_model="test-model", embedding_model=None, timeout_seconds=30,
+        max_output_tokens=1200, status="reduced_capability", updated_by="ivy",
+        capabilities_json=json.dumps({
+            "reachable": True, "tls_valid": True, "authenticated": True,
+            "model_available": True, "structured_output": True, "ask_schemas": False,
+        }),
+    )
+
+    assert _profile_is_usable(profile) is True
+    profile.capabilities_json = json.dumps({"reachable": True, "structured_output": False})
+    assert _profile_is_usable(profile) is False
+    profile.status = "unavailable"
+    assert _profile_is_usable(profile) is False
 
 
 def test_est_time_formatter_uses_the_requested_fixed_utc_minus_four_display() -> None:
@@ -250,7 +269,7 @@ def test_explicit_audit_question_uses_grounded_fallback_after_invalid_classifica
     assert result.audit_operation_scope == "mutations"
 
 
-def test_explicit_audit_fallback_without_username_requests_clarification() -> None:
+def test_explicit_audit_fallback_without_username_queries_all_users() -> None:
     inquiry = _deterministic_audit_inquiry(
         "show me the last 10 delete actions according to the audit log"
     )
@@ -262,8 +281,18 @@ def test_explicit_audit_fallback_without_username_requests_clarification() -> No
         inquiry, default_limit=20, initial_range_seconds=3600,
     )
     assert compiled is not None
-    assert compiled[0].decision == "needs_clarification"
-    assert compiled[0].intents == []
+    assert compiled[0].decision == "collect"
+    assert compiled[0].scope_summary == (
+        "List the last 10 delete audit operations across all users."
+    )
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_audit_events",
+        audit_operation_scope="deletes",
+        audit_outcome="all",
+        audit_search_until_limit=True,
+        range_seconds=3600,
+        limit=10,
+    )]
 
 
 def test_capability_ledger_distinguishes_available_uncollected_from_unavailable() -> None:
@@ -1906,7 +1935,7 @@ def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
     )]
 
 
-def test_semantic_audit_plan_requests_missing_username_instead_of_other_reads() -> None:
+def test_semantic_audit_plan_compiles_missing_username_as_cluster_wide() -> None:
     compiled = _semantic_audit_read_plan(
         InquirySemantics(
             mode="audit",
@@ -1922,8 +1951,32 @@ def test_semantic_audit_plan_requests_missing_username_instead_of_other_reads() 
     assert compiled is not None
     plan, terminal = compiled
     assert terminal is True
-    assert plan.decision == "needs_clarification"
-    assert plan.intents == []
+    assert plan.decision == "collect"
+    assert plan.scope_summary == "List the last 20 audit operations across all users."
+    assert len(plan.intents) == 1
+    assert plan.intents[0].audit_username is None
+
+
+def test_latest_cluster_wide_audit_query_can_be_reused_by_duration_followup() -> None:
+    prior = _latest_audit_query_semantics([{
+        "id": "audit-old", "tool": "query_audit_events", "data": {
+            "username": None, "operationScope": "deletes",
+            "outcomeFilter": "all", "limit": 10, "rangeSeconds": 3600,
+        },
+    }])
+
+    resolved = _resolve_audit_inquiry(
+        question="what about in the last 24hrs",
+        inquiry=None,
+        prior_audit_query=prior,
+        max_range_seconds=86_400,
+    )
+
+    assert resolved is not None
+    assert resolved.audit_username is None
+    assert resolved.audit_operation_scope == "deletes"
+    assert resolved.result_limit == 10
+    assert resolved.audit_range_seconds == 86_400
 
 
 def test_audit_last_n_starts_bounded_search_and_expands_until_limit() -> None:
@@ -7415,7 +7468,7 @@ def test_ask_does_not_override_model_direction_with_catalog_fallback(
     assert explorer.calls == []
 
 
-def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
+def test_ask_uses_safely_reduced_active_profile_and_shows_warning(
     tmp_path: Path,
 ) -> None:
     provider = FakeModelProvider()
@@ -7432,8 +7485,13 @@ def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
         db_session.add(ModelProfile(
             id=1, provider_label="Internal", base_url="https://models.example.test/v1",
             chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="reduced_capability", capabilities_json="{}",
-            updated_by="ivy",
+            max_output_tokens=1200, status="reduced_capability",
+            capabilities_json=json.dumps({
+                "reachable": True, "tls_valid": True, "authenticated": True,
+                "model_available": True, "structured_output": True,
+                "ask_schemas": False,
+            }),
+            last_error="ReadPlan probe failed. Synthetic semantic mismatch.", updated_by="ivy",
         ))
         db_session.commit()
     engine.dispose()
@@ -7450,7 +7508,9 @@ def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
         assert created.status_code == 303
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert rendered.status_code == 200
-        assert "Configure and successfully test a model profile" in rendered.text
+        assert "Model running with reduced capability" in rendered.text
+        assert "ReadPlan probe failed. Synthetic semantic mismatch." in rendered.text
+        assert "Model profile not ready" not in rendered.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -7458,7 +7518,6 @@ def test_ask_with_non_ready_active_profile_does_not_use_detached_orm_state(
         assert assistant is not None
         assert assistant.provider_status == "reduced_capability"
     engine.dispose()
-    assert provider.adhoc_plan_calls == []
 
 
 def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
@@ -9292,6 +9351,19 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         )
         assert rejected_ca.status_code == 422
         assert "must not contain a private key" in rejected_ca.json()["detail"]
+        rejected_reasoning = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "provider_label": "Invalid reasoning",
+                "base_url": "https://models.example.test/v1",
+                "chat_model": "test-model",
+                "api_token": "test-api-token",
+                "reasoning_effort": "extreme",
+            },
+        )
+        assert rejected_reasoning.status_code == 422
+        assert rejected_reasoning.json()["detail"] == "Reasoning effort is invalid."
         saved = client.post(
             "/api/v1/model-profile",
             headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
@@ -9368,6 +9440,7 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
                 "timeout_seconds": "45",
                 "max_input_tokens": "128000",
                 "max_output_tokens": "10000",
+                "reasoning_effort": "high",
                 "tool_calling_hint": "true",
                 "vision_hint": "true",
             },
@@ -9402,6 +9475,7 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
         assert profiles[0].is_active is True
         assert profiles[0].api_type == "chat-completions"
         assert profiles[0].tls_mode == "insecure"
+        assert profiles[0].reasoning_effort == "high"
         assert profiles[0].tool_calling_hint is True
         assert profiles[0].vision_hint is True
         assert profiles[0].credential_key in credentials.values

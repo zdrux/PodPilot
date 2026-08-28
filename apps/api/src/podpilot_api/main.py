@@ -39,6 +39,7 @@ from podpilot_api.model_provider import (
     ModelProvider,
     ModelProviderError,
     OpenAIProviderRouter,
+    REASONING_EFFORTS,
     capture_raw_model_responses,
     validate_model_endpoint,
 )
@@ -254,12 +255,36 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         tls_mode=profile.tls_mode,
         custom_ca_pem=profile.custom_ca_pem,
         max_input_tokens=profile.max_input_tokens,
+        reasoning_effort=profile.reasoning_effort,
     )
 
 
 def _active_profile(db_session: Session) -> ModelProfile | None:
     return db_session.scalar(
         select(ModelProfile).where(ModelProfile.is_active.is_(True)).order_by(ModelProfile.id).limit(1)
+    )
+
+
+def _profile_is_usable(profile: ModelProfile | None) -> bool:
+    """Allow safely degraded text workflows without treating every probe warning as an outage."""
+
+    if profile is None:
+        return False
+    if profile.status == "ready":
+        return True
+    if profile.status != "reduced_capability":
+        return False
+    try:
+        capabilities = json.loads(profile.capabilities_json)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    accepted_transport = any(
+        capabilities.get(key) is True
+        for key in ("tls_valid", "tls_accepted", "plaintext_accepted")
+    )
+    return accepted_transport and all(
+        capabilities.get(key) is True
+        for key in ("reachable", "authenticated", "model_available", "structured_output")
     )
 
 
@@ -3875,7 +3900,8 @@ def _read_progress_message(intent) -> str:
         )
         return f"Reading {intent.metric} trend for {intent.metric_scope} {target}."
     if intent.tool == "query_audit_events":
-        return f"Reading bounded cluster audit activity for {intent.audit_username}."
+        target = f"for {intent.audit_username}" if intent.audit_username else "across all users"
+        return f"Reading bounded cluster audit activity {target}."
     resource = intent.kind or intent.resource or "cluster resource"
     scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
     if intent.tool == "pod_logs":
@@ -4421,13 +4447,16 @@ def _latest_audit_query_semantics(
         if item.get("tool") != "query_audit_events" or not isinstance(item.get("data"), dict):
             continue
         data = item["data"]
-        username = str(data.get("username") or "").strip()
+        raw_username = data.get("username")
+        username = str(raw_username).strip() if raw_username is not None else None
         operation_scope = str(data.get("operationScope") or "")
         outcome = str(data.get("outcomeFilter") or "")
         if (
-            not username
-            or len(username) > 512
-            or any(ord(character) < 32 or ord(character) == 127 for character in username)
+            (username is not None and (
+                not username
+                or len(username) > 512
+                or any(ord(character) < 32 or ord(character) == 127 for character in username)
+            ))
             or operation_scope not in {"all", "mutations", "deletes"}
             or outcome not in {"all", "successful", "failed"}
         ):
@@ -4495,7 +4524,10 @@ def _resolve_audit_inquiry(
             needs_object_details=True,
             evidence_goal="Repeat the prior audit query over the newly supplied period.",
             result_limit=prior_audit_query.get("limit"),
-            audit_username=str(prior_audit_query["username"]),
+            audit_username=(
+                str(prior_audit_query["username"])
+                if prior_audit_query.get("username") is not None else None
+            ),
             audit_operation_scope=str(prior_audit_query.get("operation_scope") or "all"),
             audit_outcome=str(prior_audit_query.get("outcome") or "all"),
             audit_range_seconds=min(followup_range, max_range_seconds),
@@ -4719,26 +4751,25 @@ def _semantic_audit_read_plan(
 
     if inquiry is None or inquiry.mode != "audit":
         return None
-    if not inquiry.audit_username:
-        return (
-            ReadPlan(
-                goal_type="logs",
-                scope_summary="A cluster audit query requires an exact supplied username.",
-                clarification="Which exact cluster username should PodPilot search for?",
-                intents=[],
-            ),
-            True,
-        )
     limit = inquiry.result_limit or default_limit
     search_until_limit = inquiry.audit_range_seconds is None
     range_seconds = inquiry.audit_range_seconds or initial_range_seconds
     operation_scope = inquiry.audit_operation_scope or "all"
     outcome = inquiry.audit_outcome or "all"
+    operation_label = {
+        "all": "audit operations",
+        "mutations": "mutation audit operations",
+        "deletes": "delete audit operations",
+    }[operation_scope]
     return (
         ReadPlan(
             goal_type="logs",
             scope_summary=(
-                f"List the last {limit} {operation_scope} audit operations for the supplied user."
+                f"List the last {limit} {operation_label} "
+                + (
+                    f"for user {inquiry.audit_username}."
+                    if inquiry.audit_username else "across all users."
+                )
             ),
             intents=[ReadIntent(
                 tool="query_audit_events",
@@ -5761,7 +5792,7 @@ async def _collect_bounded_cluster_reads(
                     f"{intent.namespace + '/' if intent.namespace else ''}{intent.name or '*'} "
                     f"range={intent.range_seconds}s"
                     if intent.tool == "query_metrics" else
-                    f"audit user={intent.audit_username} scope={intent.audit_operation_scope} "
+                    f"audit user={intent.audit_username or '*'} scope={intent.audit_operation_scope} "
                     f"outcome={intent.audit_outcome} range={intent.range_seconds}s"
                     if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"
@@ -6360,7 +6391,7 @@ def create_app(
             profile = _active_profile(db_session)
             profile_status = str(profile.status) if profile is not None else None
             profile_snapshot = (
-                _profile_config(profile) if profile is not None and profile_status == "ready" else None
+                _profile_config(profile) if _profile_is_usable(profile) else None
             )
             profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
@@ -7693,7 +7724,9 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": bool(profile and profile.status == "ready"),
+                "model_ready": _profile_is_usable(profile),
+                "model_status": profile.status if profile else None,
+                "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
                 "active_run": None,
                 "clusters": [_cluster_summary(item) for item in available_clusters],
                 "selected_cluster_ids": [SYSTEM_CLUSTER_ID],
@@ -7768,7 +7801,9 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": bool(profile and profile.status == "ready"),
+                "model_ready": _profile_is_usable(profile),
+                "model_status": profile.status if profile else None,
+                "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
                 "messages_truncated": conversation.summarized_message_count > 0,
                 "adhoc_run_timeout_seconds": app_settings.adhoc_run_timeout_seconds,
                 "active_run": ({
@@ -8383,6 +8418,7 @@ def create_app(
                     "tls_mode": row.tls_mode, "custom_ca_pem": row.custom_ca_pem or "",
                     "max_input_tokens": row.max_input_tokens,
                     "max_output_tokens": row.max_output_tokens,
+                    "reasoning_effort": row.reasoning_effort,
                     "timeout_seconds": row.timeout_seconds, "status": row.status,
                     "capabilities": json.loads(row.capabilities_json),
                     "tool_calling_hint": row.tool_calling_hint, "vision_hint": row.vision_hint,
@@ -8442,6 +8478,7 @@ def create_app(
         api_type = form.get("api_type", "responses").strip()
         tls_mode = form.get("tls_mode", "system").strip()
         custom_ca_pem = form.get("custom_ca_pem", "").strip() or None
+        reasoning_effort = form.get("reasoning_effort", "").strip() or None
         if not provider_label or len(provider_label) > 100:
             raise HTTPException(status_code=422, detail="Provider label is required and must be at most 100 characters.")
         try:
@@ -8454,6 +8491,8 @@ def create_app(
             raise HTTPException(status_code=422, detail="API type must be Responses or Chat Completions.")
         if tls_mode not in {"system", "custom_ca", "insecure", "plaintext"}:
             raise HTTPException(status_code=422, detail="TLS mode is invalid.")
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise HTTPException(status_code=422, detail="Reasoning effort is invalid.")
         if tls_mode == "custom_ca" and not custom_ca_pem:
             raise HTTPException(status_code=422, detail="Custom-CA mode requires a PEM CA bundle.")
         if custom_ca_pem and len(custom_ca_pem) > 65_536:
@@ -8511,6 +8550,7 @@ def create_app(
             profile.tls_mode = tls_mode
             profile.custom_ca_pem = custom_ca_pem if tls_mode == "custom_ca" else None
             profile.max_input_tokens = max_input_tokens
+            profile.reasoning_effort = reasoning_effort
             profile.tool_calling_hint = form.get("tool_calling_hint") == "true"
             profile.vision_hint = form.get("vision_hint") == "true"
             profile.timeout_seconds = timeout_seconds
@@ -8618,7 +8658,7 @@ def create_app(
             profile = db_session.get(ModelProfile, profile_id)
             if profile is None:
                 raise HTTPException(status_code=404, detail="Model profile not found.")
-            if profile.status != "ready":
+            if not _profile_is_usable(profile):
                 raise HTTPException(status_code=409, detail="Test the model successfully before activation.")
             db_session.execute(update(ModelProfile).values(is_active=False))
             profile.is_active = True
@@ -8648,12 +8688,14 @@ def create_app(
             db_session.delete(profile)
             replacement = None
             if was_active:
-                replacement = db_session.scalar(
+                replacement = next((candidate for candidate in db_session.scalars(
                     select(ModelProfile)
-                    .where(ModelProfile.id != profile_id, ModelProfile.status == "ready")
+                    .where(
+                        ModelProfile.id != profile_id,
+                        ModelProfile.status.in_(("ready", "reduced_capability")),
+                    )
                     .order_by(ModelProfile.last_probe_at.desc(), ModelProfile.updated_at.desc())
-                    .limit(1)
-                )
+                ) if _profile_is_usable(candidate)), None)
                 if replacement:
                     replacement.is_active = True
             replacement_id = replacement.id if replacement else None
@@ -9095,7 +9137,7 @@ def create_app(
         model_result: dict[str, object] = {"status": "not_configured"}
         with Session(request.app.state.engine) as db_session:
             profile = _active_profile(db_session)
-            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            profile_snapshot = _profile_config(profile) if _profile_is_usable(profile) else None
             credential_key = profile.credential_key if profile_snapshot else None
             runtime_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
             runtime_cluster_name = (
@@ -9566,7 +9608,7 @@ def create_app(
                 for item in reversed(history_rows)
             ]
             profile = _active_profile(db_session)
-            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            profile_snapshot = _profile_config(profile) if _profile_is_usable(profile) else None
             credential_key = profile.credential_key if profile_snapshot else None
             alert_name = investigation.alert_name
 
@@ -9866,7 +9908,7 @@ def create_app(
             analysis_payload["limitations"] = limitations
             analysis_payload["diagnostic_results"] = diagnostic_results
             profile = _active_profile(db_session)
-            profile_snapshot = _profile_config(profile) if profile and profile.status == "ready" else None
+            profile_snapshot = _profile_config(profile) if _profile_is_usable(profile) else None
             credential_key = profile.credential_key if profile_snapshot else None
 
         model_result: dict[str, object] = analysis_payload.get("model", {"status": "not_configured"})

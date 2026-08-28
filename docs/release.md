@@ -56,6 +56,12 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - A “last N” audit query expands beyond its initial window until N matches or the configured ceiling;
   a duration-only follow-up inherits the prior typed audit target, executes a fresh read, and remains
   functional after one invalid structured-classification response.
+- “Last 10 delete actions according to the audit log” must compile without a username, search all
+  users, filter to `delete` and `deletecollection` in Loki, and request newest-first with limit 10;
+  adding “by USER” must add only the escaped exact-username filter.
+- Audit queries must filter exact typed fields and rewrite matches to the compact safe projection in
+  Loki before transfer; fixtures must prove verbose request/response objects are absent from LogQL
+  output and cannot exhaust the bounded HTTP response for a small requested result count.
 
 Milestone 4 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,

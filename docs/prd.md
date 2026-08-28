@@ -139,12 +139,18 @@ activate one successfully tested profile:
 - Responses or Chat Completions API mode, selected explicitly and checked by a
   connection probe
 - reasoning/chat model name, initially `gpt-5.6-terra`
+- optional model-specific reasoning effort, verified by the connection probe
 - optional embedding model, initially `text-embedding-3-small`
 - system TLS trust, an optional custom CA bundle, or an explicitly warned insecure
   PoC mode
 - explicitly selected plain HTTP only for direct Kubernetes Service DNS endpoints;
   external plaintext endpoints remain prohibited
 - request timeout and maximum investigation token budget
+
+A profile with reduced capability may remain active for safely degraded workflows when its
+probe still establishes accepted transport, authentication, model availability, and strict
+structured output. Semantic planning failures must remain operator-visible and must not bypass
+server-side typed-plan validation, read budgets, or deterministic fallbacks.
 
 The UI must never read the saved token back. A connection test must report:
 

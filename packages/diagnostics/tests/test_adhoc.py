@@ -1221,6 +1221,20 @@ def test_audit_query_accepts_exact_username_and_filters() -> None:
     assert intent.audit_username == "Druciare-Adm"
 
 
+def test_audit_query_accepts_cluster_wide_filters_without_username() -> None:
+    intent = ReadIntent(
+        tool="query_audit_events",
+        audit_operation_scope="deletes",
+        audit_outcome="all",
+        audit_search_until_limit=True,
+        range_seconds=3600,
+        limit=10,
+    )
+
+    assert intent.audit_username is None
+    assert intent.audit_operation_scope == "deletes"
+
+
 @pytest.mark.parametrize(
     "placeholder",
     [

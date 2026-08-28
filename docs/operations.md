@@ -220,14 +220,29 @@ The current deployment uses these variables:
 - `PODPILOT_ADHOC_MAX_CLUSTERS_PER_CONVERSATION`, default `10`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
-Model profile metadata (API type, base URL, model names, TLS mode/custom CA,
-capability hints, timeout, and token budgets) is configured through
+Model profile metadata (API type, base URL, model names, optional reasoning effort,
+TLS mode/custom CA, capability hints, timeout, and token budgets) is configured through
 `/settings/model` and stored in SQLite. Local development reads `OPENAI_API_KEY`
 without persisting it. In OpenShift, every profile has an opaque key in the fixed
 Secret above. Saving a token sends it through the OAuth-protected HTTPS Route;
 FastAPI patches only that key through the Kubernetes API using the runtime
 ServiceAccount. The UI never reads the saved value back. Model calls reread the
 key, so token creation and rotation require no Deployment restart.
+
+Reasoning effort defaults to the provider's model-specific behavior. When selected,
+PodPilot sends `reasoning.effort` to the Responses API or `reasoning_effort` to Chat
+Completions on every model request, including capability probes. Supported values vary
+by model, so save the profile and run **Test connection** after changing the level.
+Because the provider's output-token limit includes hidden reasoning tokens, an explicit
+effort uses the profile's full maximum-output budget instead of PodPilot's smaller
+non-reasoning per-operation cap.
+
+A `reduced_capability` probe result does not automatically disable AI workflows. PodPilot
+allows the profile when the recorded probe still proves an accepted transport, endpoint
+reachability, authentication, model availability, and structured output. Failures of the
+more demanding semantic Ask schema probe remain visible in Ask and Model Settings, while
+normal code continues to validate typed read plans and use deterministic fallbacks. Profiles
+missing any of those core capabilities remain unavailable.
 
 ### Multi-cluster Ask and curated memory
 
@@ -257,10 +272,11 @@ registered identity. The base runtime identity is also bound to
 role `cluster-logging-audit-view`; there is no `cluster-monitoring-audit-view` role.
 
 Ask audit questions are classified separately from workload-log questions. The classifier derives
-the supplied username, period, count, all-versus-mutation-versus-delete-only scope, and
+an optional supplied username, period, count, all-versus-mutation-versus-delete-only scope, and
 all/successful/failed outcome;
 normal code validates those values and runs a fixed query against
-`/api/logs/v1/audit/loki/api/v1/query_range`. Username matching is exact and case-insensitive.
+`/api/logs/v1/audit/loki/api/v1/query_range`. With no username, the query searches all users;
+with one, username matching is exact and case-insensitive.
 For example, “show the last 5 successful changes by Druciare-Adm over 2 hours” produces a five-row,
 two-hour mutation query without encoding that username or time window in application code.
 Investigators, Approvers, and Breakglass users can use this Ask capability. A 403 from Loki should
@@ -270,8 +286,8 @@ cluster-wide LokiStack tenant authorization.
 Explicit audit-log wording also has a narrow server-owned semantic fallback. If an OpenAI-compatible
 provider returns empty, fenced, truncated, or otherwise invalid classification JSON, PodPilot accepts
 one fenced JSON object when valid and otherwise compiles only the grounded audit username, count,
-period, mutation scope, and outcome present in the operator's text. A missing username produces a
-clarification instead of falling through to Kubernetes API inventory discovery.
+period, mutation scope, and outcome present in the operator's text. A missing username compiles to
+a bounded cluster-wide audit query instead of falling through to Kubernetes API inventory discovery.
 
 An audit request such as “last 5 actions” does not treat the initial one-hour window as the answer
 boundary. It doubles the bounded query range until five matching events are found or
@@ -281,7 +297,8 @@ limit, operation scope, and outcome while replacing its period. A malformed clas
 retried once; the strict duration-only continuation can still be compiled from the prior typed
 audit evidence, but unrelated questions never inherit that audit target.
 The Loki request limit now matches the requested result count because its LogQL already applies the
-validated filters. Audit traffic uses the separate 1 MiB default response ceiling rather than
+validated stage, operation, outcome, and optional exact-username filters. Audit traffic uses the
+separate 1 MiB default response ceiling rather than
 overfetching four times the requested number of verbose raw records under the generic 64 KiB cap.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,

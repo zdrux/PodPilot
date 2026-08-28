@@ -29,7 +29,7 @@ class FakeAuditSource:
 
 def _event(username: str, *, verb: str = "get", code: int = 200) -> str:
     return json.dumps({
-        "auditID": f"audit-{verb}-{code}",
+        "auditID": f"audit-{username}-{verb}-{code}",
         "stage": "ResponseComplete",
         "requestReceivedTimestamp": "2026-08-27T11:59:00Z",
         "user": {"username": username},
@@ -58,6 +58,9 @@ def test_reader_matches_username_case_insensitively_and_projects_safe_fields() -
 
     query = str(source.calls[0]["logql"])
     assert r'audit_username=~"(?i)^druciare\\-adm$"' in query
+    assert "| line_format `" in query
+    assert 'audit_resource="objectRef.resource"' in query
+    assert "requestObject" not in query
     assert source.calls[0]["limit"] == 5
     event = result.observations[0].data["events"][0]
     assert event["username"] == "DRUCIARE-ADM"
@@ -106,6 +109,35 @@ def test_delete_scope_excludes_other_mutations() -> None:
     assert [event["verb"] for event in result.observations[0].data["events"]] == [
         "delete", "deletecollection",
     ]
+
+
+def test_cluster_wide_delete_query_filters_in_loki_and_returns_all_users() -> None:
+    source = FakeAuditSource((
+        ("1787831940000000000", _event("alice", verb="delete")),
+        ("1787831930000000000", _event("bob", verb="deletecollection")),
+        ("1787831920000000000", _event("carol", verb="patch")),
+    ))
+    reader = BoundedAuditEventReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_audit_events",
+        audit_operation_scope="deletes",
+        audit_outcome="all",
+        range_seconds=3600,
+        limit=10,
+    ))
+
+    query = str(source.calls[0]["logql"])
+    assert "audit_username=~" not in query
+    assert '| audit_stage="ResponseComplete"' in query
+    assert 'audit_verb=~"^(?:delete|deletecollection)$"' in query
+    assert "| line_format `" in query
+    assert source.calls[0]["limit"] == 10
+    assert [event["username"] for event in result.observations[0].data["events"]] == [
+        "alice", "bob",
+    ]
+    assert result.observations[0].data["username"] is None
+    assert result.observations[0].summary.endswith("across all users.")
 
 
 def test_last_n_query_expands_backward_until_it_finds_requested_events() -> None:
@@ -210,6 +242,43 @@ def test_loki_audit_client_accepts_verbose_requested_entries_with_audit_ceiling(
     ).query_audit_entries("fixed", start=NOW, end=NOW, limit=10)
 
     assert len(result.entries) == 10
+
+
+def test_reader_accepts_compact_loki_line_projection() -> None:
+    compact = json.dumps({
+        "auditID": "compact-delete-1",
+        "stage": "ResponseComplete",
+        "requestReceivedTimestamp": "2026-08-27T11:59:00Z",
+        "user": {"username": "druciare-adm"},
+        "verb": "delete",
+        "objectRef": {
+            "apiGroup": "apps", "apiVersion": "v1", "resource": "deployments",
+            "subresource": "", "namespace": "payments", "name": "api",
+        },
+        "responseStatus": {"code": "200"},
+    })
+    source = FakeAuditSource((("1787831940000000000", compact),))
+
+    result = BoundedAuditEventReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_audit_events", audit_username="druciare-adm",
+        audit_operation_scope="deletes", audit_outcome="all", limit=10,
+    ))
+
+    event = result.observations[0].data["events"][0]
+    assert event == {
+        "timestamp": "2026-08-27T11:59:00+00:00",
+        "username": "druciare-adm",
+        "verb": "delete",
+        "apiGroup": "apps",
+        "apiVersion": "v1",
+        "resource": "deployments",
+        "subresource": None,
+        "namespace": "payments",
+        "name": "api",
+        "responseCode": 200,
+        "outcome": "succeeded",
+        "auditID": "compact-delete-1",
+    }
 
 
 def test_loki_audit_denial_names_required_role(tmp_path: Path) -> None:

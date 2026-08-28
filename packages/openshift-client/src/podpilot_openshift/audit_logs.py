@@ -32,6 +32,23 @@ class AuditQuerySource(Protocol):
     ) -> AuditLogEntries: ...
 
 
+_COMPACT_AUDIT_LINE_TEMPLATE = (
+    '{"auditID":{{printf "%q" .audit_id}},'
+    '"stage":"ResponseComplete",'
+    '"requestReceivedTimestamp":{{printf "%q" .audit_timestamp}},'
+    '"user":{"username":{{printf "%q" .audit_username}}},'
+    '"verb":{{printf "%q" .audit_verb}},'
+    '"objectRef":{'
+    '"apiGroup":{{printf "%q" .audit_api_group}},'
+    '"apiVersion":{{printf "%q" .audit_api_version}},'
+    '"resource":{{printf "%q" .audit_resource}},'
+    '"subresource":{{printf "%q" .audit_subresource}},'
+    '"namespace":{{printf "%q" .audit_namespace}},'
+    '"name":{{printf "%q" .audit_name}}},'
+    '"responseStatus":{"code":{{printf "%q" .audit_code}}}}'
+)
+
+
 def _logql_regex_literal(value: str) -> str:
     """Encode an exact case-insensitive value without granting regex syntax."""
 
@@ -90,18 +107,23 @@ class BoundedAuditEventReader:
         self._clock = clock
 
     def execute(self, intent: ReadIntent) -> ReadResult:
-        if intent.tool != "query_audit_events" or not intent.audit_username:
+        if intent.tool != "query_audit_events":
             raise ValueError("BoundedAuditEventReader requires a typed audit event intent.")
-        username = intent.audit_username.strip()
+        username = intent.audit_username.strip() if intent.audit_username else None
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         end = self._clock()
         query = (
             '{log_type="audit"} '
-            '| json audit_username="user.username", audit_stage="stage", '
-            'audit_verb="verb", audit_code="responseStatus.code" '
-            f'| audit_username=~{_logql_regex_literal(username)} '
-            '| audit_stage="ResponseComplete"'
+            '| json audit_id="auditID", audit_timestamp="requestReceivedTimestamp", '
+            'audit_username="user.username", audit_stage="stage", '
+            'audit_verb="verb", audit_code="responseStatus.code", '
+            'audit_api_group="objectRef.apiGroup", audit_api_version="objectRef.apiVersion", '
+            'audit_resource="objectRef.resource", audit_subresource="objectRef.subresource", '
+            'audit_namespace="objectRef.namespace", audit_name="objectRef.name" '
         )
+        if username:
+            query += f'| audit_username=~{_logql_regex_literal(username)} '
+        query += '| audit_stage="ResponseComplete"'
         if intent.audit_operation_scope == "mutations":
             query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
         elif intent.audit_operation_scope == "deletes":
@@ -110,6 +132,10 @@ class BoundedAuditEventReader:
             query += ' | audit_code=~"^[123][0-9]{2}$"'
         elif intent.audit_outcome == "failed":
             query += ' | audit_code=~"^[45][0-9]{2}$"'
+        # Rewrite matching audit lines inside Loki so large request/response objects never
+        # cross the network. The HTTP limit and backward direction then apply to these compact,
+        # server-filtered projections rather than pages of raw audit payloads.
+        query += f" | line_format `{_COMPACT_AUDIT_LINE_TEMPLATE}`"
         snapshot = AuditLogEntries(entries=(), is_complete=True)
         events: list[dict[str, object]] = []
         while True:
@@ -164,13 +190,14 @@ class BoundedAuditEventReader:
             tool="query_audit_events",
             summary=(
                 f"Read {len(events)} completed audit event"
-                f"{'s' if len(events) != 1 else ''} for user {username}."
+                f"{'s' if len(events) != 1 else ''} "
+                + (f"for user {username}." if username else "across all users.")
             ),
             source="loki:audit/query/user_actions",
             collected_at=self._clock(),
             data={
-                "username": redact_text(username)[:512],
-                "caseInsensitive": True,
+                "username": redact_text(username)[:512] if username else None,
+                "caseInsensitive": bool(username),
                 "operationScope": intent.audit_operation_scope,
                 "outcomeFilter": intent.audit_outcome,
                 "rangeSeconds": range_seconds,
@@ -191,7 +218,7 @@ class BoundedAuditEventReader:
         self,
         snapshot: AuditLogEntries,
         *,
-        username: str,
+        username: str | None,
         operation_scope: str,
         outcome: str,
         limit: int,
@@ -204,7 +231,7 @@ class BoundedAuditEventReader:
                 continue
             user = event.get("user") if isinstance(event.get("user"), dict) else {}
             observed_username = str(user.get("username") or "")
-            if observed_username.casefold() != username.casefold():
+            if username and observed_username.casefold() != username.casefold():
                 continue
             if str(event.get("stage") or "") != "ResponseComplete":
                 continue

@@ -260,9 +260,7 @@ class ReadIntent(BaseModel):
         elif self.metric or self.metric_scope:
             raise ValueError("metric and metric_scope are valid only for query_metrics")
         if self.tool == "query_audit_events":
-            if not self.audit_username:
-                raise ValueError("query_audit_events requires an exact audit username")
-            if any(
+            if self.audit_username and any(
                 ord(character) < 32 or ord(character) == 127
                 for character in self.audit_username
             ):

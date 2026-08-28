@@ -527,6 +527,9 @@ current repository and cluster state.
   remains the existing redacted bounded projection with no raw lines or request/response objects.
 - Audit operation scope now distinguishes delete-only (`delete` and `deletecollection`) from broader
   mutations, so the original “last N delete actions” wording no longer includes creates, patches, or updates.
+- Audit usernames are now optional. “Last 10 delete actions according to the audit log” compiles to
+  a cluster-wide query that filters completed deletes in Loki and requests ten newest-first compact
+  results; “by USER” retains the escaped exact, case-insensitive username filter.
 
 ## 2026-08-28 Site-wide Quiet Ledger redesign
 
@@ -564,6 +567,28 @@ current repository and cluster state.
 - Pod logs now support semantic `sinceSeconds`, plus init- and ephemeral-container candidates. Event
   projection supports both core/v1 and events.k8s.io/v1 field shapes.
 - Evidence payload ceilings remain unchanged.
+
+## 2026-08-28 Configurable model reasoning effort
+
+- Model profiles now persist an optional reasoning-effort level, with provider default retained
+  for existing profiles and endpoints that do not support explicit reasoning controls.
+- PodPilot sends the selection using the API-specific OpenAI-compatible shape on every Responses
+  or Chat Completions request, including capability probes and bounded correction attempts.
+- Explicit reasoning uses the profile's full maximum-output budget because hidden reasoning tokens
+  count against that allowance. Migration `0015_model_reasoning_effort` adds the nullable profile field.
+- Reduced-capability profiles now remain usable when their probe proves the core safe text contract;
+  semantic Ask-probe failures are shown as warnings and continue through typed validation and fallback.
+- The model-free suite and a fresh SQLite migration through the new head pass locally; this change
+  has not yet been rolled out to the SNO workload.
+
+## 2026-08-28 Compact server-side audit filtering
+
+- Typed audit queries now parse and filter username, stage, verb, outcome, and object coordinates
+  inside Loki, then use `line_format` to return only the safe projected fields.
+- Newest-first `query_range` and the requested result limit operate on compact matching lines, so
+  large audit request/response objects are not downloaded or scanned page-by-page by PodPilot.
+- Last-N searches still expand the bounded time window only when too few matching records exist.
+  This local change has not yet been rolled out to the SNO workload.
 
 ## Known Limitations
 

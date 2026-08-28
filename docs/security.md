@@ -18,11 +18,18 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 - OpenShift Logging remains read-only through `cluster-logging-application-view`,
   `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. The application
   tenant supplies aggregate namespace-volume evidence. The audit tenant supports bounded
-  user-activity queries through a server-owned LogQL template; the model may extract only the
-  username, period, result limit, operation scope, and outcome filter. Usernames are matched
-  exactly and case-insensitively after regex escaping, and PodPilot persists only projected audit
-  fields—not raw lines, request objects, or response objects. Infrastructure and audit access add
-  investigation visibility but no mutation authority.
+user-activity queries through a server-owned LogQL template; the model may extract only the
+optional username, period, result limit, operation scope, and outcome filter. Omitting the
+username requests matching activity across all users; a supplied username is matched exactly and
+case-insensitively after regex escaping. PodPilot persists only projected audit fields—not raw
+lines, request objects, or response objects. Infrastructure and audit access add investigation
+visibility but no mutation authority.
+
+The audit LogQL pipeline parses and filters those typed fields in Loki, then applies a server-owned
+`line_format` projection containing only the bounded audit ID, timestamp, username, verb, object
+reference, and response code. Raw request and response objects are therefore excluded before the
+Loki response crosses the network; `query_range` uses newest-first direction and the requested
+result limit over the filtered compact lines.
 
 An omitted audit period is not interpreted as a one-hour evidence boundary. The broker expands a
 bounded initial window until the requested result count is satisfied or the configured maximum

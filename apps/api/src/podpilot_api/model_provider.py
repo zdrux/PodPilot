@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_valid
 from podpilot_diagnostics.adhoc import CandidateReadPlan, InvestigationGap, ReadIntent, ReadPlan
 
 
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
 def validate_model_endpoint(
     base_url: str,
     tls_mode: str,
@@ -65,6 +68,27 @@ class ModelProfileConfig:
     tls_mode: Literal["system", "custom_ca", "insecure", "plaintext"] = "system"
     custom_ca_pem: str | None = None
     max_input_tokens: int = 128_000
+    reasoning_effort: str | None = None
+
+
+def _responses_reasoning(profile: ModelProfileConfig) -> dict[str, object]:
+    if not profile.reasoning_effort:
+        return {}
+    return {"reasoning": {"effort": profile.reasoning_effort}}
+
+
+def _chat_reasoning(profile: ModelProfileConfig) -> dict[str, object]:
+    if not profile.reasoning_effort:
+        return {}
+    return {"reasoning_effort": profile.reasoning_effort}
+
+
+def _output_limit(profile: ModelProfileConfig, concise_limit: int) -> int:
+    """Leave room for hidden reasoning tokens when an effort is selected explicitly."""
+
+    if profile.reasoning_effort not in {None, "none"}:
+        return profile.max_output_tokens
+    return min(profile.max_output_tokens, concise_limit)
 
 
 @dataclass(frozen=True)
@@ -611,17 +635,19 @@ class OpenAIResponsesProvider:
                 instructions="Return the requested capability probe object only.",
                 input="Confirm structured output with summary set to probe-ok.",
                 text_format=ModelInterpretation,
-                max_output_tokens=min(profile.max_output_tokens, 512),
+                max_output_tokens=_output_limit(profile, 512),
                 store=False,
+                **_responses_reasoning(profile),
             )
             structured = parsed.output_parsed is not None
 
             stream = client.responses.create(
                 model=profile.chat_model,
                 input="Reply with OK.",
-                max_output_tokens=64,
+                max_output_tokens=_output_limit(profile, 64),
                 store=False,
                 stream=True,
+                **_responses_reasoning(profile),
             )
             for _event in stream:
                 streaming = True
@@ -632,7 +658,7 @@ class OpenAIResponsesProvider:
             tool_response = client.responses.create(
                 model=profile.chat_model,
                 input="Call the podpilot_probe function once.",
-                max_output_tokens=128,
+                max_output_tokens=_output_limit(profile, 128),
                 store=False,
                 tools=[{
                     "type": "function",
@@ -642,6 +668,7 @@ class OpenAIResponsesProvider:
                     "strict": True,
                 }],
                 tool_choice={"type": "function", "name": "podpilot_probe"},
+                **_responses_reasoning(profile),
             )
             tools = any(getattr(item, "type", "") == "function_call" for item in tool_response.output)
 
@@ -802,6 +829,7 @@ class OpenAIResponsesProvider:
                 text_format=ModelInterpretation,
                 max_output_tokens=profile.max_output_tokens,
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -828,6 +856,7 @@ class OpenAIResponsesProvider:
                 text_format=InvestigationChatAnswer,
                 max_output_tokens=profile.max_output_tokens,
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -950,8 +979,9 @@ class OpenAIResponsesProvider:
                 ),
                 input=json.dumps(payload, sort_keys=True, default=str),
                 text_format=plan_schema,
-                max_output_tokens=min(profile.max_output_tokens, 700 if candidate_mode else 1400),
+                max_output_tokens=_output_limit(profile, 700 if candidate_mode else 1400),
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -995,11 +1025,13 @@ class OpenAIResponsesProvider:
                     "metric_query=top_log_volume_by_namespace and metric_scope=cluster. "
                     "When the operator supplies a metric period, convert it exactly to "
                     "metric_range_seconds; for example 5m is 300 and 2h is 7200. "
-                    "For audit mode, extract the exact supplied username into audit_username, set "
+                    "For audit mode, extract an exact supplied username into audit_username; leave it "
+                    "null for a cluster-wide query across all users. Set "
                     "audit_operation_scope=deletes for delete-only requests, mutations for broader "
                     "changes/writes, and otherwise all; set audit_outcome to successful, failed, or all according to "
                     "the request. Convert an explicit audit period to audit_range_seconds. Do not infer a "
-                    "username or period that was not supplied. Leave audit fields null outside audit mode. "
+                    "username or period that was not supplied. A missing username is valid in audit mode. "
+                    "Leave audit fields null outside audit mode. "
                     "When prior_audit_query is supplied and the question is an elliptical follow-up, "
                     "keep its username, limit, operation scope, and outcome unless the operator explicitly "
                     "changes them, and replace its period only when the follow-up supplies a new period. "
@@ -1009,8 +1041,9 @@ class OpenAIResponsesProvider:
                 ),
                 input=json.dumps(context, sort_keys=True, default=str),
                 text_format=InquirySemantics,
-                max_output_tokens=min(profile.max_output_tokens, 700),
+                max_output_tokens=_output_limit(profile, 700),
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -1027,8 +1060,9 @@ class OpenAIResponsesProvider:
                 instructions=_ADHOC_ANSWER_INSTRUCTIONS,
                 input=json.dumps(_minimal_answer_payload(context), sort_keys=True, default=str),
                 text_format=ConciseAdHocAnswer,
-                max_output_tokens=min(profile.max_output_tokens, 1400),
+                max_output_tokens=_output_limit(profile, 1400),
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -1058,8 +1092,9 @@ class OpenAIResponsesProvider:
                 ),
                 input=json.dumps(context, sort_keys=True, default=str),
                 text_format=AdHocLogAnalysis,
-                max_output_tokens=min(profile.max_output_tokens, 1800),
+                max_output_tokens=_output_limit(profile, 1800),
                 store=False,
+                **_responses_reasoning(profile),
             )
         except Exception as exc:
             raise ModelProviderError(self._safe_error(exc)) from exc
@@ -1106,6 +1141,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 messages=messages,
                 response_format=response_format,
                 max_tokens=limit or profile.max_output_tokens,
+                **_chat_reasoning(profile),
             )
             content = response.choices[0].message.content
             retried_empty_content = False
@@ -1125,6 +1161,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                     ],
                     response_format=response_format,
                     max_tokens=limit or profile.max_output_tokens,
+                    **_chat_reasoning(profile),
                 )
                 content = response.choices[0].message.content
                 if not content:
@@ -1159,6 +1196,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                     ],
                     response_format=response_format,
                     max_tokens=limit or profile.max_output_tokens,
+                    **_chat_reasoning(profile),
                 )
                 corrected_content = correction.choices[0].message.content
                 if not corrected_content:
@@ -1279,7 +1317,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             payload={
                 "summary": "probe-ok", "operational_context": "capability probe",
                 "recommended_checks": ["none"], "caveats": [],
-            }, limit=min(profile.max_output_tokens, 512),
+            }, limit=_output_limit(profile, 512),
         )
         structured = probe.summary == "probe-ok"
         streaming = False
@@ -1289,7 +1327,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             stream = client.chat.completions.create(
                 model=profile.chat_model,
                 messages=[{"role": "user", "content": "Reply OK"}],
-                max_tokens=16, stream=True,
+                max_tokens=_output_limit(profile, 16),
+                stream=True,
+                **_chat_reasoning(profile),
             )
             for _ in stream:
                 streaming = True
@@ -1302,12 +1342,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             tool_response = client.chat.completions.create(
                 model=profile.chat_model,
                 messages=[{"role": "user", "content": "Call podpilot_probe."}],
-                max_tokens=64,
+                max_tokens=_output_limit(profile, 64),
                 tools=[{"type": "function", "function": {
                     "name": "podpilot_probe", "description": "Capability probe",
                     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
                 }}],
                 tool_choice={"type": "function", "function": {"name": "podpilot_probe"}},
+                **_chat_reasoning(profile),
             )
             tools = bool(tool_response.choices[0].message.tool_calls)
         except Exception:
@@ -1440,7 +1481,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 candidate_mode=candidate_mode,
             ),
             payload=(_minimal_action_payload(context) if candidate_mode else context),
-            limit=min(profile.max_output_tokens, 700 if candidate_mode else 1400),
+            limit=_output_limit(profile, 700 if candidate_mode else 1400),
         )
         if isinstance(parsed, ActionSelection):
             return parsed.to_read_plan()
@@ -1483,7 +1524,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             # Reasoning-capable OpenAI-compatible endpoints may spend part of this
             # allowance before emitting the small JSON object. Keep classification
             # bounded, but do not truncate the richer semantic IR at the old budget.
-            limit=min(profile.max_output_tokens, 1400),
+            limit=_output_limit(profile, 1400),
         )
 
     def answer_ad_hoc(self, profile, api_key, context):
@@ -1491,7 +1532,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             profile, api_key, schema=ConciseAdHocAnswer,
             instructions=_ADHOC_ANSWER_INSTRUCTIONS,
             payload=_minimal_answer_payload(context),
-            limit=min(profile.max_output_tokens, 1400),
+            limit=_output_limit(profile, 1400),
         )
         return parsed.to_adhoc_answer()
 
@@ -1509,7 +1550,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "commands. Return no issues when the excerpts contain no meaningful anomaly."
             ),
             payload=context,
-            limit=min(profile.max_output_tokens, 1800),
+            limit=_output_limit(profile, 1800),
         )
 
 
