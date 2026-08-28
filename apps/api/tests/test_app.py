@@ -1274,6 +1274,15 @@ def test_final_answer_quality_rejects_heading_only_but_accepts_concise_prose() -
     assert _adhoc_answer_quality_issue(
         content="No errors.",
     ) is None
+    assert _adhoc_answer_quality_issue(
+        content=(
+            "Inspect the full object with `kubectl get kafka example -n streaming -o yaml` "
+            "and look under spec."
+        ),
+    ) == "operator_shell_command"
+    assert _adhoc_answer_quality_issue(
+        content="The evidence was collected through the Kubernetes API without a shell command.",
+    ) is None
 
 
 def test_final_answer_quality_rejects_embedded_schema_but_not_markdown_style() -> None:
@@ -7421,7 +7430,8 @@ def test_invalid_later_plan_continues_with_discovered_exact_candidate(caplog) ->
             if len(completed) == 1:
                 raise ModelProviderError(
                     "Provider response does not match ActionSelection. Provider returned content "
-                    "that failed schema validation (object_reads.0: value_error)."
+                    "that failed schema validation (object_reads.0: value_error).",
+                    failure_type="schema_validation",
                 )
             return ReadPlan(
                 goal_type="diagnose", decision="answer_from_evidence",
@@ -7486,7 +7496,9 @@ def test_invalid_later_plan_continues_with_discovered_exact_candidate(caplog) ->
     assert explorer.calls[1].name == "vc-cluster"
     assert any(item["id"] == "cluster-kafka-detail" for item in result.evidence)
     assert "highest-priority unread candidate" in " ".join(result.limitations)
+    assert "schema-invalid" in " ".join(result.limitations)
     assert "podpilot.adhoc.invalid_plan_candidate_recovery" in caplog.text
+    assert "failure_type=schema_validation" in caplog.text
 
 
 def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
@@ -10247,6 +10259,18 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "total_tokens": 51200,
                 },
                 "calls": [],
+                "failure_count": 1,
+                "failures": [{
+                    "operation": "workflow.ActionSelection.schema_retry",
+                    "failure_type": "schema_validation",
+                    "schema": "ActionSelection",
+                    "attempt": 2,
+                    "fields": [{
+                        "path": "object_reads.0.resource",
+                        "code": "value_error",
+                        "message": "Value error, invalid Kubernetes resource identifier",
+                    }],
+                }],
             }),
         ))
         db_session.commit()
@@ -10263,3 +10287,6 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "50,000" in rendered.text
     assert "Largest input" in rendered.text
     assert "3 model calls; usage reported for 2" in rendered.text
+    assert "Model request failures" in rendered.text
+    assert "schema validation · ActionSelection · attempt 2" in rendered.text
+    assert "object_reads.0.resource" in rendered.text

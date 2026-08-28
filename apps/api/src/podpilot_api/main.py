@@ -799,17 +799,25 @@ def _clean_adhoc_markdown(
 
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
 _MARKDOWN_DECORATION = re.compile(r"[`*_~>#|\[\]()-]+")
+_OPERATOR_SHELL_COMMAND = re.compile(
+    r"(?:`|^|\n)\s*(?:\$\s*)?(?:kubectl|oc)\s+"
+    r"(?:api-resources|auth|debug|describe|exec|explain|get|logs|patch|port-forward|"
+    r"proxy|replace|rollout|scale|set|top|wait)\b",
+    re.IGNORECASE,
+)
 
 
 def _adhoc_answer_quality_issue(
     *, content: str, answer_mode: str | None = None, has_evidence: bool = False,
     has_citations: bool = False,
 ) -> str | None:
-    """Retry only structurally empty answers; trust checks happen during validation."""
+    """Retry structurally empty or unsafe operator-facing answers."""
 
     # Citation allowlisting and unsupported-claim guards are enforced by
     # _validated_adhoc_answer. Log findings are appended deterministically, and
     # inventory-only evidence is an advisory rather than grounds to discard prose.
+    if _OPERATOR_SHELL_COMMAND.search(content):
+        return "operator_shell_command"
     if re.search(
         r"(?:#{1,6}\s*investigation gaps\s*```(?:json)?|"
         r"[\"']investigation_gaps[\"']\s*:)",
@@ -5448,25 +5456,52 @@ async def _collect_bounded_cluster_reads(
                 and read_candidates
             ):
                 selected_candidate = read_candidates[0]
-                plan = ReadPlan(
-                    goal_type=pinned_goal or "diagnose",
-                    scope_summary=(
+                planner_failure_type = str(
+                    getattr(planner_error, "failure_type", "provider_error")
+                )
+                if planner_failure_type == "schema_validation":
+                    recovery_scope = (
                         "Continue the investigation with the highest-priority broker-validated "
                         "candidate after the model's corrected action selection remained invalid."
-                    ),
+                    )
+                    recovery_limitation = (
+                        "The model's proposed read remained schema-invalid after one correction "
+                        "attempt; PodPilot continued with the highest-priority unread candidate "
+                        "grounded in already collected evidence."
+                    )
+                elif planner_failure_type == "empty_response":
+                    recovery_scope = (
+                        "Continue the investigation with the highest-priority broker-validated "
+                        "candidate after the model returned no usable structured plan."
+                    )
+                    recovery_limitation = (
+                        "The model returned no usable structured plan after one correction attempt; "
+                        "PodPilot continued with the highest-priority unread candidate grounded in "
+                        "already collected evidence."
+                    )
+                else:
+                    recovery_scope = (
+                        "Continue the investigation with the highest-priority broker-validated "
+                        "candidate after the model planner request failed."
+                    )
+                    recovery_limitation = (
+                        "The model planner request failed before a usable selection was returned; "
+                        "PodPilot continued with the highest-priority unread candidate grounded in "
+                        "already collected evidence."
+                    )
+                plan = ReadPlan(
+                    goal_type=pinned_goal or "diagnose",
+                    scope_summary=recovery_scope,
                     intents=[selected_candidate.intent],
                 )
                 target_errors = []
                 candidate_errors = []
-                limitations.append(
-                    "The model's proposed read remained malformed after one correction attempt; "
-                    "PodPilot continued with the highest-priority unread candidate grounded in "
-                    "already collected evidence."
-                )
+                limitations.append(recovery_limitation)
                 LOGGER.warning(
                     "podpilot.adhoc.invalid_plan_candidate_recovery actor=%s workflow_id=%s "
-                    "candidate_id=%s capability=%s",
+                    "candidate_id=%s capability=%s failure_type=%s",
                     actor, workflow_id, selected_candidate.id, selected_candidate.capability,
+                    planner_failure_type,
                 )
             elif needs_fallback and log_fallback is not None:
                 plan = log_fallback
@@ -6640,6 +6675,9 @@ def create_app(
                     feedback_message = (
                         "Return only a short operator-facing answer. Do not embed JSON or schema fields."
                         if answer_quality_issue == "structured_fields_embedded_in_answer"
+                        else
+                        "Explain the result without telling the operator to run shell commands."
+                        if answer_quality_issue == "operator_shell_command"
                         else
                         "Briefly interpret the supplied evidence and state what remains uncertain."
                         if answer_quality_issue == "insufficient_interpretation_with_available_evidence"

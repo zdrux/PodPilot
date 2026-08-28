@@ -23,6 +23,8 @@ from podpilot_api.model_provider import (
     _model_request_context,
     _minimal_action_payload,
     _minimal_answer_payload,
+    _record_model_failure,
+    _validation_failure_details,
     capture_model_diagnostics,
     capture_raw_model_responses,
     summarize_model_diagnostics,
@@ -473,6 +475,33 @@ def test_model_diagnostics_omit_response_content_for_normal_ask_turns() -> None:
 
     assert calls[0]["usage"]["total_tokens"] == 12
     assert "response_preview" not in calls[0]
+
+
+def test_model_diagnostics_capture_safe_schema_failure_without_rejected_value() -> None:
+    rejected_value = "operator-secret-object-name"
+    with pytest.raises(Exception) as validation:
+        ActionSelection(action_ids=[rejected_value])
+
+    failure = _validation_failure_details(
+        ActionSelection, validation.value, attempt=2
+    )
+    with capture_model_diagnostics() as calls:
+        calls.append({"operation": "workflow.ActionSelection.schema_retry"})
+        _record_model_failure(
+            failure,
+            operation="workflow.ActionSelection.schema_retry",
+            schema="ActionSelection",
+            since=0,
+        )
+
+    summary = summarize_model_diagnostics(calls)
+    assert summary["failure_count"] == 1
+    assert summary["failures"][0]["failure_type"] == "schema_validation"
+    assert summary["failures"][0]["schema"] == "ActionSelection"
+    assert summary["failures"][0]["attempt"] == 2
+    assert summary["failures"][0]["fields"][0]["path"] == "action_ids"
+    assert "value_error" in summary["failures"][0]["fields"][0]["code"]
+    assert rejected_value not in json.dumps(summary)
 
 
 def test_adapters_omit_reasoning_when_provider_default_is_selected() -> None:

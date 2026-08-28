@@ -51,6 +51,19 @@
             </dl>
             {% else %}<p>The provider did not report token usage.</p>{% endif %}
             <small>{{ message.model_diagnostics.call_count }} model call{% if message.model_diagnostics.call_count != 1 %}s{% endif %}; usage reported for {{ message.model_diagnostics.usage_reported_calls }}.</small>
+            {% if message.model_diagnostics.failures %}
+            <div class="message-model-failures">
+              <strong>Model request failures</strong>
+              <ul>
+                {% for failure in message.model_diagnostics.failures %}
+                <li>
+                  <span>{{ failure.failure_type | replace('_', ' ') }}{% if failure.schema %} · {{ failure.schema }}{% endif %}{% if failure.attempt %} · attempt {{ failure.attempt }}{% endif %}</span>
+                  {% for field in failure.fields %}<small><code>{{ field.path }}</code> · {{ field.code }} — {{ field.message }}</small>{% endfor %}
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
           </details>
           {% endif %}
         </div>

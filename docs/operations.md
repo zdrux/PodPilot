@@ -244,6 +244,17 @@ single-call input. Aggregate usage measures processing across the turn; only the
 request is relevant to context-window pressure. Compatible providers may omit some or all usage
 fields, which PodPilot reports without estimating them.
 
+When a structured model response fails validation, the same collapsed control shows a bounded
+failure summary: failure category, schema, attempt number, and up to six validation field paths,
+codes, and safe messages. Rejected values, prompts, authorization headers, and response bodies are
+not stored in normal Ask diagnostics. Empty responses, timeouts, and provider failures remain
+separate categories so the operator-facing recovery message does not incorrectly call every
+planner failure malformed.
+
+Ask answers are also checked for operator shell commands. A response that tells the operator to run
+`oc` or `kubectl` receives one model correction attempt; if it remains unsafe, PodPilot replaces it
+with a deterministic evidence summary. Declarative configuration guidance remains allowed.
+
 **Test connection** persists the latest bounded synthetic-probe trace on the model profile. The
 collapsed **Request diagnostics** section includes the probe operation/schema, endpoint path, HTTP
 status, duration, request ID, token usage, and a redacted response preview. It never stores request

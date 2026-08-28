@@ -714,6 +714,49 @@ def _model_http_response_hook(response: httpx.Response) -> None:
     capture.append(diagnostic)
 
 
+def _validation_failure_details(
+    schema: type[BaseModel], error: ValidationError, *, attempt: int
+) -> dict[str, object]:
+    """Return bounded schema diagnostics without rejected values or response content."""
+
+    fields: list[dict[str, str]] = []
+    for item in error.errors(include_url=False, include_input=False)[:6]:
+        location = ".".join(str(part) for part in item.get("loc", ())) or "response"
+        fields.append({
+            "path": location[:200],
+            "code": str(item.get("type") or "invalid")[:100],
+            "message": redact_text(str(item.get("msg") or "Invalid value."))[:300],
+        })
+    return {
+        "failure_type": "schema_validation",
+        "schema": schema.__name__[:100],
+        "attempt": max(1, attempt),
+        "fields": fields,
+    }
+
+
+def _record_model_failure(
+    failure: dict[str, object], *, operation: str, schema: str, since: int
+) -> None:
+    """Attach a safe failure to its provider call, or record a call with no HTTP response."""
+
+    capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
+    if capture is None:
+        return
+    if len(capture) > since:
+        diagnostic = capture[-1]
+    else:
+        diagnostic = {"operation": operation[:200], "schema": schema[:100]}
+        capture.append(diagnostic)
+    diagnostic["failed"] = True
+    diagnostic["failure"] = failure
+
+
+def _provider_failure_type(exc: Exception) -> str:
+    name = type(exc).__name__.casefold()
+    return "timeout" if "timeout" in name else "provider_error"
+
+
 def summarize_model_diagnostics(
     calls: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -742,17 +785,36 @@ def summarize_model_diagnostics(
             largest_input = max(largest_input, int(usage.get("input_tokens") or 0))
         except (TypeError, ValueError):
             pass
+    failures: list[dict[str, object]] = []
+    for call in calls:
+        failure = call.get("failure")
+        if isinstance(failure, dict):
+            failures.append({
+                "operation": str(call.get("operation") or "model request")[:200],
+                "failure_type": str(failure.get("failure_type") or "provider_error")[:80],
+                "schema": str(failure.get("schema") or call.get("schema") or "")[:100],
+                "attempt": failure.get("attempt"),
+                "fields": failure.get("fields") if isinstance(failure.get("fields"), list) else [],
+            })
     return {
         "call_count": len(calls),
         "usage_reported_calls": reported_calls,
         "usage": totals if reported_calls else None,
         "largest_input_tokens": largest_input if reported_calls else None,
+        "failure_count": len(failures),
+        "failures": failures[:12],
         "calls": calls[:40],
     }
 
 
 class ModelProviderError(RuntimeError):
-    pass
+    def __init__(
+        self, message: str, *, failure_type: str = "provider_error",
+        failure: dict[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_type = failure_type
+        self.failure = failure or {}
 
 
 class ModelProvider(Protocol):
@@ -1686,6 +1748,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             {"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(payload, sort_keys=True, default=str)},
         ]
+        capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
+        parse_start = len(capture) if capture is not None else 0
         try:
             with _model_request_context(
                 f"workflow.{schema.__name__}", schema=schema.__name__
@@ -1700,7 +1764,16 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             content = response.choices[0].message.content
             retried_empty_content = False
             if not content:
+                empty_failure = {
+                    "failure_type": "empty_response", "schema": schema.__name__,
+                    "attempt": 1, "fields": [],
+                }
+                _record_model_failure(
+                    empty_failure, operation=f"workflow.{schema.__name__}",
+                    schema=schema.__name__, since=parse_start,
+                )
                 retried_empty_content = True
+                empty_retry_start = len(capture) if capture is not None else 0
                 with _model_request_context(
                     f"workflow.{schema.__name__}.empty_retry", schema=schema.__name__
                 ):
@@ -1722,22 +1795,44 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                     )
                 content = response.choices[0].message.content
                 if not content:
+                    empty_failure = {
+                        "failure_type": "empty_response", "schema": schema.__name__,
+                        "attempt": 2, "fields": [],
+                    }
+                    _record_model_failure(
+                        empty_failure,
+                        operation=f"workflow.{schema.__name__}.empty_retry",
+                        schema=schema.__name__, since=empty_retry_start,
+                    )
                     raise ModelProviderError(
-                        "The provider returned no structured response content after one correction attempt."
+                        "The provider returned no structured response content after one correction attempt.",
+                        failure_type="empty_response", failure=empty_failure,
                     )
             _record_raw_response(content)
             try:
                 return self._validate_structured_content(schema, content)
             except ValidationError as first_error:
+                first_failure = _validation_failure_details(schema, first_error, attempt=1)
+                first_call_start = empty_retry_start if retried_empty_content else parse_start
+                _record_model_failure(
+                    first_failure,
+                    operation=(
+                        f"workflow.{schema.__name__}.empty_retry"
+                        if retried_empty_content else f"workflow.{schema.__name__}"
+                    ),
+                    schema=schema.__name__, since=first_call_start,
+                )
                 if retried_empty_content:
                     salvaged = self._salvage_action_selection(schema, content)
                     if salvaged is not None:
                         return salvaged
                     raise ModelProviderError(
                         f"Provider response does not match {schema.__name__}. "
-                        f"{self._schema_correction_detail(schema, first_error)}"
+                        f"{self._schema_correction_detail(schema, first_error)}",
+                        failure_type="schema_validation", failure=first_failure,
                     ) from first_error
                 validation_detail = self._schema_correction_detail(schema, first_error)
+                schema_retry_start = len(capture) if capture is not None else 0
                 with _model_request_context(
                     f"workflow.{schema.__name__}.schema_retry", schema=schema.__name__
                 ):
@@ -1760,24 +1855,61 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                     )
                 corrected_content = correction.choices[0].message.content
                 if not corrected_content:
-                    raise ModelProviderError("The provider returned no corrected structured response content.")
+                    empty_failure = {
+                        "failure_type": "empty_response", "schema": schema.__name__,
+                        "attempt": 2, "fields": [],
+                    }
+                    _record_model_failure(
+                        empty_failure,
+                        operation=f"workflow.{schema.__name__}.schema_retry",
+                        schema=schema.__name__, since=schema_retry_start,
+                    )
+                    raise ModelProviderError(
+                        "The provider returned no corrected structured response content.",
+                        failure_type="empty_response", failure=empty_failure,
+                    )
                 _record_raw_response(corrected_content)
                 try:
                     return self._validate_structured_content(schema, corrected_content)
-                except ValidationError:
+                except ValidationError as corrected_error:
+                    corrected_failure = _validation_failure_details(
+                        schema, corrected_error, attempt=2
+                    )
+                    _record_model_failure(
+                        corrected_failure,
+                        operation=f"workflow.{schema.__name__}.schema_retry",
+                        schema=schema.__name__, since=schema_retry_start,
+                    )
                     salvaged = self._salvage_action_selection(schema, corrected_content)
                     if salvaged is not None:
                         return salvaged
-                    raise
+                    raise ModelProviderError(
+                        f"Provider response does not match {schema.__name__}. "
+                        f"{self._schema_correction_detail(schema, corrected_error)}",
+                        failure_type="schema_validation", failure=corrected_failure,
+                    ) from corrected_error
         except ModelProviderError:
             raise
         except ValidationError as exc:
+            failure = _validation_failure_details(schema, exc, attempt=2)
             detail = self._safe_error(exc)
             raise ModelProviderError(
-                f"Provider response does not match {schema.__name__}. {detail}"
+                f"Provider response does not match {schema.__name__}. {detail}",
+                failure_type="schema_validation", failure=failure,
             ) from exc
         except Exception as exc:
-            raise ModelProviderError(self._safe_error(exc)) from exc
+            failure_type = _provider_failure_type(exc)
+            failure = {
+                "failure_type": failure_type, "schema": schema.__name__,
+                "attempt": 1, "fields": [],
+            }
+            _record_model_failure(
+                failure, operation=f"workflow.{schema.__name__}",
+                schema=schema.__name__, since=parse_start,
+            )
+            raise ModelProviderError(
+                self._safe_error(exc), failure_type=failure_type, failure=failure
+            ) from exc
 
     @staticmethod
     def _validate_structured_content(schema, content: str):
