@@ -646,6 +646,7 @@ def test_candidate_mode_uses_compact_hybrid_action_and_object_read_schema() -> N
     assert "object_reads" in schema["properties"]
     assert "intents" not in schema["properties"]
     instructions = completions.requests[0]["messages"][0]["content"]
+    assert "encode every requested step" in instructions
     assert "Prefer exact supplied action IDs" in instructions
     assert "discover_resources" in instructions
     assert "Never request Secrets" in instructions
@@ -898,20 +899,96 @@ def test_capability_report_requires_ask_schemas_for_ready_state() -> None:
     assert CapabilityReport(**base, ask_schemas=True).ready is True
 
 
+def _configure_valid_probe_classifier(provider: OpenAIChatCompletionsProvider) -> None:
+    provider.classify_ad_hoc = lambda *_args: InquirySemantics(  # type: ignore[method-assign]
+        mode="logs",
+        operation="logs",
+        cardinality="collection",
+        resource_query="Pod",
+        namespace="payments",
+        needs_object_details=True,
+        evidence_goal="Discover the failing Pod and inspect its recent logs.",
+    )
+
+
 def test_ask_schema_probe_reports_operational_contract_failure() -> None:
     provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
     provider.plan_ad_hoc = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
-        ModelProviderError("Provider response does not match ReadPlan.")
+        ModelProviderError("Provider response does not match ActionSelection.")
     )
 
     passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
 
     assert passed is False
-    assert detail == "ReadPlan probe failed. Provider response does not match ReadPlan."
+    assert detail == (
+        "ActionSelection probe failed. "
+        "Provider response does not match ActionSelection."
+    )
+
+
+def test_ask_schema_probe_identifies_inquiry_phase() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    provider.classify_ad_hoc = lambda *_args: InquirySemantics(  # type: ignore[method-assign]
+        mode="explain",
+        operation="explain",
+        evidence_goal="Explain Pod logs.",
+    )
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is False
+    assert detail == (
+        "InquirySemantics probe failed. The model did not preserve the "
+        "namespace-scoped log request without inventing a Pod name."
+    )
+
+
+def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
+    planning_contexts: list[dict[str, object]] = []
+
+    def grounded_probe_plan(_profile, _key, context):
+        planning_contexts.append(context)
+        if context["investigation_round"] == 1:
+            return ReadPlan(
+                scope_summary="Discover Pods before reading logs.",
+                intents=[ReadIntent(
+                    tool="list_resources", resource="pods", namespace="payments",
+                )],
+            )
+        return ReadPlan(
+            scope_summary="Read the exact observed Pod logs.",
+            candidate_ids=["read-0123456789abcdefabcd"],
+        )
+
+    provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
+    provider.answer_ad_hoc = lambda *_args: AdHocAnswer(  # type: ignore[method-assign]
+        answer_mode="evidence_based",
+        answer="The observed Pod restarted and its latest log reports successful startup.",
+        cited_evidence_ids=["probe-pods", "probe-log"],
+    )
+    provider.analyze_logs = lambda *_args: AdHocLogAnalysis(  # type: ignore[method-assign]
+        overview="The bounded log excerpt contains no error.",
+    )
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is True
+    assert detail is None
+    assert len(planning_contexts) == 2
+    assert planning_contexts[0]["read_candidates"] == []
+    assert planning_contexts[0]["inquiry"]["mode"] == "logs"
+    assert planning_contexts[0]["resource_catalog"][0]["resource"] == "pods"
+    assert planning_contexts[1]["read_candidates"][0]["id"] == (
+        "read-0123456789abcdefabcd"
+    )
 
 
 def test_ask_schema_probe_identifies_answer_phase() -> None:
     provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
     def grounded_probe_plan(_profile, _key, context):
         if context["investigation_round"] == 1:
             return ReadPlan(
@@ -941,6 +1018,7 @@ def test_ask_schema_probe_identifies_answer_phase() -> None:
 
 def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
     provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
     provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
         scope_summary="Read a guessed Pod.",
         intents=[ReadIntent(
@@ -952,13 +1030,14 @@ def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
 
     assert passed is False
     assert detail == (
-        "ReadPlan probe failed. "
+        "ActionSelection probe failed. "
         "The model did not plan discovery before an ungrounded Pod log read."
     )
 
 
 def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
     provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_classifier(provider)
 
     def grounded_probe_plan(_profile, _key, context):
         if context["investigation_round"] == 1:
@@ -975,8 +1054,8 @@ def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
 
     provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
     provider.answer_ad_hoc = lambda *_args: AdHocAnswer(  # type: ignore[method-assign]
-        answer_mode="general_guidance", answer="Schema probe passed.",
-        cited_evidence_ids=[], limitations=[],
+        answer_mode="evidence_based", answer="Schema probe passed.",
+        cited_evidence_ids=["probe-log"], limitations=[],
     )
     provider.analyze_logs = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
         ModelProviderError("Provider response does not match AdHocLogAnalysis.")

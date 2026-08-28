@@ -65,8 +65,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   fixed OpenShift Secret and are dynamically created, rotated, and removed without
   a Pod restart. Transport modes include system trust, custom CA, a visibly
   insecure HTTPS override, and explicit plain HTTP restricted to Kubernetes
-  Service DNS endpoints. Capability probing now separately validates the live Ask
-  PodPilot planning and answer schemas, shows an explicit result notification,
+  Service DNS endpoints. Capability probing now validates the live Ask PodPilot
+  classification, compact action-selection, grounded follow-up, evidence-citing
+  answer, and log-analysis stages with the same modular payload shapes as production,
+  and shows an explicit result notification,
   emits sanitized phase/outcome events for provider troubleshooting, and gives
   Chat Completions models one bounded field/type plus static cross-field schema correction attempt.
   A schema-invalid correction after a valid premature stop may fall back to one exact
