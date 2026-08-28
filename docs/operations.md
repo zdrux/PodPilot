@@ -188,6 +188,11 @@ The current deployment uses these variables:
   `1` through `60`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
+- `PODPILOT_ADHOC_AUDIT_DEFAULT_RANGE_SECONDS`, default `3600` (one hour), used only
+  when the operator does not supply an audit period
+- `PODPILOT_ADHOC_AUDIT_MAX_RANGE_SECONDS`, default `86400` (24 hours)
+- `PODPILOT_ADHOC_AUDIT_DEFAULT_LIMIT`, default `20`, used only when the operator does
+  not supply a result count
 - `PODPILOT_WORKLOAD_MAX_EVENTS`, default `30`
 - `PODPILOT_WORKLOAD_LOG_TAIL_LINES`, default `200`
 - `PODPILOT_WORKLOAD_MAX_LOG_BYTES`, default `16384` per collected log stream
@@ -246,6 +251,16 @@ Remote namespace log-volume questions additionally require the standard `logging
 registered identity. The base runtime identity is also bound to
 `cluster-logging-infrastructure-view` and `cluster-logging-audit-view`. OpenShift names the audit
 role `cluster-logging-audit-view`; there is no `cluster-monitoring-audit-view` role.
+
+Ask audit questions are classified separately from workload-log questions. The classifier derives
+the supplied username, period, count, all-versus-mutation scope, and all/successful/failed outcome;
+normal code validates those values and runs a fixed query against
+`/api/logs/v1/audit/loki/api/v1/query_range`. Username matching is exact and case-insensitive.
+For example, “show the last 5 successful changes by Druciare-Adm over 2 hours” produces a five-row,
+two-hour mutation query without encoding that username or time window in application code.
+Investigators, Approvers, and Breakglass users can use this Ask capability. A 403 from Loki should
+be resolved by verifying the registered cluster identity has `cluster-logging-audit-view` and
+cluster-wide LokiStack tenant authorization.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname

@@ -412,6 +412,7 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     assert set(schema["properties"]) == {
         "mode", "resource_query", "needs_object_details", "evidence_goal",
         "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
+        "audit_username", "audit_operation_scope", "audit_outcome", "audit_range_seconds",
     }
     assert request["max_tokens"] == 350
     assert "Do not choose tools or coordinates" in request["messages"][0]["content"]

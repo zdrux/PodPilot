@@ -127,6 +127,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift, and installed CRD objects. Normal code resolves versions, group
   collisions, scope, and verbs. Lists paginate and persist compact, explicitly
   truncated collection evidence rather than one observation per object.
+- Catalog-compiled inventory reads retain the selected API version and Kind instead
+  of executing from a plural alone. Kind and API-group wording disambiguates colliding
+  lists such as core `Node` versus `NodeMetrics`, and OpenShift versus Cluster API
+  `Machine` resources, while the broker revalidates the exact coordinates.
 - Ask PodPilot now makes one small model semantic-classification call per user turn, shared by
   every selected cluster. The model identifies coarse inquiry mode, the resource concept, desired
   evidence, and whether names alone are sufficient. Inventory concepts are validated against each
@@ -484,6 +488,21 @@ current repository and cluster state.
   not sufficient on this OpenShift path.
 - Never commit model tokens, kubeconfigs, cluster credentials, pull secrets, or
   private keys.
+
+## 2026-08-27 Cluster audit Ask queries
+
+- Added a typed `query_audit_events` read path backed by the OpenShift LokiStack audit tenant.
+  Semantic classification supplies the exact username, requested time range, result limit,
+  all-versus-mutation scope, and all/successful/failed outcome. Configured defaults apply only
+  when the operator omits a count or period.
+- Audit usernames are regex-escaped, matched exactly and case-insensitively in Loki, then verified
+  again with `casefold()` before projection. Evidence retains only bounded event metadata and does
+  not persist raw audit lines or request/response objects.
+- The capability remains inside Ask's Investigator-or-higher authorization boundary, so
+  Investigator, Approver, and Breakglass roles can query it through the runtime identity's existing
+  `cluster-logging-audit-view` binding.
+- Deterministic fallback and suggested-check generation now use current-turn evidence IDs, stopping
+  an unrelated follow-up from recycling an earlier Node inventory as its answer or next check.
 
 ## Known Limitations
 

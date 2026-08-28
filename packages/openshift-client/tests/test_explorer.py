@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -5,6 +6,7 @@ from kubernetes.client.exceptions import ApiException
 from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import ReadIntent
+from podpilot_diagnostics.adhoc import AdHocObservation, ReadResult
 from podpilot_openshift.explorer import (
     KubernetesReadOnlyExplorer,
     ReadOnlyExplorerError,
@@ -76,6 +78,33 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     assert configuration.verify_ssl is tls_verify
     assert configuration.assert_hostname is tls_verify
     assert suppressed == ([] if tls_verify else [InsecureRequestWarning])
+
+
+def test_audit_query_routes_to_dedicated_reader_without_kubernetes_discovery() -> None:
+    class AuditReader:
+        def __init__(self) -> None:
+            self.intent = None
+
+        def execute(self, intent):
+            self.intent = intent
+            return ReadResult((AdHocObservation(
+                id="audit-1", tool="query_audit_events", summary="Read audit events.",
+                source="loki:audit/query/user_actions",
+                collected_at=datetime.now(timezone.utc),
+                data={"events": []},
+            ),))
+
+    reader = AuditReader()
+    explorer = KubernetesReadOnlyExplorer(audit_reader=reader)
+    intent = ReadIntent(
+        tool="query_audit_events", audit_username="operator",
+        audit_operation_scope="all", audit_outcome="all",
+    )
+
+    result = explorer.execute(intent)
+
+    assert reader.intent == intent
+    assert result.observations[0].tool == "query_audit_events"
 
 
 def test_endpoint_projections_preserve_bounded_pod_targets_for_traffic_traversal() -> None:

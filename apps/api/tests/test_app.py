@@ -31,6 +31,7 @@ from podpilot_api.main import (
     _current_reads_are_metric_rankings,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
+    _deterministic_audit_answer,
     _deterministic_inventory_answer,
     _deterministic_kafka_metrics_answer,
     _deterministic_metric_ranking_answer,
@@ -49,6 +50,7 @@ from podpilot_api.main import (
     _partition_investigation_gaps,
     _reconcile_validated_answer_gaps,
     _semantic_metric_read_plan,
+    _semantic_audit_read_plan,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -1503,6 +1505,20 @@ def test_deterministic_evidence_fallback_never_returns_an_empty_answer() -> None
     assert fallback["citations"] == ["cluster-route-1"]
 
 
+def test_deterministic_evidence_fallback_does_not_reuse_previous_turn_evidence() -> None:
+    fallback = _deterministic_evidence_fallback_answer(
+        evidence=[{
+            "id": "old-node-list", "tool": "list_resources",
+            "summary": "Read one Node resource.",
+        }],
+        activity=[],
+    )
+
+    assert fallback["answer_mode"] == "insufficient_evidence"
+    assert fallback["citations"] == []
+    assert "Node" not in fallback["content"]
+
+
 def test_adhoc_answer_structures_inline_labels_and_removes_inline_citations() -> None:
     evidence_id = "cluster-pod-7"
     answer = AdHocAnswer(
@@ -1735,6 +1751,86 @@ def test_semantic_cluster_metric_plan_preserves_requested_top_n() -> None:
     assert plan.intents[0].tool == "query_metrics"
     assert plan.intents[0].metric_scope == "cluster"
     assert plan.intents[0].limit == 5
+
+
+def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
+    compiled = _semantic_audit_read_plan(
+        InquirySemantics(
+            mode="audit",
+            needs_object_details=True,
+            evidence_goal="List successful changes by the supplied user.",
+            result_limit=5,
+            audit_username="Druciare-Adm",
+            audit_operation_scope="mutations",
+            audit_outcome="successful",
+            audit_range_seconds=7200,
+        ),
+        default_limit=20,
+        default_range_seconds=3600,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="query_audit_events",
+        audit_username="Druciare-Adm",
+        audit_operation_scope="mutations",
+        audit_outcome="successful",
+        range_seconds=7200,
+        limit=5,
+    )]
+
+
+def test_semantic_audit_plan_requests_missing_username_instead_of_other_reads() -> None:
+    compiled = _semantic_audit_read_plan(
+        InquirySemantics(
+            mode="audit",
+            needs_object_details=True,
+            evidence_goal="List user actions.",
+            audit_operation_scope="all",
+            audit_outcome="all",
+        ),
+        default_limit=20,
+        default_range_seconds=3600,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.decision == "needs_clarification"
+    assert plan.intents == []
+
+
+def test_deterministic_audit_answer_uses_only_current_turn_audit_evidence() -> None:
+    evidence = [
+        {"id": "old-node", "tool": "list_resources", "summary": "Read Node resources."},
+        {
+            "id": "audit-current", "tool": "query_audit_events",
+            "cluster_name": "Central", "data": {
+                "username": "DRUCIARE-ADM", "rangeSeconds": 3600,
+                "events": [{
+                    "timestamp": "2026-08-27T11:59:00+00:00",
+                    "username": "DRUCIARE-ADM", "verb": "patch",
+                    "resource": "configmaps", "namespace": "payments",
+                    "name": "settings", "responseCode": 200,
+                }],
+            },
+        },
+    ]
+
+    answer = _deterministic_audit_answer(
+        evidence=evidence,
+        activity=[{
+            "status": "succeeded", "tool": "query_audit_events",
+            "evidence_ids": ["audit-current"],
+        }],
+    )
+
+    assert answer is not None
+    assert answer["citations"] == ["audit-current"]
+    assert "configmaps/payments/settings" in answer["content"]
+    assert "Node" not in answer["content"]
 
 
 def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
@@ -2486,6 +2582,67 @@ def test_model_semantics_can_route_novel_inventory_wording_through_live_catalog(
     )
     assert rendered is not None
     assert "`orders`" in str(rendered["content"])
+
+
+def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("Audit collection must not enter open model planning.")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+            self.catalog_calls = 0
+
+        def resource_catalog(self, **_kwargs):
+            self.catalog_calls += 1
+            raise AssertionError("Audit collection must not discover resource types.")
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="audit-current", tool="query_audit_events",
+                summary="Read 1 completed audit event for user Druciare-Adm.",
+                source="loki:audit/query/user_actions",
+                collected_at=datetime.now(timezone.utc),
+                data={"username": "Druciare-Adm", "events": [], "count": 0},
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[], adhoc_audit_default_limit=20,
+            adhoc_audit_default_range_seconds=3600,
+        ),
+        actor="ivy", workflow_id="semantic-audit",
+        question="Show the last 5 successful actions by Druciare-Adm over 2 hours.",
+        conversation=[], existing_evidence=[{
+            "id": "old-node", "tool": "list_resources", "summary": "Read one Node."
+        }],
+        inquiry=InquirySemantics(
+            mode="audit", needs_object_details=True,
+            evidence_goal="List the supplied user's successful API actions.",
+            result_limit=5, audit_username="Druciare-Adm",
+            audit_operation_scope="all", audit_outcome="successful",
+            audit_range_seconds=7200,
+        ),
+    ))
+
+    assert explorer.catalog_calls == 0
+    assert explorer.calls == [ReadIntent(
+        tool="query_audit_events", audit_username="Druciare-Adm",
+        audit_operation_scope="all", audit_outcome="successful",
+        range_seconds=7200, limit=5,
+    )]
+    assert result.activity[0]["tool"] == "query_audit_events"
 
 
 def test_inventory_details_begin_with_catalog_list_before_optional_planning() -> None:

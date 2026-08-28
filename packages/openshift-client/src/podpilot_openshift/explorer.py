@@ -14,6 +14,7 @@ from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
+from podpilot_openshift.audit_logs import AuditQueryError, BoundedAuditEventReader
 from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
 from podpilot_openshift.http_probe import BoundedHttpProbe
 from podpilot_openshift.log_metrics import BoundedLogVolumeReader, LogMetricsQueryError
@@ -532,6 +533,7 @@ class KubernetesReadOnlyExplorer:
         http_probe: BoundedHttpProbe | None = None,
         metric_reader: BoundedMetricTrendReader | None = None,
         log_metric_reader: BoundedLogVolumeReader | None = None,
+        audit_reader: BoundedAuditEventReader | None = None,
         watch_factory: Any = kubernetes_watch.Watch,
     ) -> None:
         self._dynamic = dynamic_client
@@ -544,6 +546,7 @@ class KubernetesReadOnlyExplorer:
         self._http_probe = http_probe or BoundedHttpProbe()
         self._metric_reader = metric_reader
         self._log_metric_reader = log_metric_reader
+        self._audit_reader = audit_reader
         self._watch_factory = watch_factory
 
     @classmethod
@@ -619,6 +622,12 @@ class KubernetesReadOnlyExplorer:
                 return self._discover_resources(intent)
             if intent.tool == "http_probe":
                 return self._http_probe.execute(intent)
+            if intent.tool == "query_audit_events":
+                if self._audit_reader is None:
+                    raise ReadOnlyExplorerError(
+                        "The authenticated cluster audit adapter is unavailable."
+                    )
+                return self._audit_reader.execute(intent)
             if intent.tool == "query_metrics":
                 if intent.metric == "top_log_volume_by_namespace":
                     if self._log_metric_reader is None:
@@ -642,6 +651,8 @@ class KubernetesReadOnlyExplorer:
         except MetricTrendError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except LogMetricsQueryError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
+        except AuditQueryError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
             resource_name = intent.resource or intent.kind or "resource"

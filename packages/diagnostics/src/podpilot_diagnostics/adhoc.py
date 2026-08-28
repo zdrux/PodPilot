@@ -137,6 +137,7 @@ class ReadIntent(BaseModel):
     tool: Literal[
         "discover_resources", "get_resource", "list_resources", "search_resources",
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
+        "query_audit_events",
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -165,6 +166,9 @@ class ReadIntent(BaseModel):
     metric_scope: Literal[
         "cluster", "pod", "namespace", "deployment", "node", "persistent_volume_claim"
     ] | None = None
+    audit_username: str | None = Field(default=None, max_length=512)
+    audit_operation_scope: Literal["all", "mutations"] | None = None
+    audit_outcome: Literal["all", "successful", "failed"] | None = None
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
@@ -253,6 +257,20 @@ class ReadIntent(BaseModel):
                 raise ValueError("persistent_volume_claim scope supports only persistent_volume_usage")
         elif self.metric or self.metric_scope:
             raise ValueError("metric and metric_scope are valid only for query_metrics")
+        if self.tool == "query_audit_events":
+            if not self.audit_username:
+                raise ValueError("query_audit_events requires an exact audit username")
+            if any(
+                ord(character) < 32 or ord(character) == 127
+                for character in self.audit_username
+            ):
+                raise ValueError("audit username must not contain control characters")
+            if self.audit_operation_scope is None or self.audit_outcome is None:
+                raise ValueError(
+                    "query_audit_events requires operation scope and outcome semantics"
+                )
+        elif any((self.audit_username, self.audit_operation_scope, self.audit_outcome)):
+            raise ValueError("audit fields are valid only for query_audit_events")
         if self.tool == "discover_resources":
             if not self.discovery_query:
                 raise ValueError("discover_resources requires a discovery_query")
@@ -1280,18 +1298,42 @@ def plan_catalog_read(
         re.IGNORECASE,
     )
     namespace = namespace_match.group("namespace") if namespace_match else None
-    matches: list[tuple[int, dict[str, object]]] = []
+    normalized_question = re.sub(r"[^a-z0-9]", "", lowered)
+    question_terms = set(re.findall(r"[a-z0-9]+", lowered))
+    matches: list[tuple[tuple[int, int, int, int], dict[str, object]]] = []
     for entry in resource_catalog:
         resource = str(entry.get("resource") or "")
         kind = str(entry.get("kind") or "")
-        if not resource or not kind:
+        api_version = str(entry.get("apiVersion") or "")
+        if not resource or not kind or not api_version:
             continue
         unqualified = resource.split(".", 1)[0]
         kind_words = re.sub(r"(?<!^)(?=[A-Z])", " ", kind).lower()
         aliases = {unqualified.lower(), kind.lower(), kind_words}
         for alias in aliases:
             if re.search(rf"\b{re.escape(alias)}s?\b", lowered):
-                matches.append((len(alias), entry))
+                normalized_kind = re.sub(r"[^a-z0-9]", "", kind.lower())
+                group = api_version.split("/", 1)[0] if "/" in api_version else "core"
+                group_terms = {
+                    term for term in re.findall(r"[a-z0-9]+", group.lower())
+                    if len(term) >= 3 and term not in {"k8s", "io"}
+                }
+                # Prefer the resource whose complete Kind is explicitly named. This
+                # distinguishes core Node from NodeMetrics when both advertise the
+                # plural ``nodes``. A group word in the question similarly resolves
+                # same-Kind CRDs such as OpenShift and Cluster API Machines.
+                exact_kind = int(bool(
+                    normalized_kind and normalized_kind in normalized_question
+                ))
+                group_overlap = len(question_terms.intersection(group_terms))
+                platform_preference = (
+                    2 if group == "core" else
+                    1 if "openshift.io" in group else
+                    0
+                )
+                matches.append(((
+                    exact_kind, group_overlap, platform_preference, len(alias)
+                ), entry))
                 break
     if not matches:
         return None
@@ -1301,6 +1343,7 @@ def plan_catalog_read(
     if not namespaced and namespace:
         return None
     resource = str(entry["resource"])
+    api_version = str(entry["apiVersion"])
     kind = str(entry["kind"])
     return (
         ReadPlan(
@@ -1309,6 +1352,8 @@ def plan_catalog_read(
             intents=[ReadIntent(
                 tool="list_resources",
                 resource=resource,
+                api_version=api_version,
+                kind=kind,
                 namespace=namespace,
                 limit=inventory_limit,
             )],

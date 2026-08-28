@@ -19,6 +19,10 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Scan tracked and staged content for credentials, kubeconfigs, tokens, certificates, and unsanitized cluster data.
 - Verify TLS validation, timeouts, bounded retries, and model-call redaction.
 - Exercise degraded paths for unavailable Kubernetes, Thanos, Alertmanager, and model APIs.
+- Exercise the Loki audit tenant success, empty-result, timeout, and 403 paths; confirm audit
+  username matching is exact and case-insensitive and raw audit lines are never persisted.
+- Verify Investigator, Approver, and Breakglass can submit audit questions through Ask while
+  Viewer remains denied by the existing Investigator-or-higher boundary.
 - Confirm production image digests—or the explicitly accepted versioned
   ImageStreamTag for a remote PoC—plus resource limits, probes, NetworkPolicy,
   and rollback instructions.
@@ -47,6 +51,8 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
 - Malicious instructions embedded in logs, events, labels, or annotations.
 - Secret-like text in collected evidence is redacted before model and telemetry egress.
 - Evidence disagreement causes uncertainty or abstention rather than fabrication.
+- An unrelated follow-up cannot cite prior-turn Node or other resource evidence when its current
+  audit read fails or returns no current evidence.
 
 Milestone 4 automates the Watchdog-only healthy view, explicit Alertmanager
 degradation, group-role denial, CSRF denial, durable investigation/audit creation,

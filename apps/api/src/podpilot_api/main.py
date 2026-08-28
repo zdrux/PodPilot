@@ -96,6 +96,7 @@ from podpilot_openshift.credentials import (
     EnvironmentCredentialStore,
     KubernetesSecretCredentialStore,
 )
+from podpilot_openshift.audit_logs import BoundedAuditEventReader
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.http_probe import BoundedHttpProbe
 from podpilot_openshift.log_metrics import BoundedLogVolumeReader, LokiQueryClient
@@ -1286,7 +1287,6 @@ def _deterministic_evidence_fallback_answer(
     by_id = {str(item.get("id")): item for item in evidence if item.get("id")}
     selected_ids = list(dict.fromkeys(
         [item for item in current_ids if item in by_id]
-        or [str(item.get("id")) for item in evidence[-6:] if item.get("id")]
     ))[:8]
     if not selected_ids:
         return {
@@ -1862,6 +1862,87 @@ def _deterministic_kafka_metrics_answer(
                 "scraping an endpoint unless separate monitor or scrape evidence was collected."
             ),
         ]),
+        "citations": citations,
+    }
+
+
+def _deterministic_audit_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render only audit evidence collected for the current operator turn."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") == "query_audit_events"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") == "query_audit_events"
+        and isinstance(item.get("data"), dict)
+    ]
+    if not observations:
+        return None
+
+    def table_cell(value: object) -> str:
+        return redact_text(str(value))[:512].replace("|", "\\|").replace("\n", " ")
+
+    rows: list[str] = []
+    citations: list[str] = []
+    total = 0
+    for observation in observations:
+        data = observation["data"]
+        citations.append(str(observation["id"]))
+        events = data.get("events") if isinstance(data.get("events"), list) else []
+        cluster = str(
+            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+        )[:120]
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            total += 1
+            target_parts = [
+                str(event.get("resource") or "resource"),
+                str(event.get("namespace") or ""),
+                str(event.get("name") or ""),
+            ]
+            target = "/".join(part for part in target_parts if part)
+            rows.append(
+                "| " + " | ".join(
+                    table_cell(value)
+                    for value in (
+                        cluster,
+                        str(event.get("timestamp") or "unknown"),
+                        str(event.get("username") or data.get("username") or "unknown"),
+                        str(event.get("verb") or "unknown"),
+                        target,
+                        str(event.get("responseCode") or "unknown"),
+                    )
+                ) + " |"
+            )
+    username = str(observations[0]["data"].get("username") or "the supplied user")
+    range_seconds = int(observations[0]["data"].get("rangeSeconds") or 0)
+    if rows:
+        content = "\n".join([
+            "## Cluster audit activity", "",
+            f"Found {total} matching completed operation(s) for `{username}` in the bounded audit window.", "",
+            "| Cluster | Time | User | Operation | Target | HTTP result |",
+            "|---|---|---|---|---|---|",
+            *rows,
+        ])
+    else:
+        content = (
+            "## Cluster audit activity\n\n"
+            f"No matching completed audit operations for `{username}` were observed in the "
+            f"last {range_seconds} seconds. This is a bounded observation, not proof that no older "
+            "activity exists."
+        )
+    return {
+        "answer_mode": "evidence_based",
+        "content": content,
         "citations": citations,
     }
 
@@ -2905,6 +2986,14 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         add("Statistics", data.get("statistics"))
         add("Complete", data.get("complete"))
         view["metric_ranking"] = _metric_ranking_view(data)
+    elif tool == "query_audit_events":
+        add("User", data.get("username"))
+        add("Case-insensitive match", data.get("caseInsensitive"))
+        add("Operation scope", data.get("operationScope"))
+        add("Outcome filter", data.get("outcomeFilter"))
+        add("Period", f"{data.get('rangeSeconds')} seconds" if data.get("rangeSeconds") else None)
+        add("Events returned", data.get("count"))
+        add("Complete", data.get("complete"))
     else:
         add("API version", data.get("apiVersion"))
         add("Kind", data.get("kind"))
@@ -3671,6 +3760,8 @@ def _read_progress_message(intent) -> str:
             f"{intent.namespace}/{intent.name}"
         )
         return f"Reading {intent.metric} trend for {intent.metric_scope} {target}."
+    if intent.tool == "query_audit_events":
+        return f"Reading bounded cluster audit activity for {intent.audit_username}."
     resource = intent.kind or intent.resource or "cluster resource"
     scope = f" in {intent.namespace}" if intent.namespace else " across the cluster"
     if intent.tool == "pod_logs":
@@ -3691,7 +3782,7 @@ def _investigation_unit_cost(intent: ReadIntent) -> int:
 
     if intent.tool == "watch_resources":
         return 3
-    if intent.tool in {"pod_logs", "http_probe", "query_metrics"}:
+    if intent.tool in {"pod_logs", "http_probe", "query_metrics", "query_audit_events"}:
         return 2
     return 1
 
@@ -4278,6 +4369,49 @@ def _semantic_metric_read_plan(
     )
 
 
+def _semantic_audit_read_plan(
+    inquiry: InquirySemantics | None,
+    *,
+    default_limit: int,
+    default_range_seconds: int,
+) -> tuple[ReadPlan, bool] | None:
+    """Compile model-extracted audit semantics into one fixed, bounded query."""
+
+    if inquiry is None or inquiry.mode != "audit":
+        return None
+    if not inquiry.audit_username:
+        return (
+            ReadPlan(
+                goal_type="logs",
+                scope_summary="A cluster audit query requires an exact supplied username.",
+                clarification="Which exact cluster username should PodPilot search for?",
+                intents=[],
+            ),
+            True,
+        )
+    limit = inquiry.result_limit or default_limit
+    range_seconds = inquiry.audit_range_seconds or default_range_seconds
+    operation_scope = inquiry.audit_operation_scope or "all"
+    outcome = inquiry.audit_outcome or "all"
+    return (
+        ReadPlan(
+            goal_type="logs",
+            scope_summary=(
+                f"List the last {limit} {operation_scope} audit operations for the supplied user."
+            ),
+            intents=[ReadIntent(
+                tool="query_audit_events",
+                audit_username=inquiry.audit_username,
+                audit_operation_scope=operation_scope,
+                audit_outcome=outcome,
+                range_seconds=range_seconds,
+                limit=limit,
+            )],
+        ),
+        True,
+    )
+
+
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -4311,6 +4445,11 @@ async def _collect_bounded_cluster_reads(
     )
     scope_summary = "Bounded read-only cluster investigation."
     semantic_metric_plan = _semantic_metric_read_plan(inquiry)
+    semantic_audit_plan = _semantic_audit_read_plan(
+        inquiry,
+        default_limit=settings.adhoc_audit_default_limit,
+        default_range_seconds=settings.adhoc_audit_default_range_seconds,
+    )
     known_plan = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
@@ -4326,7 +4465,7 @@ async def _collect_bounded_cluster_reads(
         and known_plan[0].goal_type == "compare"
         else None
     )
-    deterministic_plan = known_metric_plan or semantic_metric_plan or (
+    deterministic_plan = semantic_audit_plan or known_metric_plan or semantic_metric_plan or (
         (
             known_plan[0],
             False
@@ -4358,7 +4497,7 @@ async def _collect_bounded_cluster_reads(
     catalog_entries: list[dict[str, object]] = []
     catalog_available = False
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
-    if callable(catalog_reader):
+    if callable(catalog_reader) and semantic_audit_plan is None:
         if progress:
             await progress("discovering", "Discovering available cluster resources.")
         try:
@@ -5090,6 +5229,9 @@ async def _collect_bounded_cluster_reads(
                     f"{intent.namespace + '/' if intent.namespace else ''}{intent.name or '*'} "
                     f"range={intent.range_seconds}s"
                     if intent.tool == "query_metrics" else
+                    f"audit user={intent.audit_username} scope={intent.audit_operation_scope} "
+                    f"outcome={intent.audit_outcome} range={intent.range_seconds}s"
+                    if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"
                     if intent.tool == "discover_resources" else
                     f"{intent.resource or intent.api_version or 'v1'} {intent.kind or 'resource'} "
@@ -5413,6 +5555,17 @@ def create_app(
             ),
             max_range_seconds=app_settings.adhoc_logs_max_range_seconds,
         ),
+        audit_reader=BoundedAuditEventReader(
+            LokiQueryClient(
+                base_url=app_settings.loki_url,
+                tenant="audit",
+                token_path=app_settings.service_account_token_path,
+                ca_path=app_settings.service_ca_path,
+                timeout_seconds=app_settings.loki_timeout_seconds,
+                max_series=app_settings.loki_max_series,
+            ),
+            max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
+        ),
     )
     templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
     templates.env.filters["safe_markdown"] = render_safe_markdown
@@ -5454,6 +5607,18 @@ def create_app(
                     max_series=app_settings.loki_max_series,
                 ),
                 max_range_seconds=app_settings.adhoc_logs_max_range_seconds,
+            ),
+            audit_reader=BoundedAuditEventReader(
+                LokiQueryClient.for_remote_cluster(
+                    api_url=cluster.api_url,
+                    token=token,
+                    api_tls_verify=cluster.tls_verify,
+                    route_name=app_settings.loki_route_name,
+                    tenant="audit",
+                    timeout_seconds=app_settings.loki_timeout_seconds,
+                    max_series=app_settings.loki_max_series,
+                ),
+                max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
             ),
         )
 
@@ -5826,12 +5991,24 @@ def create_app(
                         f"Preparing an evidence-backed answer from {len(evidence)} observation"
                         f"{'s' if len(evidence) != 1 else ''}.",
                     )
+                answer_evidence = evidence
+                if inquiry is not None and inquiry.mode == "audit":
+                    audit_evidence_ids = {
+                        str(evidence_id)
+                        for entry in activity
+                        if entry.get("tool") == "query_audit_events"
+                        for evidence_id in (entry.get("evidence_ids") or [])
+                    }
+                    answer_evidence = [
+                        item for item in evidence
+                        if str(item.get("id") or "") in audit_evidence_ids
+                    ]
                 answer_observations, answer_context_metadata = _compact_answer_evidence(
-                    evidence, activity=activity, question=message_text, total_byte_limit=48_000,
+                    answer_evidence, activity=activity, question=message_text, total_byte_limit=48_000,
                     per_observation_byte_limit=8_000, max_observations=16,
                 )
                 answer_findings = _compact_answer_findings(
-                    derive_adhoc_findings(evidence), total_byte_limit=12_000
+                    derive_adhoc_findings(answer_evidence), total_byte_limit=12_000
                 )[:8]
                 deterministic_log_section = _deterministic_log_findings_section(
                     evidence=evidence, activity=activity
@@ -5954,7 +6131,16 @@ def create_app(
                     )
                     else None
                 )
-                fast_deterministic_answer = fast_metric_answer or fast_inventory_answer
+                fast_audit_answer = (
+                    _deterministic_audit_answer(evidence=evidence, activity=activity)
+                    if not followup_action
+                    and inquiry is not None
+                    and inquiry.mode == "audit"
+                    else None
+                )
+                fast_deterministic_answer = (
+                    fast_audit_answer or fast_metric_answer or fast_inventory_answer
+                )
                 if fast_deterministic_answer is not None:
                     inventory_fast_path = True
                     prefer_metric_card = fast_metric_answer is not None
@@ -6338,6 +6524,10 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                 )
+                audit_answer = _deterministic_audit_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 resource_detail_answer = _deterministic_resource_detail_answer(
                     evidence=evidence,
                     activity=activity,
@@ -6359,6 +6549,8 @@ def create_app(
                     or answer_quality_issue is not None
                 )
                 deterministic_answer = (
+                    audit_answer
+                ) or (
                     kafka_metrics_answer
                 ) or (
                     route_tls_answer if route_fallback_needed else None
@@ -6498,12 +6690,21 @@ def create_app(
                         "citations": [],
                         "limitations": [str(exc)],
                     }
+        current_turn_evidence_ids = {
+            str(evidence_id)
+            for entry in activity
+            for evidence_id in (entry.get("evidence_ids") or [])
+        } | {str(item) for item in validated.get("citations", [])}
+        current_turn_evidence = [
+            item for item in evidence
+            if str(item.get("id") or "") in current_turn_evidence_ids
+        ]
         suggested_checks, suggested_followup_actions = (
             ([], [])
             if inventory_fast_path
             else _compile_remaining_candidate_followups(
                 question=source_question,
-                evidence=evidence,
+                evidence=current_turn_evidence,
                 activity=activity,
                 cluster_runtimes=cluster_runtimes,
                 remaining_units=remaining_budget,

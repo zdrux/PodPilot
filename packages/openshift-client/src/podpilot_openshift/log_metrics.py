@@ -12,6 +12,7 @@ import httpx
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_mapping
+from podpilot_openshift.audit_logs import AuditLogEntries, AuditQueryError
 
 
 class LogMetricsQueryError(RuntimeError):
@@ -51,11 +52,12 @@ class LokiQueryClient:
         timeout_seconds: float = 30.0,
         max_series: int = 50,
         max_response_bytes: int = 65_536,
+        tenant: str = "application",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if (token_path is None) == (token is None):
             raise ValueError("Configure exactly one Loki bearer-token source.")
-        self._base_url = base_url.rstrip("/")
+        normalized_base_url = base_url.rstrip("/")
         self._token_path = token_path
         self._token = token
         self._ca_path = ca_path
@@ -68,6 +70,14 @@ class LokiQueryClient:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._max_series = max_series
         self._max_response_bytes = max_response_bytes
+        if tenant not in {"application", "audit"}:
+            raise ValueError("The Loki tenant must be application or audit.")
+        self._tenant = tenant
+        tenant_marker = "/api/logs/v1/"
+        if tenant_marker in normalized_base_url:
+            tenant_root = normalized_base_url.split(tenant_marker, 1)[0]
+            normalized_base_url = f"{tenant_root}{tenant_marker}{tenant}"
+        self._base_url = normalized_base_url
         self._transport = transport
 
     @classmethod
@@ -78,12 +88,14 @@ class LokiQueryClient:
         token: str,
         api_tls_verify: bool = True,
         route_name: str = "logging-loki",
+        tenant: str = "application",
         **kwargs: Any,
     ) -> "LokiQueryClient":
         """Discover the conventional LokiStack Route on one registered cluster."""
         return cls(
-            base_url="https://logging-loki.invalid/api/logs/v1/application",
+            base_url=f"https://logging-loki.invalid/api/logs/v1/{tenant}",
             token=token,
+            tenant=tenant,
             route_discovery_url=(
                 f"{api_url.rstrip('/')}"
                 "/apis/route.openshift.io/v1/namespaces/openshift-logging/"
@@ -131,6 +143,53 @@ class LokiQueryClient:
             is_complete=len(result) <= self._max_series,
         )
 
+    def query_audit_entries(
+        self,
+        logql: str,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> AuditLogEntries:
+        if self._tenant != "audit":
+            raise AuditQueryError("Audit queries require the Loki audit tenant.")
+        try:
+            payload = self._request("/loki/api/v1/query_range", {
+                "query": logql,
+                "start": str(int(start.timestamp() * 1_000_000_000)),
+                "end": str(int(end.timestamp() * 1_000_000_000)),
+                "limit": str(limit),
+                "direction": "backward",
+            })
+        except LogMetricsQueryError as exc:
+            raise AuditQueryError(str(exc)) from exc
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            raise AuditQueryError("Loki returned an unsuccessful audit query result.")
+        data = payload.get("data")
+        if not isinstance(data, dict) or data.get("resultType") != "streams":
+            raise AuditQueryError("Loki returned an unexpected audit query result type.")
+        result = data.get("result")
+        if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+            raise AuditQueryError("Loki returned an unexpected audit response shape.")
+        complete = len(result) <= self._max_series
+        entries: list[tuple[str, str]] = []
+        for stream in result[: self._max_series]:
+            values = stream.get("values")
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if (
+                    isinstance(value, list)
+                    and len(value) == 2
+                    and isinstance(value[0], str)
+                    and isinstance(value[1], str)
+                ):
+                    entries.append((value[0], value[1]))
+        entries.sort(key=lambda item: item[0], reverse=True)
+        if len(entries) >= limit:
+            complete = False
+        return AuditLogEntries(entries=tuple(entries[:limit]), is_complete=complete)
+
     def _request(self, path: str, params: dict[str, str]) -> Any:
         try:
             token = (
@@ -173,10 +232,16 @@ class LokiQueryClient:
             if exc.response.status_code == 401:
                 message = "The logging API rejected the configured bearer token."
             elif exc.response.status_code == 403:
+                tenant_label = (
+                    "audit-log" if self._tenant == "audit" else "application-log analytics"
+                )
+                role = (
+                    "cluster-logging-audit-view"
+                    if self._tenant == "audit" else "cluster-logging-application-view"
+                )
                 message = (
-                    "The cluster denied application-log analytics access. Grant the "
-                    "PodPilot identity cluster-logging-application-view and configure it "
-                    "as a LokiStack OpenShift logging administrator."
+                    f"The cluster denied {tenant_label} access. Grant the PodPilot identity "
+                    f"{role} and verify LokiStack tenant authorization."
                 )
             elif exc.response.status_code == 404:
                 message = "The configured logging endpoint does not expose the expected Loki API."
@@ -229,7 +294,7 @@ class LokiQueryClient:
             host = first.get("host")
         if not isinstance(host, str) or not host.strip():
             raise LogMetricsQueryError("The remote LokiStack Route has no admitted host.")
-        self._base_url = f"https://{host.strip()}/api/logs/v1/application"
+        self._base_url = f"https://{host.strip()}/api/logs/v1/{self._tenant}"
         self._route_discovery_url = None
         return self._base_url
 

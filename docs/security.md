@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-27
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -17,7 +17,11 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
   `openshift-monitoring/podpilot-alertmanager-api-view` Role.
 - OpenShift Logging remains read-only through `cluster-logging-application-view`,
   `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. The application
-  tenant supplies aggregate namespace-volume evidence; infrastructure and audit access add
+  tenant supplies aggregate namespace-volume evidence. The audit tenant supports bounded
+  user-activity queries through a server-owned LogQL template; the model may extract only the
+  username, period, result limit, operation scope, and outcome filter. Usernames are matched
+  exactly and case-insensitively after regex escaping, and PodPilot persists only projected audit
+  fields—not raw lines, request objects, or response objects. Infrastructure and audit access add
   investigation visibility but no mutation authority.
 
 ## Credentials That Must Never Be Committed
@@ -54,6 +58,11 @@ resource, ConfigMap, and Pod-log reads through an application broker, while deny
 Secrets, access-review resources, exec/attach/port-forward/proxy paths, and every
 mutation. Because `cluster-reader` is aggregated, release checks audit its effective
 permissions as well as the broker policy.
+
+Cluster audit queries use the same Ask authorization boundary: Investigator, Approver, and
+Breakglass roles may request them; Viewer may not. Human application roles do not receive direct
+Loki credentials or RBAC. The runtime ServiceAccount performs the read through its existing
+`cluster-logging-audit-view` binding.
 
 Pod-log autonomy does not give the model a free-form log client. Pod LIST evidence
 creates bounded opaque candidate IDs for exact observed namespace/Pod/container

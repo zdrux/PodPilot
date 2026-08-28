@@ -795,7 +795,8 @@ def test_live_catalog_compiles_common_cluster_scoped_inventory_without_model() -
     assert planned is not None
     plan, terminal = planned
     assert plan.intents == [ReadIntent(
-        tool="list_resources", resource="clusteroperators", limit=500,
+        tool="list_resources", resource="clusteroperators",
+        api_version="config.openshift.io/v1", kind="ClusterOperator", limit=500,
     )]
     assert terminal is True
 
@@ -814,6 +815,92 @@ def test_live_catalog_allows_cluster_wide_list_for_namespaced_inventory() -> Non
     planned = plan_catalog_read("Show widgets in namespace payments", catalog)
     assert planned is not None
     assert planned[0].intents[0].namespace == "payments"
+
+
+def test_live_catalog_pins_exact_coordinates_and_prefers_node_over_node_metrics() -> None:
+    catalog = [{
+        "resource": "nodes.metrics.k8s.io",
+        "apiVersion": "metrics.k8s.io/v1beta1",
+        "kind": "NodeMetrics",
+        "namespaced": False,
+    }, {
+        "resource": "nodes.core",
+        "apiVersion": "v1",
+        "kind": "Node",
+        "namespaced": False,
+    }]
+
+    planned = plan_catalog_read("Show me a list of nodes on the cluster", catalog)
+
+    assert planned is not None
+    assert planned[0].intents == [ReadIntent(
+        tool="list_resources", resource="nodes.core", api_version="v1",
+        kind="Node", limit=500,
+    )]
+
+
+def test_live_catalog_can_explicitly_select_node_metrics() -> None:
+    catalog = [{
+        "resource": "nodes.metrics.k8s.io",
+        "apiVersion": "metrics.k8s.io/v1beta1",
+        "kind": "NodeMetrics",
+        "namespaced": False,
+    }, {
+        "resource": "nodes.core",
+        "apiVersion": "v1",
+        "kind": "Node",
+        "namespaced": False,
+    }]
+
+    planned = plan_catalog_read("Show node metrics", catalog)
+
+    assert planned is not None
+    assert planned[0].intents[0].api_version == "metrics.k8s.io/v1beta1"
+    assert planned[0].intents[0].kind == "NodeMetrics"
+
+
+def test_live_catalog_uses_group_hint_for_same_kind_custom_resources() -> None:
+    catalog = [{
+        "resource": "machines.cluster.x-k8s.io",
+        "apiVersion": "cluster.x-k8s.io/v1beta1",
+        "kind": "Machine",
+        "namespaced": True,
+    }, {
+        "resource": "machines.machine.openshift.io",
+        "apiVersion": "machine.openshift.io/v1beta1",
+        "kind": "Machine",
+        "namespaced": True,
+    }]
+
+    planned = plan_catalog_read("List OpenShift machines", catalog)
+
+    assert planned is not None
+    assert planned[0].intents[0].resource == "machines.machine.openshift.io"
+    assert planned[0].intents[0].api_version == "machine.openshift.io/v1beta1"
+    assert planned[0].intents[0].kind == "Machine"
+
+    default = plan_catalog_read("List machines", catalog)
+    assert default is not None
+    assert default[0].intents[0].resource == "machines.machine.openshift.io"
+
+    cluster_api = plan_catalog_read("List Cluster API machines", catalog)
+    assert cluster_api is not None
+    assert cluster_api[0].intents[0].resource == "machines.cluster.x-k8s.io"
+
+
+def test_live_catalog_pins_configmap_coordinates() -> None:
+    planned = plan_catalog_read("List configmaps", [{
+        "resource": "configmaps",
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "namespaced": True,
+    }])
+
+    assert planned is not None
+    assert planned[0].intents[0] == ReadIntent(
+        tool="list_resources", resource="configmaps", api_version="v1",
+        kind="ConfigMap", limit=500,
+    )
 
 
 def test_inventory_limit_can_be_increased_within_broker_ceiling() -> None:
@@ -1072,6 +1159,24 @@ def test_log_candidate_id_is_rejected_for_non_log_tools() -> None:
             namespace="payments",
             name="api",
         )
+
+
+def test_audit_query_requires_complete_semantics() -> None:
+    with pytest.raises(ValidationError, match="operation scope and outcome"):
+        ReadIntent(tool="query_audit_events", audit_username="operator")
+
+
+def test_audit_query_accepts_exact_username_and_filters() -> None:
+    intent = ReadIntent(
+        tool="query_audit_events",
+        audit_username="Druciare-Adm",
+        audit_operation_scope="mutations",
+        audit_outcome="successful",
+        range_seconds=7200,
+        limit=5,
+    )
+
+    assert intent.audit_username == "Druciare-Adm"
 
 
 @pytest.mark.parametrize(
