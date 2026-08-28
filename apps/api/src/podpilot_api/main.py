@@ -1968,6 +1968,21 @@ def _deterministic_metric_ranking_answer(
     }
 
 
+def _current_reads_are_metric_rankings(
+    activity: list[dict[str, object]],
+) -> bool:
+    """Recognize a metric-only result from executed reads, independent of model routing."""
+
+    evidence_reads = [
+        entry
+        for entry in activity
+        if entry.get("status") == "succeeded" and entry.get("evidence_ids")
+    ]
+    return bool(evidence_reads) and all(
+        entry.get("tool") == "query_metrics" for entry in evidence_reads
+    )
+
+
 def _deterministic_inventory_answer(
     *,
     evidence: list[dict[str, object]],
@@ -5644,6 +5659,7 @@ def create_app(
         remaining_budget = app_settings.adhoc_max_reads_per_turn
         raw_responses: list[dict[str, str]] = []
         inventory_fast_path = False
+        prefer_metric_card = False
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
@@ -5924,19 +5940,24 @@ def create_app(
                     )
                     else None
                 )
+                metric_ranking_candidate = _deterministic_metric_ranking_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 fast_metric_answer = (
-                    _deterministic_metric_ranking_answer(
-                        evidence=evidence,
-                        activity=activity,
-                    )
+                    metric_ranking_candidate
                     if not followup_action
-                    and inquiry is not None
-                    and inquiry.mode == "metrics"
+                    and metric_ranking_candidate is not None
+                    and (
+                        (inquiry is not None and inquiry.mode == "metrics")
+                        or _current_reads_are_metric_rankings(activity)
+                    )
                     else None
                 )
                 fast_deterministic_answer = fast_metric_answer or fast_inventory_answer
                 if fast_deterministic_answer is not None:
                     inventory_fast_path = True
+                    prefer_metric_card = fast_metric_answer is not None
                     validated = {
                         **fast_deterministic_answer,
                         "conclusion_status": "confirmed",
@@ -6354,6 +6375,8 @@ def create_app(
                 )
                 if deterministic_answer is not None:
                     validated.update(deterministic_answer)
+                    if deterministic_answer is metric_ranking_answer:
+                        prefer_metric_card = True
                     if answer_quality_issue is not None:
                         limitations.append(
                             "The model returned an incomplete final answer after one correction attempt; "
@@ -6532,6 +6555,9 @@ def create_app(
                             if isinstance(gap, InvestigationGap)
                         ],
                         "conclusion_status": validated.get("conclusion_status", "confirmed"),
+                        "preferred_evidence_view": (
+                            "metric_ranking" if prefer_metric_card else None
+                        ),
                     }, sort_keys=True
                 ),
                 provider_status=provider_status,
@@ -6947,13 +6973,27 @@ def create_app(
                     (Cluster.is_enabled.is_(True)) | (Cluster.id.in_(conversation_cluster_ids))
                 ).order_by(Cluster.name)
             ))
-        messages = [{
-            "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
-            "answer_mode": row.answer_mode, "citations": json.loads(row.citations_json),
-            "activity": json.loads(row.tool_activity_json), "provider_status": row.provider_status,
-            "raw_responses": json.loads(row.raw_responses_json or "[]"),
-            "created_at": row.created_at,
-        } for row in rows]
+        messages = []
+        for row in rows:
+            citations = json.loads(row.citations_json)
+            raw_activity_view = json.loads(row.tool_activity_json)
+            activity_view = raw_activity_view if isinstance(raw_activity_view, dict) else {}
+            prefer_metric_card = (
+                row.role == "assistant"
+                and activity_view.get("preferred_evidence_view") == "metric_ranking"
+                and any(
+                    isinstance(evidence_by_id.get(str(evidence_id), {}).get("metric_ranking"), dict)
+                    for evidence_id in citations
+                )
+            )
+            messages.append({
+                "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
+                "answer_mode": row.answer_mode, "citations": citations,
+                "activity": activity_view, "provider_status": row.provider_status,
+                "raw_responses": json.loads(row.raw_responses_json or "[]"),
+                "prefer_metric_card": prefer_metric_card,
+                "created_at": row.created_at,
+            })
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": conversation, "messages": messages,

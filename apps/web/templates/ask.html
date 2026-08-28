@@ -38,7 +38,9 @@
           <span class="answer-status answer-status-grounded" tabindex="0" data-tooltip="Cluster-specific claims are backed by the cited observations{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, but the overall conclusion remains unresolved{% endif %}." aria-label="Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, unresolved conclusion{% endif %}.">Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %} · unresolved{% endif %}</span>
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
         </div>
+        {% if not message.prefer_metric_card %}
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
+        {% endif %}
         {% if message.role == 'assistant' and message.raw_responses %}
         <details class="raw-model-response">
           <summary><span>Raw model response</span><small>Untrusted provider output · {{ message.raw_responses | length }} attempt{% if message.raw_responses | length != 1 %}s{% endif %}</small></summary>

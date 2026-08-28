@@ -28,6 +28,7 @@ from podpilot_api.main import (
     _compile_grounded_candidate_plan,
     _compile_remaining_candidate_followups,
     _compile_suggested_followups,
+    _current_reads_are_metric_rankings,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_inventory_answer,
@@ -1832,6 +1833,117 @@ def test_deterministic_metric_ranking_renders_clusters_and_no_data() -> None:
     assert "East DEV" in answer["content"]
     assert "No finite samples returned" in answer["content"]
     assert answer["citations"] == ["metric-central", "metric-east"]
+
+
+def test_metric_only_reads_are_recognized_without_model_classification() -> None:
+    assert _current_reads_are_metric_rankings([
+        {
+            "tool": "query_metrics",
+            "status": "succeeded",
+            "evidence_ids": ["metric-central"],
+        },
+        {
+            "tool": "query_metrics",
+            "status": "succeeded",
+            "evidence_ids": ["metric-east"],
+        },
+    ]) is True
+    assert _current_reads_are_metric_rankings([
+        {
+            "tool": "query_metrics",
+            "status": "succeeded",
+            "evidence_ids": ["metric-central"],
+        },
+        {
+            "tool": "get_resource",
+            "status": "succeeded",
+            "evidence_ids": ["pod-central"],
+        },
+    ]) is False
+    assert _current_reads_are_metric_rankings([]) is False
+
+
+def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
+    tmp_path: Path,
+) -> None:
+    conversation_id = "00000000-0000-0000-0000-000000000181"
+    evidence_id = "metric-log-volume-1"
+    fallback_text = "Fallback metric ranking remains available."
+    evidence = [{
+        "id": evidence_id,
+        "tool": "query_metrics",
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "cluster_name": "Runtime cluster",
+        "summary": "Ranked namespaces by application-log volume.",
+        "source": "loki:application/query/top_log_volume_by_namespace",
+        "data": {
+            "metric": "top_log_volume_by_namespace",
+            "scope": "cluster",
+            "unit": "bytes",
+            "limit": 10,
+            "complete": True,
+            "ranking": [{
+                "labels": {"namespace": "payments"},
+                "current": 1048576,
+                "average": 1024,
+                "maximum": None,
+            }],
+        },
+    }]
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id,
+            created_by="ivy",
+            title="Log volume",
+            status="active",
+            cluster_ids_json=json.dumps([SYSTEM_CLUSTER_ID]),
+            evidence_json=json.dumps(evidence),
+        ))
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000182",
+            conversation_id=conversation_id,
+            role="assistant",
+            actor=None,
+            content=fallback_text,
+            answer_mode="evidence_based",
+            citations_json=json.dumps([evidence_id]),
+            tool_activity_json=json.dumps({
+                "preferred_evidence_view": "metric_ranking",
+            }),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        rendered = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert rendered.status_code == 200
+        assert "Observed metric" in rendered.text
+        assert "Top Application-Log Volume by Namespace" in rendered.text
+        assert fallback_text not in rendered.text
+
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            evidence[0]["data"]["ranking"] = []
+            conversation.evidence_json = json.dumps(evidence)
+            db_session.commit()
+        engine.dispose()
+
+        fallback = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert fallback.status_code == 200
+        assert "Observed metric" not in fallback.text
+        assert fallback_text in fallback.text
 
 
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
@@ -5068,9 +5180,11 @@ def test_ask_top_cpu_runs_one_cluster_metric_query_and_renders_table(
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
     assert rendered.status_code == 200
-    assert "top 5 CPU-consuming pods by cluster" in rendered.text
+    assert "Top CPU Consumers" in rendered.text
+    assert "top 5 CPU-consuming pods by cluster" not in rendered.text
+    assert "api-central-dev" in rendered.text
+    assert "api-east-dev" in rendered.text
     assert "Central DEV" in rendered.text and "East DEV" in rendered.text
-    assert "api-central-dev" in rendered.text and "api-east-dev" in rendered.text
     assert provider.adhoc_plan_calls == []
     assert provider.adhoc_answer_calls == []
     assert set(explorers) == {"Central DEV", "East DEV"}
@@ -6614,8 +6728,9 @@ def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
-    assert "collector Pod is the largest observed CPU consumer" in rendered.text
+    assert "Top CPU Consumers" in rendered.text
     assert provider.adhoc_plan_calls == []
+    assert provider.adhoc_answer_calls == []
     assert len(explorer.calls) == 1
     assert explorer.calls[0].tool == "query_metrics"
     assert explorer.calls[0].metric == "top_cpu_consumers"
