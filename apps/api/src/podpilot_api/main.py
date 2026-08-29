@@ -6618,6 +6618,36 @@ def _explicit_audit_filters(question: str) -> dict[str, object]:
     updates: dict[str, object] = {}
     if re.search(r"(?i)\b(?:delete|deleted|deletes|deleting|removed?)\b", question):
         updates["audit_operation_scope"] = "deletes"
+    elif re.search(r"(?i)\b(?:mutation|mutations|write|writes|changes?)\b", question):
+        updates["audit_operation_scope"] = "mutations"
+    if re.search(r"(?i)\b(?:failed|failure|failures|denied|forbidden)\b", question):
+        updates["audit_outcome"] = "failed"
+    elif re.search(r"(?i)\b(?:successful|succeeded|allowed)\b", question):
+        updates["audit_outcome"] = "successful"
+
+    number_words = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+        "nineteen": 19, "twenty": 20,
+    }
+    count_token = r"(?:\d{1,3}|" + "|".join(number_words) + r")"
+    result_noun = r"(?:entries|entry|events?|actions?|operations?|records?|results?|deletes|mutations)"
+    limit_match = re.search(
+        rf"(?i)\b(?:last|latest|most\s+recent|first|top)\s+"
+        rf"(?P<count>{count_token})\s+"
+        rf"(?:(?:audit|log|delete|deletion|mutation)\s+)*{result_noun}\b",
+        question,
+    ) or re.search(
+        rf"(?i)\b(?P<count>{count_token})\s+(?:audit|log)\s+{result_noun}\b",
+        question,
+    )
+    if limit_match:
+        token = limit_match.group("count").casefold()
+        requested_limit = int(token) if token.isdigit() else number_words[token]
+        if 1 <= requested_limit <= 100:
+            updates["result_limit"] = requested_limit
     for alias, resource in _AUDIT_RESOURCE_ALIASES.items():
         if re.search(rf"(?i)\b{re.escape(alias)}\b", question):
             updates["resource_query"] = resource

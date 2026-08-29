@@ -97,6 +97,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
   outcome, username, and time range; an all-user Pod deletion query no longer shows an appended
   `events.audit.k8s.io` RBAC failure or the misleading phrase “the supplied user.”
+- Explicit audit counts and filters are now authoritative after classification. “Last 5” no longer
+  expands to the default 20 when the model omits `result_limit`; delete/mutation scope and
+  successful/failed outcome wording likewise override broader model defaults before Loki access.
 - Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
   namespace log-volume ranking. The original scope and top-N are retained while only the range is
   replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting

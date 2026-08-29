@@ -435,6 +435,9 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,
   suppresses a competing unrestricted shell call, preserves all-user wording, and enforces explicit
   namespace, delete-operation, and Kubernetes resource filters in both Loki and local projection.
+- Audit-adherence tests must prove an explicit last/top count overrides the configured default and
+  that delete/mutation plus successful/failed wording overrides broader classifier output before
+  the Loki query is compiled.
 - Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
   registered ranking and original top-N while changing only the requested range. The log-volume
   fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day

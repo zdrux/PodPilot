@@ -77,6 +77,10 @@ Registered top-consumer metric evidence also acts as a typed continuation anchor
 follow-up that asks for the same CPU, memory, or namespace log-volume ranking over a different
 period reuses the prior metric, scope, coordinates, grouping, and limit while changing only the
 bounded time range.
+Audit classification is similarly reconciled with unambiguous operator constraints before query
+compilation. Explicit last/top counts, delete-versus-mutation scope, success/failure outcome, and
+recognized resource kinds override broader model defaults; an omitted model `result_limit` cannot
+turn “last 5 audit entries” into the configured default of 20.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner polls the process silently and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible

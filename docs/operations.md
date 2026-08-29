@@ -508,6 +508,10 @@ queries can be bounded simultaneously by namespace, operation class, outcome, us
 explicit common Kubernetes resource kind; for example, “who deleted Pods in ai-ops” queries Loki
 for completed delete operations on `pods` in `ai-ops` across all users. It does not fall back to the
 nonexistent `events.audit.k8s.io` Kubernetes resource.
+Normal code re-applies explicit audit constraints after model classification. Requests such as
+“show the last 5 audit entries for failed delete operations” therefore compile with `limit=5`,
+delete-only verbs, and failed HTTP outcomes even if the model returns broader defaults. Numeric
+limits from 1 through 100 and number words from one through twenty are recognized.
 
 Metric period follow-ups preserve the latest registered top CPU, top memory, or namespace
 application-log-volume ranking. For example, after a top-namespace log-volume result, “show the log
