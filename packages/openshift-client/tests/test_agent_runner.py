@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import subprocess
 import time
@@ -127,15 +128,18 @@ def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -
         pid = 4321
         returncode = -15
         terminated = False
+        stdout = io.BytesIO(b"partial output")
+        stderr = io.BytesIO(b"terminated")
 
-        def communicate(self, timeout=None):
+        def wait(self, timeout=None):
             if self.terminated:
-                return "partial output", "terminated"
+                return self.returncode
             raise subprocess.TimeoutExpired(cmd="synthetic", timeout=timeout)
 
     process = FakeProcess()
     monkeypatch.setattr(runner, "COMMAND_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(runner, "HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr(runner, "MAX_OUTPUT_BYTES", 8)
     monkeypatch.setattr(runner.subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
         runner.os,
@@ -149,7 +153,7 @@ def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -
         lambda name, **details: events.append((name, details)),
     )
 
-    exit_code, stdout, stderr, timed_out = runner._run_command(
+    exit_code, stdout, stderr, timed_out, stdout_bytes, stderr_bytes = runner._run_command(
         "sleep forever",
         {},
         request_id="request-1",
@@ -159,8 +163,11 @@ def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -
     )
 
     assert exit_code == 124
-    assert stdout == "partial output"
+    assert stdout.startswith("partial")
+    assert "truncated stdout" in stdout
     assert "terminated the command" in stderr
     assert timed_out is True
+    assert stdout_bytes == len(b"partial output")
+    assert stderr_bytes == len(b"terminated")
     assert any(name == "command_heartbeat" for name, _ in events)
     assert any(name == "command_terminating" for name, _ in events)

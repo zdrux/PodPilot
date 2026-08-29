@@ -413,10 +413,14 @@ summary must preserve the complete-coverage rule before confirming absence.
   summary is visible to the operator.
 - Runner watchdog tests must cover structured idle/in-flight logging, periodic API progress,
   process-group termination at the command deadline, exit code `124`, and a loopback client timeout
-  longer than the runner deadline. Both containers retain working liveness/readiness probes.
+  longer than the runner deadline. They must also prove stdout/stderr are continuously drained,
+  retained within the configured byte ceiling, and visibly marked when truncated. Both containers
+  retain working liveness/readiness probes.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
   `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
-  deterministic payload-volume table, and never substitutes Kubernetes Event counts.
+  native payload-volume metric card, and never substitutes Kubernetes Event counts.
+- Agent-loop tests must prove one empty Chat Completions turn triggers exactly one finalization
+  retry, reuses existing tool results, and does not replay a completed runner command.
 
 ## Rollback
 

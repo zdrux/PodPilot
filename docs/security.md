@@ -87,7 +87,10 @@ evidence under the existing policy. Cluster output remains untrusted data and ma
 prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root
 filesystem and dropped capabilities. Runner logs contain target identity, TLS mode, exit code,
 duration, timeout state, and byte counts, never tokens, command text, stdout, or stderr. The runner
-emits startup/idle and in-flight command heartbeats. Every shell process group is terminated at the
+also reports whether either stream was truncated. It continuously drains both streams but retains
+only the configured bounded prefix (256 KiB each by default), preventing verbose output from being
+buffered without limit. The runner emits startup/idle and in-flight command heartbeats. Every shell
+process group is terminated at the
 configured command deadline; the API has a slightly longer loopback HTTP deadline and the durable
 Ask job retains its outer deadline.
 

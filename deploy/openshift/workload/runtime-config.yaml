@@ -34,6 +34,7 @@ data:
   agent_mode: "guarded"
   agent_runner_url: "http://127.0.0.1:8090"
   agent_command_timeout_seconds: "300"
+  agent_command_max_output_bytes: "262144"
   agent_heartbeat_seconds: "10"
   remote_cluster_tls_verify: "true"
   model_timeout_max_seconds: "240"

@@ -151,6 +151,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["agent_mode"] == "guarded"
     assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
     assert runtime["data"]["agent_command_timeout_seconds"] == "300"
+    assert runtime["data"]["agent_command_max_output_bytes"] == "262144"
     assert runtime["data"]["agent_heartbeat_seconds"] == "10"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {
@@ -265,6 +266,7 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
     assert runner["name"] == "oc-runner"
     assert {item["name"] for item in runner["env"]} == {
         "PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS",
+        "PODPILOT_AGENT_COMMAND_MAX_OUTPUT_BYTES",
         "PODPILOT_AGENT_HEARTBEAT_SECONDS",
     }
     assert all(

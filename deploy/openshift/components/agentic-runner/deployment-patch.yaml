@@ -21,6 +21,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: agent_heartbeat_seconds
+            - name: PODPILOT_AGENT_COMMAND_MAX_OUTPUT_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_command_max_output_bytes
           livenessProbe:
             exec:
               command:

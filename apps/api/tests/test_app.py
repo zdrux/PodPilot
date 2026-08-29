@@ -7166,6 +7166,12 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
                         }),
                     ),),
                 )
+            if len(self.agent_messages) == 2:
+                return AgentStep(
+                    assistant_message={"role": "assistant", "content": None},
+                    content=None,
+                    tool_calls=(),
+                )
             return AgentStep(
                 assistant_message={"role": "assistant", "content": "RBAC denied the mutation."},
                 content="RBAC denied the mutation.",
@@ -7236,6 +7242,9 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])
+    retry_message = provider.agent_messages[2][-1]
+    assert retry_message["role"] == "user"
+    assert "return a concise final answer now" in str(retry_message["content"])
     engine = build_engine(settings)
     with Session(engine) as db_session:
         assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))

@@ -45,10 +45,17 @@ model returns a final assistant message or the durable Ask run reaches its outer
 deadline. Beyond the optional deterministic enrichment, this path does not constrain the agent to
 `ReadIntent`, the read broker, typed remediation, preview, or approval. It does retain conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
+finalization retry using the command results already in context. A second empty turn fails the run;
+successful commands are not automatically repeated and the loop cannot retry indefinitely.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner emits structured heartbeats and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live. Timeout returns exit code `124` and a redacted operator-visible
 limitation instead of leaving the run indefinitely on `agent_command`.
+Dedicated drain threads consume stdout and stderr as the process runs, retain a bounded prefix of
+each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`
+from buffering arbitrary command output up to the sidecar's memory limit while preserving true byte
+counts and truncation flags in metadata-only runner logs.
 Model calls use the same progress-heartbeat mechanism and the profile's provider timeout, so an
 agent can remain visibly active while choosing its next action without waiting indefinitely.
 

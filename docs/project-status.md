@@ -45,8 +45,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   metadata, idle and in-flight heartbeats run every 10 seconds, failed-command summaries appear in
   Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
   124. The API turns command heartbeats into changing live Ask progress while the outer run retains
-  its 900-second deadline in the agentic overlays.
-  The model-free suite passes locally with 636 tests and 82% aggregate coverage.
+  its 900-second deadline in the agentic overlays. Runner stdout and stderr are now drained
+  concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
+  exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
+  byte counts and truncation flags.
+  The model-free suite passes locally with 642 tests and 82% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
@@ -62,6 +65,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
   that Loki is unavailable; clusters with the registered LokiStack integration render the byte
   volume and average-rate table.
+- Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
+  API logs the anomaly, sends one corrective request using the existing tool results, and then
+  either persists the recovered answer or fails explicitly after a second empty turn. It does not
+  automatically repeat completed shell commands.
 
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster

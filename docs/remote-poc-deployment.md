@@ -322,12 +322,12 @@ oc -n ai-ops get configmap podpilot-runtime \
 oc -n ai-ops get configmap podpilot-runtime \
   -o jsonpath='{.data.remote_cluster_tls_verify}{"\n"}'
 oc -n ai-ops get configmap podpilot-runtime \
-  -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
+  -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_command_max_output_bytes}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
 oc -n ai-ops exec deployment/podpilot -c oc-runner -- oc version --client
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 ```
 
-Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `false`, `300 10`, a Linux
+Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `false`, `300 262144 10`, a Linux
 OpenShift CLI client version, and the RBAC result appropriate to the remote
 identity. Review any `yes` result before exposing agentic mode; the sidecar will
 be able to exercise every permission granted to that service account.

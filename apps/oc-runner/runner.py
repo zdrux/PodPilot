@@ -29,6 +29,40 @@ def _positive_env(name: str, default: float) -> float:
 
 COMMAND_TIMEOUT_SECONDS = _positive_env("PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS", 300.0)
 HEARTBEAT_SECONDS = _positive_env("PODPILOT_AGENT_HEARTBEAT_SECONDS", 10.0)
+MAX_OUTPUT_BYTES = int(_positive_env("PODPILOT_AGENT_COMMAND_MAX_OUTPUT_BYTES", 262_144))
+
+
+class _BoundedStreamCollector:
+    def __init__(self, *, name: str, limit: int) -> None:
+        self.name = name
+        self.limit = limit
+        self.retained = bytearray()
+        self.total_bytes = 0
+
+    def consume(self, stream) -> None:
+        while True:
+            chunk = stream.read(65_536)
+            if not chunk:
+                return
+            self.total_bytes += len(chunk)
+            remaining = self.limit - len(self.retained)
+            if remaining > 0:
+                self.retained.extend(chunk[:remaining])
+
+    @property
+    def truncated(self) -> bool:
+        return self.total_bytes > len(self.retained)
+
+    def text(self) -> str:
+        rendered = bytes(self.retained).decode("utf-8", errors="replace")
+        if not self.truncated:
+            return rendered
+        omitted = self.total_bytes - len(self.retained)
+        marker = (
+            f"\n[PodPilot oc-runner truncated {self.name} after {self.limit} bytes; "
+            f"{omitted} additional bytes were discarded.]\n"
+        )
+        return rendered.rstrip() + marker
 
 
 def _write_incluster_kubeconfig() -> None:
@@ -139,20 +173,20 @@ def _runner_heartbeat() -> None:
         )
 
 
-def _terminate_process_group(process: subprocess.Popen[str], request_id: str) -> tuple[str, str]:
+def _terminate_process_group(process: subprocess.Popen[bytes], request_id: str) -> None:
     _event("command_terminating", request_id=request_id, pid=process.pid)
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     try:
-        return process.communicate(timeout=5)
+        process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        return process.communicate()
+        process.wait()
 
 
 def _run_command(
@@ -163,28 +197,43 @@ def _run_command(
     cluster_id: str,
     cluster_name: str,
     started: float,
-) -> tuple[int, str, str, bool]:
+) -> tuple[int, str, str, bool, int, int]:
     process = subprocess.Popen(
         ["/bin/bash", "-lc", command],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
-        text=True,
-        errors="replace",
         start_new_session=True,
     )
+    assert process.stdout is not None and process.stderr is not None
+    stdout_collector = _BoundedStreamCollector(name="stdout", limit=MAX_OUTPUT_BYTES)
+    stderr_collector = _BoundedStreamCollector(name="stderr", limit=MAX_OUTPUT_BYTES)
+    collector_threads = [
+        threading.Thread(
+            target=stdout_collector.consume,
+            args=(process.stdout,),
+            name=f"runner-stdout-{request_id}",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=stderr_collector.consume,
+            args=(process.stderr,),
+            name=f"runner-stderr-{request_id}",
+            daemon=True,
+        ),
+    ]
+    for collector_thread in collector_threads:
+        collector_thread.start()
     timed_out = False
     while True:
         elapsed = time.monotonic() - started
         remaining = COMMAND_TIMEOUT_SECONDS - elapsed
         if remaining <= 0:
             timed_out = True
-            stdout, stderr = _terminate_process_group(process, request_id)
+            _terminate_process_group(process, request_id)
             break
         try:
-            stdout, stderr = process.communicate(
-                timeout=min(HEARTBEAT_SECONDS, remaining)
-            )
+            process.wait(timeout=min(HEARTBEAT_SECONDS, remaining))
             break
         except subprocess.TimeoutExpired:
             _event(
@@ -195,6 +244,10 @@ def _run_command(
                 elapsed_seconds=round(time.monotonic() - started, 1),
                 timeout_seconds=COMMAND_TIMEOUT_SECONDS,
             )
+    for collector_thread in collector_threads:
+        collector_thread.join(timeout=5)
+    stdout = stdout_collector.text()
+    stderr = stderr_collector.text()
     exit_code = 124 if timed_out else process.returncode
     if timed_out:
         timeout_detail = (
@@ -202,7 +255,14 @@ def _run_command(
             f"{COMMAND_TIMEOUT_SECONDS:g} seconds."
         )
         stderr = f"{stderr.rstrip()}\n{timeout_detail}\n" if stderr else timeout_detail + "\n"
-    return exit_code, stdout, stderr, timed_out
+    return (
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+        stdout_collector.total_bytes,
+        stderr_collector.total_bytes,
+    )
 
 
 class RunnerHandler(BaseHTTPRequestHandler):
@@ -219,6 +279,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             "uptime_seconds": round(time.monotonic() - RUNNER_STARTED_AT, 1),
             "active_commands": active_count,
             "command_timeout_seconds": COMMAND_TIMEOUT_SECONDS,
+            "command_max_output_bytes": MAX_OUTPUT_BYTES,
         })
 
     def do_POST(self) -> None:  # noqa: N802
@@ -266,7 +327,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             timeout_seconds=COMMAND_TIMEOUT_SECONDS,
         )
         try:
-            exit_code, stdout, stderr, timed_out = _run_command(
+            exit_code, stdout, stderr, timed_out, stdout_bytes, stderr_bytes = _run_command(
                 command,
                 env,
                 request_id=request_id,
@@ -297,8 +358,10 @@ class RunnerHandler(BaseHTTPRequestHandler):
             exit_code=exit_code,
             timed_out=timed_out,
             duration_ms=round((time.monotonic() - started) * 1000),
-            stdout_bytes=len(stdout.encode("utf-8", errors="replace")),
-            stderr_bytes=len(stderr.encode("utf-8", errors="replace")),
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            stdout_truncated=stdout_bytes > MAX_OUTPUT_BYTES,
+            stderr_truncated=stderr_bytes > MAX_OUTPUT_BYTES,
         )
         self._send_json(
             200,
@@ -307,6 +370,8 @@ class RunnerHandler(BaseHTTPRequestHandler):
                 "stdout": stdout,
                 "stderr": stderr,
                 "timed_out": timed_out,
+                "stdout_truncated": stdout_bytes > MAX_OUTPUT_BYTES,
+                "stderr_truncated": stderr_bytes > MAX_OUTPUT_BYTES,
             },
         )
 
@@ -330,6 +395,7 @@ if __name__ == "__main__":
         runtime_cluster_tls_verify=True,
         remote_connections="api-brokered-per-command",
         command_timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+        command_max_output_bytes=MAX_OUTPUT_BYTES,
         heartbeat_seconds=HEARTBEAT_SECONDS,
     )
     threading.Thread(target=_runner_heartbeat, name="runner-heartbeat", daemon=True).start()

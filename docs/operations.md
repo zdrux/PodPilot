@@ -158,8 +158,11 @@ provider and credentials are healthy.
 - `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.
 - `PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS`, default `300`; the runner terminates the complete shell
   process group at this deadline and returns exit code `124`.
+- `PODPILOT_AGENT_COMMAND_MAX_OUTPUT_BYTES`, default `262144`; the runner continuously drains each
+  command stream while retaining at most this many bytes from stdout and independently from stderr.
+  Truncated results include an explicit marker, and logs retain the true byte count.
 - `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls runner/API log heartbeats and in-flight
-  command progress updates persisted to the active Ask run.
+command progress updates persisted to the active Ask run.
 - `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY`, default `true`; the remote agentic PoC overlay sets it to
   `false`, forcing registered remote readers and runner commands to skip certificate and hostname
   verification. This credential-interception risk is limited to that lab overlay.
@@ -521,6 +524,12 @@ bounded by the runner's 300-second process-group timeout, while the complete Ask
 by `adhoc_run_timeout_seconds`.
 See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
 authorization-audit, and rollback instructions.
+
+Some OpenAI-compatible reasoning models may occasionally return an empty assistant turn after
+successful tool calls. PodPilot detects that shape and asks once for a concise final answer from the
+existing command results. Look for `podpilot.agentic.empty_step_retry` in API logs. If the retry is
+also empty, the run fails explicitly; PodPilot does not loop or automatically replay successful
+commands.
 
 1. Connect and apply the reusable namespace, service account, and read-only RBAC:
 

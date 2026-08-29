@@ -8336,6 +8336,7 @@ def create_app(
         messages.append({"role": "user", "content": question})
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
+        empty_step_retry_used = False
 
         while True:
             if progress:
@@ -8380,8 +8381,32 @@ def create_app(
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
                 if not agent_content:
+                    if not empty_step_retry_used:
+                        empty_step_retry_used = True
+                        LOGGER.warning(
+                            "podpilot.agentic.empty_step_retry actor=%s conversation_id=%s",
+                            username,
+                            conversation_id,
+                        )
+                        if progress:
+                            await progress(
+                                "agent_thinking",
+                                "The model returned an empty turn; requesting the final answer once more.",
+                            )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "Your previous turn contained neither a tool call nor an "
+                                "operator-facing answer. Use the command results already present "
+                                "in this conversation and return a concise final answer now. Do "
+                                "not repeat successful commands unless their results are genuinely "
+                                "insufficient."
+                            ),
+                        })
+                        continue
                     raise ModelProviderError(
-                        "The unrestricted agent returned neither a tool call nor a final answer."
+                        "The unrestricted agent returned neither a tool call nor a final answer "
+                        "after one finalization retry."
                     )
                 content = agent_content
                 if (
@@ -8888,6 +8913,7 @@ def create_app(
                             question=provider_question,
                         )
                     )
+                    provider_phase = "unrestricted_agent"
                     return await _execute_unrestricted_agent_turn(
                         engine=engine,
                         username=username,
