@@ -7784,6 +7784,99 @@ def test_unrestricted_router_pod_metrics_are_terminal_native_enrichment(
     engine.dispose()
 
 
+def test_failed_unrestricted_kafka_topic_storage_stays_out_of_shell_fallback(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="metrics",
+                evidence_goal="Read current disk usage for one Kafka topic.",
+                metric_request=MetricRequestSemantics(
+                    signals=["kafka_topic_storage"],
+                    target=MetricTargetSemantics(
+                        scope="kafka_cluster", kind="Kafka",
+                        namespace="kafka-observability",
+                        name="kafka-observability-cluster",
+                    ),
+                    operation="show", statistic="current", group_by=["topic"],
+                ),
+            )
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("failed registered Kafka storage must not enter the shell loop")
+
+    class FailedMetricExplorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            raise ReadOnlyExplorerError(
+                "Thanos Querier is temporarily unavailable. Kubernetes Metrics API "
+                "fallback also failed: No current-snapshot fallback is registered for "
+                "kafka_topic_storage."
+            )
+
+    explorer = FailedMetricExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    'show current disk usage for the "logs-east-tm-system" topic on the '
+                    "kafka-observability-cluster Kafka in the kafka-observability namespace"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].metric == "kafka_topic_storage"
+    assert "could not collect authoritative evidence" in rendered.text
+    assert "Thanos Querier is temporarily unavailable" in rendered.text
+    assert "grant" not in rendered.text.casefold()
+    assert "pods/exec" not in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        assert assistant.answer_mode == "insufficient_evidence"
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["preferred_evidence_view"] == "deterministic_primary"
+        assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
+    engine.dispose()
+
+
 def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
     tmp_path: Path,
 ) -> None:

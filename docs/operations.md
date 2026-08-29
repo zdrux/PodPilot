@@ -1257,6 +1257,12 @@ exporter/profile rather than treating the object as idle or allowing the model t
 Metric label names can vary across operator/exporter releases; unsupported profiles require a new
 reviewed server-owned template or label alias, not an operator-supplied query.
 
+In unrestricted agent mode, a recognized Kafka topic-storage request remains on this registered
+metrics path even when Thanos or the required exporter is unavailable. PodPilot reports the
+authoritative collection failure and does not fall through to a broker Pod shell or recommend
+granting `pods/exec`. Broker log-size telemetry is the supported topic-level source; PVC usage can
+show broker-level capacity but cannot accurately attribute bytes to one topic.
+
 Unknown CRDs use the generic safe resource path: live API discovery resolves the served resource,
 bounded LIST/GET reads expose redacted spec/status evidence, and opaque observed relationships can
 be traversed without model-authored API coordinates, field paths, or selector values. PodPilot does

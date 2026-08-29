@@ -81,6 +81,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   with the lost history called out explicitly. When every registered read and shell verification
   fails, normal code reports the exact failures and suppresses unsupported model explanations such
   as claiming a metrics add-on is absent.
+- Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
+  path. If that authoritative read fails, unrestricted mode renders the collection limitation
+  directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
 - Successful terminal registered enrichments now render once and suppress a competing unrestricted
   shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
   outcome, username, and time range; an all-user Pod deletion query no longer shows an appended

@@ -4400,6 +4400,27 @@ def _authoritative_unrestricted_failure(
     )
 
 
+def _failed_kafka_topic_storage_is_terminal(
+    plan: ReadPlan | None,
+    activity: list[dict[str, object]],
+) -> bool:
+    """Keep a failed registered Kafka storage read out of the shell fallback path."""
+
+    if plan is None or not plan.intents or any(
+        intent.tool != "query_metrics" or intent.metric != "kafka_topic_storage"
+        for intent in plan.intents
+    ):
+        return False
+    registered_reads = [
+        item for item in activity
+        if item.get("source") == "deterministic_enrichment"
+        and item.get("tool") == "query_metrics"
+    ]
+    return bool(registered_reads) and not any(
+        item.get("status") == "succeeded" for item in registered_reads
+    )
+
+
 def _read_intent_signature(intent: ReadIntent) -> str:
     """Deduplicate exact reads even when equivalent Pod candidates have different IDs."""
 
@@ -9644,6 +9665,19 @@ def create_app(
                         evidence=enrichment_evidence,
                         activity=enrichment_activity,
                     )
+                    if (
+                        deterministic_answer is None
+                        and _failed_kafka_topic_storage_is_terminal(
+                            base_enrichment[0] if base_enrichment is not None else None,
+                            enrichment_activity,
+                        )
+                    ):
+                        failure_answer = _authoritative_unrestricted_failure(
+                            enrichment_activity
+                        )
+                        if failure_answer is not None:
+                            deterministic_answer = {"content": failure_answer}
+                            preferred_evidence_view = "deterministic_primary"
                     deterministic_reads_succeeded = bool(enrichment_activity) and all(
                         item.get("status") == "succeeded"
                         for item in enrichment_activity
