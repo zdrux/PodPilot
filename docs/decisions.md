@@ -1064,11 +1064,14 @@ because every cluster interaction compiles through typed reads and mutations req
 approval. The SNO lab needs to exercise native multi-step tool calling with the same OpenRouter
 model as the remote cluster without accidentally granting the lab agent cluster-admin.
 
-Decision: Add a lab-only `unrestricted` agent mode that is enabled only by the SNO milestone
-overlay. Use OpenRouter Chat Completions with exact model `openai/gpt-oss-120b` and one
+Decision: Add an explicit `unrestricted` agent mode enabled by the SNO milestone overlay and an
+optional additive `remote-poc-agentic` overlay. Use OpenRouter Chat Completions with exact model
+`openai/gpt-oss-120b` for the SNO simulation and one
 `execute_shell` function. Execute calls through a localhost-only sidecar built with a pinned Linux
 `oc` binary. The sidecar shares `podpilot-investigator`; do not compose the `ai-observer`
-cluster-admin overlay. Keep guarded mode as the base/remote default. Retain an outer durable-run
+cluster-admin overlay. Keep guarded mode as the base and standard remote default. The remote
+agentic overlay inherits remote configuration and RBAC, adds a separately promoted versioned runner
+image, and grants no permissions itself. Retain an outer durable-run
 deadline, redaction before returning command output to the model, and command metadata audit, but
 bypass typed reads, registered remediation, preview, and approval inside the lab mode.
 

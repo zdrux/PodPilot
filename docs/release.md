@@ -388,12 +388,14 @@ Machine and workload tests must prove namespace propagation; Node and ClusterOpe
 reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
 summary must preserve the complete-coverage rule before confirming absence.
 
-## Unrestricted SNO agent gates
+## Unrestricted agent gates
 
-- Guarded mode remains the default in the portable runtime ConfigMap and the remote overlay does
-  not contain the runner sidecar.
+- Guarded mode remains the default in the portable runtime ConfigMap and the standard remote overlay
+  does not contain the runner sidecar.
 - The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
   `serviceAccountName: podpilot-investigator`.
+- The optional remote agentic overlay composes the guarded remote overlay plus the shared runner
+  component, renders both versioned ImageStreams, and contains no cluster-admin binding.
 - No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
   validation must return `yes` for cluster-wide Pod GET and `no` for cluster-wide Deployment PATCH.
 - The runner image pins its OpenShift CLI source by digest, runs non-root with a read-only root

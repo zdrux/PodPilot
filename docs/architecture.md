@@ -26,7 +26,8 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 ## Current Runtime
 
-The SNO milestone overlay has an optional lab-only unrestricted agent path. Before the free-form
+The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
+agent path. Before the free-form
 loop, normal code applies the existing high-confidence `plan_known_read` compiler to the current
 question. When it matches, PodPilot executes those registered readers across the selected clusters,
 persists their normalized evidence, and supplies the evidence plus any deterministic ranking table
@@ -43,11 +44,12 @@ reuse/persistence, progress, command metadata audit, and the run deadline.
 
 The sidecar shares the Pod-level `podpilot-investigator` service account. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
-separate `ai-observer` cluster-admin overlay is not included. Consequently the model may ask for
+separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
+the standard remote identity and grants no additional RBAC. Consequently the model may ask for
 any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
-portable base and remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
+portable base and standard remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
 
-The guarded single Pod contains two containers; the unrestricted SNO fixture adds the runner as a
+The guarded single Pod contains two containers; either unrestricted overlay adds the runner as a
 third. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
 `127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the

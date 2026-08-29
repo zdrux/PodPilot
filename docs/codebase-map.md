@@ -24,7 +24,7 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - FastAPI, Pydantic, Uvicorn, SQLAlchemy, and Alembic form the initial API stack.
 - Jinja2, HTMX, and Server-Sent Events provide the single-image interactive GUI.
 - The guarded runtime uses the official Kubernetes Python dynamic client instead of `oc`. The
-  SNO-only unrestricted-agent overlay adds a separate digest-pinned `oc` runner sidecar.
+  explicit unrestricted overlays add a separate digest-pinned `oc` runner sidecar.
 - The provider router uses the official OpenAI Python SDK for Responses and
   strict-schema Chat Completions endpoints. SQLite stores endpoint metadata while
   per-profile tokens remain in the fixed OpenShift credential Secret.
@@ -39,7 +39,11 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `AGENTS.md`: repository router and invariants.
 - `.gitignore`: credential, local cluster state, build output, and editor exclusions.
 - `Dockerfile`: pinned UBI Python image and non-root application runtime.
-- `Dockerfile.oc-runner`: pinned SNO lab sidecar containing Linux `oc` and the loopback runner.
+- `Dockerfile.oc-runner`: pinned agentic sidecar containing Linux `oc` and the loopback runner.
+- `deploy/openshift/components/agentic-runner/`: shared optional sidecar patch used by SNO and
+  remote agentic overlays.
+- `deploy/openshift/overlays/remote-poc-agentic/`: additive unrestricted remote PoC overlay with a
+  separately promoted runner ImageStream.
 - `requirements.lock`: hash-locked production dependency graph.
 - `apps/api/src/podpilot_api/main.py`: FastAPI routes and security headers.
 - `apps/api/migrations/`: Alembic schema history.
@@ -87,12 +91,13 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `deploy/openshift/workload/`: Deployment, OAuth-protected Service/Route, and NetworkPolicy.
 - `deploy/openshift/build/sno-binary/`: lab ImageStream and binary BuildConfig.
 - `deploy/openshift/overlays/sno-milestone-one/`: complete SNO application overlay.
+- `deploy/openshift/overlays/remote-poc-agentic/`: optional additive remote unrestricted overlay.
 - `deploy/openshift/overlays/poc-cluster-admin/`: additive cluster-admin exception for the disposable SNO lab.
 - `deploy/openshift/auth/poc-htpasswd/`: elevated PoC application groups and authenticated-user OAuth-proxy access RBAC.
 - `deploy/openshift/storage/sno-local/`: non-default static local storage for the disposable SNO lab.
 - `docs/ocp-inventory-reuse.md`: reviewed boundary for selectively extracting adjacent project patterns.
 - `scripts/connect-sno.ps1`: generates a short-lived observer kubeconfig outside the repository.
-- `scripts/deploy-agentic-sno.ps1`: RBAC-checks, builds, deploys, and configures the SNO-only
+- `scripts/deploy-agentic-sno.ps1`: RBAC-checks, builds, deploys, and configures the SNO
   OpenRouter/oc agent simulation without printing credentials.
 - `scripts/copy-poc-user-password.ps1`: copies one temporary lab password to the Windows clipboard without printing it.
 - `docs/product.md`: initial product scope.

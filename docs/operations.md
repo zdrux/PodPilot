@@ -489,6 +489,17 @@ oc get deployment podpilot -n ai-ops -o jsonpath='{.spec.template.spec.container
 Expected results are `podpilot-investigator`, `yes`, `no`, and a container list containing
 `oc-runner`. Do not apply `deploy/openshift/overlays/poc-cluster-admin` to this simulation.
 
+### Optional unrestricted remote PoC
+
+The guarded remote overlay remains the default. After separately building and
+promoting `podpilot` and `podpilot-oc-runner` under the same immutable version,
+apply `deploy/openshift/overlays/remote-poc-agentic`. That overlay inherits the
+remote OAuth, storage, role mapping, and RBAC configuration and adds only the
+shared runner component plus `agent_mode: unrestricted`. It creates no second
+Deployment: `oc-runner` is the third container in the existing PodPilot Pod.
+See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
+authorization-audit, and rollback instructions.
+
 1. Connect and apply the reusable namespace, service account, and read-only RBAC:
 
    ```powershell

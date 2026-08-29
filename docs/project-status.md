@@ -25,17 +25,20 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
-- A feature-branch SNO-only unrestricted agent simulation now uses OpenRouter Chat Completions with
+- A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
   exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
   function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
-  typed read/remediation approval inside the lab mode while retaining the durable run deadline,
-  output redaction before provider reuse, progress, and command metadata audit. The base and remote
-  deployments remain guarded.
+  typed read/remediation approval inside the explicit agentic mode while retaining the durable run deadline,
+  output redaction before provider reuse, progress, and command metadata audit. The base and
+  standard remote deployments remain guarded; unrestricted remote deployment is an explicit
+  additive overlay.
 - The runner image copies a digest-pinned Linux `oc` binary into the pinned UBI Python runtime. The
   SNO overlay runs it non-root under the existing `podpilot-investigator` Pod service account. The
   deploy helper refuses to proceed if that identity can patch Deployments, builds both images,
   deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
-  passed over stdin. The model-free suite passes locally with 628 tests and 82% aggregate coverage.
+  passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
+  promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
+  The model-free suite passes locally with 629 tests and 82% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
@@ -453,7 +456,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available with the API, OAuth proxy, and
   `oc-runner` containers ready.
-- Local automated suite: 628 tests passing with 82% aggregate coverage.
+- Local automated suite: 629 tests passing with 82% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

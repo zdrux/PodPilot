@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podpilot-runtime
+  namespace: ai-ops
+data:
+  agent_mode: unrestricted
+  adhoc_run_timeout_seconds: "900"

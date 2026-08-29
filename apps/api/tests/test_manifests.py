@@ -210,19 +210,57 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
     overlay = root / "overlays" / "sno-milestone-one"
     kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
     runtime = yaml.safe_load((overlay / "runtime-config-patch.yaml").read_text())
-    runner_patch = yaml.safe_load((overlay / "agentic-runner-patch.yaml").read_text())
+    runner_patch = yaml.safe_load(
+        (root / "components" / "agentic-runner" / "deployment-patch.yaml").read_text()
+    )
     deployment = yaml.safe_load((root / "workload" / "deployment.yaml").read_text())
     rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
 
     assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
     assert "../../../overlays/poc-cluster-admin" not in kustomization["resources"]
+    assert kustomization["components"] == ["../../components/agentic-runner"]
     assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == (
         "podpilot-investigator"
     )
     runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
     assert runner["name"] == "oc-runner"
     assert runner["image"] == "podpilot-oc-runner:latest"
+    assert all(
+        document.get("roleRef", {}).get("name") != "cluster-admin"
+        for document in rbac_documents
+    )
+
+
+def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() -> None:
+    root = ROOT / "deploy" / "openshift"
+    overlay = root / "overlays" / "remote-poc-agentic"
+    kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
+    runtime = yaml.safe_load((overlay / "runtime-config-patch.yaml").read_text())
+    image_stream = yaml.safe_load((overlay / "image-stream.yaml").read_text())
+    runner_patch = yaml.safe_load(
+        (root / "components" / "agentic-runner" / "deployment-patch.yaml").read_text()
+    )
+    rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
+
+    assert kustomization["resources"] == ["../remote-poc", "image-stream.yaml"]
+    assert kustomization["images"] == [{
+        "name": "podpilot-oc-runner",
+        "newName": (
+            "image-registry.openshift-image-registry.svc:5000/"
+            "ai-ops/podpilot-oc-runner"
+        ),
+        "newTag": "0.12.0",
+    }]
+    assert kustomization["components"] == ["../../components/agentic-runner"]
+    assert runtime["data"] == {
+        "agent_mode": "unrestricted",
+        "adhoc_run_timeout_seconds": "900",
+    }
+    assert image_stream["metadata"]["name"] == "podpilot-oc-runner"
+    assert runner_patch["spec"]["template"]["spec"]["containers"][0]["name"] == (
+        "oc-runner"
+    )
     assert all(
         document.get("roleRef", {}).get("name") != "cluster-admin"
         for document in rbac_documents

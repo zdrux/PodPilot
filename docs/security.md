@@ -52,13 +52,16 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
-### Lab-only unrestricted agent exception
+### Explicit unrestricted agent exception
 
-`deploy/openshift/overlays/sno-milestone-one/` deliberately enables
-`PODPILOT_AGENT_MODE=unrestricted` and adds a localhost-only `oc-runner` sidecar. In this mode a
+`deploy/openshift/overlays/sno-milestone-one/` and the optional
+`deploy/openshift/overlays/remote-poc-agentic/` deliberately enable
+`PODPILOT_AGENT_MODE=unrestricted` and add a localhost-only `oc-runner` sidecar. In this mode a
 Chat Completions model may execute arbitrary Bash and `oc` commands without PodPilot's read
 schemas, mutation preview, or approval workflow. This is an explicit test fixture, not a production
-security boundary. The base and remote overlays remain guarded.
+security boundary. The base and standard `remote-poc` overlays remain guarded. The remote agentic
+overlay adds no RBAC of its own and therefore exercises every permission already granted to
+`podpilot-investigator` on that target cluster.
 
 High-confidence questions may additionally run through the existing registered deterministic
 read compiler before the shell loop. Those reads retain their normal fixed query construction,
@@ -66,8 +69,9 @@ normalization, redaction, evidence persistence, and bounded presentation. They p
 product enrichment—such as Loki application-log byte rankings—but do not remove or constrain the
 agent's arbitrary shell tool.
 
-The runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the lab
-deployment helper fails before building if that identity can patch Deployments. Cluster RBAC and
+The runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
+deployment helper fails before building if that identity can patch Deployments. Remote operators
+must perform the equivalent authorization review before applying the optional agentic overlay. Cluster RBAC and
 admission therefore remain the authoritative execution boundary. Command text and exit status are
 audited without stdout/stderr; shell output is secret-pattern redacted before it is returned to the
 provider and is not persisted as evidence. Normalized deterministic enrichment is persisted as
