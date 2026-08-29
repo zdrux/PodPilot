@@ -49,6 +49,10 @@ presentation metadata never decides whether investigation is complete. This dist
 Pod GET seed an investigation without treating `status.phase: Pending` as its explanation. The
 retrieval shortcut includes Strimzi Kafka existence and inventory questions, which compile to a bounded
 `kafkas.kafka.strimzi.io` list across namespaces and render from normalized API evidence.
+Both interrogative and imperative wording are recognized, including “are there Kafka clusters?”
+and “show/list all deployed Kafka clusters.” The same registered read executes independently on
+every selected OpenShift cluster. Found objects, complete zero-object results, and failed/API-missing
+reads remain cluster-attributed, and coverage counts include failed clusters.
 KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its observed
 namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
@@ -88,6 +92,9 @@ The registered Loki audit reader is authoritative in unrestricted mode even when
 is denied. Audit data is not a Kubernetes `events.audit.k8s.io` resource, so a failed or partially
 failed registered query renders its evidence and limitations without entering the generic shell
 loop. This also avoids assuming optional utilities such as `jq` exist in the runner image.
+Registered Strimzi Kafka-cluster inventory is authoritative by the same principle: an unavailable
+Kafka API on one or every selected cluster is reported directly and cannot fall through to repeated
+guesses such as `oc get kakas`, `kafkas`, or `kafka` on a single cluster.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner polls the process silently and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible

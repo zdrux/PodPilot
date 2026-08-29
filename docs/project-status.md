@@ -90,6 +90,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
   path. If that authoritative read fails, unrestricted mode renders the collection limitation
   directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
+- Imperative Kafka deployment inventory wording now routes to the registered Strimzi Kafka reader.
+  “Show/list all deployed Kafka clusters” runs once per selected OpenShift cluster and renders
+  found, empty, and unavailable API states with complete coverage accounting instead of repeatedly
+  guessing resource names through `oc-runner` on the first cluster.
 - Remote Thanos and LokiStack authorization failures now preserve the literal `HTTP 403` status in
   per-cluster Ask limitations and name the relevant read-only role. Log-volume queries correctly
   identify `cluster-logging-application-view`; Thanos metrics identify `cluster-monitoring-view`.

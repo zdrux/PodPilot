@@ -520,6 +520,12 @@ If the Loki audit query times out, is denied, or only succeeds on some selected 
 reports that registered result directly. It does not ask the unrestricted agent to substitute
 `oc get events.audit.k8s.io`, and it does not depend on `jq` being installed in `oc-runner`.
 
+Kafka deployment inventory wording such as “show me all the deployed Kafka clusters” uses the
+registered `kafkas.kafka.strimzi.io` list on every selected OpenShift cluster. The rendered table
+distinguishes found Kafka CRs, a readable API with zero Kafka objects, and a failed or unavailable
+Kafka API. This inventory is terminal and never falls through to model-guessed resource names in
+`oc-runner`.
+
 Metric period follow-ups preserve the latest registered top CPU, top memory, or namespace
 application-log-volume ranking. For example, after a top-namespace log-volume result, “show the log
 volume over a 3 day period” repeats the same Loki query with `rangeSeconds=259200`; it does not exec

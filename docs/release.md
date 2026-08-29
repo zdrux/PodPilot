@@ -430,6 +430,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   on a complete registered result. UI presentation preference must not terminate execution.
 - Multi-cluster follow-up tests must prove opaque object references retain a uniquely attributable
   source cluster and do not fan an exact namespace/name investigation out to unrelated clusters.
+- Kafka inventory tests must cover imperative and interrogative deployment wording, execute the
+  canonical Strimzi Kafka list once on every selected cluster, distinguish found/empty/failed
+  cluster results, include failures in the coverage denominator, and never enter the shell loop.
 - Failure-authority tests must prove an unavailable registered source plus failed shell verification
   cannot become an unsupported model claim about a missing metrics server or add-on.
 - Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,

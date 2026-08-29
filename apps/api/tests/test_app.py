@@ -5488,7 +5488,7 @@ def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() ->
 def test_inventory_catalog_miss_refreshes_before_planning() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
-            raise AssertionError("A refreshed Kafka catalog match must not call the planner.")
+            raise AssertionError("A refreshed Widget catalog match must not call the planner.")
 
     class Explorer:
         def __init__(self):
@@ -5499,9 +5499,9 @@ def test_inventory_catalog_miss_refreshes_before_planning() -> None:
             self.catalog_calls.append(refresh)
             if refresh:
                 return [{
-                    "resource": "kafkas.kafka.strimzi.io",
-                    "apiVersion": "kafka.strimzi.io/v1beta2",
-                    "kind": "Kafka", "namespaced": True,
+                    "resource": "widgets.example.io",
+                    "apiVersion": "example.io/v1",
+                    "kind": "Widget", "namespaced": True,
                     "verbs": ["get", "list"],
                 }]
             return [{
@@ -5513,11 +5513,11 @@ def test_inventory_catalog_miss_refreshes_before_planning() -> None:
         def execute(self, intent):
             self.calls.append(intent)
             return ReadResult((AdHocObservation(
-                id="cluster-kafka-list", tool="list_resources",
-                summary="Read Kafka resources.",
-                source="kubernetes:kafka.strimzi.io/v1beta2:Kafka:cluster/*",
+                id="cluster-widget-list", tool="list_resources",
+                summary="Read Widget resources.",
+                source="kubernetes:example.io/v1:Widget:cluster/*",
                 collected_at=datetime.now(timezone.utc),
-                data={"kind": "Kafka", "scope": "cluster", "names": ["vc-cluster"]},
+                data={"kind": "Widget", "scope": "cluster", "names": ["sample-widget"]},
             ),))
 
     explorer = Explorer()
@@ -5534,16 +5534,16 @@ def test_inventory_catalog_miss_refreshes_before_planning() -> None:
             auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
             role_breakglass_groups=[],
         ),
-        actor="ivy", workflow_id="catalog-kafka-miss",
-        question="Which OpenShift clusters have Kafka instances running on them?",
+        actor="ivy", workflow_id="catalog-widget-miss",
+        question="Which Widget instances are running on the OpenShift clusters?",
         conversation=[], existing_evidence=[],
     ))
 
     assert explorer.catalog_calls == [False, True]
-    assert [call.resource for call in explorer.calls] == ["kafkas.kafka.strimzi.io"]
+    assert [call.resource for call in explorer.calls] == ["widgets.example.io"]
     assert result.activity[0]["tool"] == "list_resources"
     assert result.activity[0]["status"] == "succeeded"
-    assert result.evidence[0]["data"]["names"] == ["vc-cluster"]
+    assert result.evidence[0]["data"]["names"] == ["sample-widget"]
 
 
 def test_model_kafka_cluster_alias_is_canonicalized_to_live_kafka_kind() -> None:
@@ -8251,7 +8251,7 @@ def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "are there Kafka clusters deployed here?"},
+            data={"message": "Show me all the deployed Kafka clusters"},
             follow_redirects=False,
         )
         rendered = client.get(
@@ -8300,6 +8300,125 @@ def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
         assert activity["preferred_evidence_view"] == "deterministic_primary"
         assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
     engine.dispose()
+
+
+def test_unrestricted_kafka_inventory_reads_every_selected_cluster(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("registered Kafka inventory must bypass classification")
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("registered Kafka inventory must bypass the shell loop")
+
+    class Explorer:
+        def __init__(self, cluster_name: str) -> None:
+            self.cluster_name = cluster_name
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            if self.cluster_name == "Legacy DEV":
+                raise ReadOnlyExplorerError(
+                    "The server does not expose the kafkas.kafka.strimzi.io resource type."
+                )
+            present = self.cluster_name == "Central DEV"
+            names = ["orders-kafka"] if present else []
+            objects = [{"namespace": "streams", "name": "orders-kafka"}] if present else []
+            items = [{
+                "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                "metadata": {"namespace": "streams", "name": "orders-kafka"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }] if present else []
+            slug = self.cluster_name.casefold().replace(" ", "-")
+            return ReadResult((AdHocObservation(
+                id=f"kafka-{slug}", tool="list_resources",
+                summary=f"Read Kafka resources from {self.cluster_name}.",
+                source="kubernetes:kafka.strimzi.io:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "resource": "kafkas.kafka.strimzi.io", "kind": "Kafka",
+                    "scope": "cluster", "names": names, "objects": objects,
+                    "items": items, "objectListComplete": True,
+                },
+            ),))
+
+    cluster_credentials = MemoryCredentialStore()
+    explorers: dict[str, Explorer] = {}
+
+    def explorer_factory(cluster, _token):
+        explorer = Explorer(cluster.name)
+        explorers[cluster.name] = explorer
+        return explorer
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        cluster_credential_store=cluster_credentials, model_provider=Provider(),
+        remote_read_explorer_factory=explorer_factory,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    cluster_ids = [
+        "40000000-0000-0000-0000-000000000001",
+        "40000000-0000-0000-0000-000000000002",
+        "40000000-0000-0000-0000-000000000003",
+    ]
+    engine = build_engine(settings)
+    with TestClient(app):
+        pass
+    with Session(engine) as db_session:
+        now = datetime.now(timezone.utc)
+        for cluster_id, name in zip(
+            cluster_ids, ("Central DEV", "East DEV", "Legacy DEV"), strict=True,
+        ):
+            key = f"cluster_{cluster_id.replace('-', '')}"
+            cluster_credentials.set(f"token-{name}", key)
+            db_session.add(Cluster(
+                id=cluster_id, name=name,
+                api_url=f"https://api.{name.casefold().replace(' ', '-')}.example:6443",
+                credential_key=key, tags_json="{}", tls_verify=True, is_enabled=True,
+                is_system=False, status="ready", created_by="ada", updated_by="ada",
+                created_at=now, updated_at=now,
+            ))
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Show me all the deployed Kafka clusters",
+                "cluster_ids": json.dumps(cluster_ids),
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    expected = ReadIntent(
+        tool="list_resources", resource="kafkas.kafka.strimzi.io",
+        kind="Kafka", limit=500,
+    )
+    assert set(explorers) == {"Central DEV", "East DEV", "Legacy DEV"}
+    assert all(explorer.calls == [expected] for explorer in explorers.values())
+    assert all(name in rendered.text for name in ("Central DEV", "East DEV", "Legacy DEV"))
+    assert "orders-kafka" in rendered.text
+    assert "No matching resources" in rendered.text
+    assert "does not expose the kafkas.kafka.strimzi.io resource type" in rendered.text
+    assert "1 of 3 queried OpenShift clusters" in rendered.text
 
 
 def test_terminal_unrestricted_audit_enrichment_suppresses_duplicate_shell_path(

@@ -1393,7 +1393,8 @@ _CLUSTER_LOG_VOLUME_QUERY = re.compile(
 _KAFKA_INVENTORY_QUERY = re.compile(
     r"(?=.*\bkafka\b)"
     r"(?=.*\b(?:clusters?|instances?|installations?|deployments?)\b)"
-    r"(?=.*(?:\bare\s+there\b|\bare\s+any\b))"
+    r"(?=.*(?:\bare\s+there\b|\bare\s+any\b|"
+    r"\b(?:show|list|find|inventory|what|which)\b))"
     r"(?=.*\b(?:deployed|installed|running|exists?)\b)",
     re.IGNORECASE,
 )

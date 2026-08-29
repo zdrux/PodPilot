@@ -1609,6 +1609,8 @@ def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> N
         "are there Kafka clusters deployed here?",
         "are there Kafka instances installed on the selected OpenShift clusters?",
         "are any Kafka deployments running here?",
+        "Show me all the deployed Kafka clusters",
+        "List deployed Kafka clusters on the selected OpenShift clusters",
     ],
 )
 def test_kafka_existence_question_compiles_terminal_inventory(question: str) -> None:

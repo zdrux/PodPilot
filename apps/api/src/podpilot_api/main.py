@@ -2599,10 +2599,20 @@ def _deterministic_inventory_answer(
         return rows
 
     inventory_sources = [*observations, *discovery_misses, *incompatible_observations]
+    failed_inventory_reads = [
+        item for item in activity
+        if item.get("tool") == "list_resources"
+        and item.get("status") != "succeeded"
+        and (item.get("cluster_id") or item.get("cluster_name"))
+    ]
     source_cluster_ids = {
         str(item.get("cluster_id") or item.get("cluster_name") or "cluster")
         for item in inventory_sources
     }
+    source_cluster_ids.update(
+        str(item.get("cluster_id") or item.get("cluster_name"))
+        for item in failed_inventory_reads
+    )
     if len(source_cluster_ids) > 1:
         rows: list[str] = []
         citations: list[str] = []
@@ -2641,6 +2651,22 @@ def _deterministic_inventory_answer(
             str(item.get("cluster_id") or item.get("cluster_name") or "cluster")
             for item in [*observations, *discovery_misses]
         }
+        for entry in failed_inventory_reads:
+            cluster_name = str(
+                entry.get("cluster_name") or entry.get("cluster_id") or "cluster"
+            )
+            cluster_id = str(entry.get("cluster_id") or cluster_name)
+            if cluster_id in represented_cluster_ids:
+                continue
+            represented_cluster_ids.add(cluster_id)
+            detail = redact_text(str(
+                entry.get("detail") or "The registered inventory read failed."
+            ))[:300].replace("|", "\\|").replace("\n", " ")
+            requested_kind = str(preferred_kind or "requested resource")[:253]
+            rows.append(
+                f"| `{cluster_name}` | `{requested_kind}` | — | "
+                f"_Collection failed: {detail}_ | Not applicable |"
+            )
         for observation in reversed(incompatible_observations):
             cluster_name = str(
                 observation.get("cluster_name")
@@ -4421,13 +4447,20 @@ def _failed_kafka_topic_storage_is_terminal(
     )
 
 
-def _registered_audit_plan_is_authoritative(plan: ReadPlan | None) -> bool:
-    """Audit evidence has no valid generic Kubernetes-resource shell fallback."""
+def _registered_plan_is_authoritative(plan: ReadPlan | None) -> bool:
+    """Keep registered audit and Kafka inventory reads out of shell fallback."""
 
     return bool(
         plan is not None
         and plan.intents
-        and all(intent.tool == "query_audit_events" for intent in plan.intents)
+        and (
+            all(intent.tool == "query_audit_events" for intent in plan.intents)
+            or all(
+                intent.tool == "list_resources"
+                and intent.resource == "kafkas.kafka.strimzi.io"
+                for intent in plan.intents
+            )
+        )
     )
 
 
@@ -9802,13 +9835,13 @@ def create_app(
                         activity=enrichment_activity,
                     )
                     failed_kafka_storage_terminal = False
-                    authoritative_audit_terminal = _registered_audit_plan_is_authoritative(
+                    authoritative_enrichment_terminal = _registered_plan_is_authoritative(
                         base_enrichment[0] if base_enrichment is not None else None
                     )
                     if (
                         deterministic_answer is None
                         and (
-                            authoritative_audit_terminal
+                            authoritative_enrichment_terminal
                             or _failed_kafka_topic_storage_is_terminal(
                                 base_enrichment[0] if base_enrichment is not None else None,
                                 enrichment_activity,
@@ -9821,7 +9854,7 @@ def create_app(
                         if failure_answer is not None:
                             deterministic_answer = {"content": failure_answer}
                             preferred_evidence_view = "deterministic_primary"
-                            if not authoritative_audit_terminal:
+                            if not authoritative_enrichment_terminal:
                                 failed_kafka_storage_terminal = True
                     deterministic_reads_succeeded = bool(enrichment_activity) and all(
                         item.get("status") == "succeeded"
@@ -9838,7 +9871,7 @@ def create_app(
                     registered_answer_complete = bool(
                         deterministic_answer is not None
                         and (
-                            authoritative_audit_terminal
+                            authoritative_enrichment_terminal
                             or failed_kafka_storage_terminal
                             or (
                                 enrichment_terminal

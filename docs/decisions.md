@@ -1154,3 +1154,18 @@ limit to one initial-window query, and return fewer rows when fewer matches are 
 Consequences: Audit requests cannot fall back to invented Kubernetes resources or undeclared
 runner utilities. Operators see the actionable Loki timeout or authorization failure directly;
 restoring the registered audit source is the required recovery path.
+
+## 2026-08-29 - Kafka deployment inventory is canonical and cluster-complete
+
+Context: Imperative wording such as “show all deployed Kafka clusters” missed the narrow Kafka
+existence recognizer. The unrestricted model then guessed several resource aliases on the first
+selected cluster and generalized that result across the full multi-cluster selection.
+
+Decision: Recognize both imperative and interrogative Kafka deployment-inventory wording and
+compile it to `list kafkas.kafka.strimzi.io` once per selected cluster. Treat this registered plan
+as authoritative, including empty, partial, API-missing, and denied results. Include failed cluster
+reads in rendered coverage and do not enter the shell loop.
+
+Consequences: Kafka inventory uses one canonical Strimzi contract, reports what happened on every
+selected cluster, and cannot infer fleet-wide absence from one cluster or from unrelated Knative
+Kafka CRDs.
