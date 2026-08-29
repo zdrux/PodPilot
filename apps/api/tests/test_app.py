@@ -15,6 +15,7 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import (
     _append_deterministic_inventory,
+    _authoritative_unrestricted_failure,
     _adhoc_answer_quality_issue,
     _adhoc_answer_advisories,
     _adhoc_capability_wording_issue,
@@ -7510,7 +7511,6 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         ))
         db_session.commit()
     engine.dispose()
-
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
@@ -7546,6 +7546,46 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
             for item in json.loads(run.progress_json)
         )
     engine.dispose()
+
+
+def test_unrestricted_registered_failures_override_unsupported_agent_explanations():
+    activity = [
+        {
+            "tool": "query_metrics",
+            "source": "deterministic_enrichment",
+            "cluster_name": "Central DEV",
+            "status": "denied_or_unavailable",
+            "detail": "Thanos Querier is temporarily unavailable.",
+        },
+        {
+            "tool": "execute_shell",
+            "cluster_name": "Central DEV",
+            "status": "failed",
+            "exit_code": 1,
+        },
+    ]
+
+    rendered = _authoritative_unrestricted_failure(activity)
+
+    assert rendered is not None
+    assert "Thanos Querier is temporarily unavailable" in rendered
+    assert "cannot confirm" in rendered
+    assert "metrics server" not in rendered
+
+
+def test_successful_unrestricted_shell_check_may_explain_registered_failure():
+    activity = [
+        {
+            "tool": "query_metrics",
+            "source": "deterministic_enrichment",
+            "cluster_name": "Central DEV",
+            "status": "denied_or_unavailable",
+            "detail": "Thanos Querier is temporarily unavailable.",
+        },
+        {"tool": "execute_shell", "status": "completed", "exit_code": 0},
+    ]
+
+    assert _authoritative_unrestricted_failure(activity) is None
 
 
 def test_ask_raw_response_toggle_persists_and_displays_both_answer_attempts(

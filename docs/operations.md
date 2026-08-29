@@ -481,8 +481,9 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
 Unrestricted turns retain additive deterministic enrichment. Questions recognized by the existing
-known-read compiler first use the registered API/Loki/Thanos reader and pass normalized evidence to
-the agent; the shell loop remains unrestricted afterward. For example, a top-namespace log-volume
+known-read compiler or the guarded-mode metric, audit, and catalog-grounded resource compilers first
+use the registered API/Loki/Thanos reader and pass normalized evidence to the agent; the shell loop
+remains unrestricted afterward. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
 and average byte rate. Every renderable normalized metric result—not only top CPU, memory, and log
 volume—uses the native evidence card as its only visible table. This includes node, PVC, Kafka,
@@ -490,6 +491,13 @@ ingress, and future metric profiles without a UI allowlist change. Empty or unsu
 the deterministic text fallback. Deterministic Markdown and any model-authored duplicate table are
 suppressed when a native card is available. Kubernetes Event counts are not an acceptable proxy for
 that result.
+
+Thanos is the preferred historical metric source. If it is unavailable, Node CPU/memory rankings
+and namespace-scoped Pod CPU/memory rankings use the Kubernetes Metrics API for a current-only
+snapshot. The UI records that no historical average or peak was available. The equivalent OpenShift
+CLI commands are `oc adm top node` and `oc adm top pod`; `oc top` is not a valid OpenShift command.
+When all registered reads and shell verification attempts fail, Ask reports the exact collection
+errors without accepting an agent-invented explanation for why a source was unavailable.
 
 Verify the deployed boundary:
 

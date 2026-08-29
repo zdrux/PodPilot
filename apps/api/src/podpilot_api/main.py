@@ -4233,6 +4233,36 @@ async def _collect_unrestricted_known_reads(
     )
 
 
+def _authoritative_unrestricted_failure(
+    activity: list[dict[str, object]],
+) -> str | None:
+    """Render registered failures instead of allowing unsupported model explanations."""
+
+    registered = [
+        item for item in activity
+        if item.get("source") == "deterministic_enrichment"
+    ]
+    if not registered or any(item.get("status") == "succeeded" for item in registered):
+        return None
+    if any(
+        item.get("tool") == "execute_shell" and item.get("status") == "completed"
+        for item in activity
+    ):
+        return None
+    failures = []
+    for item in registered:
+        cluster = str(item.get("cluster_name") or item.get("cluster_id") or "cluster")
+        tool = str(item.get("tool") or "registered read")
+        detail = str(item.get("detail") or "the registered source was unavailable")
+        failures.append(f"- **{cluster} — {tool}:** {detail}")
+    return (
+        "PodPilot could not collect authoritative evidence for this request, so it cannot "
+        "confirm the requested result.\n\n"
+        + "\n".join(failures)
+        + "\n\nNo conclusion was inferred from the collection failures."
+    )
+
+
 def _read_intent_signature(intent: ReadIntent) -> str:
     """Deduplicate exact reads even when equivalent Pod candidates have different IDs."""
 
@@ -8320,7 +8350,11 @@ def create_app(
                     "presentation and its units. Do not reproduce the enrichment as another table; "
                     "report only material findings that are not already present in it. Do not replace "
                     "application-log payload volume "
-                    "with Kubernetes Event counts. You still have unrestricted execute_shell "
+                    "with Kubernetes Event counts. A registered collection failure proves only that "
+                    "the source was unavailable; never invent its cause or claim that a metrics "
+                    "server, add-on, API, or resource is absent unless command output proves it. "
+                    "For OpenShift current resource usage, the CLI forms are `oc adm top node` and "
+                    "`oc adm top pod`, not `oc top`. You still have unrestricted execute_shell "
                     "access for verification, extension, mutation, or unrelated work.\n\n"
                     + serialized_enrichment
                 ),
@@ -8409,10 +8443,14 @@ def create_app(
                         "after one finalization retry."
                     )
                 content = agent_content
+                authoritative_failure = _authoritative_unrestricted_failure(activity)
+                if authoritative_failure is not None:
+                    content = authoritative_failure
                 if (
                     preferred_presentation
                     and preferred_evidence_view != "metric_ranking"
                     and preferred_presentation not in agent_content
+                    and authoritative_failure is None
                 ):
                     content = (
                         preferred_presentation
@@ -8454,6 +8492,7 @@ def create_app(
                         actor=None,
                         content=content,
                         answer_mode=(
+                            "insufficient_evidence" if authoritative_failure is not None else
                             "evidence_based" if enrichment_citations else "general_guidance"
                         ),
                         citations_json=json.dumps(enrichment_citations, sort_keys=True),
@@ -8464,7 +8503,10 @@ def create_app(
                             "suggested_followup_actions": [],
                             "guidance_next_checks": [],
                             "investigation_gaps": [],
-                            "conclusion_status": "agent_reported",
+                            "conclusion_status": (
+                                "not_confirmed" if authoritative_failure is not None
+                                else "agent_reported"
+                            ),
                             "agent_mode": "unrestricted",
                             "preferred_evidence_view": preferred_evidence_view,
                         }, sort_keys=True),
@@ -8841,8 +8883,66 @@ def create_app(
                         provider_question,
                         inventory_limit=app_settings.adhoc_inventory_max_objects,
                     )
-                    if known_read is not None:
-                        enrichment_plan, _ = known_read
+                    inquiry = None
+                    if not followup_action:
+                        if progress:
+                            await progress(
+                                "planning", "Selecting registered enrichment capabilities."
+                            )
+                        prior_audit_query = _latest_audit_query_semantics(evidence)
+                        inquiry = await _classify_ad_hoc_inquiry(
+                            model_provider=provider,
+                            profile=profile_snapshot,
+                            api_key=api_key,
+                            question=source_question,
+                            conversation=history,
+                            cluster_names=[item.name for item in selected_clusters],
+                            prior_audit_query=prior_audit_query,
+                            evidence=evidence,
+                        )
+                        inquiry = _resolve_audit_inquiry(
+                            question=source_question,
+                            inquiry=inquiry,
+                            prior_audit_query=prior_audit_query,
+                            max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
+                        )
+                    semantic_metric_plan = _semantic_metric_read_plan(inquiry)
+                    semantic_audit_plan = _semantic_audit_read_plan(
+                        inquiry,
+                        default_limit=app_settings.adhoc_audit_default_limit,
+                        initial_range_seconds=app_settings.adhoc_audit_initial_range_seconds,
+                    )
+                    health_tools = {
+                        "pod_health_summary", "node_health_summary",
+                        "cluster_operator_health_summary", "machine_health_summary",
+                        "workload_health_summary",
+                    }
+                    known_override = (
+                        known_read
+                        if known_read is not None and known_read[0].intents and (
+                            all(
+                                intent.tool in health_tools
+                                for intent in known_read[0].intents
+                            )
+                            or all(
+                                intent.tool == "query_metrics"
+                                and intent.metric in {
+                                    "node_cpu_utilization", "node_memory_utilization",
+                                }
+                                for intent in known_read[0].intents
+                            )
+                        )
+                        else None
+                    )
+                    base_enrichment = (
+                        known_override
+                        or semantic_audit_plan
+                        or semantic_metric_plan
+                        or known_read
+                    )
+                    if base_enrichment is not None or (
+                        inquiry is not None and inquiry.resource_query
+                    ):
                         for selected_cluster in selected_clusters:
                             cluster_label = selected_cluster.name
                             if not selected_cluster.is_enabled:
@@ -8867,6 +8967,33 @@ def create_app(
                                         f"be initialized ({type(exc).__name__})."
                                     )
                                     continue
+                            cluster_plan = base_enrichment
+                            if cluster_plan is None and inquiry is not None:
+                                catalog_reader = getattr(reader, "resource_catalog", None)
+                                if callable(catalog_reader):
+                                    try:
+                                        catalog = await run_in_threadpool(
+                                            catalog_reader,
+                                            query=inquiry.resource_query or source_question,
+                                            limit=120,
+                                        )
+                                        cluster_plan = _semantic_resource_read_plan(
+                                            inquiry,
+                                            resource_catalog=catalog,
+                                            question=source_question,
+                                            conversation=history,
+                                            inventory_limit=(
+                                                app_settings.adhoc_inventory_max_objects
+                                            ),
+                                        )
+                                    except ReadOnlyExplorerError as exc:
+                                        enrichment_limitations.append(
+                                            f"Cluster {cluster_label}: resource discovery failed "
+                                            f"({str(exc)})."
+                                        )
+                            if cluster_plan is None:
+                                continue
+                            enrichment_plan, _ = cluster_plan
                             collected = await _collect_unrestricted_known_reads(
                                 cluster_reader=reader,
                                 plan=enrichment_plan,

@@ -28,11 +28,17 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
 agent path. Before the free-form
-loop, normal code applies the existing high-confidence `plan_known_read` compiler to the current
-question. When it matches, PodPilot executes those registered readers across the selected clusters,
+loop, normal code applies the existing high-confidence compiler plus the same registered metric,
+audit, and catalog-grounded resource semantic compilers used by guarded mode. When one matches,
+PodPilot executes those registered readers across the selected clusters,
 persists their normalized evidence, and supplies the evidence plus any deterministic ranking table
 to the model. This preserves enrichments such as Loki-backed application-log volume, health
 summaries, and registered metric rankings; it is additive and does not restrict later agent actions.
+Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
+rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
+unavailable. The fallback is explicitly current-only; average and peak equal current and the
+limitation is persisted. If every registered read and agent verification command fails, normal code
+renders those exact collection failures and discards speculative model explanations of the outage.
 
 The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls

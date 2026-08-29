@@ -49,12 +49,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
   byte counts and truncation flags.
-  The model-free suite passes locally with 642 tests and 82% aggregate coverage.
+  The model-free suite passes locally with 645 tests and 82% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
 - Unrestricted turns now retain additive high-confidence deterministic enrichment. Registered
-  known reads execute before the shell loop across selected clusters, persist normalized evidence,
+  known reads and the guarded metric, audit, and catalog-grounded resource compilers execute before
+  the shell loop across selected clusters, persist normalized evidence,
   and supply preferred deterministic ranking metadata to the model. Enriched metric rankings now
   render through one native evidence card instead of stacking deterministic Markdown, a duplicate
   model table, and the card. Card selection is data-driven for every renderable metric shape,
@@ -65,6 +66,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
   that Loki is unavailable; clusters with the registered LokiStack integration render the byte
   volume and average-rate table.
+- Thanos remains the preferred metric trend source. Node rankings and namespace-scoped Pod CPU or
+  memory rankings now fall back to a current `metrics.k8s.io/v1beta1` snapshot when Thanos fails,
+  with the lost history called out explicitly. When every registered read and shell verification
+  fails, normal code reports the exact failures and suppresses unsupported model explanations such
+  as claiming a metrics add-on is absent.
 - Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
   API logs the anomaly, sends one corrective request using the existing tool results, and then
   either persists the recovered answer or fails explicitly after a second empty turn. It does not

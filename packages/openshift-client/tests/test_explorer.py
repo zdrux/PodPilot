@@ -14,6 +14,7 @@ from podpilot_openshift.explorer import (
     _list_projection,
     _remote_discovery_error,
 )
+from podpilot_openshift.metric_trends import MetricTrendError
 
 
 class FakeObject:
@@ -1167,3 +1168,40 @@ def test_sensitive_or_invalid_targets_are_denied(intent):
     target, _, _ = explorer()
     with pytest.raises(ReadOnlyExplorerError):
         target.execute(intent)
+
+
+def test_thanos_node_ranking_falls_back_to_current_kubernetes_metrics_snapshot():
+    class FailedThanos:
+        def execute(self, _intent):
+            raise MetricTrendError("Thanos Querier is temporarily unavailable.")
+
+    class MetricsResources:
+        def get(self, **kwargs):
+            assert kwargs == {
+                "api_version": "metrics.k8s.io/v1beta1", "kind": "NodeMetrics",
+            }
+            return SimpleNamespace(get=lambda: SimpleNamespace(items=[{
+                "metadata": {"name": "worker-a"}, "usage": {"cpu": "2"},
+            }]))
+
+    dynamic = SimpleNamespace(resources=MetricsResources())
+    core = SimpleNamespace(list_node=lambda: SimpleNamespace(items=[SimpleNamespace(
+        metadata=SimpleNamespace(name="worker-a", labels={}),
+        status=SimpleNamespace(allocatable={"cpu": "4"}, capacity={"cpu": "4"}),
+    )]))
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=dynamic, core_api=core, metric_reader=FailedThanos(),
+    )
+
+    result = target.execute(ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=("node",), limit=5,
+    ))
+
+    observation = result.observations[0]
+    assert observation.source == "kubernetes:metrics.k8s.io/v1beta1:NodeMetrics"
+    assert observation.data["ranking"][0]["labels"] == {"nodename": "worker-a"}
+    assert observation.data["ranking"][0]["current"] == 50.0
+    assert observation.data["rangeSeconds"] == 0
+    assert "current snapshot" in result.limitations[0]

@@ -419,6 +419,11 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
   `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.
+- Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
+  catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
+  back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
+- Failure-authority tests must prove an unavailable registered source plus failed shell verification
+  cannot become an unsupported model claim about a missing metrics server or add-on.
 - Agent-loop tests must prove one empty Chat Completions turn triggers exactly one finalization
   retry, reuses existing tool results, and does not replay a completed runner command.
 
