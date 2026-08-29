@@ -74,6 +74,13 @@ successful commands are not automatically repeated and the loop cannot retry ind
 When a complete explicit-retrieval enrichment succeeds, its deterministic presentation is authoritative:
 PodPilot renders it once and suppresses any model-proposed shell call for the same turn. This
 prevents a second, less capable collection path from duplicating or contradicting typed evidence.
+Completion is constraint-preserving rather than verb-based. Collection classification carries an
+optional grounded object-field predicate separately from requested output fields. Exact and
+case-insensitive `contains` predicates compile to bounded `search_resources` reads across every
+selected cluster. A plain resource list cannot satisfy a question containing a material field
+predicate; if classification drops that constraint, the enrichment remains non-terminal and is
+not rendered as the answer. Search results distinguish complete absence from an empty result at
+the scan ceiling, which remains explicitly inconclusive.
 Opaque recent-object references retain their source cluster when uniquely attributable. A causal
 follow-up about one result therefore investigates that cluster instead of repeating the same
 namespace/name coordinate across every cluster selected on the conversation.

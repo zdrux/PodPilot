@@ -2531,16 +2531,28 @@ def _deterministic_inventory_answer(
     ):
         return None
 
+    resource_read_tools = {"list_resources", "search_resources"}
+    successful_search_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") == "search_resources"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    if _question_has_field_predicate(question) and not successful_search_ids:
+        # A plain inventory does not answer a field-constrained collection request.
+        return None
     current_ids = {
         str(evidence_id)
         for entry in activity
-        if entry.get("status") == "succeeded" and entry.get("tool") == "list_resources"
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") in resource_read_tools
         for evidence_id in (entry.get("evidence_ids") or [])
     }
     all_observations = [
         item for item in reversed(evidence)
         if str(item.get("id")) in current_ids
-        and item.get("tool") == "list_resources"
+        and item.get("tool") in resource_read_tools
         and isinstance(item.get("data"), dict)
         and isinstance(item["data"].get("names"), list)
     ]
@@ -2600,10 +2612,16 @@ def _deterministic_inventory_answer(
             rows.append((namespace[:253], name, ready))
         return rows
 
+    def observation_complete(observation: dict[str, object]) -> bool:
+        data = observation["data"]
+        if observation.get("tool") == "search_resources":
+            return data.get("searchComplete") is True
+        return bool(data.get("objectListComplete", not data.get("truncated")))
+
     inventory_sources = [*observations, *discovery_misses, *incompatible_observations]
     failed_inventory_reads = [
         item for item in activity
-        if item.get("tool") == "list_resources"
+        if item.get("tool") in resource_read_tools
         and item.get("status") != "succeeded"
         and (item.get("cluster_id") or item.get("cluster_name"))
     ]
@@ -2620,6 +2638,7 @@ def _deterministic_inventory_answer(
         citations: list[str] = []
         total_matches = 0
         matching_cluster_ids: set[str] = set()
+        incomplete_cluster_ids: set[str] = set()
         for observation in reversed(observations):
             data = observation["data"]
             cluster_name = str(observation.get("cluster_name") or observation.get("cluster_id") or "cluster")
@@ -2627,6 +2646,8 @@ def _deterministic_inventory_answer(
             kind = str(data.get("kind") or "Resource")
             objects = inventory_rows(data)
             citations.append(str(observation["id"]))
+            if not observation_complete(observation):
+                incomplete_cluster_ids.add(cluster_id)
             if objects:
                 total_matches += len(objects)
                 matching_cluster_ids.add(cluster_id)
@@ -2636,7 +2657,13 @@ def _deterministic_inventory_answer(
                 )
             else:
                 rows.append(
-                    f"| `{cluster_name}` | `{kind}` | — | _No matching resources_ | Not applicable |"
+                    f"| `{cluster_name}` | `{kind}` | — | "
+                    + (
+                        "_No matching resources_"
+                        if observation_complete(observation) else
+                        "_No match observed before the scan ceiling; result is inconclusive_"
+                    )
+                    + " | Not applicable |"
                 )
         for observation in reversed(discovery_misses):
             cluster_name = str(
@@ -2688,10 +2715,19 @@ def _deterministic_inventory_answer(
         return {
             "answer_mode": "evidence_based",
             "content": (
-                "## Multi-cluster inventory\n\n"
-                f"**Found:** {total_matches} matching resource"
+                (
+                    "## Filtered multi-cluster inventory\n\n"
+                    if successful_search_ids else "## Multi-cluster inventory\n\n"
+                )
+                + f"**Found:** {total_matches} matching resource"
                 f"{'s' if total_matches != 1 else ''} on {len(matching_cluster_ids)} of "
-                f"{len(source_cluster_ids)} queried OpenShift clusters.\n\n"
+                f"{len(source_cluster_ids)} queried OpenShift clusters."
+                + (
+                    f" **Coverage warning:** {len(incomplete_cluster_ids)} cluster search"
+                    f"{'es were' if len(incomplete_cluster_ids) != 1 else ' was'} incomplete."
+                    if incomplete_cluster_ids else ""
+                )
+                + "\n\n"
                 "| OpenShift cluster | Kind | Namespace | Matching resource | Ready |\n"
                 "|---|---|---|---|---|\n" + "\n".join(rows) +
                 "\n\nEach row comes from an independently bounded read against the named cluster. "
@@ -2738,9 +2774,9 @@ def _deterministic_inventory_answer(
     objects = inventory_rows(data)
     kind = str(data.get("kind") or "Resource")
     scope = str(data.get("scope") or "cluster")
-    complete = bool(data.get("objectListComplete", not data.get("truncated")))
+    complete = observation_complete(observation)
     lines = [
-        f"## {kind} inventory",
+        f"## {'Filtered ' if observation.get('tool') == 'search_resources' else ''}{kind} inventory",
         "",
         f"**Scope:** `{scope}`  ",
         f"**Collected:** {len(objects)}",
@@ -2753,11 +2789,17 @@ def _deterministic_inventory_answer(
             for index, (namespace, name, ready) in enumerate(objects, 1)
         )
     else:
-        lines.append("No matching resources were returned.")
+        lines.append(
+            "No matching resources were returned."
+            if complete else
+            "No match was observed before the scan ceiling; the result is inconclusive."
+        )
     lines.extend(["", (
+        "The bounded search is complete for this snapshot."
+        if complete and observation.get("tool") == "search_resources" else
         "The collected object list is complete for this snapshot."
         if complete else
-        "The configured inventory ceiling was reached; additional matching resources exist."
+        "The configured scan ceiling was reached; additional resources were not evaluated."
     )])
     if data.get("detailsTruncated"):
         lines.append(
@@ -4548,6 +4590,21 @@ _EXPLICIT_RETRIEVAL_PATTERN = re.compile(
     r"^\s*(?:show|list|display|give\s+me|which|what\s+are|top|rank|count)\b",
     re.IGNORECASE,
 )
+_FIELD_PREDICATE_PATTERN = re.compile(
+    r"\bwhose\b|"
+    r"\bwhere\b.{0,100}?\b(?:contains?|equals?|is|matches?|starts?\s+with|ends?\s+with)\b|"
+    r"\b(?:field|hostname|host|name|value|status|annotation|label)\b.{0,80}?"
+    r"\b(?:contains?|equals?|is|matches?|starts?\s+with|ends?\s+with)\b|"
+    r"\b(?:contains?|equals?|matches?|starts?\s+with|ends?\s+with)\b.{0,80}?"
+    r"[`'\"]?[A-Za-z0-9_.:/-]+",
+    re.IGNORECASE,
+)
+
+
+def _question_has_field_predicate(question: str) -> bool:
+    """Detect a material collection constraint that must not degrade to a plain list."""
+
+    return bool(_FIELD_PREDICATE_PATTERN.search(question))
 
 
 def _question_requires_agentic_investigation(
@@ -5184,7 +5241,7 @@ def _inventory_plan_scope_errors(
     plan: ReadPlan,
     inquiry: InquirySemantics | None,
 ) -> list[str]:
-    """Reject inventory LISTs that drift away from the requested resource Kind."""
+    """Reject inventory reads that drop the requested Kind or field predicate."""
 
     if (
         inquiry is None
@@ -5203,6 +5260,24 @@ def _inventory_plan_scope_errors(
             errors.append(
                 f"Inventory read Kind {intent.kind!r} does not match the requested "
                 f"resource Kind {inquiry.resource_query!r}."
+            )
+            continue
+        resource_filter = inquiry.resource_filter
+        if resource_filter is None:
+            continue
+        if intent.tool != "search_resources":
+            errors.append(
+                "The inventory read dropped the operator's object-field predicate; "
+                "a bounded search_resources read is required."
+            )
+        elif (
+            intent.match_field != resource_filter.field
+            or intent.match_operator != resource_filter.operator
+            or intent.match_value != resource_filter.value
+        ):
+            errors.append(
+                "The inventory search does not preserve the operator's exact field, "
+                "operator, and value predicate."
             )
     return errors
 
@@ -7442,6 +7517,31 @@ def _semantic_resource_read_plan(
             ),
             False,
         )
+    resource_filter = inquiry.resource_filter
+    if resource_filter is not None and grounded(resource_filter.value):
+        return (
+            ReadPlan(
+                goal_type=inquiry.planner_goal,
+                scope_summary=(
+                    f"Search {catalog_intent.kind} resources where "
+                    f"{resource_filter.field} {resource_filter.operator} "
+                    f"{resource_filter.value}."
+                ),
+                intents=[ReadIntent(
+                    tool="search_resources",
+                    resource=catalog_intent.resource,
+                    api_version=catalog_intent.api_version,
+                    kind=catalog_intent.kind,
+                    namespace=namespace if namespaced is not False else None,
+                    label_selector=inquiry.label_selector,
+                    match_field=resource_filter.field,
+                    match_value=resource_filter.value,
+                    match_operator=resource_filter.operator,
+                    limit=inquiry.result_limit or min(100, inventory_limit),
+                )],
+            ),
+            True,
+        )
     exact_one = (
         generic_exact_diagnostic
         or inquiry.cardinality == "exact_one"
@@ -7512,7 +7612,8 @@ def _semantic_resource_read_plan(
                 limit=inventory_limit,
             )],
         ),
-        not bool(inquiry.requested_fields),
+        not bool(inquiry.requested_fields)
+        and not _question_has_field_predicate(question),
     )
 
 

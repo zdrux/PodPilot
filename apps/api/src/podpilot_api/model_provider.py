@@ -403,6 +403,35 @@ class MetricRequestSemantics(BaseModel):
         return self
 
 
+class ResourceFieldFilterSemantics(BaseModel):
+    """One grounded predicate for a bounded Kubernetes object-field search."""
+
+    field: str = Field(min_length=1, max_length=512)
+    operator: Literal["exact", "contains"] = "exact"
+    value: str = Field(min_length=1, max_length=512)
+
+    @field_validator("field")
+    @classmethod
+    def validate_field_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*",
+            normalized,
+        ):
+            raise ValueError("filter field must be a dot-separated Kubernetes object path")
+        return normalized
+
+    @field_validator("value")
+    @classmethod
+    def normalize_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
+            raise ValueError("filter value must be non-empty and contain no control characters")
+        return normalized
+
+
 class InquirySemantics(BaseModel):
     """Model-owned semantic IR; normal code resolves and validates every read."""
 
@@ -425,6 +454,7 @@ class InquirySemantics(BaseModel):
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
+    resource_filter: ResourceFieldFilterSemantics | None = None
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
     previous_logs: bool = False
@@ -600,6 +630,7 @@ class CapabilitySelection(BaseModel):
     object_name: str | None = Field(default=None, max_length=253)
     namespace: str | None = Field(default=None, max_length=253)
     requested_fields: list[str] = Field(default_factory=list, max_length=12)
+    resource_filter: ResourceFieldFilterSemantics | None = None
     label_selector: str | None = Field(default=None, max_length=512)
     container: str | None = Field(default=None, max_length=253)
     previous_logs: bool = False
@@ -1929,6 +1960,11 @@ class OpenAIResponsesProvider:
                     "metadata.labels, spec.template.spec.containers, or status.conditions. Use object_fields "
                     "for requested metadata/spec/status, exact_one for one named object, and collection for "
                     "plural inventory. Extract label_selector only for an explicit label key/value filter. "
+                    "When a collection is constrained by an object field, return resource_filter with the "
+                    "dot-separated Kubernetes field path, exact or contains operator, and the operator's "
+                    "literal value. For example, 'Routes whose hostname contains .example.com' uses "
+                    "field=spec.host, operator=contains, value=.example.com. Preserve this predicate; it is "
+                    "material to the request and is not merely a requested output field. "
                     "For events, use resource_query=Event and object_name for the exact related object whose "
                     "events were requested. For logs, extract the Pod resource, exact Pod and namespace when "
                     "available, container, previous_logs, and an explicit log_range_seconds. Never invent an "
@@ -2657,7 +2693,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "server code supplies the trusted parent name as its value. Return requested_fields as dot-separated "
                 "Kubernetes paths, and log container/previous/time bounds when applicable. Use "
                 "object_fields for requested metadata/spec/status and exact_one for one named object. "
-                "Extract label_selector only from an explicit label key/value filter. For events use "
+                "Extract label_selector only from an explicit label key/value filter. When a collection "
+                "is constrained by an object field, return resource_filter with the dot-separated "
+                "Kubernetes field path, exact or contains operator, and the operator's literal value. "
+                "For example, Route hostname maps to spec.host. Preserve this predicate separately from "
+                "requested_fields because it changes which objects match. For events use "
                 "resource_query=Event and object_name for the exact related object. Never invent an "
                 "omitted coordinate. Set needs_object_details when names alone cannot "
                 "answer. Requests for a "

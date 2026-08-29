@@ -22,6 +22,7 @@ from podpilot_api.model_provider import (
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
     OpenAIResponsesProvider,
+    ResourceFieldFilterSemantics,
     _model_http_request_hook,
     _model_http_response_hook,
     _model_request_context,
@@ -904,7 +905,7 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
         "capability", "cardinality", "resource_query", "object_reference_id",
         "scope_reference_id", "relationship_reference_id",
         "relationship_selector_key", "object_name",
-        "namespace", "requested_fields", "container", "previous_logs",
+        "namespace", "requested_fields", "resource_filter", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
             "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
             "metric_request",
@@ -917,6 +918,26 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     classifier_prompt = request["messages"][0]["content"].casefold()
     assert "unknown crds" in classifier_prompt
     assert "never infer promql from the kind" in classifier_prompt
+    assert "resource_filter" in classifier_prompt
+    assert "spec.host" in classifier_prompt
+
+
+def test_resource_inventory_capability_preserves_field_filter() -> None:
+    selected = CapabilitySelection(
+        capability="resource_inventory",
+        cardinality="collection",
+        resource_query="Route",
+        resource_filter=ResourceFieldFilterSemantics(
+            field="spec.host", operator="contains", value=".az.cibc.com",
+        ),
+        evidence_goal="Find Routes whose host contains the supplied suffix.",
+    )
+
+    inquiry = selected.to_inquiry_semantics()
+
+    assert inquiry.resource_filter == ResourceFieldFilterSemantics(
+        field="spec.host", operator="contains", value=".az.cibc.com",
+    )
 
 
 def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:

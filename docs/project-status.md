@@ -82,6 +82,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   evidence and continues through model-selected shell checks. Recent object references also retain
   a uniquely attributable source cluster so follow-up investigations do not query the same object
   coordinate on every selected cluster.
+- Natural-language resource field predicates are now first-class semantic constraints. Collection
+  requests such as Route hostnames containing a supplied suffix compile to bounded
+  `search_resources` reads instead of whole-kind lists. Terminal completion requires the plan to
+  preserve the exact field, operator, and grounded value; otherwise enrichment remains a seed for
+  continued agent investigation. Empty searches report absence only with complete scan coverage.
 - Thanos remains the preferred metric trend source. Node rankings and namespace-scoped Pod CPU or
   memory rankings now fall back to a current `metrics.k8s.io/v1beta1` snapshot when Thanos fails,
   with the lost history called out explicitly. When every registered read and shell verification

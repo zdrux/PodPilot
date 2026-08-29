@@ -85,6 +85,7 @@ from podpilot_api.model_provider import (
     ModelProfileConfig,
     ModelInterpretation,
     ModelProviderError,
+    ResourceFieldFilterSemantics,
 )
 from podpilot_api.models import (
     AdHocConversation,
@@ -4565,6 +4566,92 @@ def test_existence_question_renders_identifiable_multi_cluster_inventory() -> No
     assert rendered["citations"] == ["central-kafka", "east-kafka"]
 
 
+def test_field_search_renders_only_matching_multi_cluster_resources() -> None:
+    evidence = [
+        {
+            "id": "central-routes", "cluster_id": "central",
+            "cluster_name": "CMSP Central DEV", "tool": "search_resources",
+            "data": {
+                "kind": "Route", "scope": "cluster", "names": ["payments"],
+                "objects": [{"namespace": "payments", "name": "payments"}],
+                "searchComplete": True, "matchField": "spec.host",
+                "matchOperator": "contains", "matchValue": ".az.cibc.com",
+            },
+        },
+        {
+            "id": "east-routes", "cluster_id": "east",
+            "cluster_name": "CMSP East DEV", "tool": "search_resources",
+            "data": {
+                "kind": "Route", "scope": "cluster", "names": [], "objects": [],
+                "searchComplete": True, "matchField": "spec.host",
+                "matchOperator": "contains", "matchValue": ".az.cibc.com",
+            },
+        },
+    ]
+    rendered = _deterministic_inventory_answer(
+        question='Are there Routes whose hostname contains ".az.cibc.com"?',
+        preferred_kind="Route", inventory_only=True, evidence=evidence,
+        activity=[
+            {"tool": "search_resources", "status": "succeeded", "evidence_ids": [item["id"]]}
+            for item in evidence
+        ],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "Filtered multi-cluster inventory" in content
+    assert "payments" in content
+    assert "No matching resources" in content
+    assert "1 matching resource on 1 of 2" in content
+
+
+def test_incomplete_empty_field_search_is_inconclusive() -> None:
+    evidence = [{
+        "id": "route-search", "tool": "search_resources",
+        "data": {
+            "kind": "Route", "scope": "cluster", "names": [], "objects": [],
+            "searchComplete": False, "truncated": True,
+            "matchField": "spec.host", "matchOperator": "contains",
+            "matchValue": ".az.cibc.com",
+        },
+    }]
+    rendered = _deterministic_inventory_answer(
+        question='Are there Routes whose hostname contains ".az.cibc.com"?',
+        preferred_kind="Route", inventory_only=True, evidence=evidence,
+        activity=[{
+            "tool": "search_resources", "status": "succeeded",
+            "evidence_ids": ["route-search"],
+        }],
+    )
+
+    assert rendered is not None
+    content = str(rendered["content"])
+    assert "result is inconclusive" in content
+    assert "No matching resources were returned" not in content
+    assert "additional resources were not evaluated" in content
+
+
+def test_plain_inventory_does_not_answer_field_predicate_question() -> None:
+    rendered = _deterministic_inventory_answer(
+        question='Are there Routes whose hostname contains ".az.cibc.com"?',
+        inventory_only=True,
+        evidence=[{
+            "id": "route-list", "tool": "list_resources",
+            "data": {
+                "kind": "Route", "scope": "cluster", "names": ["unfiltered"],
+                "objects": [{"namespace": "default", "name": "unfiltered"}],
+                "objectListComplete": True,
+            },
+        }],
+        activity=[{
+            "tool": "list_resources", "status": "succeeded",
+            "evidence_ids": ["route-list"],
+        }],
+    )
+
+    assert rendered is None
+
+
 def test_kafka_inventory_omits_unrelated_clusterrole_list_evidence() -> None:
     evidence = [
         {
@@ -4658,6 +4745,35 @@ def test_model_authored_inventory_plan_cannot_change_requested_kind() -> None:
     assert _inventory_plan_scope_errors(plan, inquiry) == [
         "Inventory read Kind 'ClusterRole' does not match the requested resource Kind 'Kafka'."
     ]
+
+
+def test_inventory_plan_cannot_drop_or_change_field_predicate() -> None:
+    inquiry = InquirySemantics(
+        mode="inventory", resource_query="Route", cardinality="collection",
+        resource_filter=ResourceFieldFilterSemantics(
+            field="spec.host", operator="contains", value=".az.cibc.com",
+        ),
+        evidence_goal="Find Routes with the supplied hostname suffix.",
+    )
+    plain_list = ReadPlan(
+        goal_type="inventory", scope_summary="List Routes.",
+        intents=[ReadIntent(
+            tool="list_resources", resource="routes.route.openshift.io",
+            api_version="route.openshift.io/v1", kind="Route", limit=500,
+        )],
+    )
+    changed_search = ReadPlan(
+        goal_type="inventory", scope_summary="Search Routes.",
+        intents=[ReadIntent(
+            tool="search_resources", resource="routes.route.openshift.io",
+            api_version="route.openshift.io/v1", kind="Route",
+            match_field="metadata.name", match_operator="contains",
+            match_value=".az.cibc.com", limit=100,
+        )],
+    )
+
+    assert "dropped" in _inventory_plan_scope_errors(plain_list, inquiry)[0]
+    assert "does not preserve" in _inventory_plan_scope_errors(changed_search, inquiry)[0]
 
 
 def test_inventory_collection_uses_live_catalog_without_model_planning() -> None:
@@ -5250,6 +5366,57 @@ def test_semantic_named_resource_without_namespace_compiles_grounded_search() ->
         kind="Deployment", match_field="metadata.name", match_value="checkout",
         match_operator="exact", limit=5,
     )]
+
+
+def test_semantic_collection_field_predicate_compiles_bounded_search() -> None:
+    question = 'Are there Routes whose hostname field contains ".az.cibc.com"?'
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="inventory", operation="inventory", cardinality="collection",
+            resource_query="Route",
+            resource_filter=ResourceFieldFilterSemantics(
+                field="spec.host", operator="contains", value=".az.cibc.com",
+            ),
+            evidence_goal="Find Routes with matching hostnames.",
+        ),
+        resource_catalog=[{
+            "resource": "routes.route.openshift.io",
+            "apiVersion": "route.openshift.io/v1", "kind": "Route",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question=question, conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="search_resources", resource="routes.route.openshift.io",
+        api_version="route.openshift.io/v1", kind="Route",
+        match_field="spec.host", match_value=".az.cibc.com",
+        match_operator="contains", limit=100,
+    )]
+
+
+def test_uncompiled_field_predicate_cannot_make_plain_inventory_terminal() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="inventory", operation="inventory", cardinality="collection",
+            resource_query="Route", evidence_goal="Find matching Route hostnames.",
+        ),
+        resource_catalog=[{
+            "resource": "routes.route.openshift.io",
+            "apiVersion": "route.openshift.io/v1", "kind": "Route",
+            "namespaced": True, "verbs": ["get", "list"],
+        }],
+        question='Are there Routes whose hostname contains ".az.cibc.com"?',
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is False
+    assert plan.intents[0].tool == "list_resources"
 
 
 def test_semantic_coordinates_must_be_grounded_in_operator_context() -> None:
@@ -8291,6 +8458,106 @@ def test_unrestricted_namespace_kafka_topic_storage_discovers_clusters_then_quer
     assert "HTTP 403 Forbidden" in rendered.text
     assert "model provider is currently unavailable" not in rendered.text.casefold()
     assert "execute_shell" not in rendered.text
+
+
+def test_unrestricted_route_field_filter_uses_registered_search_not_inventory(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="inventory", operation="inventory", cardinality="collection",
+                resource_query="Route",
+                resource_filter=ResourceFieldFilterSemantics(
+                    field="spec.host", operator="contains", value=".az.cibc.com",
+                ),
+                evidence_goal="Find Routes whose hostname contains the supplied suffix.",
+            )
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("complete registered field search must bypass the shell loop")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "routes.route.openshift.io",
+                "apiVersion": "route.openshift.io/v1", "kind": "Route",
+                "namespaced": True, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            assert intent.tool == "search_resources"
+            return ReadResult((AdHocObservation(
+                id="filtered-route", tool="search_resources",
+                summary="Found one matching Route after scanning 120 resources.",
+                source="kubernetes:route.openshift.io/v1:Route:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "resource": "routes.route.openshift.io", "kind": "Route",
+                    "scope": "cluster", "count": 1, "scannedCount": 120,
+                    "matchField": "spec.host", "matchOperator": "contains",
+                    "matchValue": ".az.cibc.com", "names": ["payments"],
+                    "objects": [{"namespace": "payments", "name": "payments"}],
+                    "items": [{
+                        "apiVersion": "route.openshift.io/v1", "kind": "Route",
+                        "metadata": {"namespace": "payments", "name": "payments"},
+                        "spec": {"host": "payments.az.cibc.com"},
+                    }],
+                    "searchComplete": True, "objectListComplete": True,
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider, read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    'are there any routes on these clusters whose hostname field contains '
+                    '".az.cibc.com"?'
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert explorer.calls == [ReadIntent(
+        tool="search_resources", resource="routes.route.openshift.io",
+        api_version="route.openshift.io/v1", kind="Route",
+        match_field="spec.host", match_value=".az.cibc.com",
+        match_operator="contains", limit=100,
+    )]
+    assert "Filtered Route inventory" in rendered.text
+    assert "payments" in rendered.text
+    assert "500" not in rendered.text
 
 
 def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(

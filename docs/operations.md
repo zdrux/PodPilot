@@ -497,6 +497,14 @@ the deterministic text fallback. Deterministic Markdown and any model-authored d
 suppressed when a native card is available. Kubernetes Event counts are not an acceptable proxy for
 that result.
 
+Field-constrained resource questions use the live catalog plus a bounded client-side search rather
+than returning the entire resource inventory. For example, “Routes whose hostname contains
+`.example.com`” compiles to `Route` search on `spec.host` with the literal `contains` predicate and
+runs independently on every selected cluster. The filter value must be grounded in operator text.
+If the semantic result omits a predicate detected in the question, the ordinary list is retained
+only as initial evidence and cannot terminate the turn. A zero-match answer is conclusive only when
+`searchComplete=true`; reaching the configured scan ceiling reports uncertainty instead.
+
 Thanos is the preferred historical metric source. If it is unavailable, Node CPU/memory rankings
 and namespace-scoped Pod CPU/memory rankings use the Kubernetes Metrics API for a current-only
 snapshot. The UI records that no historical average or peak was available. The equivalent OpenShift
