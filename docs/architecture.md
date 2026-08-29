@@ -454,7 +454,16 @@ versioned `grouped_resource_list` presentation block in the message metadata. Th
 bounded cluster groups, normalized Kind/namespace/name/Ready rows, search predicate values when
 retained, scan coverage, and evidence IDs. The web UI renders it as native, auto-escaped,
 collapsible tables with CSV export; it never parses provider Markdown or HTML to recover rows.
-The Markdown answer remains a backward-compatible prose and non-UI fallback. When the semantic classifier says names are
+When a structured presentation fully replaces a server-generated inventory answer, Ask suppresses
+only that legacy Markdown inventory table so operators see one canonical result with all retained
+fields, while retaining adjacent prose that reports scope or partial collection failures. It does
+not discard an answer-authored table that adds material interpretation or fields absent from the
+observed-resource card, such as NetworkPolicy selectors and rule effects. Instead, Ask parses
+CommonMark table tokens into bounded `answer_table` blocks with dynamic columns, renders them through
+the native collapsible/CSV table component, and leaves surrounding prose in its original order.
+These blocks are explicitly answer-derived: parsing does not promote interpreted cells to observed
+cluster facts. The complete Markdown answer remains stored as a backward-compatible fallback for
+clients that do not consume presentation metadata. When the semantic classifier says names are
 sufficient, that deterministic table is the final answer: PodPilot skips the general
 final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
 completed inventory request. Multi-cluster totals distinguish clusters queried from

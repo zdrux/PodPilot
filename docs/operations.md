@@ -416,7 +416,15 @@ completeness, scan count, and the matched field value when retained. Each popula
 can be downloaded as CSV. These rows come from normalized evidence and are HTML-escaped by the
 template; the UI does not parse or trust the model response as a table contract. At most 1,000
 rows are duplicated into presentation metadata, with omitted counts shown when the evidence
-contains more; the cited evidence and Markdown answer remain available.
+contains more. Ask hides the less-detailed legacy Markdown inventory table only when the structured
+card is a complete replacement for a server-generated inventory answer, while keeping adjacent scope
+and partial-failure prose visible. Other answer Markdown tables, including agent-authored tables with
+additional interpreted columns, are parsed through the CommonMark token stream and rendered as
+native dynamic-column tables with collapsing and CSV export. Their surrounding prose remains in
+place and the UI labels them as answer-derived; this presentation conversion does not make their
+contents authoritative evidence. Extraction is bounded to eight tables, 24 columns, 1,000 rows per
+table, and 4,096 characters per cell. Tables beyond those bounds remain in the safe Markdown fallback.
+The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
 Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
 or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
 asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the

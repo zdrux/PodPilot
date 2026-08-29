@@ -29,7 +29,7 @@ from podpilot_api.knowledge import (
     knowledge_applies_to,
     search_knowledge,
 )
-from podpilot_api.markdown import render_safe_markdown
+from podpilot_api.markdown import render_safe_markdown, split_markdown_tables
 from podpilot_api.model_provider import (
     AdHocAnswer,
     AdHocLogAnalysis,
@@ -2819,6 +2819,7 @@ def _resource_list_presentation(
     activity: list[dict[str, object]],
     citations: list[str],
     max_rows: int = 1_000,
+    suppress_markdown_table: bool = False,
 ) -> dict[str, object] | None:
     """Build a bounded UI block from cited, successful resource-list evidence."""
 
@@ -2993,6 +2994,7 @@ def _resource_list_presentation(
         "total_count": total_count,
         "displayed_count": displayed_count,
         "omitted_count": max(0, total_count - displayed_count),
+        "suppress_markdown_table": suppress_markdown_table,
         "groups": groups,
     }
 
@@ -9837,6 +9839,9 @@ def create_app(
                     evidence=enrichment_evidence or [],
                     activity=activity,
                     citations=enrichment_citations,
+                    suppress_markdown_table=(
+                        preferred_evidence_view == "deterministic_primary"
+                    ),
                 )
                 assistant_message_id = str(uuid4())
                 now = datetime.now(timezone.utc)
@@ -10175,6 +10180,7 @@ def create_app(
         raw_responses: list[dict[str, str]] = []
         inventory_fast_path = False
         prefer_metric_card = False
+        suppress_resource_markdown_table = False
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
@@ -11029,6 +11035,10 @@ def create_app(
                 )
                 if fast_deterministic_answer is not None:
                     inventory_fast_path = True
+                    suppress_resource_markdown_table = bool(
+                        fast_inventory_answer is not None
+                        and fast_deterministic_answer is fast_inventory_answer
+                    )
                     prefer_metric_card = (
                         fast_metric_answer is metric_ranking_candidate
                         or fast_metric_answer is metric_summary_candidate
@@ -11468,6 +11478,8 @@ def create_app(
                 )
                 if deterministic_answer is not None:
                     validated.update(deterministic_answer)
+                    if inventory_answer is not None and deterministic_answer is inventory_answer:
+                        suppress_resource_markdown_table = True
                     if (
                         deterministic_answer is metric_ranking_answer
                         or deterministic_answer is metric_summary_answer
@@ -11650,6 +11662,7 @@ def create_app(
             evidence=evidence,
             activity=activity,
             citations=[str(item) for item in validated.get("citations", [])],
+            suppress_markdown_table=suppress_resource_markdown_table,
         )
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
@@ -12165,6 +12178,17 @@ def create_app(
                     for evidence_id in citations
                 )
             )
+            answer_blocks: list[dict[str, object]] | None = None
+            if row.role == "assistant" and not prefer_metric_card:
+                answer_blocks = split_markdown_tables(row.content)
+                if (
+                    resource_presentation is not None
+                    and resource_presentation.get("suppress_markdown_table") is True
+                ):
+                    answer_blocks = [
+                        block for block in answer_blocks
+                        if block.get("type") != "answer_table"
+                    ]
             messages.append({
                 "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
                 "answer_mode": row.answer_mode, "citations": citations,
@@ -12173,6 +12197,7 @@ def create_app(
                 "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
                 "prefer_metric_card": prefer_metric_card,
                 "resource_presentation": resource_presentation,
+                "answer_blocks": answer_blocks,
                 "created_at": row.created_at,
             })
         response = templates.TemplateResponse(

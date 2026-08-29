@@ -4209,6 +4209,7 @@ def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
         "total_count": 1,
         "displayed_count": 1,
         "omitted_count": 0,
+        "suppress_markdown_table": True,
         "groups": [{
             "cluster_id": "central",
             "cluster_name": "Central <script>alert(1)</script>",
@@ -4244,9 +4245,32 @@ def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
         ))
         db_session.add(AdHocMessage(
             id=message_id, conversation_id=conversation_id, role="assistant", actor=None,
-            content="One matching ConfigMap was found.", answer_mode="evidence_based",
+            content=(
+                "## Legacy inventory\n\n"
+                "| Namespace | Matching resource |\n|---|---|\n"
+                "| platform | hostless-legacy-row |"
+            ),
+            answer_mode="evidence_based",
             citations_json=json.dumps([evidence_id]),
             tool_activity_json=json.dumps({"presentation": presentation}),
+        ))
+        rich_presentation = {
+            **presentation,
+            "title": "NetworkPolicy results",
+            "suppress_markdown_table": False,
+        }
+        db_session.add(AdHocMessage(
+            id="00000000-0000-0000-0000-000000000193",
+            conversation_id=conversation_id, role="assistant", actor=None,
+            content=(
+                "## Interpreted policies\n\n"
+                "| Name | Ingress rules | Pod selector |\n|---|---|---|\n"
+                "| deny-by-default | Blocks inbound traffic | `{}` |\n\n"
+                "The policy effect remains visible."
+            ),
+            answer_mode="evidence_based",
+            citations_json=json.dumps([evidence_id]),
+            tool_activity_json=json.dumps({"presentation": rich_presentation}),
         ))
         db_session.commit()
     engine.dispose()
@@ -4267,6 +4291,14 @@ def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
     assert "Rows are rendered from cited, normalized cluster evidence" in rendered.text
     assert "Central &lt;script&gt;alert(1)&lt;/script&gt;" in rendered.text
     assert "Central <script>alert(1)</script>" not in rendered.text
+    assert "Legacy inventory" in rendered.text
+    assert "hostless-legacy-row" not in rendered.text
+    assert 'class="answer-table-result"' in rendered.text
+    assert "Dynamic columns parsed from PodPilot’s safe Markdown response" in rendered.text
+    assert "Answer-derived" in rendered.text
+    assert "Interpreted policies" in rendered.text
+    assert "Blocks inbound traffic" in rendered.text
+    assert "The policy effect remains visible." in rendered.text
 
 
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
