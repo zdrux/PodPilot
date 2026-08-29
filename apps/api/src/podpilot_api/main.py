@@ -32,7 +32,6 @@ from podpilot_api.knowledge import (
 from podpilot_api.markdown import render_safe_markdown, split_markdown_tables
 from podpilot_api.model_provider import (
     AdHocAnswer,
-    AdHocLogAnalysis,
     AgentStep,
     InquirySemantics,
     InvestigationChatAnswer,
@@ -72,7 +71,6 @@ from podpilot_diagnostics.adhoc import (
     ReadIntent,
     ReadOnlyExplorer,
     ReadPlan,
-    automatic_read_followups,
     config_map_references_from_spec,
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
@@ -81,7 +79,6 @@ from podpilot_diagnostics.adhoc import (
     plan_catalog_read,
     plan_known_read,
     plan_kafka_topic_storage_metrics,
-    plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
 from podpilot_diagnostics.checks import (
@@ -460,10 +457,6 @@ def _validated_chat_answer(
     content = redact_text(answer.answer)[:2400]
     if mode == "evidence_based" and not citations:
         mode = "insufficient_evidence"
-        content = (
-            "The model response did not cite evidence present in this investigation, "
-            "so PodPilot withheld its factual answer. Run available checks or ask a narrower question."
-        )
     intent = None
     if answer.proposed_tool_intent == "run_queued_checks" and queued_checks > 0:
         intent = {
@@ -503,47 +496,33 @@ def _validated_adhoc_answer(
         redact_text(answer.answer),
         known_evidence_ids=known_evidence_ids,
     )[:4000]
-    rbac_limitation = next((
-        item for item in (collection_limitations or [])
-        if item.startswith("OpenShift RBAC denied ")
-    ), None)
+    validation_limitations: list[str] = []
     if mode == "evidence_based" and not citations:
         mode = "insufficient_evidence"
-        content = (
-            "PodPilot could not provide a verified cluster-specific answer because the model did "
-            "not cite collected evidence."
+        validation_limitations.append(
+            "The agent did not cite collected evidence, so its conclusion is displayed as "
+            "unconfirmed rather than replaced."
         )
     if original_mode == "insufficient_evidence" and citations:
         # Grounding and certainty are separate axes. A cited interpretation is
         # evidence-based even when its overall conclusion remains unresolved.
         mode = "evidence_based"
-    mode, content, citations, claim_limitations = _guard_unsupported_tls_claim(
+    mode, _guarded_content, citations, claim_limitations = _guard_unsupported_tls_claim(
         mode=mode,
         content=content,
         citations=citations,
         observations=observations or [],
     )
+    validation_limitations.extend(claim_limitations)
     incomplete_inventory_absence = _incomplete_inventory_supports_absence_claim(
         content=content,
         citations=citations,
         observations=observations or [],
     )
     if incomplete_inventory_absence:
-        content = (
-            "The bounded inventory did not include the requested object, but that inventory was "
-            "incomplete and cannot establish that the object is absent. PodPilot needs an exact-object "
-            "read or a complete search before making an existence claim."
-        )
-        claim_limitations.append(
+        validation_limitations.append(
             "An incomplete or truncated inventory cannot prove that a named object is absent."
         )
-    if (
-        rbac_limitation
-        and mode == "insufficient_evidence"
-        and not citations
-        and rbac_limitation not in content
-    ):
-        content = f"**Access blocked by OpenShift RBAC.** {rbac_limitation}\n\n{content}"
     investigation_gaps: list[InvestigationGap] = []
     for gap in answer.investigation_gaps[:5]:
         supporting_ids = [
@@ -565,7 +544,7 @@ def _validated_adhoc_answer(
         "citations": citations,
         "limitations": [
             redact_text(item)[:500]
-            for item in [*claim_limitations, *answer.limitations][:6]
+            for item in [*validation_limitations, *answer.limitations][:6]
         ],
         "recommended_next_checks": [
             redact_text(item)[:500] for item in answer.recommended_next_checks[:5]
@@ -749,7 +728,8 @@ def _guard_unsupported_tls_claim(
     )
     merged_citations = list(dict.fromkeys([*evidence_ids, *citations]))
     return "evidence_based", corrected[:4000], merged_citations, [
-        "PodPilot rejected a model conclusion that contradicted the TLS certificate-validation evidence."
+        "The agent conclusion conflicts with the collected TLS certificate-validation evidence; "
+        "the original response is preserved and marked with this limitation."
     ]
 
 
@@ -1046,151 +1026,6 @@ def _adhoc_capability_wording_issue(
             ):
                 return "collected_check_described_as_uncollected"
     return None
-
-
-_RECOMMENDATION_CAPABILITY_PATTERNS = (
-    ("resource_read", r"\b(?:mounts?|volumes?|configmaps?|certificate\s+configuration)\b"),
-    ("service_spec", r"\bservice\b"),
-    ("endpoints", r"\bendpoint(?:s|slice)?\b"),
-    ("pod_logs", r"\b(?:pod\s+|application\s+)?logs?\b"),
-    ("metrics", r"\bmetrics?\b"),
-    ("http_probe", r"\b(?:probe|curl|https?\s+request|tls\s+handshake)\b"),
-    ("pod_spec", r"\bpods?\b"),
-)
-
-
-def _recommendation_capability(
-    text: str,
-    check_states: dict[str, str] | None = None,
-    allowed_states: set[str] | None = None,
-) -> str | None:
-    return next((
-        name for name, pattern in _RECOMMENDATION_CAPABILITY_PATTERNS
-        if re.search(pattern, text, re.IGNORECASE)
-        and (
-            check_states is None
-            or allowed_states is None
-            or check_states.get(name) in allowed_states
-            or name not in check_states
-        )
-    ), None)
-
-
-def _actionable_investigation_gaps(
-    *,
-    validated_answer: dict[str, object],
-    capability_ledger: dict[str, object],
-) -> list[InvestigationGap]:
-    """Promote structured gaps, or safe capability-matched recommendation prose, to planner input."""
-
-    available_states = {"available_not_attempted", "requires_target"}
-    check_states = {
-        str(item.get("capability")): str(item.get("state"))
-        for item in capability_ledger.get("checks") or []
-        if isinstance(item, dict)
-    }
-    result: list[InvestigationGap] = []
-    seen: set[tuple[str, str]] = set()
-
-    def add(gap: InvestigationGap) -> None:
-        if gap.priority == "low":
-            return
-        if (
-            gap.capability in check_states
-            and check_states[gap.capability] not in available_states
-        ):
-            return
-        key = (gap.capability, re.sub(r"\s+", " ", gap.question.lower()).strip())
-        if key in seen or len(result) >= 5:
-            return
-        seen.add(key)
-        result.append(gap)
-
-    for gap in validated_answer.get("investigation_gaps") or []:
-        if isinstance(gap, InvestigationGap):
-            add(gap)
-
-    for recommendation in validated_answer.get("recommended_next_checks") or []:
-        text = redact_text(str(recommendation))[:500]
-        capability = _recommendation_capability(text, check_states, available_states)
-        if capability == "resource_read":
-            # Broad configuration wording is useful for user-triggered exact actions,
-            # but is intentionally too general for automatic recommendation follow-through.
-            capability = None
-        if capability:
-            add(InvestigationGap(
-                question=text,
-                capability=capability,
-                priority="medium",
-                reason=(
-                    "Promoted from operator-facing recommendation text for typed replanning; "
-                    "the text itself is not executable."
-                ),
-            ))
-
-    # Compatibility for constrained models that serialize structured fields into the
-    # operator-facing answer. Promote only fixed capability categories that the trusted
-    # ledger still marks actionable; never extract names, namespaces, URLs, or tool payloads.
-    content = str(validated_answer.get("content") or "")
-    if re.search(
-        r"\b(?:recommended next (?:evidence|checks?|collections?)|investigation gaps?)\b",
-        content,
-        re.IGNORECASE,
-    ):
-        for capability, pattern in _RECOMMENDATION_CAPABILITY_PATTERNS:
-            if capability == "resource_read":
-                continue
-            if (
-                check_states.get(capability) in available_states
-                and re.search(pattern, content, re.IGNORECASE)
-            ):
-                add(InvestigationGap(
-                    question=f"Collect the unverified {capability.replace('_', ' ')} evidence.",
-                    capability=capability,
-                    priority="medium",
-                    reason=(
-                        "Promoted from a malformed operator-facing evidence recommendation; "
-                        "only the fixed capability category is retained and the prose is not executable."
-                    ),
-                ))
-    return result
-
-
-def _partition_investigation_gaps(
-    gaps: list[InvestigationGap],
-    *,
-    capability_ledger: dict[str, object],
-) -> tuple[list[InvestigationGap], list[InvestigationGap]]:
-    """Reconcile requested evidence gaps against the final trusted capability ledger."""
-
-    states = {
-        str(item.get("capability")): str(item.get("state"))
-        for item in capability_ledger.get("checks") or []
-        if isinstance(item, dict)
-    }
-    resolved: list[InvestigationGap] = []
-    unresolved: list[InvestigationGap] = []
-    for gap in gaps:
-        (resolved if states.get(gap.capability) == "collected" else unresolved).append(gap)
-    return resolved, unresolved
-
-
-def _reconcile_validated_answer_gaps(
-    validated_answer: dict[str, object],
-    *,
-    capability_ledger: dict[str, object],
-) -> dict[str, object]:
-    """Remove model-authored gaps that trusted collection state already resolved."""
-
-    gaps = [
-        gap for gap in (validated_answer.get("investigation_gaps") or [])
-        if isinstance(gap, InvestigationGap)
-    ]
-    _, unresolved = _partition_investigation_gaps(
-        gaps, capability_ledger=capability_ledger
-    )
-    validated_answer["investigation_gaps"] = unresolved
-    return validated_answer
 
 
 def _adhoc_answer_advisories(
@@ -3250,26 +3085,6 @@ def _deterministic_resource_health_answer(
     }
 
 
-def _append_deterministic_inventory(
-    validated: dict[str, object], inventory_answer: dict[str, object] | None,
-) -> dict[str, object]:
-    """Augment a concise model conclusion with verified object identities."""
-
-    if inventory_answer is None:
-        return validated
-    inventory_content = str(inventory_answer.get("content") or "").strip()
-    if not inventory_content or inventory_content in str(validated.get("content") or ""):
-        return validated
-    validated["content"] = (
-        f"{str(validated.get('content') or '').rstrip()}\n\n{inventory_content}"
-    ).strip()
-    validated["citations"] = list(dict.fromkeys([
-        *[str(item) for item in (validated.get("citations") or [])],
-        *[str(item) for item in (inventory_answer.get("citations") or [])],
-    ]))
-    return validated
-
-
 def _deterministic_route_tls_answer(
     *,
     question: str,
@@ -3690,155 +3505,6 @@ def _deterministic_log_findings_section(
         "citations": list(dict.fromkeys(citations)),
         "required_log_citations": list(dict.fromkeys(required_log_citations)),
     }
-
-
-def _current_log_analysis_payload(
-    *, evidence: list[dict[str, object]], activity: list[dict[str, object]], question: str,
-) -> tuple[dict[str, object] | None, dict[str, str]]:
-    """Build a fresh, bounded provider payload containing every current log read."""
-
-    current_ids = {
-        str(evidence_id)
-        for entry in activity
-        if entry.get("status") == "succeeded" and entry.get("tool") == "pod_logs"
-        for evidence_id in (entry.get("evidence_ids") or [])
-    }
-    logs = [
-        item for item in evidence
-        if item.get("tool") == "pod_logs"
-        and str(item.get("id") or "") in current_ids
-        and isinstance(item.get("data"), dict)
-        and str(item["data"].get("tail") or "").strip()
-    ]
-    if not logs:
-        return None, {}
-    per_log_limit = max(1_500, 30_000 // len(logs))
-    excerpts: list[dict[str, object]] = []
-    text_by_id: dict[str, str] = {}
-    for item in logs:
-        evidence_id = str(item["id"])
-        data = item["data"]
-        tail = redact_text(str(data.get("tail") or ""))[-per_log_limit:]
-        text_by_id[evidence_id] = tail
-        excerpts.append({
-            "evidence_id": evidence_id,
-            "cluster": str(item.get("cluster_name") or item.get("cluster_id") or "cluster")[:253],
-            "source": str(item.get("source") or "")[:500],
-            "container": str(data.get("container") or "default")[:253],
-            "previous": bool(data.get("previous")),
-            "excerpt": tail,
-            "excerpt_limit": "bounded tail; earlier log lines may be absent",
-        })
-    return {
-        "investigation_context": (
-            "This is a read-only OpenShift troubleshooting investigation. Analyze the bounded "
-            "Pod logs for potential issues relevant to the operator request, including connectivity "
-            "and TLS signals when present, without assuming they are causal."
-        ),
-        "operator_request": redact_text(question)[:1_000],
-        "logs": excerpts,
-        "analysis_boundary": (
-            "Identify potential issues in these excerpts only. They may be incomplete and do not prove causality."
-        ),
-    }, text_by_id
-
-
-def _validated_model_log_analysis(
-    analysis: AdHocLogAnalysis, *, text_by_id: dict[str, str],
-) -> dict[str, object]:
-    """Allow only cited issues whose quoted excerpt exists in the supplied logs."""
-
-    issues: list[dict[str, object]] = []
-    rejected_issue_count = 0
-    for issue in analysis.issues:
-        evidence_ids = list(dict.fromkeys(
-            item for item in issue.evidence_ids if item in text_by_id
-        ))
-        excerpt = redact_text(issue.supporting_excerpt)[:500]
-        normalized_excerpt = re.sub(r"\s+", " ", excerpt).strip().casefold()
-        if not evidence_ids or not normalized_excerpt:
-            rejected_issue_count += 1
-            continue
-        if not any(
-            normalized_excerpt in re.sub(r"\s+", " ", text_by_id[item]).casefold()
-            for item in evidence_ids
-        ):
-            rejected_issue_count += 1
-            continue
-        issues.append({
-            "evidence_ids": evidence_ids,
-            "severity": issue.severity,
-            "category": redact_text(issue.category)[:100],
-            "summary": redact_text(issue.summary)[:500],
-            "potential_impact": redact_text(issue.potential_impact)[:700],
-            "supporting_excerpt": excerpt,
-            "confidence": issue.confidence,
-        })
-    return {
-        "overview": redact_text(analysis.overview)[:700],
-        "issues": issues[:10],
-        "limitations": [redact_text(item)[:500] for item in analysis.limitations[:4]],
-        "analyzed_evidence_ids": list(text_by_id),
-        "rejected_issue_count": rejected_issue_count,
-    }
-
-
-def _model_log_analysis_section(analysis: dict[str, object]) -> dict[str, object]:
-    """Render separately analyzed logs as hypotheses with evidence provenance."""
-
-    issues = analysis.get("issues") if isinstance(analysis.get("issues"), list) else []
-    lines = ["## Model-assisted log analysis"]
-    citations: list[str] = []
-    overview = str(analysis.get("overview") or "")
-    overview_explicitly_clean = bool(re.search(
-        r"(?i)\b(?:no|did not|does not|none)\b.{0,80}"
-        r"\b(?:meaningful |potential |operational )?(?:anomal(?:y|ies)|issues?|problems?|signals?)\b",
-        overview,
-    ))
-    if issues:
-        lines.extend((
-            "",
-            overview or "The bounded Pod log excerpts contain potential operational issues.",
-        ))
-    elif not overview_explicitly_clean or int(analysis.get("rejected_issue_count") or 0) > 0:
-        lines.extend((
-            "",
-            "The analyzer mentioned a possible operational signal but did not provide an exact, "
-            "verifiable supporting log excerpt. PodPilot therefore did not accept or present it as "
-            "a log finding.",
-        ))
-        citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
-    elif not issues:
-        lines.extend((
-            "",
-            "No potential operational issue was identified in the supplied bounded excerpts.",
-        ))
-        citations.extend(str(item) for item in analysis.get("analyzed_evidence_ids", []))
-    for issue in issues[:10]:
-        if not isinstance(issue, dict):
-            continue
-        excerpt = str(issue.get("supporting_excerpt") or "").replace("```", "''' ")
-        lines.extend((
-            "",
-            f"### {str(issue.get('severity') or 'info').title()} · "
-            f"{str(issue.get('category') or 'potential issue')}",
-            "",
-            f"- **Potential issue:** {str(issue.get('summary') or '')}",
-            f"- **Potential impact:** {str(issue.get('potential_impact') or '')}",
-            f"- **Confidence:** {str(issue.get('confidence') or 'low')}",
-            "- **Supporting log excerpt:**",
-            "",
-            "```text",
-            excerpt,
-            "```",
-        ))
-        citations.extend(str(item) for item in issue.get("evidence_ids", []))
-    lines.extend((
-        "",
-        "This is semantic analysis of bounded log excerpts, not proof of root cause. "
-        "Corroborating resource, event, metric, or probe evidence is still required.",
-    ))
-    return {"content": "\n".join(lines), "citations": list(dict.fromkeys(citations))}
 
 
 def _evidence_value(value: object, *, limit: int = 1200) -> str:
@@ -4563,172 +4229,6 @@ class _BoundedReadCollection:
 ProgressReporter = Callable[[str, str], Awaitable[None]]
 
 
-async def _collect_unrestricted_known_reads(
-    *,
-    cluster_reader: ReadOnlyExplorer,
-    plan: ReadPlan,
-    cluster_id: str,
-    cluster_name: str,
-    progress: ProgressReporter | None,
-) -> _BoundedReadCollection:
-    """Run additive registered enrichments before the unrestricted shell loop."""
-
-    evidence: list[dict[str, object]] = []
-    activity: list[dict[str, object]] = []
-    limitations: list[str] = []
-    for raw_intent in plan.intents:
-        intent = normalize_read_intent(raw_intent)
-        target = json.dumps(intent.model_dump(exclude_none=True), sort_keys=True)
-        entry: dict[str, object] = {
-            "tool": intent.tool,
-            "target": redact_text(target)[:2_000],
-            "status": "running",
-            "evidence_ids": [],
-            "source": "deterministic_enrichment",
-            "cluster_id": cluster_id,
-            "cluster_name": cluster_name,
-        }
-        if progress:
-            await progress(
-                "collecting",
-                f"Running PodPilot's registered {intent.tool} enrichment on {cluster_name}.",
-            )
-        read_started = False
-        try:
-            preflight = getattr(cluster_reader, "preflight", None)
-            if callable(preflight):
-                await run_in_threadpool(preflight, intent)
-            read_started = True
-            result = await run_in_threadpool(cluster_reader.execute, intent)
-            attributed: list[dict[str, object]] = []
-            for observation in result.observations:
-                item = observation.to_dict()
-                item["cluster_id"] = cluster_id
-                item["cluster_name"] = cluster_name
-                attributed.append(item)
-            evidence.extend(attributed)
-            limitations.extend(result.limitations)
-            entry["status"] = "succeeded"
-            entry["evidence_ids"] = [item["id"] for item in attributed]
-            entry["observations"] = len(attributed)
-        except ReadOnlyExplorerError as exc:
-            entry["status"] = (
-                "denied_or_unavailable" if read_started else "rejected_before_collection"
-            )
-            entry["detail"] = redact_text(str(exc))[:500]
-            limitations.append(str(exc))
-        activity.append(entry)
-    return _BoundedReadCollection(
-        evidence=evidence,
-        activity=activity,
-        limitations=limitations,
-        scope_summary=plan.scope_summary,
-        units_used=len(plan.intents),
-    )
-
-
-def _observed_kafka_coordinates(
-    evidence: list[dict[str, object]],
-) -> list[tuple[str, str]]:
-    """Read exact Kafka CR coordinates only from registered list evidence."""
-
-    coordinates: list[tuple[str, str]] = []
-    for observation in evidence:
-        if observation.get("tool") != "list_resources":
-            continue
-        data = observation.get("data")
-        if not isinstance(data, dict) or data.get("resource") != "kafkas.kafka.strimzi.io":
-            continue
-        raw_objects = data.get("objects")
-        if isinstance(raw_objects, list):
-            for item in raw_objects:
-                if not isinstance(item, dict):
-                    continue
-                namespace = item.get("namespace")
-                name = item.get("name")
-                if isinstance(namespace, str) and isinstance(name, str):
-                    coordinates.append((namespace, name))
-        raw_items = data.get("items")
-        if isinstance(raw_items, list):
-            for item in raw_items:
-                metadata = item.get("metadata") if isinstance(item, dict) else None
-                if not isinstance(metadata, dict):
-                    continue
-                namespace = metadata.get("namespace")
-                name = metadata.get("name")
-                if isinstance(namespace, str) and isinstance(name, str):
-                    coordinates.append((namespace, name))
-    return list(dict.fromkeys(coordinates))
-
-
-def _authoritative_unrestricted_failure(
-    activity: list[dict[str, object]],
-) -> str | None:
-    """Render registered failures instead of allowing unsupported model explanations."""
-
-    registered = [
-        item for item in activity
-        if item.get("source") == "deterministic_enrichment"
-    ]
-    if not registered or any(item.get("status") == "succeeded" for item in registered):
-        return None
-    if any(
-        item.get("tool") == "execute_shell" and item.get("status") == "completed"
-        for item in activity
-    ):
-        return None
-    failures = []
-    for item in registered:
-        cluster = str(item.get("cluster_name") or item.get("cluster_id") or "cluster")
-        tool = str(item.get("tool") or "registered read")
-        detail = str(item.get("detail") or "the registered source was unavailable")
-        failures.append(f"- **{cluster} — {tool}:** {detail}")
-    return (
-        "PodPilot could not collect authoritative evidence for this request, so it cannot "
-        "confirm the requested result.\n\n"
-        + "\n".join(failures)
-        + "\n\nNo conclusion was inferred from the collection failures."
-    )
-
-
-def _failed_kafka_topic_storage_is_terminal(
-    plan: ReadPlan | None,
-    activity: list[dict[str, object]],
-) -> bool:
-    """Keep a failed registered Kafka storage read out of the shell fallback path."""
-
-    if plan is None or not plan.intents or any(
-        intent.tool != "query_metrics" or intent.metric != "kafka_topic_storage"
-        for intent in plan.intents
-    ):
-        return False
-    registered_reads = [
-        item for item in activity
-        if item.get("source") == "deterministic_enrichment"
-        and item.get("tool") == "query_metrics"
-    ]
-    return bool(registered_reads) and not any(
-        item.get("status") == "succeeded" for item in registered_reads
-    )
-
-
-def _registered_plan_is_authoritative(plan: ReadPlan | None) -> bool:
-    """Keep registered audit and Kafka inventory reads out of shell fallback."""
-
-    return bool(
-        plan is not None
-        and plan.intents
-        and (
-            all(intent.tool == "query_audit_events" for intent in plan.intents)
-            or all(
-                intent.tool == "list_resources"
-                and intent.resource == "kafkas.kafka.strimzi.io"
-                for intent in plan.intents
-            )
-        )
-    )
-
-
 def _read_intent_signature(intent: ReadIntent) -> str:
     """Deduplicate exact reads even when equivalent Pod candidates have different IDs."""
 
@@ -4787,24 +4287,6 @@ _FIELD_PREDICATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_CLOSED_FORM_COUNT_PATTERN = re.compile(
-    r"\b(?:how\s+many|count|number\s+of)\b",
-    re.IGNORECASE,
-)
-_CLOSED_FORM_IDENTIFIER_PATTERN = re.compile(
-    r"\b(?:names?|identifiers?|ids?)\s+(?:only|alone)\b|"
-    r"\b(?:list|show|display|give\s+me)\b.{0,60}\b(?:names?|identifiers?|ids?)\b",
-    re.IGNORECASE,
-)
-_CLOSED_FORM_EXISTENCE_PATTERN = re.compile(
-    r"\b(?:are|is)\s+there\s+any\b|"
-    r"\b(?:do|does)\b.{0,80}\b(?:exist|have)\b|"
-    r"\b(?:what|which)\b.{0,100}\b(?:available|exist|present|installed|deployed|configured)\b|"
-    r"\b(?:show|list|display)\b.{0,80}\ball\b.{0,80}\b(?:installed|deployed|configured)\b",
-    re.IGNORECASE,
-)
-
-
 def _question_has_field_predicate(question: str) -> bool:
     """Detect a material collection constraint that must not degrade to a plain list."""
 
@@ -4824,39 +4306,6 @@ def _question_requires_agentic_investigation(
         and inquiry.capability in {"cluster_investigation", "resource_details"}
         and not _EXPLICIT_RETRIEVAL_PATTERN.search(question)
     )
-
-
-def _question_explicitly_requests_closed_inventory(question: str) -> bool:
-    """Recognize a closed response shape without treating a bare list/show as sufficient."""
-
-    return bool(
-        _CLOSED_FORM_COUNT_PATTERN.search(question)
-        or _CLOSED_FORM_IDENTIFIER_PATTERN.search(question)
-        or _CLOSED_FORM_EXISTENCE_PATTERN.search(question)
-    )
-
-
-def _inventory_answer_is_closed_form(
-    question: str,
-    inquiry: InquirySemantics | None,
-) -> bool:
-    """Terminate inventory only when the requested answer shape is explicitly closed."""
-
-    if inquiry is None:
-        return _question_explicitly_requests_closed_inventory(question)
-    if inquiry.mode != "inventory":
-        return False
-    if inquiry.requested_fields or inquiry.needs_object_details:
-        return False
-    if inquiry.answer_goal in {"identifiers", "count", "existence"}:
-        return True
-    if inquiry.answer_goal in {"configuration", "behavior", "investigation"}:
-        return False
-    if inquiry.continues_prior_resource_query and _resource_followup_reuses_snapshot(
-        question, {"kind": inquiry.resource_query},
-    ):
-        return True
-    return _question_explicitly_requests_closed_inventory(question)
 
 
 def _resource_query_terms(value: object) -> set[str]:
@@ -5169,7 +4618,7 @@ def _grounded_read_candidates(
         candidate.relation == "configures_from" for candidate in candidates
     )
     selected_catalog = (
-        [] if has_exact_configuration_reference else
+        [] if recovery_anchor_plan is not None or has_exact_configuration_reference else
         [entry for score, entry in ranked_catalog if score > 0][:4]
     )
     if not selected_catalog and not candidates:
@@ -5269,187 +4718,6 @@ _MUTATING_RECOMMENDATION = re.compile(
     r"\b(?:apply|change|create|delete|edit|install|patch|replace|restart|rollout|rotate|scale|update)\b",
     re.IGNORECASE,
 )
-
-
-def _compile_suggested_followups(
-    *,
-    validated_answer: dict[str, object],
-    question: str,
-    evidence: list[dict[str, object]],
-    activity: list[dict[str, object]],
-    cluster_runtimes: list[dict[str, object]],
-    remaining_units: int,
-) -> tuple[list[str], list[dict[str, object]]]:
-    """Compile recommendation prose into optional exact read-only action buttons."""
-
-    recommendations = [
-        redact_text(str(item))[:500]
-        for item in validated_answer.get("recommended_next_checks") or []
-        if str(item).strip()
-    ]
-    visible: list[str] = []
-    actions: list[dict[str, object]] = []
-    used_candidates: set[tuple[str, str]] = set()
-    runtime_states: list[tuple[dict[str, object], dict[str, str]]] = []
-    for runtime in cluster_runtimes:
-        cluster = runtime["cluster"]
-        cluster_id = str(cluster.id)
-        cluster_evidence = [
-            dict(item) for item in evidence
-            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
-        ]
-        cluster_activity = [
-            dict(item) for item in activity
-            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
-        ]
-        ledger = _investigation_capability_ledger(
-            evidence=cluster_evidence,
-            activity=cluster_activity,
-            remaining_units=remaining_units,
-        )
-        states = {
-            str(item.get("capability")): str(item.get("state"))
-            for item in ledger.get("checks") or []
-            if isinstance(item, dict)
-        }
-        runtime_states.append((runtime, states))
-
-    for recommendation in recommendations:
-        capability = _recommendation_capability(recommendation)
-        mutation = bool(_MUTATING_RECOMMENDATION.search(recommendation))
-        recommendation_actions: list[dict[str, object]] = []
-        collected_everywhere = bool(runtime_states) and capability is not None
-        for runtime, states in runtime_states:
-            state = states.get(capability or "")
-            collected_everywhere = collected_everywhere and state == "collected"
-            if (
-                mutation
-                or capability is None
-                or remaining_units <= 0
-                or (state is not None and state not in {"available_not_attempted", "requires_target"})
-            ):
-                continue
-            cluster = runtime["cluster"]
-            cluster_id = str(cluster.id)
-            cluster_evidence = [
-                dict(item) for item in evidence
-                if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
-            ]
-            gap = InvestigationGap(
-                question=recommendation,
-                capability=capability,
-                priority="medium",
-            )
-            candidates = _grounded_read_candidates(
-                question=question,
-                evidence=cluster_evidence,
-                relationship_graph=derive_evidence_relationship_graph(cluster_evidence),
-                recovery_anchor_plan=None,
-                seen_intents=set(runtime.get("read_signatures") or []),
-                investigation_gaps=[gap],
-            )
-            for candidate in candidates:
-                if candidate.capability != capability:
-                    continue
-                key = (cluster_id, candidate.id)
-                if key in used_candidates:
-                    continue
-                used_candidates.add(key)
-                recommendation_actions.append({
-                    "id": candidate.id,
-                    "cluster_id": cluster_id,
-                    "cluster_name": str(cluster.name),
-                    "capability": capability,
-                    "label": recommendation,
-                    "target": candidate.target,
-                    "supporting_evidence_ids": list(candidate.supporting_evidence_ids),
-                })
-                break
-        if collected_everywhere:
-            continue
-        visible.append(recommendation)
-        actions.extend(recommendation_actions[:1])
-        if len(actions) >= 4:
-            break
-    return visible[:5], actions[:4]
-
-
-def _compile_remaining_candidate_followups(
-    *,
-    question: str,
-    evidence: list[dict[str, object]],
-    activity: list[dict[str, object]],
-    cluster_runtimes: list[dict[str, object]],
-    remaining_units: int,
-    limit: int = 3,
-) -> tuple[list[str], list[dict[str, object]]]:
-    """Expose remaining exact server candidates without asking the answer model for prose."""
-
-    if remaining_units <= 0 or limit <= 0:
-        return [], []
-    labels = {
-        "pod_logs": "Read logs for",
-        "pod_spec": "Inspect",
-        "service_spec": "Inspect",
-        "endpoints": "Inspect",
-        "http_probe": "Probe",
-        "metrics": "Read metrics for",
-        "resource_read": "Inspect",
-        "initial_discovery": "Inspect",
-    }
-    visible: list[str] = []
-    actions: list[dict[str, object]] = []
-    used_ids: set[str] = set()
-    for runtime in cluster_runtimes:
-        cluster = runtime["cluster"]
-        cluster_id = str(cluster.id)
-        cluster_evidence = [
-            dict(item) for item in evidence
-            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
-        ]
-        cluster_activity = [
-            dict(item) for item in activity
-            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == cluster_id
-        ]
-        capability_states = {
-            str(item.get("capability")): str(item.get("state"))
-            for item in _investigation_capability_ledger(
-                evidence=cluster_evidence,
-                activity=cluster_activity,
-                remaining_units=remaining_units,
-            ).get("checks", [])
-            if isinstance(item, dict)
-        }
-        candidates = _grounded_read_candidates(
-            question=question,
-            evidence=cluster_evidence,
-            relationship_graph=derive_evidence_relationship_graph(cluster_evidence),
-            recovery_anchor_plan=None,
-            seen_intents=set(runtime.get("read_signatures") or []),
-            investigation_gaps=None,
-            limit=max(8, limit * 2),
-        )
-        for candidate in candidates:
-            if capability_states.get(candidate.capability) == "collected":
-                continue
-            if candidate.id in used_ids:
-                continue
-            used_ids.add(candidate.id)
-            prefix = labels.get(candidate.capability, "Inspect")
-            label = f"{prefix} {candidate.target}"[:500]
-            visible.append(label)
-            actions.append({
-                "id": candidate.id,
-                "cluster_id": cluster_id,
-                "cluster_name": str(cluster.name),
-                "capability": candidate.capability,
-                "label": label,
-                "target": candidate.target,
-                "supporting_evidence_ids": list(candidate.supporting_evidence_ids),
-            })
-            if len(actions) >= limit:
-                return visible, actions
-    return visible, actions
 
 
 def _compile_grounded_candidate_plan(
@@ -6040,62 +5308,6 @@ def _bind_plan_log_intents(
     if errors:
         return plan, list(dict.fromkeys(errors)), rejected
     return plan.model_copy(update={"intents": bound}), [], []
-
-
-def _fallback_pod_log_plan(
-    *,
-    question: str,
-    candidates: list[PodLogCandidate],
-    rejected: list[ReadIntent],
-    limit: int,
-) -> ReadPlan | None:
-    if (
-        limit <= 0
-        or not candidates
-        or (not rejected and not re.search(r"\blogs?\b", question, re.IGNORECASE))
-    ):
-        return None
-    normalized_question = re.sub(r"[^a-z0-9]", "", question.lower())
-    hints = [normalized_question]
-    hints.extend(
-        re.sub(r"[^a-z0-9]", "", str(value).lower())
-        for intent in rejected
-        for value in (intent.name, intent.container)
-        if value
-    )
-
-    def relevance(candidate: PodLogCandidate) -> int:
-        pod = re.sub(r"[^a-z0-9]", "", candidate.pod.lower())
-        container = re.sub(r"[^a-z0-9]", "", (candidate.container or "").lower())
-        return max((
-            100 if container and container in hint else
-            80 if pod and pod in hint else
-            60 if container and hint and hint in container else
-            0
-            for hint in hints
-        ), default=0)
-
-    relevant = [candidate for candidate in candidates if relevance(candidate) > 0]
-    pool = relevant or candidates
-    selected = sorted(pool, key=lambda candidate: (
-        -relevance(candidate), -candidate.restart_count,
-        candidate.pod, candidate.container or "",
-    ))[: min(3, limit)]
-    previous_requested = bool(re.search(
-        r"\b(?:previous|restart(?:ed|s|ing)?|crash(?:ed|es|ing)?|terminated)\b",
-        question,
-        re.IGNORECASE,
-    ))
-    return ReadPlan(
-        goal_type="logs",
-        decision="collect",
-        scope_summary="Collect bounded logs from exact Pods discovered in cluster evidence.",
-        intents=[ReadIntent(
-            tool="pod_logs",
-            candidate_id=item.id,
-            previous=bool(previous_requested and item.restart_count > 0),
-        ) for item in selected],
-    )
 
 
 def _latest_audit_query_semantics(
@@ -8181,23 +7393,6 @@ def _canonical_resource_query(
     return matches[0] if len(set(matches)) == 1 else resource_query
 
 
-def _explicit_inventory_question(question: str) -> bool:
-    """Recognize high-confidence list wording without model-dependent routing."""
-
-    if re.search(
-        r"(?i)\b(?:health|healthy|status|configuration|configure|configured|"
-        r"details?|why|how|logs?|metrics?|utili[sz]ation|usage|throughput|"
-        r"latency|lag|rates?|iops|capacity|replicas?)\b",
-        question,
-    ):
-        return False
-    return bool(re.search(
-        r"(?i)^\s*(?:show|list|display)\b|"
-        r"\b(?:which|what)\b.{0,120}\b(?:exist|exists|running|available)\b",
-        question,
-    ))
-
-
 async def _collect_bounded_cluster_reads(
     *,
     model_provider: ModelProvider,
@@ -8225,11 +7420,6 @@ async def _collect_bounded_cluster_reads(
     limitations: list[str] = []
     seen_intents: set[str] = set(existing_read_signatures or [])
     units_used = 0
-    automatic_tls_retries = 0
-    automatic_configmap_reads = 0
-    pinned_goal: str | None = (
-        "diagnose" if investigation_gaps else inquiry.planner_goal if inquiry else None
-    )
     scope_summary = "Bounded read-only cluster investigation."
     semantic_metric_plan = _semantic_metric_read_plan(inquiry)
     semantic_audit_plan = _semantic_audit_read_plan(
@@ -8237,57 +7427,28 @@ async def _collect_bounded_cluster_reads(
         default_limit=settings.adhoc_audit_default_limit,
         initial_range_seconds=settings.adhoc_audit_initial_range_seconds,
     )
-    # A valid model selection normally owns semantic routing; normal code owns its
-    # fixed, bounded compilation. Unambiguous Node utilization requests are a
-    # deterministic exception so a schema-valid inventory or pod-ranking
-    # misclassification cannot discard the Node scope, requested signals, or rank.
-    # Other known reads remain a fallback only when capability selection is unavailable.
+    # Registered parsers provide candidate reads only. The model-derived inquiry
+    # and planner own routing; heuristics never override a valid agent decision.
     known_read = plan_known_read(
         question,
         inventory_limit=settings.adhoc_inventory_max_objects,
         alert_name=alert_name,
         alert_labels=alert_labels,
     )
-    node_metric_override = (
-        known_read
-        if known_read is not None
-        and known_read[0].intents
-        and all(
-            intent.metric in {"node_cpu_utilization", "node_memory_utilization"}
-            and intent.tool == "query_metrics"
-            for intent in known_read[0].intents
-        )
-        else None
-    )
     health_summary_tools = {
         "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
         "workload_health_summary",
     }
-    health_summary_override = (
-        known_read
-        if known_read is not None
-        and known_read[0].intents
-        and all(intent.tool in health_summary_tools for intent in known_read[0].intents)
-        else None
-    )
     legacy_fallback = known_read if inquiry is None else None
-    deterministic_plan = (
-        health_summary_override
-        or node_metric_override
-        or semantic_audit_plan
+    registered_suggestion = (
+        semantic_audit_plan
         or semantic_metric_plan
-        or (
-            legacy_fallback
-            if legacy_fallback is not None and legacy_fallback[1]
-            else None
-        )
+        or legacy_fallback
     )
     recovery_anchor_plan = (
-        legacy_fallback[0]
-        if legacy_fallback is not None
-        and not legacy_fallback[1]
-        and len(legacy_fallback[0].intents) == 1
+        registered_suggestion[0]
+        if registered_suggestion is not None
         else None
     )
     catalog_entries: list[dict[str, object]] = []
@@ -8326,35 +7487,17 @@ async def _collect_bounded_cluster_reads(
                 inquiry.resource_query,
                 canonical_query,
             )
-        if (
-            _explicit_inventory_question(question)
-            and inquiry.operation not in {
-                "object_fields", "configuration_guidance", "logs", "events",
-                "metrics", "audit", "probe",
-            }
-            and inquiry.cardinality != "exact_one"
-        ):
-            updates.update({
-                "capability": "resource_inventory",
-                "mode": "inventory",
-                "operation": "inventory",
-                "cardinality": "collection",
-                "needs_object_details": False,
-            })
         if updates:
             inquiry = inquiry.model_copy(update=updates)
-            if not investigation_gaps:
-                pinned_goal = inquiry.planner_goal
         LOGGER.info(
             "podpilot.adhoc.resource_routing actor=%s workflow_id=%s mode=%s "
-            "operation=%s resource_query=%s catalog_entries=%s explicit_inventory=%s",
+            "operation=%s resource_query=%s catalog_entries=%s",
             actor,
             workflow_id,
             inquiry.mode,
             inquiry.operation,
             inquiry.resource_query,
             len(catalog_entries),
-            _explicit_inventory_question(question),
         )
 
     semantic_resource_plan = _semantic_resource_read_plan(
@@ -8364,12 +7507,8 @@ async def _collect_bounded_cluster_reads(
         conversation=conversation,
         inventory_limit=settings.adhoc_inventory_max_objects,
     )
-    if (
-        semantic_resource_plan is not None
-        and node_metric_override is None
-        and health_summary_override is None
-    ):
-        deterministic_plan = semantic_resource_plan
+    if semantic_resource_plan is not None:
+        recovery_anchor_plan = semantic_resource_plan[0]
 
     # Once live discovery resolves an explicit inventory question, normal code owns
     # the same bounded LIST on every selected cluster. This avoids asking the model
@@ -8381,7 +7520,7 @@ async def _collect_bounded_cluster_reads(
         if inquiry is not None
         else not _question_requires_object_details(question)
     )
-    if deterministic_plan is None and inventory_request:
+    if recovery_anchor_plan is None and inventory_request:
         catalog_question = (
             f"list {inquiry.resource_query}"
             if inquiry is not None and inquiry.resource_query
@@ -8392,15 +7531,8 @@ async def _collect_bounded_cluster_reads(
             catalog_entries,
             inventory_limit=settings.adhoc_inventory_max_objects,
         )
-        if catalog_plan is not None and catalog_plan[1]:
-            deterministic_plan = (
-                catalog_plan[0],
-                not (
-                    inquiry is not None
-                    and inquiry.mode == "inventory"
-                    and inquiry.needs_object_details
-                ),
-            )
+        if catalog_plan is not None:
+            recovery_anchor_plan = catalog_plan[0]
         elif catalog_available:
             refreshed_entries = catalog_entries
             try:
@@ -8434,38 +7566,13 @@ async def _collect_bounded_cluster_reads(
                 inventory_limit=settings.adhoc_inventory_max_objects,
             )
             if refreshed_plan is not None:
-                deterministic_plan = refreshed_plan
+                recovery_anchor_plan = refreshed_plan[0]
             else:
                 limitations.append(
                     "Live API discovery did not resolve the requested inventory type; "
                     "PodPilot continued with bounded planning instead of treating that "
                     "routing miss as an empty cluster inventory."
                 )
-    def plan_requires_repair(plan: ReadPlan, *, round_number: int) -> bool:
-        known_evidence_ids = {str(item.get("id")) for item in evidence}
-        return plan_needs_evidence_repair(
-            plan,
-            known_evidence_ids=known_evidence_ids,
-            has_completed_reads=bool(activity),
-        )
-
-    def plan_needs_sufficiency_review(plan: ReadPlan) -> bool:
-        """Challenge one early diagnostic stop without prescribing its next read."""
-
-        known_evidence_ids = {str(item.get("id")) for item in evidence}
-        has_valid_support = bool(
-            known_evidence_ids.intersection(plan.supporting_evidence_ids)
-        )
-        has_successful_read = any(
-            item.get("status") == "succeeded" for item in activity
-        ) or bool(investigation_gaps and evidence)
-        return (
-            plan.goal_type in {"diagnose", "logs", "explain"}
-            and plan.decision == "answer_from_evidence"
-            and has_valid_support
-            and has_successful_read
-        )
-
     def planner_context(
         *,
         round_number: int,
@@ -8530,7 +7637,6 @@ async def _collect_bounded_cluster_reads(
                 ),
                 "checks": capability_ledger.get("checks") or [],
             },
-            "pinned_goal_type": pinned_goal,
             "investigation_gaps": [
                 gap.model_dump() for gap in (investigation_gaps or [])
             ],
@@ -8574,7 +7680,6 @@ async def _collect_bounded_cluster_reads(
         )
         if units_used >= regular_unit_ceiling:
             break
-        terminal_plan = False
         if round_number == 1 and requested_candidate_id:
             requested_candidates = _grounded_read_candidates(
                 question=question,
@@ -8600,27 +7705,17 @@ async def _collect_bounded_cluster_reads(
                 scope_summary="Run the operator-selected grounded read-only follow-up check.",
                 intents=[requested_candidate.intent],
             )
-            # A user-selected suggestion is one exact broker-validated read. Do
-            # not re-enter open-ended planning after it completes.
-            terminal_plan = True
             if progress:
                 await progress("planning", "Validated the selected read-only follow-up check.")
-        elif round_number == 1 and deterministic_plan:
-            plan, terminal_plan = deterministic_plan
         else:
             plan = None
             planner_error: ModelProviderError | None = None
             feedback: dict[str, object] | None = None
             target_errors: list[str] = []
-            rejected_log_intents: list[ReadIntent] = []
             no_progress_plan = False
-            had_actionable_no_read_plan = False
             read_candidates: list[_GroundedReadCandidate] = []
             candidate_errors: list[str] = []
             binding_errors: list[str] = []
-            candidate_stop_requires_repair = False
-            actionable_gap_candidates: list[_GroundedReadCandidate] = []
-            diagnostic_log_candidates: list[_GroundedReadCandidate] = []
             for planning_attempt in range(1, 3):
                 relationship_graph = derive_evidence_relationship_graph(evidence)
                 read_candidates = _grounded_read_candidates(
@@ -8637,21 +7732,6 @@ async def _collect_bounded_cluster_reads(
                         else None
                     ),
                 )
-                gap_capabilities = {
-                    gap.capability for gap in (investigation_gaps or [])
-                    if gap.priority in {"high", "medium"}
-                }
-                actionable_gap_candidates = [
-                    candidate for candidate in read_candidates
-                    if candidate.capability in gap_capabilities
-                    or "resource_read" in gap_capabilities
-                    or "other" in gap_capabilities
-                ]
-                diagnostic_log_candidates = [
-                    candidate for candidate in read_candidates
-                    if candidate.capability == "pod_logs"
-                    and _failure_logs_are_relevant(question)
-                ]
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
                 try:
@@ -8681,29 +7761,17 @@ async def _collect_bounded_cluster_reads(
                 except ModelProviderError as exc:
                     planner_error = exc
                     break
-                if pinned_goal is None:
-                    pinned_goal = plan.goal_type
-                elif plan.goal_type != pinned_goal:
-                    LOGGER.info(
-                        "podpilot.adhoc.goal_pinned actor=%s workflow_id=%s proposed=%s pinned=%s",
-                        actor,
-                        workflow_id,
-                        plan.goal_type,
-                        pinned_goal,
-                    )
-                    plan = plan.model_copy(update={"goal_type": pinned_goal})
                 plan, candidate_errors = _compile_grounded_candidate_plan(
                     plan, read_candidates
                 )
                 log_candidates = pod_log_candidates_from_evidence(evidence)
-                bound_plan, binding_errors, rejected = _bind_plan_log_intents(
+                bound_plan, binding_errors, _rejected = _bind_plan_log_intents(
                     plan, log_candidates,
                     question=question,
                     evidence=evidence,
                 )
                 binding_errors.extend(_inventory_plan_scope_errors(bound_plan, inquiry))
                 target_errors = [*candidate_errors, *binding_errors]
-                rejected_log_intents.extend(rejected)
                 prepared_signatures: list[str] = []
                 for proposed_intent in bound_plan.intents:
                     prepared = normalize_read_intent(proposed_intent)
@@ -8719,28 +7787,10 @@ async def _collect_bounded_cluster_reads(
                     1 for signature in prepared_signatures if signature not in seen_intents
                 )
                 no_progress_plan = bool(bound_plan.intents) and novel_intents == 0
-                candidate_stop_requires_repair = bool(
-                    (actionable_gap_candidates or diagnostic_log_candidates)
-                    and bound_plan.decision == "answer_from_evidence"
-                ) or bool(getattr(bound_plan, "_selection_incomplete", False))
-                evidence_repair_needed = plan_requires_repair(
-                    plan, round_number=round_number
-                ) or candidate_stop_requires_repair
-                had_actionable_no_read_plan = (
-                    had_actionable_no_read_plan or evidence_repair_needed
-                )
-                sufficiency_review_needed = (
-                    planning_attempt == 1
-                    and not evidence_repair_needed
-                    and not target_errors
-                    and plan_needs_sufficiency_review(plan)
-                )
-                if (
-                    not evidence_repair_needed
-                    and not sufficiency_review_needed
-                    and not no_progress_plan
-                    and not target_errors
-                ):
+                # The planner owns sufficiency and direction. Server-derived gaps,
+                # candidates, and collector metadata are context only; they must not
+                # force another read after the planner elects to answer.
+                if not no_progress_plan and not target_errors:
                     plan = bound_plan
                     discarded_intents = getattr(plan, "_discarded_intent_count", 0)
                     if discarded_intents:
@@ -8759,9 +7809,7 @@ async def _collect_bounded_cluster_reads(
                 repair_reason = (
                     "candidate_selection" if candidate_errors else
                     "ungrounded_target" if target_errors else
-                    "unsupported_answer" if evidence_repair_needed else
-                    "no_progress" if no_progress_plan else
-                    "evidence_sufficiency_review"
+                    "no_progress"
                 )
                 LOGGER.warning(
                     "podpilot.adhoc.plan_repair actor=%s workflow_id=%s round=%s attempt=%s "
@@ -8792,236 +7840,22 @@ async def _collect_bounded_cluster_reads(
                     ),
                     "errors": target_errors,
                 } if target_errors else {
-                    "code": "actionable_goal_requires_evidence",
-                    "message": (
-                        "The operational question still has an actionable grounded read candidate. "
-                        "Select one or more exact IDs from read_candidates in candidate_ids and leave "
-                        "intents empty."
-                        if read_candidates else
-                        "The operational question has no valid supporting evidence. Use the compact "
-                        "resource catalog to return one safe discovery intent. Only request "
-                        "clarification if no catalog target can answer the question."
-                    ),
-                } if evidence_repair_needed else {
                     "code": "no_progress",
                     "message": (
                         "Every proposed intent repeats a read already completed in this turn. "
                         "Use the supplied relationship_graph frontier, capability_ledger, findings, "
                         "and investigation_gaps to choose a novel typed read that materially advances "
-                        "the pinned goal. If no novel allowed read would improve the answer, return "
+                        "your investigation. If no novel allowed read would improve the answer, return "
                         "answer_from_evidence with exact supporting IDs and a stop reason rather than "
                         "repeating an intent."
                     ),
                     "duplicate_intent_count": len(prepared_signatures),
-                } if no_progress_plan else {
-                    "code": "review_evidence_sufficiency",
-                    "message": (
-                        "Before ending this diagnostic investigation, review the supplied "
-                        "observations, findings, explicit object relationships, and remaining "
-                        "typed read budget. If one allowed read can materially verify an "
-                        "uninspected next hop, distinguish a live hypothesis, or resolve a "
-                        "limitation you would otherwise recommend as a next check, return "
-                        "decision=collect with that typed intent now. Do not merely defer an "
-                        "available read to the final answer. If no available read would "
-                        "materially improve the answer, repeat decision=answer_from_evidence "
-                        "with exact supporting_evidence_ids."
-                    ),
                 })
-            needs_fallback = plan is None or plan_requires_repair(
-                plan, round_number=round_number
-            ) or candidate_stop_requires_repair or bool(target_errors)
-            log_fallback = _fallback_pod_log_plan(
-                question=question,
-                candidates=pod_log_candidates_from_evidence(evidence),
-                rejected=rejected_log_intents,
-                limit=remaining_reads,
-            ) if target_errors else None
-            if (
-                needs_fallback
-                and investigation_gaps
-                and actionable_gap_candidates
-                and planner_error is None
-                and not binding_errors
-            ):
-                selected_candidate = actionable_gap_candidates[0]
-                plan = ReadPlan(
-                    goal_type=pinned_goal or "diagnose",
-                    scope_summary=(
-                        "Collect the highest-priority grounded read candidate for an unresolved "
-                        "structured evidence gap."
-                    ),
-                    intents=[selected_candidate.intent],
-                )
-                target_errors = []
-                candidate_errors = []
-                limitations.append(
-                    "The model twice stopped despite an actionable structured evidence gap; "
-                    "PodPilot selected the highest-priority grounded read candidate identified "
-                    "from that gap and current evidence."
-                )
-                LOGGER.warning(
-                    "podpilot.adhoc.gap_candidate_recovery actor=%s workflow_id=%s "
-                    "candidate_id=%s capability=%s",
-                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
-                )
-            elif (
-                needs_fallback
-                and diagnostic_log_candidates
-                and planner_error is None
-                and not binding_errors
-            ):
-                selected_candidate = diagnostic_log_candidates[0]
-                plan = ReadPlan(
-                    goal_type=pinned_goal or "diagnose",
-                    scope_summary=(
-                        "Collect one exact workload log after the model twice stopped during "
-                        "an operator-requested failure investigation."
-                    ),
-                    intents=[selected_candidate.intent],
-                )
-                target_errors = []
-                candidate_errors = []
-                limitations.append(
-                    "The model twice stopped while an exact workload log remained available for "
-                    "the reported failure; PodPilot collected that bounded read-only log evidence."
-                )
-                LOGGER.warning(
-                    "podpilot.adhoc.diagnostic_log_candidate_recovery actor=%s workflow_id=%s "
-                    "candidate_id=%s reason=failure_question",
-                    actor, workflow_id, selected_candidate.id,
-                )
-            elif (
-                needs_fallback
-                and plan is not None
-                and getattr(plan, "_selection_incomplete", False)
-                and read_candidates
-                and not target_errors
-            ):
-                selected_candidate = read_candidates[0]
-                plan = ReadPlan(
-                    goal_type=pinned_goal or "diagnose",
-                    scope_summary=(
-                        "Continue the model-requested investigation with the highest-priority "
-                        "supplied evidence action after its empty selection."
-                    ),
-                    intents=[selected_candidate.intent],
-                )
-                candidate_errors = []
-                limitations.append(
-                    "The model requested more investigation but twice omitted an action ID; "
-                    "PodPilot used the highest-priority supplied read-only evidence action."
-                )
-                LOGGER.warning(
-                    "podpilot.adhoc.action_candidate_recovery actor=%s workflow_id=%s "
-                    "candidate_id=%s capability=%s reason=empty_selection",
-                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
-                )
-            elif (
-                needs_fallback
-                and planner_error is not None
-                and activity
-                and read_candidates
-            ):
-                selected_candidate = read_candidates[0]
-                planner_failure_type = str(
-                    getattr(planner_error, "failure_type", "provider_error")
-                )
-                if planner_failure_type == "schema_validation":
-                    recovery_scope = (
-                        "Continue the investigation with the highest-priority broker-validated "
-                        "candidate after the model's corrected action selection remained invalid."
-                    )
-                    recovery_limitation = (
-                        "The model's proposed read remained schema-invalid after one correction "
-                        "attempt; PodPilot continued with the highest-priority unread candidate "
-                        "grounded in already collected evidence."
-                    )
-                elif planner_failure_type == "empty_response":
-                    recovery_scope = (
-                        "Continue the investigation with the highest-priority broker-validated "
-                        "candidate after the model returned no usable structured plan."
-                    )
-                    recovery_limitation = (
-                        "The model returned no usable structured plan after one correction attempt; "
-                        "PodPilot continued with the highest-priority unread candidate grounded in "
-                        "already collected evidence."
-                    )
-                else:
-                    recovery_scope = (
-                        "Continue the investigation with the highest-priority broker-validated "
-                        "candidate after the model planner request failed."
-                    )
-                    recovery_limitation = (
-                        "The model planner request failed before a usable selection was returned; "
-                        "PodPilot continued with the highest-priority unread candidate grounded in "
-                        "already collected evidence."
-                    )
-                plan = ReadPlan(
-                    goal_type=pinned_goal or "diagnose",
-                    scope_summary=recovery_scope,
-                    intents=[selected_candidate.intent],
-                )
-                target_errors = []
-                candidate_errors = []
-                limitations.append(recovery_limitation)
-                LOGGER.warning(
-                    "podpilot.adhoc.invalid_plan_candidate_recovery actor=%s workflow_id=%s "
-                    "candidate_id=%s capability=%s failure_type=%s",
-                    actor, workflow_id, selected_candidate.id, selected_candidate.capability,
-                    planner_failure_type,
-                )
-            elif needs_fallback and log_fallback is not None:
-                plan = log_fallback
-                target_errors = []
-                limitations.append(
-                    "PodPilot rejected model-authored log targets that were not present in collected "
-                    "evidence and used exact discovered Pod/container targets instead."
-                )
-                if progress:
-                    await progress(
-                        "planning",
-                        f"Using {len(plan.intents)} exact Pod/container target"
-                        f"{'s' if len(plan.intents) != 1 else ''} from collected evidence.",
-                    )
-                LOGGER.info(
-                    "podpilot.adhoc.log_target_fallback actor=%s workflow_id=%s candidates=%s",
-                    actor,
-                    workflow_id,
-                    len(plan.intents),
-                )
-            elif (
-                needs_fallback
-                and not target_errors
-                and not activity
-                and recovery_anchor_plan is not None
-                and (planner_error is None or had_actionable_no_read_plan)
-            ):
-                plan = recovery_anchor_plan
-                limitations.append(
-                    (
-                        "The model planner's correction was not schema-valid after it first stopped "
-                        "without evidence; PodPilot used one read grounded directly in the operator's "
-                        "request, then returned diagnostic direction to the model."
-                        if planner_error is not None else
-                        "The model planner twice stopped before collecting evidence; PodPilot used one "
-                        "read grounded directly in the operator's request, then returned diagnostic "
-                        "direction to the model."
-                    )
-                )
-                if progress:
-                    await progress(
-                        "planning",
-                        "Using the exact target in your question as the first discovery anchor.",
-                    )
-                LOGGER.warning(
-                    "podpilot.adhoc.operator_anchor_recovery actor=%s workflow_id=%s tool=%s "
-                    "reason=%s",
-                    actor,
-                    workflow_id,
-                    plan.intents[0].tool,
-                    "invalid_correction" if planner_error is not None else "repeated_stop",
-                )
-            elif needs_fallback and planner_error is not None:
+            needs_fallback = plan is None or bool(target_errors)
+            # Invalid targets are reported to the agent and operator. The server
+            # never substitutes a different collector, log target, or graph
+            # candidate because doing so would take over investigative direction.
+            if needs_fallback and planner_error is not None:
                 LOGGER.warning(
                     "podpilot.adhoc.plan_failed actor=%s workflow_id=%s round=%s error=%s",
                     actor,
@@ -9086,36 +7920,19 @@ async def _collect_bounded_cluster_reads(
                     "PodPilot requested a novel evidence step before stopping."
                 )
             break
-        intent_queue: list[tuple[ReadIntent, str | None, str | None, tuple[str, ...]]] = [
-            (intent, None, None, ()) for intent in new_intents
-        ]
+        intent_queue = list(new_intents)
         queue_index = 0
         while (
             queue_index < len(intent_queue)
             and units_used < settings.adhoc_max_reads_per_turn
         ):
-            intent, automatic_code, automatic_reason, trigger_evidence_ids = intent_queue[queue_index]
+            intent = intent_queue[queue_index]
             queue_index += 1
             unit_cost = _investigation_unit_cost(intent)
-            unit_ceiling = (
-                settings.adhoc_max_reads_per_turn if automatic_code else regular_unit_ceiling
-            )
-            if units_used + unit_cost > unit_ceiling:
+            if units_used + unit_cost > regular_unit_ceiling:
                 continue
             if progress:
                 message = _read_progress_message(intent)
-                if automatic_code == "tls_trust_retry":
-                    message = "Retrying the bounded HTTPS probe without certificate verification."
-                elif automatic_code == "pod_log_investigation":
-                    message = "Inspecting bounded logs for a relevant backend container."
-                elif automatic_code == "traffic_path_investigation":
-                    message = "Following the observed Route traffic path to its backend workloads."
-                elif automatic_code == "log_signal_investigation":
-                    message = "Correlating a notable bounded log signal with exact Pod evidence."
-                elif automatic_code == "configuration_detail":
-                    message = "Reading exact discovered objects to explain their configuration."
-                elif automatic_code == "referenced_configmap":
-                    message = "Reading the exact referenced ConfigMap to display its configuration."
                 await progress("collecting", message)
             entry: dict[str, object] = {
                 "round": round_number,
@@ -9147,9 +7964,6 @@ async def _collect_bounded_cluster_reads(
                     )
                 ),
             }
-            if automatic_code:
-                entry["automatic_followup"] = automatic_code
-                entry["trigger_evidence_ids"] = list(trigger_evidence_ids)
             read_started = False
             try:
                 preflight = getattr(cluster_reader, "preflight", None)
@@ -9160,54 +7974,12 @@ async def _collect_bounded_cluster_reads(
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
-                for followup in automatic_read_followups(
-                    intent, result.observations, question=question, goal_type=plan.goal_type,
-                    primary_kind=(inquiry.resource_query if inquiry is not None else None),
-                ):
-                    # Only mechanical trust retries and exact, non-sensitive ConfigMap
-                    # references for an explicit display request may bypass another model
-                    # round. Other diagnostic traversal remains model-selected.
-                    allowed_tls_retry = (
-                        followup.code == "tls_trust_retry" and automatic_tls_retries < 2
-                    )
-                    allowed_configmap_read = (
-                        followup.code == "referenced_configmap"
-                        and automatic_configmap_reads < 3
-                    )
-                    if not (allowed_tls_retry or allowed_configmap_read):
-                        continue
-                    followup_intent = normalize_read_intent(followup.intent)
-                    signature = _read_intent_signature(followup_intent)
-                    if signature in seen_intents:
-                        continue
-                    if allowed_tls_retry:
-                        automatic_tls_retries += 1
-                    else:
-                        automatic_configmap_reads += 1
-                    seen_intents.add(signature)
-                    intent_queue.append((
-                        followup_intent,
-                        followup.code,
-                        followup.reason,
-                        followup.evidence_ids,
-                    ))
-                    LOGGER.info(
-                        "podpilot.adhoc.automatic_followup actor=%s workflow_id=%s code=%s "
-                        "tool=%s trigger_evidence_ids=%s",
-                        actor,
-                        workflow_id,
-                        followup.code,
-                        followup_intent.tool,
-                        ",".join(followup.evidence_ids),
-                    )
                 probe_failed = intent.tool == "http_probe" and any(
                     item.data.get("outcome") == "failed" for item in result.observations
                 )
                 entry["status"] = "failed" if probe_failed else "succeeded"
                 entry["observations"] = len(result.observations)
                 entry["evidence_ids"] = [item.id for item in result.observations]
-                if automatic_reason:
-                    entry["reason"] = automatic_reason
                 if progress:
                     summaries = [
                         str(item.summary).strip() for item in result.observations
@@ -9240,8 +8012,6 @@ async def _collect_bounded_cluster_reads(
                 entry["detail"] = str(exc)
             activity.append(entry)
         evidence = evidence[-settings.adhoc_max_evidence :]
-        if terminal_plan:
-            break
     return _BoundedReadCollection(
         evidence=evidence,
         activity=activity,
@@ -9687,9 +8457,7 @@ def create_app(
         enrichment_evidence: list[dict[str, object]] | None = None,
         enrichment_activity: list[dict[str, object]] | None = None,
         enrichment_limitations: list[str] | None = None,
-        preferred_presentation: str | None = None,
         preferred_evidence_view: str | None = None,
-        registered_answer_complete: bool = False,
         agent_targets: dict[str, tuple[str, AgentClusterConnection | None]],
     ) -> str:
         if profile.api_type != "chat-completions":
@@ -9726,11 +8494,9 @@ def create_app(
         }]
         if enrichment_evidence or enrichment_limitations:
             enrichment_payload = {
-                "scope": "PodPilot registered deterministic enrichment for the current request",
+                "scope": "PodPilot runtime context for the current request",
                 "observations": enrichment_evidence or [],
                 "limitations": enrichment_limitations or [],
-                "preferred_presentation": preferred_presentation,
-                "registered_answer_complete": registered_answer_complete,
             }
             serialized_enrichment = redact_text(json.dumps(
                 enrichment_payload,
@@ -9742,20 +8508,17 @@ def create_app(
             messages.append({
                 "role": "system",
                 "content": (
-                    "Normal PodPilot code recognized this request and collected the registered "
-                    "evidence below before the unrestricted loop. Treat these observations as the "
-                    "primary source for the capability they cover. Preserve any preferred table "
-                    "presentation and its units. Do not reproduce the enrichment as another table; "
-                    "report only material findings that are not already present in it. Do not replace "
+                    "The runtime context below contains only enforced connection limitations and "
+                    "any observations explicitly supplied to this agent turn. It does not prescribe "
+                    "a direction or signal that the request is complete. Decide autonomously which "
+                    "reads or commands are needed before answering. Do not replace "
                     "application-log payload volume "
                     "with Kubernetes Event counts. A registered collection failure proves only that "
                     "the source was unavailable; never invent its cause or claim that a metrics "
                     "server, add-on, API, or resource is absent unless command output proves it. "
                     "For OpenShift current resource usage, the CLI forms are `oc adm top node` and "
-                    "`oc adm top pod`, not `oc top`. When registered_answer_complete is true, "
-                    "return a short acknowledgement without a tool call; normal "
-                    "code will render that answer exactly once. You still have unrestricted execute_shell "
-                    "access for verification, extension, mutation, or unrelated work.\n\n"
+                    "`oc adm top pod`, not `oc top`. You retain unrestricted execute_shell access for "
+                    "verification and extension.\n\n"
                     + serialized_enrichment
                 ),
             })
@@ -9771,66 +8534,47 @@ def create_app(
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
         empty_step_retry_used = False
-        terminal_registered_answer = bool(
-            registered_answer_complete and preferred_presentation
-        )
-
         while True:
-            if terminal_registered_answer:
+            if progress:
+                await progress(
+                    "agent_thinking", "The unrestricted agent is choosing its next action."
+                )
+            model_started = asyncio.get_running_loop().time()
+            step_method = provider.next_agent_step
+            if empty_step_retry_used:
+                finalizer = getattr(provider, "finalize_agent_step", None)
+                if callable(finalizer):
+                    step_method = finalizer
+            model_task = asyncio.create_task(
+                run_in_threadpool(
+                    step_method,
+                    profile,
+                    api_key,
+                    messages,
+                )
+            )
+            while True:
+                done, _ = await asyncio.wait(
+                    {model_task},
+                    timeout=app_settings.agent_heartbeat_seconds,
+                )
+                if model_task in done:
+                    step = model_task.result()
+                    break
+                elapsed_seconds = round(
+                    asyncio.get_running_loop().time() - model_started
+                )
                 if progress:
                     await progress(
-                        "finding",
-                        "The registered evidence fully answers this request.",
+                        "agent_thinking",
+                        f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
+                        f"{profile.timeout_seconds:g}s provider timeout).",
                     )
-                step = AgentStep(
-                    assistant_message={
-                        "role": "assistant",
-                        "content": "The registered evidence fully answers this request.",
-                    },
-                    content="The registered evidence fully answers this request.",
-                    tool_calls=(),
-                )
-            else:
-                if progress:
-                    await progress(
-                        "agent_thinking", "The unrestricted agent is choosing its next action."
+                if elapsed_seconds >= profile.timeout_seconds + 10:
+                    model_task.cancel()
+                    raise ModelProviderError(
+                        "The unrestricted agent model call exceeded its configured timeout."
                     )
-                model_started = asyncio.get_running_loop().time()
-                step_method = provider.next_agent_step
-                if empty_step_retry_used:
-                    finalizer = getattr(provider, "finalize_agent_step", None)
-                    if callable(finalizer):
-                        step_method = finalizer
-                model_task = asyncio.create_task(
-                    run_in_threadpool(
-                        step_method,
-                        profile,
-                        api_key,
-                        messages,
-                    )
-                )
-                while True:
-                    done, _ = await asyncio.wait(
-                        {model_task},
-                        timeout=app_settings.agent_heartbeat_seconds,
-                    )
-                    if model_task in done:
-                        step = model_task.result()
-                        break
-                    elapsed_seconds = round(
-                        asyncio.get_running_loop().time() - model_started
-                    )
-                    if progress:
-                        await progress(
-                            "agent_thinking",
-                            f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
-                            f"{profile.timeout_seconds:g}s provider timeout).",
-                        )
-                    if elapsed_seconds >= profile.timeout_seconds + 10:
-                        model_task.cancel()
-                        raise ModelProviderError(
-                            "The unrestricted agent model call exceeded its configured timeout."
-                        )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
                 if not agent_content:
@@ -9863,24 +8607,6 @@ def create_app(
                         failure_type="agent_contract",
                     )
                 content = agent_content
-                authoritative_failure = _authoritative_unrestricted_failure(activity)
-                if authoritative_failure is not None:
-                    content = authoritative_failure
-                elif terminal_registered_answer:
-                    content = str(preferred_presentation)
-                if (
-                    preferred_presentation
-                    and preferred_evidence_view not in {
-                        "metric_ranking", "deterministic_primary",
-                    }
-                    and preferred_presentation not in agent_content
-                    and authoritative_failure is None
-                ):
-                    content = (
-                        preferred_presentation
-                        + "\n\n## Agent analysis\n\n"
-                        + agent_content
-                    )
                 enrichment_citations = [
                     str(item["id"])
                     for item in enrichment_evidence or []
@@ -9890,9 +8616,7 @@ def create_app(
                     evidence=enrichment_evidence or [],
                     activity=activity,
                     citations=enrichment_citations,
-                    suppress_markdown_table=(
-                        preferred_evidence_view == "deterministic_primary"
-                    ),
+                    suppress_markdown_table=False,
                 )
                 assistant_message_id = str(uuid4())
                 now = datetime.now(timezone.utc)
@@ -9924,7 +8648,6 @@ def create_app(
                         actor=None,
                         content=content,
                         answer_mode=(
-                            "insufficient_evidence" if authoritative_failure is not None else
                             "evidence_based" if enrichment_citations else "general_guidance"
                         ),
                         citations_json=json.dumps(enrichment_citations, sort_keys=True),
@@ -9935,10 +8658,7 @@ def create_app(
                             "suggested_followup_actions": [],
                             "guidance_next_checks": [],
                             "investigation_gaps": [],
-                            "conclusion_status": (
-                                "not_confirmed" if authoritative_failure is not None
-                                else "agent_reported"
-                            ),
+                            "conclusion_status": "agent_reported",
                             "agent_mode": "unrestricted",
                             "preferred_evidence_view": preferred_evidence_view,
                             "presentation": resource_list_presentation,
@@ -10229,9 +8949,7 @@ def create_app(
         cluster_runtimes: list[dict[str, object]] = []
         remaining_budget = app_settings.adhoc_max_reads_per_turn
         raw_responses: list[dict[str, str]] = []
-        inventory_fast_path = False
         prefer_metric_card = False
-        suppress_resource_markdown_table = False
         provider_status = profile_status or "not_configured"
         validated: dict[str, object] = {
             "answer_mode": "insufficient_evidence",
@@ -10256,7 +8974,6 @@ def create_app(
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
                     enrichment_limitations: list[str] = []
-                    enrichment_terminal = True
                     agent_targets: dict[
                         str, tuple[str, AgentClusterConnection | None]
                     ] = {}
@@ -10303,380 +9020,11 @@ def create_app(
                                 f"Cluster {cluster_label} API TLS verification is disabled; "
                                 "credentials and evidence are vulnerable to interception."
                             )
-                    known_read = plan_known_read(
-                        provider_question,
-                        inventory_limit=app_settings.adhoc_inventory_max_objects,
-                    )
-                    inquiry = None
-                    terminal_kafka_inventory = bool(
-                        known_read is not None
-                        and known_read[1]
-                        and (
-                            is_kafka_topic_storage_discovery_plan(known_read[0])
-                            or _question_explicitly_requests_closed_inventory(
-                                source_question
-                            )
-                        )
-                        and known_read[0].intents
-                        and all(
-                            intent.tool == "list_resources"
-                            and intent.resource == "kafkas.kafka.strimzi.io"
-                            for intent in known_read[0].intents
-                        )
-                    )
-                    if not followup_action and not terminal_kafka_inventory:
-                        if progress:
-                            await progress(
-                                "planning", "Selecting registered enrichment capabilities."
-                            )
-                        prior_audit_query = _latest_audit_query_semantics(evidence)
-                        prior_metric_query = _latest_metric_query_semantics(evidence)
-                        prior_resource_query = _latest_resource_query_semantics(evidence)
-                        reuse_prior_resource_snapshot = _resource_followup_reuses_snapshot(
-                            source_question, prior_resource_query,
-                        )
-                        inquiry = (
-                            _resolve_resource_inquiry(
-                                question=source_question,
-                                inquiry=None,
-                                prior_resource_query=prior_resource_query,
-                            )
-                            if reuse_prior_resource_snapshot else
-                            await _classify_ad_hoc_inquiry(
-                                model_provider=provider,
-                                profile=profile_snapshot,
-                                api_key=api_key,
-                                question=source_question,
-                                conversation=history,
-                                cluster_names=[item.name for item in selected_clusters],
-                                prior_audit_query=prior_audit_query,
-                                prior_metric_query=prior_metric_query,
-                                prior_resource_query=prior_resource_query,
-                                evidence=evidence,
-                            )
-                        )
-                        inquiry = _resolve_audit_inquiry(
-                            question=source_question,
-                            inquiry=inquiry,
-                            prior_audit_query=prior_audit_query,
-                            max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
-                        )
-                        inquiry = _resolve_metric_inquiry(
-                            question=source_question,
-                            inquiry=inquiry,
-                            prior_metric_query=prior_metric_query,
-                        )
-                        inquiry = _resolve_resource_inquiry(
-                            question=source_question,
-                            inquiry=inquiry,
-                            prior_resource_query=prior_resource_query,
-                        )
-                    else:
-                        prior_resource_query = _latest_resource_query_semantics(evidence)
-                        reuse_prior_resource_snapshot = False
-                    reference_cluster_ids = _inquiry_reference_cluster_ids(
-                        inquiry, evidence,
-                    )
-                    named_cluster_ids = _question_cluster_ids(
-                        source_question, selected_clusters,
-                    )
-                    if reference_cluster_ids and named_cluster_ids:
-                        reference_cluster_ids &= named_cluster_ids
-                    elif named_cluster_ids:
-                        reference_cluster_ids = named_cluster_ids
-                    if reference_cluster_ids:
-                        agent_targets = {
-                            cluster_id: target
-                            for cluster_id, target in agent_targets.items()
-                            if cluster_id in reference_cluster_ids
-                        }
-                    semantic_metric_plan = _semantic_metric_read_plan(inquiry)
-                    semantic_audit_plan = _semantic_audit_read_plan(
-                        inquiry,
-                        default_limit=app_settings.adhoc_audit_default_limit,
-                        initial_range_seconds=app_settings.adhoc_audit_initial_range_seconds,
-                    )
-                    health_tools = {
-                        "pod_health_summary", "node_health_summary",
-                        "cluster_operator_health_summary", "machine_health_summary",
-                        "workload_health_summary",
-                    }
-                    known_override = (
-                        known_read
-                        if known_read is not None and known_read[0].intents and (
-                            all(
-                                intent.tool in health_tools
-                                for intent in known_read[0].intents
-                            )
-                            or all(
-                                intent.tool == "query_metrics"
-                                and intent.metric in {
-                                    "node_cpu_utilization", "node_memory_utilization",
-                                }
-                                for intent in known_read[0].intents
-                            )
-                        )
-                        else None
-                    )
-                    base_enrichment = (
-                        known_override
-                        or semantic_audit_plan
-                        or semantic_metric_plan
-                        or known_read
-                    )
-                    if reuse_prior_resource_snapshot:
-                        reused_evidence, reused_activity = _reuse_prior_resource_evidence(
-                            evidence=evidence,
-                            prior_resource_query=prior_resource_query,
-                            cluster_ids=reference_cluster_ids,
-                        )
-                        enrichment_evidence.extend(reused_evidence)
-                        enrichment_activity.extend(reused_activity)
-                        if reused_evidence:
-                            collected_times = sorted({
-                                str(item.get("collected_at"))
-                                for item in reused_evidence if item.get("collected_at")
-                            })
-                            snapshot_time = collected_times[-1] if collected_times else "an earlier turn"
-                            enrichment_limitations.append(
-                                "Displayed the previously collected resource snapshot from "
-                                f"{snapshot_time}; no fresh cluster read was requested."
-                            )
-                    kafka_storage_discovery = is_kafka_topic_storage_discovery_plan(
-                        base_enrichment[0] if base_enrichment is not None else None
-                    )
-                    kafka_storage_metric_activity: list[dict[str, object]] = []
-                    if not reuse_prior_resource_snapshot and (base_enrichment is not None or (
-                        inquiry is not None and inquiry.resource_query
-                    )):
-                        for selected_cluster in selected_clusters:
-                            cluster_label = selected_cluster.name
-                            if (
-                                reference_cluster_ids
-                                and selected_cluster.id not in reference_cluster_ids
-                            ):
-                                continue
-                            if not selected_cluster.is_enabled:
-                                enrichment_limitations.append(
-                                    f"Cluster {cluster_label} is disabled; deterministic enrichment was skipped."
-                                )
-                                continue
-                            reader: ReadOnlyExplorer = cluster_reader
-                            if not selected_cluster.is_system:
-                                target = agent_targets.get(selected_cluster.id)
-                                connection = target[1] if target is not None else None
-                                if connection is None:
-                                    continue
-                                try:
-                                    reader = remote_cluster_reader(
-                                        selected_cluster,
-                                        connection.token,
-                                    )
-                                except Exception as exc:
-                                    enrichment_limitations.append(
-                                        f"Cluster {cluster_label}: the registered reader could not "
-                                        f"be initialized ({type(exc).__name__})."
-                                    )
-                                    continue
-                            cluster_plan = base_enrichment
-                            if cluster_plan is None and inquiry is not None:
-                                catalog_reader = getattr(reader, "resource_catalog", None)
-                                if callable(catalog_reader):
-                                    try:
-                                        catalog = await run_in_threadpool(
-                                            catalog_reader,
-                                            query=inquiry.resource_query or source_question,
-                                            limit=120,
-                                        )
-                                        cluster_plan = _semantic_resource_read_plan(
-                                            inquiry,
-                                            resource_catalog=catalog,
-                                            question=source_question,
-                                            conversation=history,
-                                            inventory_limit=(
-                                                app_settings.adhoc_inventory_max_objects
-                                            ),
-                                        )
-                                    except ReadOnlyExplorerError as exc:
-                                        enrichment_limitations.append(
-                                            f"Cluster {cluster_label}: resource discovery failed "
-                                            f"({str(exc)})."
-                                        )
-                            if cluster_plan is None:
-                                continue
-                            enrichment_plan, plan_terminal = cluster_plan
-                            enrichment_terminal = enrichment_terminal and plan_terminal
-                            collected = await _collect_unrestricted_known_reads(
-                                cluster_reader=reader,
-                                plan=enrichment_plan,
-                                cluster_id=selected_cluster.id,
-                                cluster_name=cluster_label,
-                                progress=progress,
-                            )
-                            enrichment_evidence.extend(collected.evidence)
-                            enrichment_activity.extend(collected.activity)
-                            enrichment_limitations.extend(
-                                collected.limitations if len(selected_clusters) == 1 else
-                                [f"Cluster {cluster_label}: {item}" for item in collected.limitations]
-                            )
-                            if kafka_storage_discovery:
-                                metric_plan = plan_kafka_topic_storage_metrics(
-                                    provider_question,
-                                    _observed_kafka_coordinates(collected.evidence),
-                                )
-                                if metric_plan is not None:
-                                    metric_collection = await _collect_unrestricted_known_reads(
-                                        cluster_reader=reader,
-                                        plan=metric_plan,
-                                        cluster_id=selected_cluster.id,
-                                        cluster_name=cluster_label,
-                                        progress=progress,
-                                    )
-                                    enrichment_evidence.extend(metric_collection.evidence)
-                                    enrichment_activity.extend(metric_collection.activity)
-                                    kafka_storage_metric_activity.extend(
-                                        metric_collection.activity
-                                    )
-                                    metric_limitations = (
-                                        list(metric_plan.limitations)
-                                        + metric_collection.limitations
-                                    )
-                                    enrichment_limitations.extend(
-                                        metric_limitations if len(selected_clusters) == 1 else
-                                        [
-                                            f"Cluster {cluster_label}: {item}"
-                                            for item in metric_limitations
-                                        ]
-                                    )
-                    metric_ranking_answer = _deterministic_metric_ranking_answer(
-                        evidence=enrichment_evidence,
-                        activity=enrichment_activity,
-                    )
-                    metric_answer = (
-                        metric_ranking_answer
-                        or _deterministic_metric_summary_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                        )
-                    )
-                    kafka_storage_failure = (
-                        _authoritative_unrestricted_failure(
-                            kafka_storage_metric_activity
-                        )
-                        if kafka_storage_discovery
-                        and kafka_storage_metric_activity
-                        and metric_answer is None
-                        else None
-                    )
-                    deterministic_answer = (
-                        metric_answer
-                        or (
-                            {"content": kafka_storage_failure}
-                            if kafka_storage_failure is not None else None
-                        )
-                        or _deterministic_pod_health_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                        )
-                        or _deterministic_resource_health_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                        )
-                        or _deterministic_audit_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                        )
-                        or _deterministic_inventory_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                            question=provider_question,
-                            inventory_only=(
-                                not inquiry.requested_fields
-                                if inquiry is not None and inquiry.mode == "inventory"
-                                else None
-                            ),
-                            preferred_kind=(
-                                inquiry.resource_query
-                                if inquiry is not None and inquiry.mode == "inventory"
-                                else None
-                            ),
-                        )
-                        or _deterministic_resource_detail_answer(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                            question=provider_question,
-                        )
-                    )
-                    preferred_evidence_view = _preferred_metric_evidence_view(
-                        evidence=enrichment_evidence,
-                        activity=enrichment_activity,
-                    )
-                    failed_kafka_storage_terminal = False
-                    authoritative_enrichment_terminal = _registered_plan_is_authoritative(
-                        base_enrichment[0] if base_enrichment is not None else None
-                    )
-                    if (
-                        deterministic_answer is None
-                        and (
-                            authoritative_enrichment_terminal
-                            or _failed_kafka_topic_storage_is_terminal(
-                                base_enrichment[0] if base_enrichment is not None else None,
-                                enrichment_activity,
-                            )
-                        )
-                    ):
-                        failure_answer = _authoritative_unrestricted_failure(
-                            enrichment_activity
-                        )
-                        if failure_answer is not None:
-                            deterministic_answer = {"content": failure_answer}
-                            preferred_evidence_view = "deterministic_primary"
-                            if not authoritative_enrichment_terminal:
-                                failed_kafka_storage_terminal = True
-                    deterministic_reads_succeeded = bool(enrichment_activity) and all(
-                        item.get("status") == "succeeded"
-                        for item in enrichment_activity
-                        if item.get("source") == "deterministic_enrichment"
-                    )
-                    inventory_completion_allowed = bool(
-                        inquiry is None
-                        or inquiry.mode != "inventory"
-                        or _inventory_answer_is_closed_form(source_question, inquiry)
-                    )
-                    registered_answer_complete = bool(
-                        deterministic_answer is not None
-                        and (
-                            failed_kafka_storage_terminal
-                            or (
-                                inventory_completion_allowed
-                                and (
-                                    authoritative_enrichment_terminal
-                                    or (
-                                        enrichment_terminal
-                                        and deterministic_reads_succeeded
-                                    )
-                                )
-                                and not _question_requires_agentic_investigation(
-                                    source_question, inquiry,
-                                )
-                            )
-                        )
-                    )
-                    if (
-                        registered_answer_complete
-                        and preferred_evidence_view is None
-                    ):
-                        preferred_evidence_view = "deterministic_primary"
-                    preferred_agent_presentation = (
-                        str(deterministic_answer["content"])
-                        if deterministic_answer is not None
-                        and (
-                            registered_answer_complete
-                            or inquiry is None
-                            or inquiry.mode != "inventory"
-                        )
-                        else None
-                    )
+                    # In unrestricted mode the agent owns discovery from the first action.
+                    # Registered collectors, semantic compilers, prior snapshots, and enrichment
+                    # packs are intentionally not executed ahead of the agent or injected as a
+                    # preferred direction. The selected cluster catalog, conversation, RBAC,
+                    # redaction, command limits, and timeout remain enforced boundaries.
                     provider_phase = "unrestricted_agent"
                     return await _execute_unrestricted_agent_turn(
                         engine=engine,
@@ -10691,9 +9039,7 @@ def create_app(
                         enrichment_evidence=enrichment_evidence,
                         enrichment_activity=enrichment_activity,
                         enrichment_limitations=enrichment_limitations,
-                        preferred_presentation=preferred_agent_presentation,
-                        preferred_evidence_view=preferred_evidence_view,
-                        registered_answer_complete=registered_answer_complete,
+                        preferred_evidence_view=None,
                         agent_targets=agent_targets,
                     )
                 inquiry = None
@@ -10932,69 +9278,6 @@ def create_app(
                 answer_findings = _compact_answer_findings(
                     derive_adhoc_findings(answer_evidence), total_byte_limit=12_000
                 )[:8]
-                deterministic_log_section = _deterministic_log_findings_section(
-                    evidence=evidence, activity=activity
-                )
-                model_log_analysis: dict[str, object] | None = None
-                log_payload, log_text_by_id = _current_log_analysis_payload(
-                    evidence=evidence, activity=activity, question=provider_question,
-                )
-                analyze_logs = getattr(provider, "analyze_logs", None)
-                if log_payload is not None and callable(analyze_logs):
-                    provider_phase = "log_analysis"
-                    if progress:
-                        await progress(
-                            "analyzing_logs",
-                            f"Analyzing {len(log_text_by_id)} bounded Pod log excerpt"
-                            f"{'s' if len(log_text_by_id) != 1 else ''} for potential issues.",
-                        )
-                    try:
-                        raw_log_analysis = await run_in_threadpool(
-                            analyze_logs, profile_snapshot, api_key, log_payload,
-                        )
-                        model_log_analysis = _validated_model_log_analysis(
-                            raw_log_analysis, text_by_id=log_text_by_id,
-                        )
-                        limitations.extend(
-                            str(item) for item in model_log_analysis.get("limitations", [])
-                        )
-                        LOGGER.info(
-                            "podpilot.adhoc.log_analysis_complete actor=%s conversation_id=%s "
-                            "logs=%s issues=%s",
-                            username,
-                            conversation_id,
-                            len(log_text_by_id),
-                            len(model_log_analysis.get("issues", [])),
-                        )
-                    except ModelProviderError as exc:
-                        LOGGER.warning(
-                            "podpilot.adhoc.log_analysis_failed actor=%s conversation_id=%s error=%s",
-                            username,
-                            conversation_id,
-                            exc,
-                        )
-                        limitations.append(
-                            "The dedicated model-assisted Pod log analysis was unavailable; "
-                            "the bounded log evidence remains available for inspection."
-                        )
-                    finally:
-                        provider_phase = "final_answer"
-                if model_log_analysis is not None:
-                    compact_without_log_tails: list[dict[str, object]] = []
-                    for observation in answer_observations:
-                        candidate = dict(observation)
-                        if candidate.get("tool") == "pod_logs" and isinstance(
-                            candidate.get("data"), dict
-                        ):
-                            data = dict(candidate["data"])
-                            data.pop("tail", None)
-                            data["tailOmittedFromFinalContext"] = True
-                            data["tailAnalysis"] = (
-                                "See model_log_analysis; the complete bounded excerpt remains in evidence."
-                            )
-                            candidate["data"] = data
-                        compact_without_log_tails.append(candidate)
-                    answer_observations = compact_without_log_tails
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": provider_question,
@@ -11019,44 +9302,11 @@ def create_app(
                         activity=activity,
                         remaining_units=remaining_budget,
                     ),
-                    "model_log_analysis": model_log_analysis,
+                    "model_log_analysis": None,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                 }
                 if inquiry is not None:
                     answer_context["inquiry"] = inquiry.model_dump()
-                fast_pod_health_answer = (
-                    _deterministic_pod_health_answer(evidence=evidence, activity=activity)
-                    if not followup_action else None
-                )
-                fast_resource_health_answer = (
-                    _deterministic_resource_health_answer(
-                        evidence=evidence, activity=activity,
-                    )
-                    if not followup_action else None
-                )
-                fast_inventory_answer = (
-                    _deterministic_inventory_answer(
-                        evidence=evidence,
-                        activity=activity,
-                        question=message_text,
-                        inventory_only=(
-                            inquiry.mode == "inventory" if inquiry is not None else None
-                        ),
-                        preferred_kind=(
-                            inquiry.resource_query if inquiry is not None else None
-                        ),
-                    )
-                    if not followup_action
-                    and _inventory_answer_is_closed_form(message_text, inquiry)
-                    and (
-                        inquiry is None
-                        or (
-                            inquiry.mode == "inventory"
-                            and not inquiry.needs_object_details
-                        )
-                    )
-                    else None
-                )
                 metric_ranking_candidate = _deterministic_metric_ranking_answer(
                     evidence=evidence,
                     activity=activity,
@@ -11066,96 +9316,39 @@ def create_app(
                     activity=activity,
                 )
                 metric_candidate = metric_ranking_candidate or metric_summary_candidate
-                fast_metric_answer = (
-                    metric_candidate
-                    if not followup_action
-                    and metric_candidate is not None
+                prefer_metric_card = bool(
+                    metric_candidate is not None
                     and (
                         (inquiry is not None and inquiry.mode == "metrics")
                         or _current_reads_are_metric_rankings(activity)
                     )
-                    else None
                 )
-                fast_audit_answer = (
-                    _deterministic_audit_answer(evidence=evidence, activity=activity)
-                    if not followup_action
-                    and inquiry is not None
-                    and inquiry.mode == "audit"
-                    else None
-                )
-                fast_resource_answer_candidate = _deterministic_resource_detail_answer(
-                    evidence=evidence,
-                    activity=activity,
-                    question=message_text,
-                    preferred_kind=(inquiry.resource_query if inquiry is not None else None),
-                )
-                fast_configmap_answer = (
-                    fast_resource_answer_candidate
-                    if not followup_action
-                    and fast_resource_answer_candidate is not None
-                    and str(fast_resource_answer_candidate.get("content") or "").startswith(
-                        "## ConfigMap configuration"
-                    )
-                    else None
-                )
-                fast_deterministic_answer = (
-                    fast_pod_health_answer
-                    or fast_resource_health_answer
-                    or fast_audit_answer
-                    or fast_metric_answer
-                    or fast_configmap_answer
-                    or fast_inventory_answer
-                )
-                if fast_deterministic_answer is not None:
-                    inventory_fast_path = True
-                    suppress_resource_markdown_table = bool(
-                        fast_inventory_answer is not None
-                        and fast_deterministic_answer is fast_inventory_answer
-                    )
-                    prefer_metric_card = (
-                        fast_metric_answer is metric_ranking_candidate
-                        or fast_metric_answer is metric_summary_candidate
-                    )
-                    validated = {
-                        **fast_deterministic_answer,
-                        "conclusion_status": fast_deterministic_answer.get(
-                            "conclusion_status", "confirmed"
-                        ),
-                        "limitations": _dedupe_limitations(limitations),
-                        "recommended_next_checks": [],
-                        "investigation_gaps": [],
-                    }
-                else:
-                    with capture_raw_model_responses(include_raw_response) as captured:
-                        try:
-                            answer = await run_in_threadpool(
-                                provider.answer_ad_hoc,
-                                profile_snapshot,
-                                api_key,
-                                answer_context,
-                            )
-                        finally:
-                            _bounded_raw_response_attempts(
-                                raw_responses, captured, stage="initial answer"
-                            )
-                    if include_raw_response and not captured:
-                        _bounded_raw_response_attempts(
-                            raw_responses,
-                            [
-                                answer.model_dump_json()
-                                if hasattr(answer, "model_dump_json") else str(answer)
-                            ],
-                            stage="initial answer",
+                with capture_raw_model_responses(include_raw_response) as captured:
+                    try:
+                        answer = await run_in_threadpool(
+                            provider.answer_ad_hoc,
+                            profile_snapshot,
+                            api_key,
+                            answer_context,
                         )
-                    validated = _validated_adhoc_answer(
-                        answer,
-                        known_evidence_ids={str(item.get("id")) for item in answer_evidence},
-                        collection_limitations=limitations,
-                        observations=answer_evidence,
+                    finally:
+                        _bounded_raw_response_attempts(
+                            raw_responses, captured, stage="initial answer"
+                        )
+                if include_raw_response and not captured:
+                    _bounded_raw_response_attempts(
+                        raw_responses,
+                        [
+                            answer.model_dump_json()
+                            if hasattr(answer, "model_dump_json") else str(answer)
+                        ],
+                        stage="initial answer",
                     )
-                _reconcile_validated_answer_gaps(
-                    validated,
-                    capability_ledger=answer_context["capability_ledger"],
+                validated = _validated_adhoc_answer(
+                    answer,
+                    known_evidence_ids={str(item.get("id")) for item in answer_evidence},
+                    collection_limitations=limitations,
+                    observations=answer_evidence,
                 )
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
@@ -11163,432 +9356,14 @@ def create_app(
                     has_evidence=bool(answer_evidence),
                     has_citations=bool(validated["citations"]),
                 )
-                if answer_quality_issue:
-                    LOGGER.warning(
-                        "podpilot.adhoc.answer_quality_rejected actor=%s conversation_id=%s "
-                        "attempt=1 reason=%s",
-                        username,
-                        conversation_id,
-                        answer_quality_issue,
+                if answer_quality_issue is not None:
+                    limitations.append(
+                        "The agent's final response did not meet PodPilot's presentation-quality "
+                        "heuristic; it was preserved without a server-directed rewrite."
                     )
-                    if progress:
-                        await progress(
-                            "answering",
-                            "The first answer was incomplete; requesting one bounded correction.",
-                        )
-                    retry_context = dict(answer_context)
-                    feedback_message = (
-                        "Return only a short operator-facing answer. Do not embed JSON or schema fields."
-                        if answer_quality_issue == "structured_fields_embedded_in_answer"
-                        else
-                        "Explain the result without telling the operator to run shell commands."
-                        if answer_quality_issue == "operator_shell_command"
-                        else
-                        "Briefly interpret the supplied evidence and state what remains uncertain."
-                        if answer_quality_issue == "insufficient_interpretation_with_available_evidence"
-                        else
-                        "Return a short answer with substantive prose, not a heading alone."
-                    )
-                    retry_context["answer_feedback"] = {
-                        "code": "incomplete_final_answer",
-                        "reason": answer_quality_issue,
-                        "message": feedback_message,
-                    }
-                    try:
-                        with capture_raw_model_responses(include_raw_response) as captured:
-                            try:
-                                retry_answer = await run_in_threadpool(
-                                    provider.answer_ad_hoc,
-                                    profile_snapshot,
-                                    api_key,
-                                    retry_context,
-                                )
-                            finally:
-                                _bounded_raw_response_attempts(
-                                    raw_responses, captured, stage="PodPilot correction"
-                                )
-                        if include_raw_response and not captured:
-                            _bounded_raw_response_attempts(
-                                raw_responses,
-                                [
-                                    retry_answer.model_dump_json()
-                                    if hasattr(retry_answer, "model_dump_json")
-                                    else str(retry_answer)
-                                ],
-                                stage="PodPilot correction",
-                            )
-                        retry_validated = _validated_adhoc_answer(
-                            retry_answer,
-                            known_evidence_ids={str(item.get("id")) for item in answer_evidence},
-                            collection_limitations=limitations,
-                            observations=answer_evidence,
-                        )
-                        retry_validated = _merge_validated_recommendations(
-                            validated, retry_validated
-                        )
-                        _reconcile_validated_answer_gaps(
-                            retry_validated,
-                            capability_ledger=retry_context["capability_ledger"],
-                        )
-                        retry_issue = _adhoc_answer_quality_issue(
-                            content=str(retry_validated["content"]),
-                            answer_mode=str(retry_validated["answer_mode"]),
-                            has_evidence=bool(answer_evidence),
-                            has_citations=bool(retry_validated["citations"]),
-                        )
-                        validated = retry_validated
-                        answer_quality_issue = retry_issue
-                        if retry_issue:
-                            LOGGER.warning(
-                                "podpilot.adhoc.answer_quality_rejected actor=%s "
-                                "conversation_id=%s attempt=2 reason=%s",
-                                username,
-                                conversation_id,
-                                retry_issue,
-                            )
-                    except ModelProviderError as exc:
-                        LOGGER.warning(
-                            "podpilot.adhoc.answer_retry_failed actor=%s conversation_id=%s "
-                            "error=%s",
-                            username,
-                            conversation_id,
-                            exc,
-                        )
-                        limitations.append(
-                            "The model provider could not correct its incomplete final answer; "
-                            "PodPilot used deterministic evidence instead."
-                        )
-                structured_gaps = _actionable_investigation_gaps(
-                    validated_answer=validated,
-                    capability_ledger=answer_context["capability_ledger"],
+                validated["limitations"] = _dedupe_limitations(
+                    [*limitations, *list(validated["limitations"])]
                 )
-                if (
-                    not followup_action
-                    and structured_gaps
-                    and remaining_budget > 0
-                    and cluster_runtimes
-                ):
-                    if progress:
-                        await progress(
-                            "planning",
-                            "Turning unresolved evidence questions into safe typed follow-up reads.",
-                        )
-                    activity_before_gaps = len(activity)
-                    runtimes_remaining = len(cluster_runtimes)
-                    for runtime in cluster_runtimes:
-                        if remaining_budget <= 0:
-                            break
-                        selected_cluster = runtime["cluster"]
-                        reader = runtime["reader"]
-                        cluster_knowledge = runtime["knowledge"]
-                        cluster_budget = max(
-                            1, remaining_budget // max(1, runtimes_remaining)
-                        )
-                        cluster_budget = min(cluster_budget, remaining_budget)
-                        runtimes_remaining -= 1
-                        prior_cluster_evidence = [
-                            dict(item) for item in evidence_by_id.values()
-                            if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID)
-                            == selected_cluster.id
-                        ]
-                        cluster_settings = app_settings.model_copy(update={
-                            "cluster_name": selected_cluster.name,
-                            "adhoc_max_reads_per_turn": cluster_budget,
-                            "adhoc_followup_reserve_units": 0,
-                        })
-                        gap_collection = await _collect_bounded_cluster_reads(
-                            model_provider=provider,
-                            cluster_reader=reader,
-                            profile=profile_snapshot,
-                            api_key=api_key,
-                            settings=cluster_settings,
-                            actor=username,
-                            workflow_id=(
-                                f"{conversation_id}:{selected_cluster.id}:answer-gaps"
-                            ),
-                            question=message_text,
-                            conversation=history,
-                            earlier_context_summary=context_summary,
-                            existing_evidence=prior_cluster_evidence,
-                            knowledge=cluster_knowledge,
-                            investigation_gaps=structured_gaps,
-                            existing_read_signatures=list(
-                                runtime.get("read_signatures") or []
-                            ),
-                            progress=progress,
-                            inquiry=inquiry,
-                        )
-                        runtime["read_signatures"] = (
-                            gap_collection.read_signatures or []
-                        )
-                        remaining_budget = max(
-                            0, remaining_budget - gap_collection.units_used
-                        )
-                        for item in gap_collection.evidence:
-                            attributed = dict(item)
-                            attributed["cluster_id"] = selected_cluster.id
-                            attributed["cluster_name"] = selected_cluster.name
-                            evidence_by_id[str(attributed.get("id"))] = attributed
-                        for item in gap_collection.activity:
-                            attributed_activity = dict(item)
-                            attributed_activity["cluster_id"] = selected_cluster.id
-                            attributed_activity["cluster_name"] = selected_cluster.name
-                            activity.append(attributed_activity)
-                        limitations.extend(
-                            gap_collection.limitations
-                            if len(selected_clusters) == 1 else
-                            [
-                                f"Cluster {selected_cluster.name}: {item}"
-                                for item in gap_collection.limitations
-                            ]
-                        )
-                    if len(activity) > activity_before_gaps:
-                        evidence = list(evidence_by_id.values())[
-                            -app_settings.adhoc_max_evidence:
-                        ]
-                        answer_observations, answer_context_metadata = (
-                            _compact_answer_evidence(
-                                evidence, activity=activity, question=message_text,
-                                total_byte_limit=48_000,
-                                per_observation_byte_limit=8_000, max_observations=16,
-                            )
-                        )
-                        answer_findings = _compact_answer_findings(
-                            derive_adhoc_findings(evidence), total_byte_limit=12_000
-                        )[:8]
-                        deterministic_log_section = _deterministic_log_findings_section(
-                            evidence=evidence, activity=activity
-                        )
-                        model_log_analysis = None
-                        log_payload, log_text_by_id = _current_log_analysis_payload(
-                            evidence=evidence, activity=activity, question=message_text,
-                        )
-                        if log_payload is not None and callable(analyze_logs):
-                            try:
-                                raw_log_analysis = await run_in_threadpool(
-                                    analyze_logs, profile_snapshot, api_key, log_payload,
-                                )
-                                model_log_analysis = _validated_model_log_analysis(
-                                    raw_log_analysis, text_by_id=log_text_by_id,
-                                )
-                            except ModelProviderError as exc:
-                                LOGGER.warning(
-                                    "podpilot.adhoc.gap_log_analysis_failed actor=%s "
-                                    "conversation_id=%s error=%s",
-                                    username, conversation_id, exc,
-                                )
-                        if model_log_analysis is not None:
-                            without_log_tails: list[dict[str, object]] = []
-                            for observation in answer_observations:
-                                candidate = dict(observation)
-                                if candidate.get("tool") == "pod_logs" and isinstance(
-                                    candidate.get("data"), dict
-                                ):
-                                    data = dict(candidate["data"])
-                                    data.pop("tail", None)
-                                    data["tailOmittedFromFinalContext"] = True
-                                    data["tailAnalysis"] = (
-                                        "See model_log_analysis; the complete bounded excerpt "
-                                        "remains in evidence."
-                                    )
-                                    candidate["data"] = data
-                                without_log_tails.append(candidate)
-                            answer_observations = without_log_tails
-                        final_capability_ledger = _investigation_capability_ledger(
-                            evidence=evidence,
-                            activity=activity,
-                            remaining_units=remaining_budget,
-                        )
-                        resolved_gaps, remaining_gaps = _partition_investigation_gaps(
-                            structured_gaps,
-                            capability_ledger=final_capability_ledger,
-                        )
-                        answer_context = {
-                            "clusters": [
-                                _cluster_summary(item) for item in selected_clusters
-                            ],
-                            "question": message_text,
-                            "conversation": [
-                                {
-                                    "role": str(item.get("role") or "")[:16],
-                                    "content": redact_text(str(item.get("content") or ""))[:1000],
-                                }
-                                for item in history[-4:]
-                            ],
-                            "earlier_context_summary": redact_text(context_summary)[-1500:],
-                            "scope_summary": collected_scope_summary,
-                            "observations": answer_observations,
-                            "facts": _model_fact_cards(
-                                evidence, activity=activity, question=message_text,
-                            ),
-                            "curated_knowledge": knowledge_context[:6],
-                            "evidence_context": answer_context_metadata,
-                            "findings": answer_findings,
-                            "capability_ledger": final_capability_ledger,
-                            "model_log_analysis": model_log_analysis,
-                            "collection_limitations": _dedupe_limitations(
-                                limitations, limit=10
-                            ),
-                            "resolved_investigation_gaps": [
-                                gap.model_dump() for gap in resolved_gaps
-                            ],
-                            "remaining_investigation_gaps": [
-                                gap.model_dump() for gap in remaining_gaps
-                            ],
-                        }
-                        if inquiry is not None:
-                            answer_context["inquiry"] = inquiry.model_dump()
-                        with capture_raw_model_responses(
-                            include_raw_response
-                        ) as captured:
-                            try:
-                                answer = await run_in_threadpool(
-                                    provider.answer_ad_hoc,
-                                    profile_snapshot,
-                                    api_key,
-                                    answer_context,
-                                )
-                            finally:
-                                _bounded_raw_response_attempts(
-                                    raw_responses,
-                                    captured,
-                                    stage="evidence follow-up answer",
-                                )
-                        if include_raw_response and not captured:
-                            _bounded_raw_response_attempts(
-                                raw_responses,
-                                [
-                                    answer.model_dump_json()
-                                    if hasattr(answer, "model_dump_json") else str(answer)
-                                ],
-                                stage="evidence follow-up answer",
-                            )
-                        followup_validated = _validated_adhoc_answer(
-                            answer,
-                            known_evidence_ids={
-                                str(item.get("id")) for item in evidence
-                            },
-                            collection_limitations=limitations,
-                            observations=evidence,
-                        )
-                        validated = _merge_validated_recommendations(
-                            validated, followup_validated
-                        )
-                        _reconcile_validated_answer_gaps(
-                            validated,
-                            capability_ledger=final_capability_ledger,
-                        )
-                        answer_quality_issue = _adhoc_answer_quality_issue(
-                            content=str(validated["content"]),
-                            answer_mode=str(validated["answer_mode"]),
-                            has_evidence=bool(evidence),
-                            has_citations=bool(validated["citations"]),
-                        )
-                        LOGGER.info(
-                            "podpilot.adhoc.gap_followup_complete actor=%s "
-                            "conversation_id=%s gaps=%s new_reads=%s remaining_units=%s",
-                            username,
-                            conversation_id,
-                            len(structured_gaps),
-                            len(activity) - activity_before_gaps,
-                            remaining_budget,
-                        )
-                inventory_answer = _deterministic_inventory_answer(
-                    evidence=evidence,
-                    activity=activity,
-                    question=message_text,
-                    inventory_only=(
-                        inquiry.mode == "inventory" if inquiry is not None else None
-                    ),
-                    preferred_kind=(
-                        inquiry.resource_query if inquiry is not None else None
-                    ),
-                )
-                metric_ranking_answer = _deterministic_metric_ranking_answer(
-                    evidence=evidence,
-                    activity=activity,
-                )
-                metric_summary_answer = _deterministic_metric_summary_answer(
-                    evidence=evidence,
-                    activity=activity,
-                )
-                audit_answer = _deterministic_audit_answer(
-                    evidence=evidence,
-                    activity=activity,
-                )
-                resource_detail_answer = _deterministic_resource_detail_answer(
-                    evidence=evidence,
-                    activity=activity,
-                    question=message_text,
-                    preferred_kind=(inquiry.resource_query if inquiry is not None else None),
-                )
-                route_tls_answer = _deterministic_route_tls_answer(
-                    question=message_text,
-                    evidence=evidence,
-                    activity=activity,
-                )
-                route_fallback_needed = (
-                    validated.get("answer_mode") == "insufficient_evidence"
-                    or answer_quality_issue is not None
-                )
-                deterministic_answer = (
-                    audit_answer
-                ) or (
-                    route_tls_answer if route_fallback_needed else None
-                ) or (
-                    resource_detail_answer
-                    if _requested_metadata_fields(message_text) or route_fallback_needed
-                    else None
-                ) or (
-                    (metric_ranking_answer or metric_summary_answer)
-                    if route_fallback_needed else None
-                ) or (
-                    inventory_answer if route_fallback_needed else None
-                ) or (
-                    _deterministic_evidence_fallback_answer(
-                        evidence=evidence, activity=activity
-                    ) if answer_quality_issue is not None else None
-                )
-                if deterministic_answer is not None:
-                    validated.update(deterministic_answer)
-                    if inventory_answer is not None and deterministic_answer is inventory_answer:
-                        suppress_resource_markdown_table = True
-                    if (
-                        deterministic_answer is metric_ranking_answer
-                        or deterministic_answer is metric_summary_answer
-                    ):
-                        prefer_metric_card = True
-                    if answer_quality_issue is not None:
-                        limitations.append(
-                            "The model returned an incomplete final answer after one correction attempt; "
-                            "PodPilot used a deterministic evidence summary."
-                        )
-                    validated["limitations"] = _dedupe_limitations(limitations)
-                else:
-                    validated["limitations"] = _dedupe_limitations(
-                        [*limitations, *list(validated["limitations"])]
-                    )
-                if deterministic_answer is not inventory_answer:
-                    _append_deterministic_inventory(validated, inventory_answer)
-                if deterministic_log_section is not None:
-                    content = str(validated["content"]).rstrip()
-                    log_content = str(deterministic_log_section["content"])
-                    if "## Backend log findings" not in content:
-                        validated["content"] = f"{content}\n\n{log_content}".strip()
-                    validated["citations"] = list(dict.fromkeys([
-                        *[str(item) for item in validated["citations"]],
-                        *[str(item) for item in deterministic_log_section["citations"]],
-                    ]))
-                if model_log_analysis is not None:
-                    model_log_section = _model_log_analysis_section(model_log_analysis)
-                    content = str(validated["content"]).rstrip()
-                    validated["content"] = (
-                        f"{content}\n\n{model_log_section['content']}"
-                    ).strip()
-                    validated["citations"] = list(dict.fromkeys([
-                        *[str(item) for item in validated["citations"]],
-                        *[str(item) for item in model_log_section["citations"]],
-                    ]))
                 validated["limitations"] = _dedupe_limitations([
                     *[str(item) for item in validated.get("limitations", [])],
                     *_adhoc_answer_advisories(
@@ -11597,14 +9372,6 @@ def create_app(
                         observations=evidence,
                     ),
                 ])
-                _reconcile_validated_answer_gaps(
-                    validated,
-                    capability_ledger=_investigation_capability_ledger(
-                        evidence=evidence,
-                        activity=activity,
-                        remaining_units=remaining_budget,
-                    ),
-                )
                 LOGGER.info(
                     "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
                     "profile_id=%s reads=%s evidence=%s",
@@ -11694,48 +9461,17 @@ def create_app(
                         "citations": [],
                         "limitations": [str(exc)],
                     }
-        current_turn_evidence_ids = {
-            str(evidence_id)
-            for entry in activity
-            for evidence_id in (entry.get("evidence_ids") or [])
-        } | {str(item) for item in validated.get("citations", [])}
-        current_turn_evidence = [
-            item for item in evidence
-            if str(item.get("id") or "") in current_turn_evidence_ids
-        ]
-        suggested_checks, suggested_followup_actions = (
-            ([], [])
-            if inventory_fast_path
-            else _compile_remaining_candidate_followups(
-                question=source_question,
-                evidence=current_turn_evidence,
-                activity=activity,
-                cluster_runtimes=cluster_runtimes,
-                remaining_units=remaining_budget,
-                limit=3,
-            )
-        )
+        suggested_checks = [
+            str(item) for item in validated.get("recommended_next_checks", [])
+        ][:5]
         validated["recommended_next_checks"] = suggested_checks
-        validated["suggested_followup_actions"] = suggested_followup_actions
-        actionable_labels = {
-            str(item.get("label")) for item in suggested_followup_actions
-        }
-        validated["guidance_next_checks"] = [
-            item for item in suggested_checks if item not in actionable_labels
-        ]
-        if followup_action:
-            content = str(validated.get("content") or "").strip()
-            if not content.startswith("## Suggested check result"):
-                validated["content"] = (
-                    "## Suggested check result\n\n"
-                    f"**Check performed:** {selected_check_label}\n\n"
-                    f"{content}"
-                ).strip()
+        validated["suggested_followup_actions"] = []
+        validated["guidance_next_checks"] = suggested_checks
         resource_list_presentation = _resource_list_presentation(
             evidence=evidence,
             activity=activity,
             citations=[str(item) for item in validated.get("citations", [])],
-            suppress_markdown_table=suppress_resource_markdown_table,
+            suppress_markdown_table=False,
         )
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
@@ -11766,6 +9502,9 @@ def create_app(
                             if isinstance(gap, InvestigationGap)
                         ],
                         "conclusion_status": validated.get("conclusion_status", "confirmed"),
+                        "selected_check_label": (
+                            selected_check_label if followup_action else None
+                        ),
                         "preferred_evidence_view": (
                             "metric_ranking" if prefer_metric_card else None
                         ),
@@ -12252,7 +9991,7 @@ def create_app(
                 )
             )
             answer_blocks: list[dict[str, object]] | None = None
-            if row.role == "assistant" and not prefer_metric_card:
+            if row.role == "assistant":
                 answer_blocks = split_markdown_tables(row.content)
                 if (
                     resource_presentation is not None

@@ -394,34 +394,29 @@ additional OR target. With neither explicit clusters nor required tags, the entr
 Ask PodPilot accepts free-form operational questions; it does not gate cluster reads on a
 catalog of recognized phrases or sentiment. The model may propose only the registered read
 tools, normal code validates every target, sensitive resources remain denied, and the
-selected cluster ServiceAccount provides the final Kubernetes RBAC boundary. When a
-question is not an explicit identifiers-only, count, existence, or prior-snapshot presentation
-request, a bounded object list is treated as evidence rather than a complete answer. In particular,
-bare `show` and `list` requests for configuration-bearing resources continue into model interpretation;
-the verb alone no longer terminates the turn. PodPilot follows up on up to three discovered
-objects per read with exact namespace/name reads, within the existing per-turn budget, and the
-answer must interpret material fields from those details rather than returning object names alone.
+selected cluster ServiceAccount provides the final Kubernetes RBAC boundary. A bounded object list
+is evidence, never a server-owned completion decision. The server does not automatically follow
+discovered objects, retry TLS without verification, read referenced ConfigMaps, collect Pod logs,
+or expand an answer-authored evidence gap. Those exact reads remain available as grounded
+candidates; the agent chooses whether they are material and whether to continue or answer.
 For explicit inventory wording, normal code stabilizes the route after model classification and
 canonicalizes generic noun variants against the live catalog—for example, `KafkaCluster` or
 “Kafka clusters” can resolve to the uniquely discovered `Kafka` kind. A catalog miss triggers one
 fresh API-discovery pass. If it remains unresolved, PodPilot continues through bounded planning;
 it never reports an empty inventory unless an actual resource LIST succeeds with zero objects.
-This applies to health, diagnosis, comparison, explanation, configuration, topology, and behavior
-questions. Only explicit names/identifiers-only, count, existence, and snapshot-replay questions are
+This applies to health, diagnosis, comparison, explanation, configuration, topology, behavior,
+inventory, count, existence, and snapshot-replay questions. No collector result is
 inventory-terminal. When a
 `list_resources` plan omits a deliberate limit, the broker replaces the model schema's
-20-object default with the configured bounded inventory window. When the model cannot turn
-validated list evidence into a useful final answer, PodPilot renders that evidence as a
-deterministic table instead. Every answer that cites successful current-turn `list_resources` or
+20-object default with the configured bounded inventory window. Every answer that cites successful current-turn `list_resources` or
 `search_resources` evidence also persists a bounded `grouped_resource_list` presentation. Ask
 renders one collapsible section per cluster with Kind, namespace, resource name, Ready state,
 completeness, scan count, and the matched field value when retained. Each populated cluster table
 can be downloaded as CSV. These rows come from normalized evidence and are HTML-escaped by the
 template; the UI does not parse or trust the model response as a table contract. At most 1,000
 rows are duplicated into presentation metadata, with omitted counts shown when the evidence
-contains more. Ask hides the less-detailed legacy Markdown inventory table only when the structured
-card is a complete replacement for a server-generated inventory answer, while keeping adjacent scope
-and partial-failure prose visible. Other answer Markdown tables, including agent-authored tables with
+contains more. Ask keeps the complete agent prose visible alongside the normalized evidence card.
+Other answer Markdown tables, including agent-authored tables with
 additional interpreted columns, are parsed through the CommonMark token stream and rendered as
 native dynamic-column tables with collapsing and CSV export. Their surrounding prose remains in
 place and the UI labels them as answer-derived; this presentation conversion does not make their
@@ -440,11 +435,12 @@ display to that cluster without changing the conversation's locked cluster selec
 states that it reused an earlier snapshot and includes the original evidence provenance. Wording
 such as `current`, `still present`, `now`, `latest`, `refresh`, or `recheck` disables snapshot reuse
 and repeats the same bounded resource query against the requested cluster scope.
-If the model still returns an incomplete non-inventory answer after the bounded correction, exact
-object reads feed a redacted, question-focused deterministic answer with evidence citations.
-Known relationships such as CLF Kafka outputs and their pipelines are summarized directly;
-other resources expose at most a small set of fields matching the question. The fallback never
-renders the whole object and does not treat intended configuration as proof of external behavior.
+PodPilot does not issue a style correction or replace a valid answer because a quality heuristic
+finds it terse, table-shaped, or incomplete. Exact-object and relationship candidates remain
+available to the agent on later planning rounds. Deterministic cited summaries are used only when
+the provider or structured response contract fails after successful evidence collection; the
+fallback never renders the whole object and does not treat intended configuration as proof of
+external behavior.
 An exact ConfigMap display is a deliberate exception to the small-field fallback: PodPilot renders
 the redacted `data` entries directly without asking the model to reproduce them. The display is
 bounded to 24 keys, 16,000 characters per value, and 32,000 characters total, and labels any
@@ -511,21 +507,18 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 `openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
-Unrestricted turns retain additive deterministic enrichment. Questions recognized by the existing
-known-read compiler or the guarded-mode metric, audit, and catalog-grounded resource compilers first
-use the registered API/Loki/Thanos reader and pass normalized evidence to the agent; the shell loop
-remains unrestricted afterward. Explicit retrieval wording such as “show”, “list”, and “top” may
-finish from a complete registered answer. Causal wording such as “why is this Pod Pending?”,
-“investigate”, “diagnose”, and “root cause” always treats that same result as a seed and continues
-the agent loop. A native card or deterministic-primary presentation is a rendering choice, not a
-completion signal. For example, a top-namespace log-volume
+Unrestricted turns retain additive deterministic enrichment. Known-read and metric, audit, and
+catalog-grounded compilers expose validated candidates; they never execute automatically and never
+decide whether the turn is complete. The agent selects a candidate or another safe read, interprets
+the resulting evidence, and decides when to answer. Wording such as “show”, “list”, “top”, “why”,
+“investigate”, “diagnose”, and “root cause” does not create a server-owned completion route. A
+native card is a rendering choice, not a completion signal. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
 and average byte rate. Every renderable normalized metric result—not only top CPU, memory, and log
-volume—uses the native evidence card as its only visible table. This includes node, PVC, Kafka,
-ingress, and future metric profiles without a UI allowlist change. Empty or unsupported shapes keep
-the deterministic text fallback. Deterministic Markdown and any model-authored duplicate table are
-suppressed when a native card is available. Kubernetes Event counts are not an acceptable proxy for
-that result.
+volume—uses a native evidence card. This includes node, PVC, Kafka, ingress, and future metric
+profiles without a UI allowlist change. The complete agent response remains visible beside the
+card. Empty or unsupported shapes keep the deterministic text fallback. Kubernetes Event counts
+are not an acceptable proxy for that result.
 
 Field-constrained resource questions use the live catalog plus a bounded client-side search rather
 than returning the entire resource inventory. For example, “Routes whose hostname contains
@@ -956,7 +949,7 @@ The default ad-hoc budget is ten planning rounds and 25 weighted investigation u
 configured with `PODPILOT_ADHOC_MAX_ROUNDS` and
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`. The default
 `PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS=0` makes the full budget available to the dynamic
-model-directed loop; a deployment may reserve units for the mechanical TLS trust retry.
+model-directed loop. A deployment may reserve units for additional agent-selected reads.
 Discovery and ordinary resource reads cost
 one unit; Pod logs, HTTP probes, and metric queries cost two; bounded watches cost three.
 The planner may search live API discovery for any resource advertising `get`, `list`, or
@@ -981,12 +974,11 @@ application container's listener protocol; collect direct endpoint, container
 configuration, readiness-probe scheme, or application-log evidence before making
 that claim.
 
-For trust-only failures such as a private, self-signed, or unknown issuer, PodPilot
-automatically repeats the same bounded HTTPS probe once with verification disabled,
-subject to the normal read budget. The first observation remains the certificate
-warning; the retry can establish the HTTP/connectivity outcome but never server
-identity. Durable progress events identify the retry as an automatic follow-up, and both probe
-observations remain available through cited evidence.
+For trust-only failures such as a private, self-signed, or unknown issuer, PodPilot exposes an
+optional grounded candidate for the same bounded HTTPS probe with verification disabled. The
+agent decides whether that probe is material and must select it explicitly within the normal read
+budget. The first observation remains the certificate warning; a selected insecure probe can
+establish the HTTP/connectivity outcome but never server identity.
 
 PodPilot prioritizes bounded logs when Pod evidence shows an unready, restarting,
 or non-running container. It scans any selected application, init, or sidecar log
@@ -1147,7 +1139,7 @@ stops while one of these exact log reads remains available, PodPilot records
 discloses the recovery in the answer limitations.
 
 The collection pass pins its first goal and tracks normalized read signatures. Goal drift is logged
-as `podpilot.adhoc.goal_pinned`; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
+as planner feedback without pinning the agent's goal; accepted plan decisions use `podpilot.adhoc.plan_decision`; and a
 duplicate-only plan is repaired with `podpilot.adhoc.plan_repair reason=no_progress`. The final answer
 uses a separate concise contract containing only answer Markdown and exact citations. Suggested
 checks are derived afterward from remaining unread server-owned candidates, never from model prose.

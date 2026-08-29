@@ -25,6 +25,18 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
+- The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
+  `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and
+  enrichment packs can expose grounded candidates and native views but cannot force a read,
+  continue/stop decision, terminal result, or replacement conclusion. Valid agent stops are
+  respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
+  Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
+  runtime orchestration. The final agent sees bounded raw log evidence directly.
+- Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
+  citations lower evidence status and add limitations instead of erasing the response. Native
+  resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide
+  prose. Deterministic conclusions remain only as provider/contract-failure fallbacks.
+
 - A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
   exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
   function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
@@ -53,35 +65,6 @@ records remain, but execution now awaits a separate approval-gated action servic
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
-- Unrestricted turns now retain additive high-confidence deterministic enrichment. Registered
-  known reads and the guarded metric, audit, and catalog-grounded resource compilers execute before
-  the shell loop across selected clusters, persist normalized evidence,
-  and supply preferred deterministic ranking metadata to the model. Enriched metric rankings now
-  render through one native evidence card instead of stacking deterministic Markdown, a duplicate
-  model table, and the card. Card selection is data-driven for every renderable metric shape,
-  including node, storage, Kafka, and ingress results, rather than hard-coded to top CPU. The
-  native card now also renders bounded timestamped samples as an accessible time-series chart for
-  trend and extended-period requests, including the observed peak value and UTC timestamp.
-  Registered ingress bandwidth reads pair inbound and outbound HAProxy counters: frontend series
-  cover cluster/IngressController totals, while backend series provide normalized namespace/Route
-  breakdowns through the router's `exported_namespace` label. Exact compiled queries were verified
-  live against SNO as `podpilot-investigator` without router Secret or Pod exec access. The
-  observed top-five namespace
-  log-volume wording now routes to the Loki application-log payload-byte reader rather than using
-  Kubernetes Events as a proxy; arbitrary shell access remains available for non-terminal or
-  unrelated requests. The
-  deterministic wording accepts produce/produced/producing variants and week-based periods. Once a
-  terminal metric ranking succeeds, unrestricted mode renders it directly without invoking the
-  model shell loop, preventing redundant `oc exec`, `oc logs`, or empty-finalization failures. The
-  current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
-  that Loki is unavailable; clusters with the registered LokiStack integration render the byte
-  volume and average-rate table.
-- Unrestricted completion is now intent-sensitive rather than presentation-sensitive. Explicit
-  show/list/ranking requests can finish on a complete registered result, but causal wording such
-  as why/investigate/diagnose/root-cause treats Pod specs, health summaries, and metrics as initial
-  evidence and continues through model-selected shell checks. Recent object references also retain
-  a uniquely attributable source cluster so follow-up investigations do not query the same object
-  coordinate on every selected cluster.
 - Natural-language resource field predicates are now first-class semantic constraints. Collection
   requests such as Route hostnames containing a supplied suffix compile to bounded
   `search_resources` reads instead of whole-kind lists. Terminal completion requires the plan to

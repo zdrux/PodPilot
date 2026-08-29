@@ -7,14 +7,13 @@ from podpilot_diagnostics.adhoc import (
     AdHocObservation,
     ReadIntent,
     ReadPlan,
-    automatic_read_followups,
+    suggested_read_followups,
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
     normalize_read_intent,
     plan_catalog_read,
     plan_kafka_topic_storage_metrics,
     plan_known_read,
-    plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
 
@@ -262,7 +261,7 @@ def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
         },
     )
 
-    followups = automatic_read_followups(intent, (observation,))
+    followups = suggested_read_followups(intent, (observation,))
 
     assert len(followups) == 1
     assert followups[0].code == "tls_trust_retry"
@@ -271,7 +270,7 @@ def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
     assert followups[0].intent.method == "GET"
     assert followups[0].intent.tls_verify is False
     assert followups[0].evidence_ids == ("network-trust-1",)
-    assert automatic_read_followups(followups[0].intent, (observation,)) == ()
+    assert suggested_read_followups(followups[0].intent, (observation,)) == ()
 
 
 def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups() -> None:
@@ -293,7 +292,7 @@ def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups
     )
 
     findings = derive_adhoc_findings([observation.to_dict()])
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="pod_logs", candidate_id="podlog-proxy"), (observation,)
     )
 
@@ -331,7 +330,7 @@ def test_missing_pem_traceback_is_correlated_across_neighboring_log_lines() -> N
     )
 
     findings = derive_adhoc_findings([observation.to_dict()])
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="pod_logs", candidate_id="podlog-gateway"), (observation,)
     )
 
@@ -433,7 +432,7 @@ def test_unhealthy_pod_evidence_automatically_selects_bounded_exact_logs() -> No
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="list_resources", resource="pods", namespace="payments"),
         (observation,),
     )
@@ -462,7 +461,7 @@ def test_route_traffic_evidence_deterministically_follows_service_and_backend_po
         },
     )
 
-    service_reads = automatic_read_followups(
+    service_reads = suggested_read_followups(
         ReadIntent(
             tool="search_resources", resource="routes.route.openshift.io",
             match_field="spec.host", match_value="maas.apps.example.test",
@@ -486,7 +485,7 @@ def test_route_traffic_evidence_deterministically_follows_service_and_backend_po
             "spec": {"selector": {"app": "model-server"}},
         },
     )
-    backend_reads = automatic_read_followups(
+    backend_reads = suggested_read_followups(
         service_reads[0].intent, (service,),
         question="Why does https://maas.apps.example.test return Internal Server Error?",
     )
@@ -513,7 +512,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
         },
     )
 
-    log_reads = automatic_read_followups(
+    log_reads = suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="pods", api_version="v1", kind="Pod",
             namespace="maas", label_selector="app=model-server",
@@ -539,7 +538,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
             }],
         },
     )
-    pod_reads = automatic_read_followups(
+    pod_reads = suggested_read_followups(
         ReadIntent(tool="list_resources", resource="endpointslices"),
         (endpoint_slice,),
         question="The Route returns HTTP 500; inspect its backend.",
@@ -563,7 +562,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
             }],
         },
     )
-    legacy_pod_reads = automatic_read_followups(
+    legacy_pod_reads = suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="endpoints", api_version="v1", kind="Endpoints",
             namespace="maas", name="model-server",
@@ -588,7 +587,7 @@ def test_configuration_question_expands_inventory_to_exact_object_reads() -> Non
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="list_resources",
             resource="clusterlogforwarders.observability.openshift.io",
@@ -627,7 +626,7 @@ def test_explicit_config_display_follows_exact_observed_configmap_reference() ->
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -661,7 +660,7 @@ def test_configmap_reference_is_not_automatically_followed_without_display_reque
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -687,7 +686,7 @@ def test_source_cr_display_does_not_automatically_follow_supporting_configmap() 
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -710,7 +709,7 @@ def test_plain_inventory_question_does_not_expand_every_object() -> None:
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="widgets",
             api_version="example.io/v1", kind="Widget",
@@ -732,7 +731,7 @@ def test_non_inventory_health_question_expands_inventory_to_details() -> None:
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="clusteroperators",
             api_version="config.openshift.io/v1", kind="ClusterOperator",
@@ -1331,29 +1330,6 @@ def test_inventory_limit_can_be_increased_within_broker_ceiling() -> None:
 
     assert planned is not None
     assert planned[0].intents[0].limit == 500
-
-
-def test_actionable_model_goal_requires_reads_or_valid_supporting_evidence() -> None:
-    empty_health_plan = ReadPlan(
-        goal_type="health",
-        decision="answer_from_evidence",
-        scope_summary="Assess ClusterOperator health.",
-        supporting_evidence_ids=[],
-    )
-
-    assert plan_needs_evidence_repair(
-        empty_health_plan,
-        known_evidence_ids=set(),
-        has_completed_reads=False,
-    ) is True
-    supported = empty_health_plan.model_copy(update={
-        "supporting_evidence_ids": ["cluster-operators-1"],
-    })
-    assert plan_needs_evidence_repair(
-        supported,
-        known_evidence_ids={"cluster-operators-1"},
-        has_completed_reads=False,
-    ) is False
 
 
 def test_plan_decision_is_derived_from_typed_intents() -> None:

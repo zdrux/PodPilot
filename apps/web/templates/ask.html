@@ -159,7 +159,7 @@
         </section>
             {% endif %}
           {% endfor %}
-        {% elif not message.prefer_metric_card %}
+        {% else %}
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
         {% endif %}
         {% if message.role == 'assistant' and message.raw_responses %}

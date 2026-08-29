@@ -1276,24 +1276,6 @@ def derive_evidence_relationship_graph(
     }
 
 
-def plan_needs_evidence_repair(
-    plan: ReadPlan,
-    *,
-    known_evidence_ids: set[str],
-    has_completed_reads: bool,
-) -> bool:
-    """Reject an unsupported no-read answer for a model-classified operational goal."""
-
-    actionable = {"inventory", "health", "diagnose", "logs", "compare", "explain"}
-    has_valid_support = bool(known_evidence_ids.intersection(plan.supporting_evidence_ids))
-    return (
-        plan.goal_type in actionable
-        and plan.decision == "answer_from_evidence"
-        and not has_valid_support
-        and not has_completed_reads
-    )
-
-
 _BUILTIN_RESOURCE_TYPES: dict[str, tuple[str, str]] = {
     "configmap": ("v1", "ConfigMap"), "configmaps": ("v1", "ConfigMap"),
     "daemonset": ("apps/v1", "DaemonSet"), "daemonsets": ("apps/v1", "DaemonSet"),
@@ -1756,7 +1738,12 @@ def plan_known_read(
     alert_labels: dict[str, object] | None = None,
     now: datetime | None = None,
 ) -> tuple[ReadPlan, bool] | None:
-    """Compile unambiguous inventory and alert-scoped reads without model syntax."""
+    """Suggest bounded evidence reads without directing orchestration.
+
+    The compatibility boolean is a presentation hint for callers that still consume
+    the legacy tuple. It must never be used to stop, cancel, replace, or otherwise
+    steer an agent investigation.
+    """
 
     lowered = question.lower()
     metric_range_seconds = _requested_metric_range_seconds(question, now=now)
@@ -2065,14 +2052,14 @@ def plan_known_read(
             limit=inventory_limit,
         )
         intent = normalize_read_intent(proposed)
-        terminal_inventory = match.group("kind").lower().endswith("s")
+        inventory_presentation_hint = match.group("kind").lower().endswith("s")
         return (
             ReadPlan(
-                goal_type="inventory" if terminal_inventory else "diagnose",
+                goal_type="inventory" if inventory_presentation_hint else "diagnose",
                 scope_summary=f"List {intent.kind} resources in {intent.namespace}.",
                 intents=[intent],
             ),
-            terminal_inventory,
+            inventory_presentation_hint,
         )
 
     labels = alert_labels or {}
@@ -2209,8 +2196,8 @@ class ReadResult:
 
 
 @dataclass(frozen=True)
-class AutomaticReadFollowup:
-    """A deterministic, evidence-derived continuation within the existing read budget."""
+class SuggestedReadFollowup:
+    """An optional evidence-derived candidate that only an agent may select."""
 
     code: Literal[
         "tls_trust_retry", "traffic_path_investigation", "pod_log_investigation",
@@ -2441,15 +2428,20 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
     return findings[:20]
 
 
-def automatic_read_followups(
+def suggested_read_followups(
     intent: ReadIntent,
     observations: tuple[AdHocObservation, ...],
     *,
     question: str = "",
     goal_type: str | None = None,
     primary_kind: str | None = None,
-) -> tuple[AutomaticReadFollowup, ...]:
-    """Plan narrow retries and evidence expansion from normalized observations."""
+) -> tuple[SuggestedReadFollowup, ...]:
+    """Derive optional read candidates from normalized observations.
+
+    These values are suggestions for an agent-visible candidate catalog only. An
+    orchestrator must never execute them automatically or use their presence to
+    continue, stop, cancel, or replace the agent's investigation.
+    """
 
     traffic_question = bool(re.search(
         r"(?i)(?:https?://|\broute\b|\btraffic\b|\b(?:http|tls|ssl)\b|"
@@ -2490,7 +2482,7 @@ def automatic_read_followups(
         )
     )
     if explicit_config_display and not source_object_display and intent.tool == "get_resource":
-        referenced_configmaps: list[AutomaticReadFollowup] = []
+        referenced_configmaps: list[SuggestedReadFollowup] = []
         seen_configmaps: set[tuple[str, str]] = set()
         for observation in observations:
             data = observation.data
@@ -2506,7 +2498,7 @@ def automatic_read_followups(
                 if target in seen_configmaps:
                     continue
                 seen_configmaps.add(target)
-                referenced_configmaps.append(AutomaticReadFollowup(
+                referenced_configmaps.append(SuggestedReadFollowup(
                     code="referenced_configmap",
                     reason=(
                         f"Read the exact ConfigMap {namespace}/{name} referenced by the "
@@ -2526,7 +2518,7 @@ def automatic_read_followups(
     if traffic_question and intent.tool in {
         "get_resource", "list_resources", "search_resources",
     }:
-        traffic_followups: list[AutomaticReadFollowup] = []
+        traffic_followups: list[SuggestedReadFollowup] = []
         for route, evidence_id in observed_objects("Route")[:2]:
             metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
             spec = route.get("spec") if isinstance(route.get("spec"), dict) else {}
@@ -2534,7 +2526,7 @@ def automatic_read_followups(
             namespace = str(metadata.get("namespace") or "")
             service = str(target.get("name") or "")
             if namespace and service and str(target.get("kind") or "Service") == "Service":
-                traffic_followups.append(AutomaticReadFollowup(
+                traffic_followups.append(SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=(
                         f"Read the exact backend Service {namespace}/{service} referenced by the "
@@ -2563,7 +2555,7 @@ def automatic_read_followups(
                     if key and value is not None
                 )
                 if label_selector and len(label_selector) <= 512:
-                    traffic_followups.append(AutomaticReadFollowup(
+                    traffic_followups.append(SuggestedReadFollowup(
                         code="traffic_path_investigation",
                         reason=(
                             f"List the bounded Pods selected by backend Service {namespace}/{name}."
@@ -2576,7 +2568,7 @@ def automatic_read_followups(
                         evidence_ids=(evidence_id,),
                     ))
             traffic_followups.extend((
-                AutomaticReadFollowup(
+                SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=f"Inspect EndpointSlices for backend Service {namespace}/{name}.",
                     intent=ReadIntent(
@@ -2587,7 +2579,7 @@ def automatic_read_followups(
                     ),
                     evidence_ids=(evidence_id,),
                 ),
-                AutomaticReadFollowup(
+                SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=f"Inspect the legacy Endpoints object for backend Service {namespace}/{name}.",
                     intent=ReadIntent(
@@ -2600,7 +2592,7 @@ def automatic_read_followups(
         if traffic_followups:
             return tuple(traffic_followups[:6])
 
-        endpoint_pods: list[AutomaticReadFollowup] = []
+        endpoint_pods: list[SuggestedReadFollowup] = []
 
         def endpoint_targets(endpoint_object: dict[str, object]) -> list[dict[str, object]]:
             targets = endpoint_object.get("podTargets")
@@ -2645,7 +2637,7 @@ def automatic_read_followups(
                     namespace = str(target.get("namespace") or default_namespace)
                     name = str(target.get("name") or "")
                     if namespace and name:
-                        endpoint_pods.append(AutomaticReadFollowup(
+                        endpoint_pods.append(SuggestedReadFollowup(
                             code="traffic_path_investigation",
                             reason=(
                                 f"Read backend Pod {namespace}/{name} referenced by {kind} evidence."
@@ -2669,7 +2661,7 @@ def automatic_read_followups(
             )
         ]
         if trust_failures:
-            return (AutomaticReadFollowup(
+            return (SuggestedReadFollowup(
                 code="tls_trust_retry",
                 reason=(
                     "The verified HTTPS probe reached certificate validation but could not trust "
@@ -2687,7 +2679,7 @@ def automatic_read_followups(
         question,
     ))
     if detail_question and intent.tool in {"list_resources", "search_resources"}:
-        detail_reads: list[AutomaticReadFollowup] = []
+        detail_reads: list[SuggestedReadFollowup] = []
         seen_targets: set[tuple[str, str]] = set()
         for observation in observations:
             data = observation.data
@@ -2703,7 +2695,7 @@ def automatic_read_followups(
                 if not name or (namespace or "", name) in seen_targets:
                     continue
                 seen_targets.add((namespace or "", name))
-                detail_reads.append(AutomaticReadFollowup(
+                detail_reads.append(SuggestedReadFollowup(
                     code="configuration_detail",
                     reason=(
                         f"Read the exact {kind or 'resource'} {namespace + '/' if namespace else ''}"
@@ -2742,7 +2734,7 @@ def automatic_read_followups(
             ),
         )[:3]
         if prioritized:
-            return tuple(AutomaticReadFollowup(
+            return tuple(SuggestedReadFollowup(
                 code="pod_log_investigation",
                 reason=(
                     f"Inspect {candidate.namespace}/{candidate.pod} container "
@@ -2764,7 +2756,7 @@ def automatic_read_followups(
     if intent.tool != "pod_logs":
         return ()
     findings = derive_adhoc_findings([item.to_dict() for item in observations])
-    followups: list[AutomaticReadFollowup] = []
+    followups: list[SuggestedReadFollowup] = []
     for finding in findings:
         if (
             finding.get("severity") == "warning"
@@ -2783,14 +2775,14 @@ def automatic_read_followups(
             and intent.candidate_id
             and not intent.previous
         ):
-            followups.append(AutomaticReadFollowup(
+            followups.append(SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=intent.model_copy(update={"previous": True}),
                 evidence_ids=evidence_ids,
             ))
         followups.extend((
-            AutomaticReadFollowup(
+            SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=ReadIntent(
@@ -2799,7 +2791,7 @@ def automatic_read_followups(
                 ),
                 evidence_ids=evidence_ids,
             ),
-            AutomaticReadFollowup(
+            SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=ReadIntent(

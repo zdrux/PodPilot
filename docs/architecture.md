@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-29
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -16,7 +16,7 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 ## Components
 
-- **API/orchestrator**: accepts investigation requests, selects bounded diagnostic tools, enforces budgets and policy, and streams results.
+- **API/orchestrator**: accepts investigation requests, exposes bounded diagnostic candidates, validates agent-selected reads, enforces budgets and policy, and streams results.
 - **Web UI**: Jinja2/HTMX views served by the API show alert context, streamed investigation progress, evidence provenance, uncertainty, and suggested operator actions.
 - **OpenShift client**: reads the Kubernetes API plus Thanos, the OpenShift LokiStack
   gateway, and Alertmanager, validates TLS, and normalizes failures.
@@ -24,16 +24,41 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 - **Model adapter**: presents one internal contract over configured OpenAI-compatible endpoints, capability probes each profile, and turns normalized evidence into explanations while preserving citations and redaction rules.
 - **Evaluation harness**: replays sanitized incidents and scores evidence use, diagnosis quality, safety, and abstention.
 
+## Agent-control boundary
+
+The agent owns discovery direction, selection of the next useful read, evidence sufficiency,
+termination, conclusions, and operator-facing prose. Collectors, registered read compilers,
+resource catalogs, relationship graphs, findings, and enrichment packs produce normalized evidence
+or optional grounded candidates only. Their completion, failure, result shape, or legacy
+presentation hint cannot stop, continue, cancel, replace, or redirect an investigation.
+
+The orchestrator retains enforcement authority rather than investigative authority. It validates
+schemas and exact targets, denies sensitive resources and mutations, applies RBAC, redaction,
+read/time/output bounds, and requires approval at the mutation boundary. An invalid target may be
+returned to the agent for correction, but the server does not substitute a different read. A valid
+agent decision to answer is accepted even when other candidates exist. A valid final answer is
+stored after redaction and safe-Markdown normalization without style rewrites, deterministic prose
+injection, or server-directed gap recovery. Citation conflicts change evidence status and visible
+limitations; they do not erase the agent's text. Deterministic answer generation is reserved for a
+model-provider or structured-contract failure after evidence has already been collected.
+
+Native resource tables, metric cards, and parsed dynamic-column Markdown tables are presentation
+views. They are additive and never suppress the complete agent response. `list_resources`,
+`search_resources`, and `watch_resources` return bounded projections with
+`fullObjectsIncluded=false`; the agent decides whether exact object reads are material. Raw bounded
+log tails remain available to the final agent instead of being replaced by a separate server-side
+log interpretation.
+
 ## Current Runtime
 
 The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
-agent path. Before the free-form
-loop, normal code applies the existing high-confidence compiler plus the same registered metric,
-audit, and catalog-grounded resource semantic compilers used by guarded mode. When one matches,
-PodPilot executes those registered readers across the selected clusters,
-persists their normalized evidence, and supplies the evidence plus any deterministic ranking table
-to the model. This preserves enrichments such as Loki-backed application-log volume, health
-summaries, and registered metric rankings; it is additive and does not restrict later agent actions.
+agent path. Before the free-form loop, normal code may use high-confidence metric, audit, or
+catalog-grounded semantics to expose validated read candidates. Those compilers do not execute a
+read, choose a direction, or decide that the request is complete. The agent selects reads through
+the same guarded boundary as any other read, receives their normalized evidence, and alone decides
+whether to investigate further or answer. This preserves enrichments such as Loki-backed
+application-log volume, health summaries, and registered metric rankings without turning an
+enrichment pack into an orchestration policy.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
@@ -42,13 +67,12 @@ renders those exact collection failures and discards speculative model explanati
 High-confidence router Pod resource-metric requests bypass model classification and compile to CPU
 and memory reads scoped to the `openshift-ingress` namespace and grouped by Pod. Router traffic,
 request, and bandwidth questions remain separate HAProxy metric semantics.
-Explicit retrieval requests backed by a complete high-confidence plan do not call the semantic
-classifier in unrestricted mode. Causal wording such as `why`, `investigate`, `diagnose`, or
-`root cause` keeps the normalized result as initial evidence and continues into the shell loop;
-presentation metadata never decides whether investigation is complete. This distinction lets a
-Pod GET seed an investigation without treating `status.phase: Pending` as its explanation. The
-retrieval shortcut includes Strimzi Kafka existence and inventory questions, which compile to a bounded
-`kafkas.kafka.strimzi.io` list across namespaces and render from normalized API evidence.
+Explicit retrieval requests may receive exact grounded candidates without losing semantic
+classification or agent control. Causal and non-causal wording follows the same rule: presentation
+metadata never decides whether investigation is complete. A Pod GET can therefore seed an
+investigation without treating `status.phase: Pending` as its explanation. Strimzi Kafka existence
+and inventory questions can expose a bounded `kafkas.kafka.strimzi.io` list candidate across
+namespaces, but the agent still chooses whether to use it and what it means.
 Both interrogative and imperative wording are recognized, including “are there Kafka clusters?”
 and “show/list all deployed Kafka clusters.” The same registered read executes independently on
 every selected OpenShift cluster. Found objects, complete zero-object results, and failed/API-missing
@@ -71,19 +95,15 @@ reuse/persistence, progress, command metadata audit, and the run deadline.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
 successful commands are not automatically repeated and the loop cannot retry indefinitely.
-When a complete closed-form retrieval enrichment succeeds, its deterministic presentation is authoritative:
-PodPilot renders it once and suppresses any model-proposed shell call for the same turn. Closed-form
-inventory means an explicit identifiers-only, count, existence, or prior-snapshot presentation goal;
-a bare show/list request for configuration-bearing resources is not closed merely because the LIST
-succeeded. Such requests retain the normalized resource card, then continue into agent interpretation
-so selectors, rules, effects, and other material object semantics can be explained. This avoids
-confusing collection completeness with answer completeness. Completion is constraint-preserving
-rather than verb-based. Collection classification carries an
+No retrieval enrichment is authoritative over the agent and no collector suppresses a model-proposed
+read. Collection completeness is evidence about the bounded read, not answer completeness. Native
+resource cards remain additive while the agent can explain selectors, rules, effects, and other
+material object semantics. Collection classification carries an
 optional grounded object-field predicate separately from requested output fields. Exact and
 case-insensitive `contains` predicates compile to bounded `search_resources` reads across every
 selected cluster. A plain resource list cannot satisfy a question containing a material field
-predicate; if classification drops that constraint, the enrichment remains non-terminal and is
-not rendered as the answer. Search results distinguish complete absence from an empty result at
+predicate; if classification drops that constraint, the candidate is not treated as satisfying the
+request. Search results distinguish complete absence from an empty result at
 the scan ceiling, which remains explicitly inconclusive.
 Opaque recent-object references retain their source cluster when uniquely attributable. A causal
 follow-up about one result therefore investigates that cluster instead of repeating the same
@@ -99,19 +119,16 @@ turn “last 5 audit entries” into the configured default of 20.
 Backward window expansion is reserved for an explicit requested count. A vague `recent` audit
 request uses the configured initial window once and may return fewer than the default display
 limit; a model-invented convenience count cannot widen that query toward the audit ceiling.
-The registered Loki audit reader is authoritative in unrestricted mode even when it times out or
-is denied. Audit data is not a Kubernetes `events.audit.k8s.io` resource, so a failed or partially
-failed registered query renders its evidence and limitations without entering the generic shell
-loop. This also avoids assuming optional utilities such as `jq` exist in the runner image.
-Registered Strimzi Kafka-cluster inventory is authoritative by the same principle: an unavailable
-Kafka API on one or every selected cluster is reported directly and cannot fall through to repeated
-guesses such as `oc get kakas`, `kafkas`, or `kafka` on a single cluster.
+The registered Loki audit reader and Strimzi Kafka inventory are grounded capabilities, not terminal
+routes. Their success, timeout, denial, or API-missing result is returned to the agent with exact
+cluster attribution. Candidate validation prevents misspelled or invented resource types, while the
+agent remains free to select another safe read or explain the limitation.
 Namespace-scoped Kafka topic-storage requests are a registered two-stage read. PodPilot first lists
 exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
 `kafka_topic_storage` query per observed CR and groups the result by topic. An empty namespace,
-partial metric failure, or denied monitoring read remains authoritative and cannot fall through to
-broker Pod exec. This resolves the Kafka name from observed API evidence instead of requiring the
-model or operator to supply it.
+partial metric failure, or denied monitoring read remains visible evidence. This resolves the Kafka
+name from observed API evidence instead of requiring the model or operator to supply it, without
+forcing the agent to stop.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner polls the process silently and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible
@@ -693,20 +710,17 @@ protocol. When a provider makes that contradictory claim, deterministic code
 replaces it with observed facts, the supported conclusion, and the remaining direct
 probe or application evidence needed.
 
-The read broker also owns two deterministic investigation continuations. A verified
-HTTPS probe that fails only at certificate trust is repeated at most once per target
-with the identical URL, method, connection override, Host, and SNI but
-`tls_verify=false`; both observations remain evidence and the retry is explicitly
-unauthenticated. Pod evidence assigns deterministic investigation priority to
-unready, restarting, or non-running containers, allowing bounded current-log reads
-without model-authored coordinates. Logs from any container are classified into
+The read broker can expose evidence-derived candidates without selecting them. A verified
+HTTPS probe that fails only at certificate trust may expose the identical target with
+`tls_verify=false`; Pod evidence may expose exact current-log candidates for unready, restarting,
+or non-running containers. The agent alone decides whether to select either read. Logs from any
+container can be classified into
 typed operational signals (crash/exception, resource pressure, TLS, DNS, network,
 authorization, storage, dependency, application error, or warning). Each structured
 finding records exact Pod/container provenance, repetition and normalized signature
 counts, observed timestamps, bounded samples, paths, and endpoints. Material signals
-produce exact Pod and namespace Event follow-ups; crash/resource signals may also
-read the same container's previous stream. Automatic continuations share the existing
-per-turn budget, are capped and deduplicated, and cannot read Secrets or expand RBAC.
+produce optional exact Pod, Event, and previous-stream candidates. Candidates are capped and
+deduplicated, cannot read Secrets or expand RBAC, and consume budget only after agent selection.
 Findings are evidence summaries, not executable instructions, and neither pattern
 matches nor log correlation alone establish causality.
 
@@ -732,26 +746,18 @@ correction attempt receives only an error code and instruction. The same check r
 fields or fenced `investigation_gaps` serialized inside the answer
 string. Provider attempts to append a recommendation heading or `recommended_actions` serialization
 are removed before Markdown rendering because suggested controls are composed independently.
-For compatibility with earlier providers, server-side gap state is still reconciled against the final
-capability ledger. Final validation rejects prose that calls a collected capability “not collected,”
-removes stale gaps, and strips provider-facing citation markers after allowlisted citations are
-recovered. Once an HTTPS probe completes TLS and
+Final validation preserves agent-authored gaps and prose while recording citation/evidence conflicts
+as limitations and lowering evidence status when required. Provider-facing citation markers are
+stripped after allowlisted citations are recovered. Once an HTTPS probe completes TLS and
 returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
 reads because they can distinguish application, authentication, and upstream failures.
-Persistent incompleteness activates deterministic Route/TLS or generic cited-observation fallback
-rendering. Independently, every current-turn inventory/existence answer with successful list evidence
-is augmented by a deterministic table of OpenShift cluster, kind, namespace, object name, and Ready
-condition. This preserves a concise model interpretation while guaranteeing that verified object
-identities are visible. After live API discovery resolves an explicit inventory request, normal code
-executes the same bounded resource LIST independently on each selected cluster instead of asking the
-model to rediscover that syntax per cluster. A readable catalog with no matching resource type becomes
-explicit cited discovery evidence; it is rendered separately from an installed/readable API that returns
-zero objects and never causes an unrelated catalog resource to be read. A truncated LIST or incomplete
-field search cannot support a named-object absence claim; validation replaces that conclusion with an
-unresolved statement requiring an exact GET or complete search. Normal code then composes a bounded **Backend log
-findings** section into either the accepted model answer or deterministic fallback, preserving
-exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
-supporting evidence citations.
+Provider or structured-contract failure may activate a deterministic cited-observation fallback.
+Independently, cited list evidence can render an additive native table of OpenShift cluster, kind,
+namespace, object name, and Ready condition. This preserves the complete model interpretation while
+making verified object identities visible. A readable catalog with no matching resource type remains
+distinct from an installed/readable API returning zero objects. A truncated LIST or incomplete field
+search cannot support a conclusive absence claim. Normalized log findings remain evidence and optional
+candidates; normal code does not append them to or replace a valid agent answer.
 Route/TLS fallback also composes relevant current-turn Service, endpoint, Pod, and probe observations.
 A completed TLS probe with an HTTP response proves the tested path has a TLS-capable termination point,
 but does not by itself identify that component, exclude later plain-HTTP forwarding, or explain the
@@ -761,23 +767,12 @@ returned application status.
 
 1. An operator selects an alert or describes a symptom.
 2. The API establishes scope, time range, and a bounded tool budget.
-3. Deterministic tools collect only the required cluster evidence.
-4. The diagnostics engine correlates observations and records provenance.
-5. Sensitive values are removed before any external model call. When Pod logs were read,
-   a separate context-isolated structured request semantically analyzes all current bounded
-   excerpts and returns only cited potential issues.
-6. A supported server-owned plan can execute registered read-only follow-up checks.
-7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
-8. Investigation chat may collect additional bounded alert-scoped evidence and
-   answers with server-validated citations.
-9. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
-
-Clickable suggested checks are focused evidence extensions rather than new open-ended
-investigations. The server revalidates the opaque candidate, executes exactly that one read,
-and stops collection. The answer model receives a compact task containing the original operator
-question, the selected-check label, and bounded evidence; prior chat prose, summaries, knowledge
-payloads, and another planning cycle are excluded. Already-collected capability classes are not
-offered again as buttons in the same evidence state.
+3. The agent selects bounded read-only tools; normal code validates targets and policy.
+4. Collectors record normalized observations and provenance without selecting the next step.
+5. Sensitive values are removed before any external model call; bounded raw log evidence remains
+   available to the same agent for interpretation.
+6. The agent reassesses the expanded evidence, revises its direction, and decides when to answer.
+7. The UI presents the complete answer, additive evidence views, activity, provenance, and uncertainty.
 
 Natural-language Pod log requests with both an explicit namespace and a Pod-name hint receive a
 generic deterministic discovery anchor. PodPilot performs a bounded `metadata.name contains` Pod

@@ -1169,3 +1169,27 @@ reads in rendered coverage and do not enter the shell loop.
 Consequences: Kafka inventory uses one canonical Strimzi contract, reports what happened on every
 selected cluster, and cannot infer fleet-wide absence from one cluster or from unrelated Knative
 Kafka CRDs.
+
+## 2026-08-29 - Collectors never control agent direction or conclusions
+
+Context: Registered collectors and recovery helpers accumulated completion booleans, authoritative
+failure paths, automatic follow-up reads, sufficiency reviews, and deterministic answer composition.
+Although each was intended to improve a narrow request, together they could stop an investigation,
+replace agent prose, or hide evidence such as raw log tails and Markdown beneath a native card.
+
+Decision: Treat every collector, compiler, catalog match, relationship edge, finding, and
+enrichment result as evidence or a non-executable candidate only. The agent alone chooses reads,
+sufficiency, stopping, conclusions, and prose. Ignore legacy terminal hints. Do not automatically
+retry TLS insecurely, follow object references, collect logs, execute answer-authored gaps, recover
+an unselected candidate, or rewrite a schema-valid answer for style. Preserve the agent response;
+use evidence status and limitations for grounding problems. Keep native cards/tables additive.
+Retain schema and target validation, sensitive-resource denial, redaction, RBAC, bounded budgets,
+timeouts, and mutation approval as non-negotiable enforcement boundaries. Deterministic prose is
+permitted only as a provider/structured-contract failure fallback after collection.
+
+Consequences: `list_resources` and similar helpers remain valuable bounded sensors without becoming
+alternate planners. Adding a collector cannot alter the investigation state machine merely by
+returning success, failure, completeness, or a preferred presentation. Tests must provide an agent
+decision when they expect a read and must assert that server-side recovery does not occur after an
+agent stop. Historical decisions describing terminal registered enrichments or automatic
+continuations are superseded by this decision.
