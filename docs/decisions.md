@@ -1135,3 +1135,19 @@ alternate agent. The agent can correlate further evidence while the UI retains s
 New registered readers cannot accidentally suppress causal investigation by selecting a preferred
 renderer, and cross-cluster name collisions no longer send a referenced-object follow-up to every
 selected cluster.
+
+## 2026-08-29 - Registered audit collection fails closed
+
+Context: When the authoritative Loki audit query timed out, unrestricted mode entered the generic
+shell loop. The model attempted `events.audit.k8s.io`, which is not how OpenShift audit logs are
+exposed, and assumed an optional `jq` binary existed. These secondary failures obscured the real
+timeout without providing equivalent evidence.
+
+Decision: Treat a compiled `query_audit_events` plan as authoritative for the turn, including
+partial and failed multi-cluster results. Render the registered evidence or exact collection
+failure and do not enter the unrestricted shell loop. Continue to preserve explicit username,
+namespace, resource, operation, outcome, time, and result-limit filters.
+
+Consequences: Audit requests cannot fall back to invented Kubernetes resources or undeclared
+runner utilities. Operators see the actionable Loki timeout or authorization failure directly;
+restoring the registered audit source is the required recovery path.

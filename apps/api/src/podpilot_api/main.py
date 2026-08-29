@@ -4421,6 +4421,16 @@ def _failed_kafka_topic_storage_is_terminal(
     )
 
 
+def _registered_audit_plan_is_authoritative(plan: ReadPlan | None) -> bool:
+    """Audit evidence has no valid generic Kubernetes-resource shell fallback."""
+
+    return bool(
+        plan is not None
+        and plan.intents
+        and all(intent.tool == "query_audit_events" for intent in plan.intents)
+    )
+
+
 def _read_intent_signature(intent: ReadIntent) -> str:
     """Deduplicate exact reads even when equivalent Pod candidates have different IDs."""
 
@@ -9782,11 +9792,17 @@ def create_app(
                         activity=enrichment_activity,
                     )
                     failed_kafka_storage_terminal = False
+                    authoritative_audit_terminal = _registered_audit_plan_is_authoritative(
+                        base_enrichment[0] if base_enrichment is not None else None
+                    )
                     if (
                         deterministic_answer is None
-                        and _failed_kafka_topic_storage_is_terminal(
-                            base_enrichment[0] if base_enrichment is not None else None,
-                            enrichment_activity,
+                        and (
+                            authoritative_audit_terminal
+                            or _failed_kafka_topic_storage_is_terminal(
+                                base_enrichment[0] if base_enrichment is not None else None,
+                                enrichment_activity,
+                            )
                         )
                     ):
                         failure_answer = _authoritative_unrestricted_failure(
@@ -9795,7 +9811,8 @@ def create_app(
                         if failure_answer is not None:
                             deterministic_answer = {"content": failure_answer}
                             preferred_evidence_view = "deterministic_primary"
-                            failed_kafka_storage_terminal = True
+                            if not authoritative_audit_terminal:
+                                failed_kafka_storage_terminal = True
                     deterministic_reads_succeeded = bool(enrichment_activity) and all(
                         item.get("status") == "succeeded"
                         for item in enrichment_activity
@@ -9811,7 +9828,8 @@ def create_app(
                     registered_answer_complete = bool(
                         deterministic_answer is not None
                         and (
-                            failed_kafka_storage_terminal
+                            authoritative_audit_terminal
+                            or failed_kafka_storage_terminal
                             or (
                                 enrichment_terminal
                                 and deterministic_reads_succeeded

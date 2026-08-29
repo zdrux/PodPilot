@@ -81,6 +81,10 @@ Audit classification is similarly reconciled with unambiguous operator constrain
 compilation. Explicit last/top counts, delete-versus-mutation scope, success/failure outcome, and
 recognized resource kinds override broader model defaults; an omitted model `result_limit` cannot
 turn “last 5 audit entries” into the configured default of 20.
+The registered Loki audit reader is authoritative in unrestricted mode even when it times out or
+is denied. Audit data is not a Kubernetes `events.audit.k8s.io` resource, so a failed or partially
+failed registered query renders its evidence and limitations without entering the generic shell
+loop. This also avoids assuming optional utilities such as `jq` exist in the runner image.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner polls the process silently and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible

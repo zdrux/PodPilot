@@ -438,6 +438,9 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Audit-adherence tests must prove an explicit last/top count overrides the configured default and
   that delete/mutation plus successful/failed wording overrides broader classifier output before
   the Loki query is compiled.
+- Audit-failure authority tests must prove a timed-out or denied registered Loki audit read renders
+  its real failure without calling the model shell loop, `oc-runner`, `events.audit.k8s.io`, or
+  optional command-line JSON utilities.
 - Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
   registered ranking and original top-N while changing only the requested range. The log-volume
   fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day

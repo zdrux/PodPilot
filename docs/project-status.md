@@ -100,6 +100,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Explicit audit counts and filters are now authoritative after classification. “Last 5” no longer
   expands to the default 20 when the model omits `result_limit`; delete/mutation scope and
   successful/failed outcome wording likewise override broader model defaults before Loki access.
+- Registered Loki audit reads now fail closed in unrestricted mode. A timeout, denial, or partial
+  multi-cluster result is rendered directly instead of falling through to an invalid
+  `events.audit.k8s.io`/`jq` shell attempt.
 - Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
   namespace log-volume ranking. The original scope and top-N are retained while only the range is
   replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting

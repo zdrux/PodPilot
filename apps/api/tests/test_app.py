@@ -8382,6 +8382,83 @@ def test_terminal_unrestricted_audit_enrichment_suppresses_duplicate_shell_path(
     engine.dispose()
 
 
+def test_failed_unrestricted_audit_query_does_not_fall_back_to_shell(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="audit", operation="audit", cardinality="collection",
+                namespace="ai-ops", audit_username="druciare-adm",
+                audit_operation_scope="deletes", audit_outcome="all",
+                evidence_goal="List recent delete audit activity for the supplied user.",
+            )
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("a failed authoritative audit query must not enter the shell loop")
+
+    class AuditExplorer:
+        def execute(self, intent):
+            assert intent == ReadIntent(
+                tool="query_audit_events", namespace="ai-ops",
+                audit_username="druciare-adm", audit_operation_scope="deletes",
+                audit_outcome="all", audit_search_until_limit=True,
+                range_seconds=3600, limit=20,
+            )
+            raise ReadOnlyExplorerError(
+                "The Loki query exceeded the configured 30-second timeout."
+            )
+
+    class Runner:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("audit failure must not invoke oc-runner")
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=AuditExplorer(),
+        agent_runner=Runner(),
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "show me recent delete operations in the ai-ops namespace "
+                    'by the user "druciare-adm"'
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert "Loki query exceeded the configured 30-second timeout" in rendered.text
+    assert "cannot confirm the requested result" in rendered.text
+    assert "events.audit.k8s.io" not in rendered.text
+    assert "jq" not in rendered.text
+
+
 def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
     tmp_path: Path,
 ) -> None:
