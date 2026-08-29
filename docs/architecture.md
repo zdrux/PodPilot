@@ -71,10 +71,14 @@ reuse/persistence, progress, command metadata audit, and the run deadline.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
 successful commands are not automatically repeated and the loop cannot retry indefinitely.
-When a complete explicit-retrieval enrichment succeeds, its deterministic presentation is authoritative:
-PodPilot renders it once and suppresses any model-proposed shell call for the same turn. This
-prevents a second, less capable collection path from duplicating or contradicting typed evidence.
-Completion is constraint-preserving rather than verb-based. Collection classification carries an
+When a complete closed-form retrieval enrichment succeeds, its deterministic presentation is authoritative:
+PodPilot renders it once and suppresses any model-proposed shell call for the same turn. Closed-form
+inventory means an explicit identifiers-only, count, existence, or prior-snapshot presentation goal;
+a bare show/list request for configuration-bearing resources is not closed merely because the LIST
+succeeded. Such requests retain the normalized resource card, then continue into agent interpretation
+so selectors, rules, effects, and other material object semantics can be explained. This avoids
+confusing collection completeness with answer completeness. Completion is constraint-preserving
+rather than verb-based. Collection classification carries an
 optional grounded object-field predicate separately from requested output fields. Exact and
 case-insensitive `contains` predicates compile to bounded `search_resources` reads across every
 selected cluster. A plain resource list cannot satisfy a question containing a material field
@@ -344,7 +348,8 @@ resource inventory, resource details, workload logs, Kubernetes Events, cluster 
 cluster audit events, endpoint probe, general investigation, named-object configuration guidance,
 or conceptual explanation.
 The same tool-free contract carries semantic arguments such as resource concept, exact
-namespace/object coordinates, requested fields, time range, outcome, and bounded result count.
+namespace/object coordinates, requested fields, time range, outcome, bounded result count, and an
+answer goal (`identifiers`, `count`, `existence`, `configuration`, `behavior`, or `investigation`).
 Normal code verifies that exact coordinates occur in the operator's question or recent context,
 then compiles the selected capability into one registered query per selected cluster
 and renders the evidence directly as a multi-cluster table. This lets the model handle
@@ -464,9 +469,11 @@ the native collapsible/CSV table component, and leaves surrounding prose in its 
 These blocks are explicitly answer-derived: parsing does not promote interpreted cells to observed
 cluster facts. The complete Markdown answer remains stored as a backward-compatible fallback for
 clients that do not consume presentation metadata. When the semantic classifier says names are
-sufficient, that deterministic table is the final answer: PodPilot skips the general
+explicitly sufficient, that deterministic table is the final answer: PodPilot skips the general
 final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
-completed inventory request. Multi-cluster totals distinguish clusters queried from
+completed closed-form inventory request. A successful LIST remains a durable fallback if the
+subsequent agent response fails, but it does not preempt interpretation for configuration, behavior,
+investigation, requested-field, or uncertain goals. Multi-cluster totals distinguish clusters queried from
 clusters with matches. A missing projected Ready condition is displayed as `Unknown`,
 never as proof that the object is running or unhealthy. Inventory planning and malformed-plan
 recovery preserve the classifier's requested resource Kind: generic scope words such as `cluster`

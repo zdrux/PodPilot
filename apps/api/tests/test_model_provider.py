@@ -902,7 +902,7 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     request = completions.requests[0]
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
-        "capability", "cardinality", "resource_query", "object_reference_id",
+        "capability", "cardinality", "answer_goal", "resource_query", "object_reference_id",
         "scope_reference_id", "relationship_reference_id",
         "relationship_selector_key", "object_name",
         "namespace", "requested_fields", "resource_filter", "container", "previous_logs",
@@ -938,6 +938,20 @@ def test_resource_inventory_capability_preserves_field_filter() -> None:
     assert inquiry.resource_filter == ResourceFieldFilterSemantics(
         field="spec.host", operator="contains", value=".az.cibc.com",
     )
+
+
+def test_configuration_inventory_goal_requires_object_details() -> None:
+    inquiry = CapabilitySelection(
+        capability="resource_inventory",
+        cardinality="collection",
+        answer_goal="configuration",
+        resource_query="NetworkPolicy",
+        needs_object_details=False,
+        evidence_goal="Show and explain the configured NetworkPolicies.",
+    ).to_inquiry_semantics()
+
+    assert inquiry.answer_goal == "configuration"
+    assert inquiry.needs_object_details is True
 
 
 def test_resource_inventory_capability_preserves_prior_query_continuation() -> None:

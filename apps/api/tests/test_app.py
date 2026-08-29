@@ -49,6 +49,7 @@ from podpilot_api.main import (
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _inventory_plan_scope_errors,
+    _inventory_answer_is_closed_form,
     _latest_audit_query_semantics,
     _latest_metric_query_semantics,
     _latest_resource_query_semantics,
@@ -3496,6 +3497,37 @@ def test_cluster_node_ranking_guard_overrides_inventory_semantics() -> None:
     assert result.evidence[0]["data"]["ranking"][0]["labels"] == {
         "nodename": "worker-1",
     }
+
+
+@pytest.mark.parametrize(
+    ("question", "answer_goal", "requested_fields", "expected"),
+    [
+        ("show me the NetworkPolicies", "configuration", [], False),
+        ("show me the NetworkPolicies", "unknown", [], False),
+        ("list only the NetworkPolicy names", "identifiers", [], True),
+        ("how many NetworkPolicies are present?", "count", [], True),
+        ("are there any NetworkPolicies?", "existence", [], True),
+        ("show me all deployed Kafka clusters", "unknown", [], True),
+        ("list Routes and include spec.host", "identifiers", ["spec.host"], False),
+    ],
+)
+def test_inventory_completion_requires_a_closed_answer_goal(
+    question: str,
+    answer_goal: str,
+    requested_fields: list[str],
+    expected: bool,
+) -> None:
+    inquiry = InquirySemantics(
+        mode="inventory",
+        operation="inventory",
+        cardinality="collection",
+        answer_goal=answer_goal,
+        resource_query="NetworkPolicy",
+        requested_fields=requested_fields,
+        evidence_goal="Collect the requested resources.",
+    )
+
+    assert _inventory_answer_is_closed_form(question, inquiry) is expected
 
 
 def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
@@ -8513,6 +8545,164 @@ def test_unrestricted_pending_pod_question_continues_after_exact_seed(
     assert "get events" in runner.commands[0]
     assert "unbound PVC" in rendered.text
     assert "Question-focused resource evidence" not in rendered.text
+
+
+def test_unrestricted_configuration_inventory_continues_into_agent_interpretation(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="inventory",
+                operation="inventory",
+                cardinality="collection",
+                answer_goal="configuration",
+                resource_query="NetworkPolicy",
+                namespace="cdp-dit1",
+                evidence_goal="Show and interpret the configured NetworkPolicies.",
+            )
+
+        def next_agent_step(self, _profile, _api_key, messages):
+            self.agent_messages.append(list(messages))
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant",
+                    "content": (
+                        "### NetworkPolicy behavior\n\n"
+                        "| Name | Ingress rules | Pod selector | Policy types |\n"
+                        "| --- | --- | --- | --- |\n"
+                        "| deny-by-default | No ingress rules (blocks inbound traffic) "
+                        "| `{}` (all pods) | Ingress |\n\n"
+                        "The policy selects every Pod and isolates ingress unless another "
+                        "policy allows the traffic."
+                    ),
+                },
+                content=(
+                    "### NetworkPolicy behavior\n\n"
+                    "| Name | Ingress rules | Pod selector | Policy types |\n"
+                    "| --- | --- | --- | --- |\n"
+                    "| deny-by-default | No ingress rules (blocks inbound traffic) "
+                    "| `{}` (all pods) | Ingress |\n\n"
+                    "The policy selects every Pod and isolates ingress unless another "
+                    "policy allows the traffic."
+                ),
+                tool_calls=(),
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "networkpolicies.networking.k8s.io",
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="network-policy-inventory",
+                tool="list_resources",
+                summary="Read one NetworkPolicy resource.",
+                source="kubernetes:networking.k8s.io/v1:NetworkPolicy:cdp-dit1/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "resource": "networkpolicies.networking.k8s.io",
+                    "apiVersion": "networking.k8s.io/v1",
+                    "kind": "NetworkPolicy",
+                    "scope": "cdp-dit1",
+                    "names": ["deny-by-default"],
+                    "objects": [{
+                        "namespace": "cdp-dit1",
+                        "name": "deny-by-default",
+                    }],
+                    "items": [{
+                        "apiVersion": "networking.k8s.io/v1",
+                        "kind": "NetworkPolicy",
+                        "metadata": {
+                            "namespace": "cdp-dit1",
+                            "name": "deny-by-default",
+                        },
+                        "spec": {
+                            "podSelector": {},
+                            "policyTypes": ["Ingress"],
+                            "ingress": [],
+                        },
+                    }],
+                    "objectListComplete": True,
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "show me the NetworkPolicies in the cdp-dit1 namespace"},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].tool == "list_resources"
+    assert explorer.calls[0].namespace == "cdp-dit1"
+    assert len(provider.agent_messages) == 1
+    assert "network-policy-inventory" in str(provider.agent_messages[0])
+    assert "Observed resources" in rendered.text
+    assert "Answer table" in rendered.text
+    assert "Ingress rules" in rendered.text
+    assert "blocks inbound traffic" in rendered.text
+    assert "isolates ingress unless another policy allows" in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity.get("preferred_evidence_view") != "deterministic_primary"
+    engine.dispose()
 
 
 def test_unrestricted_router_pod_metrics_are_terminal_native_enrichment(

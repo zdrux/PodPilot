@@ -298,10 +298,15 @@ records remain, but execution now awaits a separate approval-gated action servic
   inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and
   search reads also normalize the common `namespace: "*"` shorthand to an omitted namespace before
   broker validation.
-- Simple inventory turns now finish through the deterministic renderer without a general final-model
-  answer/correction pass or unrelated suggested checks. Multi-cluster summaries report matches as
-  “X of Y queried clusters,” and absent Ready conditions display as `Unknown` rather than implying
-  that a discovered custom resource is running.
+- Closed-form inventory turns (explicit identifiers-only, count, existence, or prior-snapshot
+  presentation) finish through the deterministic renderer without a general final-model
+  answer/correction pass or unrelated suggested checks. Bare show/list requests for
+  configuration-bearing resources now retain their normalized observed-resource card and continue
+  into agent interpretation. The classifier records the requested answer goal, and normal code
+  defaults uncertain inventory goals to non-terminal so collection completeness cannot masquerade as
+  answer completeness. Multi-cluster summaries report matches as “X of Y queried clusters,” and
+  absent Ready conditions display as `Unknown` rather than implying that a discovered custom resource
+  is running.
 - Model planning now infers natural-language goals while the server derives collection
   decisions from typed intents. Unsupported
   operational no-read answers receive one structured repair attempt. If both

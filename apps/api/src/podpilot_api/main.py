@@ -4787,6 +4787,23 @@ _FIELD_PREDICATE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_CLOSED_FORM_COUNT_PATTERN = re.compile(
+    r"\b(?:how\s+many|count|number\s+of)\b",
+    re.IGNORECASE,
+)
+_CLOSED_FORM_IDENTIFIER_PATTERN = re.compile(
+    r"\b(?:names?|identifiers?|ids?)\s+(?:only|alone)\b|"
+    r"\b(?:list|show|display|give\s+me)\b.{0,60}\b(?:names?|identifiers?|ids?)\b",
+    re.IGNORECASE,
+)
+_CLOSED_FORM_EXISTENCE_PATTERN = re.compile(
+    r"\b(?:are|is)\s+there\s+any\b|"
+    r"\b(?:do|does)\b.{0,80}\b(?:exist|have)\b|"
+    r"\b(?:what|which)\b.{0,100}\b(?:available|exist|present|installed|deployed|configured)\b|"
+    r"\b(?:show|list|display)\b.{0,80}\ball\b.{0,80}\b(?:installed|deployed|configured)\b",
+    re.IGNORECASE,
+)
+
 
 def _question_has_field_predicate(question: str) -> bool:
     """Detect a material collection constraint that must not degrade to a plain list."""
@@ -4807,6 +4824,39 @@ def _question_requires_agentic_investigation(
         and inquiry.capability in {"cluster_investigation", "resource_details"}
         and not _EXPLICIT_RETRIEVAL_PATTERN.search(question)
     )
+
+
+def _question_explicitly_requests_closed_inventory(question: str) -> bool:
+    """Recognize a closed response shape without treating a bare list/show as sufficient."""
+
+    return bool(
+        _CLOSED_FORM_COUNT_PATTERN.search(question)
+        or _CLOSED_FORM_IDENTIFIER_PATTERN.search(question)
+        or _CLOSED_FORM_EXISTENCE_PATTERN.search(question)
+    )
+
+
+def _inventory_answer_is_closed_form(
+    question: str,
+    inquiry: InquirySemantics | None,
+) -> bool:
+    """Terminate inventory only when the requested answer shape is explicitly closed."""
+
+    if inquiry is None:
+        return _question_explicitly_requests_closed_inventory(question)
+    if inquiry.mode != "inventory":
+        return False
+    if inquiry.requested_fields or inquiry.needs_object_details:
+        return False
+    if inquiry.answer_goal in {"identifiers", "count", "existence"}:
+        return True
+    if inquiry.answer_goal in {"configuration", "behavior", "investigation"}:
+        return False
+    if inquiry.continues_prior_resource_query and _resource_followup_reuses_snapshot(
+        question, {"kind": inquiry.resource_query},
+    ):
+        return True
+    return _question_explicitly_requests_closed_inventory(question)
 
 
 def _resource_query_terms(value: object) -> set[str]:
@@ -6306,6 +6356,7 @@ def _resolve_resource_inquiry(
     resource_filter = prior_resource_query.get("resource_filter")
     return InquirySemantics(
         mode="inventory", operation="inventory", cardinality="collection",
+        answer_goal="identifiers",
         resource_query=prior_kind,
         namespace=(
             inquiry.namespace
@@ -10260,6 +10311,12 @@ def create_app(
                     terminal_kafka_inventory = bool(
                         known_read is not None
                         and known_read[1]
+                        and (
+                            is_kafka_topic_storage_discovery_plan(known_read[0])
+                            or _question_explicitly_requests_closed_inventory(
+                                source_question
+                            )
+                        )
                         and known_read[0].intents
                         and all(
                             intent.tool == "list_resources"
@@ -10581,26 +10638,44 @@ def create_app(
                         for item in enrichment_activity
                         if item.get("source") == "deterministic_enrichment"
                     )
-                    if (
-                        deterministic_answer is not None
-                        and enrichment_terminal
-                        and deterministic_reads_succeeded
-                        and preferred_evidence_view is None
-                    ):
-                        preferred_evidence_view = "deterministic_primary"
+                    inventory_completion_allowed = bool(
+                        inquiry is None
+                        or inquiry.mode != "inventory"
+                        or _inventory_answer_is_closed_form(source_question, inquiry)
+                    )
                     registered_answer_complete = bool(
                         deterministic_answer is not None
                         and (
-                            authoritative_enrichment_terminal
-                            or failed_kafka_storage_terminal
+                            failed_kafka_storage_terminal
                             or (
-                                enrichment_terminal
-                                and deterministic_reads_succeeded
+                                inventory_completion_allowed
+                                and (
+                                    authoritative_enrichment_terminal
+                                    or (
+                                        enrichment_terminal
+                                        and deterministic_reads_succeeded
+                                    )
+                                )
                                 and not _question_requires_agentic_investigation(
                                     source_question, inquiry,
                                 )
                             )
                         )
+                    )
+                    if (
+                        registered_answer_complete
+                        and preferred_evidence_view is None
+                    ):
+                        preferred_evidence_view = "deterministic_primary"
+                    preferred_agent_presentation = (
+                        str(deterministic_answer["content"])
+                        if deterministic_answer is not None
+                        and (
+                            registered_answer_complete
+                            or inquiry is None
+                            or inquiry.mode != "inventory"
+                        )
+                        else None
                     )
                     provider_phase = "unrestricted_agent"
                     return await _execute_unrestricted_agent_turn(
@@ -10616,10 +10691,7 @@ def create_app(
                         enrichment_evidence=enrichment_evidence,
                         enrichment_activity=enrichment_activity,
                         enrichment_limitations=enrichment_limitations,
-                        preferred_presentation=(
-                            str(deterministic_answer["content"])
-                            if deterministic_answer is not None else None
-                        ),
+                        preferred_presentation=preferred_agent_presentation,
                         preferred_evidence_view=preferred_evidence_view,
                         registered_answer_complete=registered_answer_complete,
                         agent_targets=agent_targets,
@@ -10975,6 +11047,7 @@ def create_app(
                         ),
                     )
                     if not followup_action
+                    and _inventory_answer_is_closed_form(message_text, inquiry)
                     and (
                         inquiry is None
                         or (

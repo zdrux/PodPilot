@@ -446,6 +446,10 @@ class InquirySemantics(BaseModel):
         "configuration_guidance", "explain"
     ] | None = None
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
+    answer_goal: Literal[
+        "identifiers", "count", "existence", "configuration", "behavior",
+        "investigation", "unknown",
+    ] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
@@ -567,6 +571,11 @@ class InquirySemantics(BaseModel):
             "explain": "explanation",
             "investigate": "cluster_investigation",
         }[self.mode]
+        if (
+            self.capability == "resource_inventory"
+            and self.answer_goal in {"configuration", "behavior", "investigation"}
+        ):
+            self.needs_object_details = True
         if sum(bool(item) for item in (
             self.object_reference_id, self.scope_reference_id, self.relationship_reference_id,
         )) > 1:
@@ -629,6 +638,10 @@ class CapabilitySelection(BaseModel):
         "explanation",
     ]
     cardinality: Literal["exact_one", "collection", "unknown"] = "unknown"
+    answer_goal: Literal[
+        "identifiers", "count", "existence", "configuration", "behavior",
+        "investigation", "unknown",
+    ] = "unknown"
     resource_query: str | None = Field(default=None, max_length=253)
     object_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
     scope_reference_id: str | None = Field(default=None, pattern=r"^ref-[a-f0-9]{20}$")
@@ -1991,7 +2004,15 @@ class OpenAIResponsesProvider:
                     "omitted coordinate. Set needs_object_details when names alone "
                     "cannot answer. Requests for a resource's labels, annotations, spec, status, taints, "
                     "or other object fields require object details even when phrased with list, show, "
-                    "or display. For metric questions, prefer metric_request: select one to four "
+                    "or display. "
+                    "Set answer_goal=count only for an explicit count, existence only for a yes/no "
+                    "or availability question, and identifiers only when the operator explicitly asks "
+                    "for names/identifiers alone. Use configuration for a bare show/list request where "
+                    "resource specifications may be material, behavior when the operator asks what the "
+                    "objects do or permit, and investigation for diagnostic interpretation. When unsure, "
+                    "use unknown; normal code will continue to analysis rather than terminating early. "
+                    "For configuration, behavior, or investigation, set needs_object_details=true. "
+                    "For metric questions, prefer metric_request: select one to four "
                     "registered signals, an exact typed target, show/trend/rank/compare/threshold operation, "
                     "current/average/maximum/minimum statistic, requested grouping, threshold, period, and "
                     "result limit. Use workload scope for an exact Deployment, StatefulSet, DaemonSet, or Job; "
@@ -2728,7 +2749,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "omitted coordinate. Set needs_object_details when names alone cannot "
                 "answer. Requests for a "
                 "resource's labels, annotations, spec, status, taints, or other object fields require "
-                "object details even when phrased with list, show, or display. For metric questions, prefer "
+                "object details even when phrased with list, show, or display. Set answer_goal=count only "
+                "for an explicit count, existence only for a yes/no or availability question, and "
+                "identifiers only for an explicit names/identifiers-only request. A bare show/list of "
+                "configuration-bearing resources uses configuration; questions about effects use behavior; "
+                "diagnostic interpretation uses investigation. Use unknown when uncertain so normal code "
+                "continues analysis. Configuration, behavior, and investigation require object details. "
+                "For metric questions, prefer "
                 "metric_request with one to four registered signals, a typed exact target, operation, statistic, "
                 "grouping, threshold, period, and result limit. Workload targets may be Deployment, StatefulSet, "
                 "DaemonSet, or Job. Node-role targets require an explicitly requested worker, master, or infra "

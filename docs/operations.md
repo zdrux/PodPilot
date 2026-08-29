@@ -395,8 +395,10 @@ Ask PodPilot accepts free-form operational questions; it does not gate cluster r
 catalog of recognized phrases or sentiment. The model may propose only the registered read
 tools, normal code validates every target, sensitive resources remain denied, and the
 selected cluster ServiceAccount provides the final Kubernetes RBAC boundary. When a
-question is not an explicit list or count request, a bounded object list is treated as discovery
-rather than a complete answer. PodPilot follows up on up to three discovered
+question is not an explicit identifiers-only, count, existence, or prior-snapshot presentation
+request, a bounded object list is treated as evidence rather than a complete answer. In particular,
+bare `show` and `list` requests for configuration-bearing resources continue into model interpretation;
+the verb alone no longer terminates the turn. PodPilot follows up on up to three discovered
 objects per read with exact namespace/name reads, within the existing per-turn budget, and the
 answer must interpret material fields from those details rather than returning object names alone.
 For explicit inventory wording, normal code stabilizes the route after model classification and
@@ -405,7 +407,8 @@ canonicalizes generic noun variants against the live catalog—for example, `Kaf
 fresh API-discovery pass. If it remains unresolved, PodPilot continues through bounded planning;
 it never reports an empty inventory unless an actual resource LIST succeeds with zero objects.
 This applies to health, diagnosis, comparison, explanation, configuration, topology, and behavior
-questions. Explicit list and count questions remain inventory-only. When a
+questions. Only explicit names/identifiers-only, count, existence, and snapshot-replay questions are
+inventory-terminal. When a
 `list_resources` plan omits a deliberate limit, the broker replaces the model schema's
 20-object default with the configured bounded inventory window. When the model cannot turn
 validated list evidence into a useful final answer, PodPilot renders that evidence as a
@@ -425,6 +428,11 @@ place and the UI labels them as answer-derived; this presentation conversion doe
 contents authoritative evidence. Extraction is bounded to eight tables, 24 columns, 1,000 rows per
 table, and 4,096 characters per cell. Tables beyond those bounds remain in the safe Markdown fallback.
 The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
+`list_resources` exists to make broad Kubernetes discovery safe and reproducible: it resolves a
+live API resource, enforces namespace/RBAC/sensitivity policy and bounded pagination, normalizes
+identity plus approved object projections, records completeness and truncation separately, redacts
+evidence, and preserves provenance for citations and native tables. It is a collection primitive,
+not a claim that the operator's question has been answered.
 Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
 or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
 asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the
