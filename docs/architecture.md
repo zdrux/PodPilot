@@ -81,6 +81,9 @@ Audit classification is similarly reconciled with unambiguous operator constrain
 compilation. Explicit last/top counts, delete-versus-mutation scope, success/failure outcome, and
 recognized resource kinds override broader model defaults; an omitted model `result_limit` cannot
 turn “last 5 audit entries” into the configured default of 20.
+Backward window expansion is reserved for an explicit requested count. A vague `recent` audit
+request uses the configured initial window once and may return fewer than the default display
+limit; a model-invented convenience count cannot widen that query toward the audit ceiling.
 The registered Loki audit reader is authoritative in unrestricted mode even when it times out or
 is denied. Audit data is not a Kubernetes `events.audit.k8s.io` resource, so a failed or partially
 failed registered query renders its evidence and limitations without entering the generic shell

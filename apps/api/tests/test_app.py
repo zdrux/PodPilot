@@ -882,6 +882,44 @@ def test_explicit_audit_constraints_override_broader_model_defaults() -> None:
     )]
 
 
+def test_recent_audit_request_does_not_expand_to_fill_model_default() -> None:
+    class Provider:
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="audit", operation="audit", cardinality="collection",
+                namespace="ai-ops", audit_username="druciare-adm",
+                result_limit=20, audit_operation_scope="deletes", audit_outcome="all",
+                evidence_goal="List recent matching delete operations.",
+            )
+
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question=(
+            'show me recent delete operations in the ai-ops namespace by the user "druciare-adm"'
+        ),
+        conversation=[], cluster_names=["Central"],
+    ))
+
+    assert inquiry is not None
+    assert inquiry.result_limit is None
+    compiled = _semantic_audit_read_plan(
+        inquiry, default_limit=20, initial_range_seconds=3600,
+    )
+    assert compiled is not None
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_audit_events", namespace="ai-ops",
+        audit_username="druciare-adm", audit_operation_scope="deletes",
+        audit_outcome="all", audit_search_until_limit=False,
+        range_seconds=3600, limit=20,
+    )]
+
+
 def test_model_selected_audit_capability_without_username_queries_all_users() -> None:
     inquiry = InquirySemantics(
         mode="audit", operation="audit", cardinality="collection",
@@ -931,7 +969,7 @@ def test_audit_compiler_scopes_delete_query_to_explicit_resource_kind() -> None:
     assert compiled[0].intents == [ReadIntent(
         tool="query_audit_events", namespace="ai-ops", audit_resource="pods",
         audit_operation_scope="deletes", audit_outcome="all",
-        audit_search_until_limit=True, range_seconds=3600, limit=20,
+        audit_search_until_limit=False, range_seconds=3600, limit=20,
     )]
 
 
@@ -8402,7 +8440,7 @@ def test_failed_unrestricted_audit_query_does_not_fall_back_to_shell(
             assert intent == ReadIntent(
                 tool="query_audit_events", namespace="ai-ops",
                 audit_username="druciare-adm", audit_operation_scope="deletes",
-                audit_outcome="all", audit_search_until_limit=True,
+                audit_outcome="all", audit_search_until_limit=False,
                 range_seconds=3600, limit=20,
             )
             raise ReadOnlyExplorerError(

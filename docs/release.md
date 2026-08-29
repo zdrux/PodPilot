@@ -438,6 +438,9 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Audit-adherence tests must prove an explicit last/top count overrides the configured default and
   that delete/mutation plus successful/failed wording overrides broader classifier output before
   the Loki query is compiled.
+- Audit-window tests must prove only an operator-specified count enables backward search expansion;
+  an unnumbered recent query must remain in the initial window even if the classifier supplies a
+  convenience result limit.
 - Audit-failure authority tests must prove a timed-out or denied registered Loki audit read renders
   its real failure without calling the model shell loop, `oc-runner`, `events.audit.k8s.io`, or
   optional command-line JSON utilities.

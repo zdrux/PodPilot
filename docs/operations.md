@@ -512,6 +512,10 @@ Normal code re-applies explicit audit constraints after model classification. Re
 “show the last 5 audit entries for failed delete operations” therefore compile with `limit=5`,
 delete-only verbs, and failed HTTP outcomes even if the model returns broader defaults. Numeric
 limits from 1 through 100 and number words from one through twenty are recognized.
+An explicit count such as “last 5” starts at the initial audit window and expands backward only
+until five matches are found or the policy ceiling is reached. “Recent” without a count performs
+one initial-window query and returns however many matches exist; it does not widen merely to fill
+the default 20-row display limit.
 If the Loki audit query times out, is denied, or only succeeds on some selected clusters, PodPilot
 reports that registered result directly. It does not ask the unrestricted agent to substitute
 `oc get events.audit.k8s.io`, and it does not depend on `jq` being installed in `oc-runner`.

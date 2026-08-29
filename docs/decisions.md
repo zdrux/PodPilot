@@ -1147,6 +1147,9 @@ Decision: Treat a compiled `query_audit_events` plan as authoritative for the tu
 partial and failed multi-cluster results. Render the registered evidence or exact collection
 failure and do not enter the unrestricted shell loop. Continue to preserve explicit username,
 namespace, resource, operation, outcome, time, and result-limit filters.
+Only an operator-specified result count enables backward audit-window expansion. For unnumbered
+`recent` requests, discard a classifier-invented convenience count, apply the configured display
+limit to one initial-window query, and return fewer rows when fewer matches are present.
 
 Consequences: Audit requests cannot fall back to invented Kubernetes resources or undeclared
 runner utilities. Operators see the actionable Loki timeout or authorization failure directly;

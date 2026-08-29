@@ -100,6 +100,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Explicit audit counts and filters are now authoritative after classification. “Last 5” no longer
   expands to the default 20 when the model omits `result_limit`; delete/mutation scope and
   successful/failed outcome wording likewise override broader model defaults before Loki access.
+- Unnumbered “recent” audit requests now query only the initial bounded window instead of repeatedly
+  widening toward the audit ceiling to fill a model/default limit. Explicit “last N” requests retain
+  bounded backward expansion until N matches are found.
 - Registered Loki audit reads now fail closed in unrestricted mode. A timeout, denial, or partial
   multi-cluster result is rendered directly instead of falling through to an invalid
   `events.audit.k8s.io`/`jq` shell attempt.

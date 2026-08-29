@@ -6773,8 +6773,16 @@ async def _classify_ad_hoc_inquiry(
             )
             if classified.mode == "audit":
                 explicit_audit_filters = _explicit_audit_filters(question)
-                if explicit_audit_filters:
-                    classified = classified.model_copy(update=explicit_audit_filters)
+                audit_updates = dict(explicit_audit_filters)
+                if (
+                    "result_limit" not in explicit_audit_filters
+                    and not classified.continues_prior_audit_query
+                ):
+                    # A model-supplied convenience limit is not an operator request.
+                    # Keep vague "recent" queries in the initial bounded window.
+                    audit_updates["result_limit"] = None
+                if audit_updates:
+                    classified = classified.model_copy(update=audit_updates)
             if _explicit_metric_question(question) and classified.mode != "metrics":
                 raise ModelProviderError(
                     "The question explicitly requests telemetry; select metrics mode instead "
@@ -7187,7 +7195,9 @@ def _semantic_audit_read_plan(
     if inquiry is None or inquiry.mode != "audit":
         return None
     limit = inquiry.result_limit or default_limit
-    search_until_limit = inquiry.audit_range_seconds is None
+    search_until_limit = (
+        inquiry.audit_range_seconds is None and inquiry.result_limit is not None
+    )
     range_seconds = inquiry.audit_range_seconds or initial_range_seconds
     operation_scope = inquiry.audit_operation_scope or "all"
     outcome = inquiry.audit_outcome or "all"
