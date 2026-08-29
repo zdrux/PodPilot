@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-28
+Last reviewed: 2026-08-29
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -42,9 +42,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   cluster's stored token to the loopback runner, which uses and deletes a per-command kubeconfig.
   The remote agentic overlay forces remote TLS verification off, while guarded deployments keep
   the secure default. Runner/API logs expose redacted target, TLS, exit, duration, and byte-count
-  metadata, idle and in-flight heartbeats run every 10 seconds, failed-command summaries appear in
+  metadata, periodic heartbeat logs are suppressed in both containers, failed-command summaries appear in
   Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
-  124. The API turns command heartbeats into changing live Ask progress while the outer run retains
+  124. The API still publishes changing live Ask progress while the outer run retains
   its 900-second deadline in the agentic overlays. Runner stdout and stderr are now drained
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
@@ -76,6 +76,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
   that Loki is unavailable; clusters with the registered LokiStack integration render the byte
   volume and average-rate table.
+- Unrestricted completion is now intent-sensitive rather than presentation-sensitive. Explicit
+  show/list/ranking requests can finish on a complete registered result, but causal wording such
+  as why/investigate/diagnose/root-cause treats Pod specs, health summaries, and metrics as initial
+  evidence and continues through model-selected shell checks. Recent object references also retain
+  a uniquely attributable source cluster so follow-up investigations do not query the same object
+  coordinate on every selected cluster.
 - Thanos remains the preferred metric trend source. Node rankings and namespace-scoped Pod CPU or
   memory rankings now fall back to a current `metrics.k8s.io/v1beta1` snapshot when Thanos fails,
   with the lost history called out explicitly. When every registered read and shell verification
@@ -84,6 +90,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
   path. If that authoritative read fails, unrestricted mode renders the collection limitation
   directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
+- Remote Thanos and LokiStack authorization failures now preserve the literal `HTTP 403` status in
+  per-cluster Ask limitations and name the relevant read-only role. Log-volume queries correctly
+  identify `cluster-logging-application-view`; Thanos metrics identify `cluster-monitoring-view`.
 - Successful terminal registered enrichments now render once and suppress a competing unrestricted
   shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
   outcome, username, and time range; an all-user Pod deletion query no longer shows an appended

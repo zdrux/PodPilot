@@ -58,7 +58,10 @@ from podpilot_api.main import (
     _partition_investigation_gaps,
     _preferred_metric_evidence_view,
     _profile_is_usable,
+    _question_requires_agentic_investigation,
     _reconcile_validated_answer_gaps,
+    _recent_object_references,
+    _inquiry_reference_cluster_ids,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
     _semantic_resource_read_plan,
@@ -2966,6 +2969,73 @@ def test_platform_metric_semantics_compile_registered_scope(
     assert intent.metric_scope == scope
     assert intent.namespace == namespace
     assert intent.name == name
+
+
+@pytest.mark.parametrize(
+    ("question", "inquiry", "expected"),
+    [
+        ("show me failing pods", None, False),
+        ("why is pod api-7d9 Pending?", None, True),
+        ("which PVC is blocking pod api-7d9?", None, True),
+        ("investigate the degraded network operator", None, True),
+        (
+            "check pod api-7d9",
+            InquirySemantics(
+                mode="investigate", cardinality="exact_one",
+                resource_query="Pod", object_name="api-7d9", namespace="payments",
+                evidence_goal="Investigate the supplied Pod.",
+            ),
+            True,
+        ),
+        (
+            "show pod api-7d9",
+            InquirySemantics(
+                mode="investigate", cardinality="exact_one",
+                resource_query="Pod", object_name="api-7d9", namespace="payments",
+                evidence_goal="Read the supplied Pod.",
+            ),
+            False,
+        ),
+        (
+            "check pod api-7d9",
+            InquirySemantics(
+                mode="investigate", operation="object_fields",
+                cardinality="exact_one", resource_query="Pod",
+                object_name="api-7d9", namespace="payments",
+                evidence_goal="Read the supplied Pod before investigating it.",
+            ),
+            True,
+        ),
+    ],
+)
+def test_agentic_completion_policy_prefers_causal_investigation(
+    question: str, inquiry: InquirySemantics | None, expected: bool,
+) -> None:
+    assert _question_requires_agentic_investigation(question, inquiry) is expected
+
+
+def test_health_summary_object_reference_retains_source_cluster() -> None:
+    evidence = [{
+        "id": "central-health", "tool": "pod_health_summary",
+        "cluster_id": "cluster-central", "cluster_name": "Central DEV",
+        "data": {
+            "kind": "Pod",
+            "objects": [{
+                "namespace": "openshift-logging", "name": "logging-loki-ingester-1",
+            }],
+        },
+    }]
+
+    references = _recent_object_references(evidence)
+
+    assert len(references) == 1
+    assert references[0]["cluster_id"] == "cluster-central"
+    inquiry = InquirySemantics(
+        mode="investigate", cardinality="exact_one", resource_query="Pod",
+        object_reference_id=references[0]["id"],
+        evidence_goal="Investigate the observed Pending Pod.",
+    )
+    assert _inquiry_reference_cluster_ids(inquiry, evidence) == {"cluster-central"}
 
 
 def test_control_plane_metric_rejects_cross_component_signal() -> None:
@@ -7687,6 +7757,144 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         assert activity["reads"][0]["status"] == "succeeded"
         assert activity["preferred_evidence_view"] == "metric_ranking"
     engine.dispose()
+
+
+def test_unrestricted_pending_pod_question_continues_after_exact_seed(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.steps = 0
+
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            return InquirySemantics(
+                mode="investigate", cardinality="exact_one", resource_query="Pod",
+                object_name="logging-loki-ingester-1", namespace="openshift-logging",
+                evidence_goal="Investigate why the exact Pod is Pending.",
+            )
+
+        def next_agent_step(self, *_args, **_kwargs):
+            if self.steps == 0:
+                self.steps += 1
+                arguments = json.dumps({
+                    "command": (
+                        "oc get events -n openshift-logging "
+                        "--field-selector involvedObject.name=logging-loki-ingester-1"
+                    ),
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "pending-events", "type": "function",
+                            "function": {"name": "execute_shell", "arguments": arguments},
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="pending-events", name="execute_shell", arguments=arguments,
+                    ),),
+                )
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant",
+                    "content": "The scheduler event identifies an unbound PVC as the cause.",
+                },
+                content="The scheduler event identifies an unbound PVC as the cause.",
+                tool_calls=(),
+            )
+
+    class PodExplorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "pods", "apiVersion": "v1", "kind": "Pod",
+                "namespaced": True, "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="pending-pod", tool="get_resource", summary="Read the Pending Pod.",
+                source="kubernetes:v1:Pod:openshift-logging/logging-loki-ingester-1",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "v1", "kind": "Pod", "resource": "pods",
+                    "metadata": {
+                        "namespace": "openshift-logging",
+                        "name": "logging-loki-ingester-1",
+                    },
+                    "spec": {"volumes": [{"name": "storage"}]},
+                    "status": {"phase": "Pending"},
+                },
+            ),))
+
+    class Runner:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+
+        def execute(self, command, connection=None):
+            self.commands.append(command)
+            return AgentCommandResult(
+                command=command, exit_code=0,
+                stdout="0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims\n",
+                stderr="",
+            )
+
+    provider = Provider()
+    explorer = PodExplorer()
+    runner = Runner()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+        agent_runner=runner,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "why is pod logging-loki-ingester-1 in namespace "
+                    "openshift-logging Pending?"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].tool in {"get_resource", "search_resources"}
+    assert explorer.calls[0].resource == "pods"
+    assert explorer.calls[0].namespace == "openshift-logging"
+    assert len(runner.commands) == 1
+    assert "get events" in runner.commands[0]
+    assert "unbound PVC" in rendered.text
+    assert "Question-focused resource evidence" not in rendered.text
 
 
 def test_unrestricted_router_pod_metrics_are_terminal_native_enrichment(

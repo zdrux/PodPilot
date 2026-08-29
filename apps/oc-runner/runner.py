@@ -151,28 +151,6 @@ def _event(name: str, **details: object) -> None:
     print(json.dumps({"event": name, **details}, sort_keys=True), flush=True)
 
 
-def _runner_heartbeat() -> None:
-    while True:
-        time.sleep(HEARTBEAT_SECONDS)
-        now = time.monotonic()
-        with ACTIVE_COMMANDS_LOCK:
-            active = [
-                {
-                    "request_id": request_id,
-                    "cluster_id": details[0],
-                    "cluster_name": details[1],
-                    "elapsed_seconds": round(now - details[2], 1),
-                }
-                for request_id, details in ACTIVE_COMMANDS.items()
-            ]
-        _event(
-            "runner_heartbeat",
-            uptime_seconds=round(now - RUNNER_STARTED_AT, 1),
-            active_command_count=len(active),
-            active_commands=active,
-        )
-
-
 def _terminate_process_group(process: subprocess.Popen[bytes], request_id: str) -> None:
     _event("command_terminating", request_id=request_id, pid=process.pid)
     try:
@@ -194,8 +172,6 @@ def _run_command(
     env: dict[str, str],
     *,
     request_id: str,
-    cluster_id: str,
-    cluster_name: str,
     started: float,
 ) -> tuple[int, str, str, bool, int, int]:
     process = subprocess.Popen(
@@ -236,14 +212,7 @@ def _run_command(
             process.wait(timeout=min(HEARTBEAT_SECONDS, remaining))
             break
         except subprocess.TimeoutExpired:
-            _event(
-                "command_heartbeat",
-                request_id=request_id,
-                cluster_id=cluster_id,
-                cluster_name=cluster_name,
-                elapsed_seconds=round(time.monotonic() - started, 1),
-                timeout_seconds=COMMAND_TIMEOUT_SECONDS,
-            )
+            continue
     for collector_thread in collector_threads:
         collector_thread.join(timeout=5)
     stdout = stdout_collector.text()
@@ -331,8 +300,6 @@ class RunnerHandler(BaseHTTPRequestHandler):
                 command,
                 env,
                 request_id=request_id,
-                cluster_id=cluster_id,
-                cluster_name=cluster_name,
                 started=started,
             )
         except OSError as exc:
@@ -396,7 +363,6 @@ if __name__ == "__main__":
         remote_connections="api-brokered-per-command",
         command_timeout_seconds=COMMAND_TIMEOUT_SECONDS,
         command_max_output_bytes=MAX_OUTPUT_BYTES,
-        heartbeat_seconds=HEARTBEAT_SECONDS,
+        command_poll_seconds=HEARTBEAT_SECONDS,
     )
-    threading.Thread(target=_runner_heartbeat, name="runner-heartbeat", daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", 8090), RunnerHandler).serve_forever()

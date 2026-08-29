@@ -1075,7 +1075,7 @@ cluster-admin overlay. Keep guarded mode as the base and standard remote default
 agentic overlay inherits remote configuration and RBAC, adds a separately promoted versioned runner
 image, grants no permissions itself, and explicitly forces remote-cluster TLS verification off for
 this environment. Retain an outer durable-run
-deadline, add a shorter per-command process-group timeout with runner/API heartbeats and live UI
+deadline, add a shorter per-command process-group timeout with silent polling and live UI
 progress, retain redaction before returning command output to the model and command metadata audit, but
 bypass typed reads, registered remediation, preview, and approval inside the lab mode.
 
@@ -1113,3 +1113,25 @@ bounded by their own data-handling contracts, while shell actions remain bounded
 identity, admission, and the outer run deadline. Adding a new deterministic enrichment continues to
 require an explicit known-read compiler rule and tests. A single authoritative renderer also avoids
 showing the same ranking as deterministic Markdown, agent Markdown, and a native metric card.
+
+## 2026-08-29 - Causal intent, not presentation, controls agent completion
+
+Context: An exact resource read can completely answer “show this Pod” while only establishing the
+starting state for “why is this Pod Pending?”. Treating a deterministic-primary table as terminal
+caused causal follow-ups to stop at Pod spec fields instead of inspecting events, claims, nodes, or
+controller state. Multi-cluster follow-ups could also repeat an exact coordinate on clusters that
+did not produce the selected result.
+
+Decision: Centralize unrestricted completion around question intent and registered-answer
+completeness. Explicit retrieval requests may terminate on a complete registered result. Causal and
+investigative requests always continue into the unrestricted tool loop after enrichment, except
+for narrow fail-closed capabilities whose contracts prohibit generic shell fallback. Keep native
+cards and deterministic-primary views as presentation metadata only. Persist a uniquely
+attributable source cluster on opaque recent-object references and constrain the follow-up turn to
+that cluster.
+
+Consequences: Deterministic readers become fast, trusted sensors for investigations instead of an
+alternate agent. The agent can correlate further evidence while the UI retains structured cards.
+New registered readers cannot accidentally suppress causal investigation by selecting a preferred
+renderer, and cross-cluster name collisions no longer send a referenced-object follow-up to every
+selected cluster.

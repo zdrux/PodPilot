@@ -42,8 +42,12 @@ renders those exact collection failures and discards speculative model explanati
 High-confidence router Pod resource-metric requests bypass model classification and compile to CPU
 and memory reads scoped to the `openshift-ingress` namespace and grouped by Pod. Router traffic,
 request, and bandwidth questions remain separate HAProxy metric semantics.
-Terminal high-confidence plans do not call the semantic classifier in unrestricted mode. This
-includes Strimzi Kafka existence and inventory questions, which compile to a bounded
+Explicit retrieval requests backed by a complete high-confidence plan do not call the semantic
+classifier in unrestricted mode. Causal wording such as `why`, `investigate`, `diagnose`, or
+`root cause` keeps the normalized result as initial evidence and continues into the shell loop;
+presentation metadata never decides whether investigation is complete. This distinction lets a
+Pod GET seed an investigation without treating `status.phase: Pending` as its explanation. The
+retrieval shortcut includes Strimzi Kafka existence and inventory questions, which compile to a bounded
 `kafkas.kafka.strimzi.io` list across namespaces and render from normalized API evidence.
 KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its observed
 namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
@@ -63,22 +67,25 @@ reuse/persistence, progress, command metadata audit, and the run deadline.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
 successful commands are not automatically repeated and the loop cannot retry indefinitely.
-When a terminal registered enrichment succeeds, its deterministic presentation is authoritative:
+When a complete explicit-retrieval enrichment succeeds, its deterministic presentation is authoritative:
 PodPilot renders it once and suppresses any model-proposed shell call for the same turn. This
 prevents a second, less capable collection path from duplicating or contradicting typed evidence.
+Opaque recent-object references retain their source cluster when uniquely attributable. A causal
+follow-up about one result therefore investigates that cluster instead of repeating the same
+namespace/name coordinate across every cluster selected on the conversation.
 Registered top-consumer metric evidence also acts as a typed continuation anchor. An elliptical
 follow-up that asks for the same CPU, memory, or namespace log-volume ranking over a different
 period reuses the prior metric, scope, coordinates, grouping, and limit while changing only the
 bounded time range.
 Each shell process group also has an independent runner-side deadline. While it is active, the
-runner emits structured heartbeats and the API records changing elapsed-time progress events so the
-SSE timeline remains visibly live. Timeout returns exit code `124` and a redacted operator-visible
+runner polls the process silently and the API records changing elapsed-time progress events so the
+SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible
 limitation instead of leaving the run indefinitely on `agent_command`.
 Dedicated drain threads consume stdout and stderr as the process runs, retain a bounded prefix of
 each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`
 from buffering arbitrary command output up to the sidecar's memory limit while preserving true byte
 counts and truncation flags in metadata-only runner logs.
-Model calls use the same progress-heartbeat mechanism and the profile's provider timeout, so an
+Model calls use the same elapsed-time progress mechanism and the profile's provider timeout, so an
 agent can remain visibly active while choosing its next action without waiting indefinitely.
 
 The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO

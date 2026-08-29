@@ -161,8 +161,9 @@ provider and credentials are healthy.
 - `PODPILOT_AGENT_COMMAND_MAX_OUTPUT_BYTES`, default `262144`; the runner continuously drains each
   command stream while retaining at most this many bytes from stdout and independently from stderr.
   Truncated results include an explicit marker, and logs retain the true byte count.
-- `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls runner/API log heartbeats and in-flight
-command progress updates persisted to the active Ask run.
+- `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls silent runner polling and in-flight
+  model/command progress updates persisted to the active Ask run. It does not emit periodic
+  container-log heartbeat messages.
 - `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY`, default `true`; the remote agentic PoC overlay sets it to
   `false`, forcing registered remote readers and runner commands to skip certificate and hostname
   verification. This credential-interception risk is limited to that lab overlay.
@@ -483,7 +484,11 @@ fixed profile, and probes Chat Completions/tool-calling support. It never prints
 Unrestricted turns retain additive deterministic enrichment. Questions recognized by the existing
 known-read compiler or the guarded-mode metric, audit, and catalog-grounded resource compilers first
 use the registered API/Loki/Thanos reader and pass normalized evidence to the agent; the shell loop
-remains unrestricted afterward. For example, a top-namespace log-volume
+remains unrestricted afterward. Explicit retrieval wording such as “show”, “list”, and “top” may
+finish from a complete registered answer. Causal wording such as “why is this Pod Pending?”,
+“investigate”, “diagnose”, and “root cause” always treats that same result as a seed and continues
+the agent loop. A native card or deterministic-primary presentation is a rendering choice, not a
+completion signal. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
 and average byte rate. Every renderable normalized metric result—not only top CPU, memory, and log
 volume—uses the native evidence card as its only visible table. This includes node, PVC, Kafka,
@@ -498,7 +503,7 @@ snapshot. The UI records that no historical average or peak was available. The e
 CLI commands are `oc adm top node` and `oc adm top pod`; `oc top` is not a valid OpenShift command.
 When all registered reads and shell verification attempts fail, Ask reports the exact collection
 errors without accepting an agent-invented explanation for why a source was unavailable.
-Successful terminal audit enrichment is rendered once and ends collection for that turn. Audit
+Successful explicit audit retrieval is rendered once and ends collection for that turn. Audit
 queries can be bounded simultaneously by namespace, operation class, outcome, username, and an
 explicit common Kubernetes resource kind; for example, “who deleted Pods in ai-ops” queries Loki
 for completed delete operations on `pods` in `ai-ops` across all users. It does not fall back to the
@@ -510,6 +515,11 @@ volume over a 3 day period” repeats the same Loki query with `rangeSeconds=259
 into Loki Pods or require `pods/exec`. An explicitly different metric does not inherit the prior
 query. The shipped `adhoc_logs_max_range_seconds` ceiling is seven days (`604800` seconds); longer
 requests are reduced to that bound and reported as limited.
+
+When an operator selects an object from prior multi-cluster evidence, PodPilot carries the opaque
+reference's source cluster into the next turn. Investigative reads and shell commands are limited
+to that cluster when the evidence uniquely identifies it; unqualified names typed from scratch
+still apply to the conversation's selected clusters.
 
 Verify the deployed boundary:
 
@@ -537,9 +547,9 @@ For multi-cluster conversations the model supplies one selected cluster ID per s
 brokers only that cluster's stored token to the loopback runner, which deletes its temporary
 kubeconfig after the command. Inspect redacted execution metadata with
 `oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
-The runner logs startup and idle heartbeats plus command start, in-flight heartbeat, completion,
-termination, and timeout events. The API logs its own runtime, model-wait, and command heartbeats
-and publishes changing model/command elapsed-time messages to Ask. A command is
+The runner logs startup plus command start, completion, termination, and timeout events. The API
+publishes changing model/command elapsed-time messages to Ask without periodic runtime, model-wait,
+or command heartbeat log entries. A command is
 bounded by the runner's 300-second process-group timeout, while the complete Ask job remains bounded
 by `adhoc_run_timeout_seconds`.
 See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
@@ -1256,6 +1266,13 @@ that telemetry exists. If the registered query returns no samples, PodPilot name
 exporter/profile rather than treating the object as idle or allowing the model to invent PromQL.
 Metric label names can vary across operator/exporter releases; unsupported profiles require a new
 reviewed server-owned template or label alias, not an operator-supplied query.
+
+Remote monitoring and logging authorization failures preserve `HTTP 403` in the per-cluster Ask
+limitation. A Thanos denial names the required `cluster-monitoring-view` role. Application-log
+volume is a Loki tenant query rather than a Thanos metric; its denial names
+`cluster-logging-application-view`. Route discovery denials identify the affected Thanos or
+LokiStack Route separately from query authorization, while transport and TLS failures remain
+reported as availability failures rather than being mislabeled as RBAC denials.
 
 In unrestricted agent mode, a recognized Kafka topic-storage request remains on this registered
 metrics path even when Thanos or the required exporter is unavailable. PodPilot reports the

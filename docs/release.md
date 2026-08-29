@@ -414,7 +414,7 @@ summary must preserve the complete-coverage rule before confirming absence.
   token reaches the loopback runner, tokens never enter model messages or logs, the temporary
   kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
   summary is visible to the operator.
-- Runner watchdog tests must cover structured idle/in-flight logging, periodic API progress,
+- Runner watchdog tests must cover silent process polling, periodic API progress,
   process-group termination at the command deadline, exit code `124`, and a loopback client timeout
   longer than the runner deadline. They must also prove stdout/stderr are continuously drained,
   retained within the configured byte ceiling, and visibly marked when truncated. Both containers
@@ -425,6 +425,11 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
   catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
   back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
+- Agent-first completion tests must prove causal Pod and resource questions continue from the
+  registered read into model-selected checks, while explicit show/list/ranking requests may stop
+  on a complete registered result. UI presentation preference must not terminate execution.
+- Multi-cluster follow-up tests must prove opaque object references retain a uniquely attributable
+  source cluster and do not fan an exact namespace/name investigation out to unrelated clusters.
 - Failure-authority tests must prove an unavailable registered source plus failed shell verification
   cannot become an unsupported model claim about a missing metrics server or add-on.
 - Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,

@@ -97,8 +97,8 @@ filesystem and dropped capabilities. Runner logs contain target identity, TLS mo
 duration, timeout state, and byte counts, never tokens, command text, stdout, or stderr. The runner
 also reports whether either stream was truncated. It continuously drains both streams but retains
 only the configured bounded prefix (256 KiB each by default), preventing verbose output from being
-buffered without limit. The runner emits startup/idle and in-flight command heartbeats. Every shell
-process group is terminated at the
+buffered without limit. Periodic idle and in-flight heartbeat log messages are suppressed; health
+probes, command lifecycle events, and deadlines remain authoritative. Every shell process group is terminated at the
 configured command deadline; the API has a slightly longer loopback HTTP deadline and the durable
 Ask job retains its outer deadline.
 

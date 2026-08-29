@@ -158,7 +158,21 @@ def test_remote_client_discovers_standard_lokistack_route() -> None:
 def test_loki_denial_has_actionable_role_guidance(tmp_path: Path) -> None:
     client = _client(tmp_path, lambda _request: httpx.Response(403))
 
-    with pytest.raises(LogMetricsQueryError, match="cluster-logging-application-view"):
+    with pytest.raises(
+        LogMetricsQueryError,
+        match=r"application-log analytics access \(HTTP 403\).*cluster-logging-application-view",
+    ):
+        client.query_namespace_volume("fixed")
+
+
+def test_remote_loki_route_denial_preserves_http_403() -> None:
+    client = LokiQueryClient.for_remote_cluster(
+        api_url="https://api.remote.example:6443",
+        token="remote-token",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(403)),
+    )
+
+    with pytest.raises(LogMetricsQueryError, match=r"LokiStack Route \(HTTP 403\)"):
         client.query_namespace_volume("fixed")
 
 

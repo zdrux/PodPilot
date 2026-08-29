@@ -4458,6 +4458,33 @@ _FAILURE_DIAGNOSTIC_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_CAUSAL_INVESTIGATION_PATTERN = re.compile(
+    r"\b(?:why|root\s+cause|what(?:'s|\s+is)?\s+(?:wrong|caus(?:e|ed|ing)|"
+    r"prevent(?:s|ed|ing)|block(?:s|ed|ing))|preventing|blocking|reason\s+for|"
+    r"investigat(?:e|ion)|"
+    r"diagnos(?:e|is|tic)|troubleshoot(?:ing)?|explain\s+why)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_RETRIEVAL_PATTERN = re.compile(
+    r"^\s*(?:show|list|display|give\s+me|which|what\s+are|top|rank|count)\b",
+    re.IGNORECASE,
+)
+
+
+def _question_requires_agentic_investigation(
+    question: str,
+    inquiry: InquirySemantics | None = None,
+) -> bool:
+    """Keep causal requests agent-owned even when a deterministic seed can render."""
+
+    if _CAUSAL_INVESTIGATION_PATTERN.search(question):
+        return True
+    return bool(
+        inquiry is not None
+        and inquiry.capability in {"cluster_investigation", "resource_details"}
+        and not _EXPLICIT_RETRIEVAL_PATTERN.search(question)
+    )
+
 
 def _resource_query_terms(value: object) -> set[str]:
     expanded = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value or ""))
@@ -6210,6 +6237,11 @@ def _recent_object_references(
         current = relations_by_target.get(target)
         if current is None or relation == "configures_from":
             relations_by_target[target] = (relation, evidence_ids)
+    evidence_by_id = {
+        str(item.get("id")): item
+        for item in evidence
+        if item.get("id")
+    }
     references: list[dict[str, object]] = []
     for node in graph.get("nodes") or []:
         if not isinstance(node, dict) or not node.get("name"):
@@ -6226,10 +6258,29 @@ def _recent_object_references(
                 [str(item)[:128] for item in node.get("evidence_ids") or []],
             ),
         )
-        coordinate = json.dumps(
-            {"kind": kind, "namespace": namespace, "name": name}, sort_keys=True
-        )
-        references.append({
+        cluster_coordinates = {
+            (
+                str(evidence_by_id[evidence_id].get("cluster_id") or ""),
+                str(evidence_by_id[evidence_id].get("cluster_name") or ""),
+            )
+            for evidence_id in evidence_ids
+            if evidence_id in evidence_by_id
+            and (
+                evidence_by_id[evidence_id].get("cluster_id")
+                or evidence_by_id[evidence_id].get("cluster_name")
+            )
+        }
+        cluster_id = None
+        cluster_name = None
+        if len(cluster_coordinates) == 1:
+            cluster_id, cluster_name = next(iter(cluster_coordinates))
+        coordinate = json.dumps({
+            "cluster_id": cluster_id,
+            "kind": kind,
+            "namespace": namespace,
+            "name": name,
+        }, sort_keys=True)
+        reference = {
             "id": f"ref-{hashlib.sha256(coordinate.encode('utf-8')).hexdigest()[:20]}",
             "kind": kind,
             "namespace": namespace,
@@ -6237,7 +6288,48 @@ def _recent_object_references(
             "relation": relation,
             "observed": bool(node.get("observed")),
             "supporting_evidence_ids": evidence_ids,
-        })
+        }
+        if cluster_id:
+            reference["cluster_id"] = cluster_id
+        if cluster_name:
+            reference["cluster_name"] = cluster_name
+        references.append(reference)
+
+    for observation in evidence:
+        data = observation.get("data")
+        objects = data.get("objects") if isinstance(data, dict) else None
+        if not isinstance(objects, list):
+            continue
+        kind = str(data.get("kind") or "Resource")[:128]
+        cluster_id = str(observation.get("cluster_id") or "")
+        cluster_name = str(observation.get("cluster_name") or "")
+        evidence_id = str(observation.get("id") or "")[:128]
+        for item in objects[:100]:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            namespace = str(item.get("namespace") or "cluster")[:253]
+            name = str(item["name"])[:253]
+            coordinate = json.dumps({
+                "cluster_id": cluster_id or None,
+                "kind": kind,
+                "namespace": namespace,
+                "name": name,
+            }, sort_keys=True)
+            reference = {
+                "id": f"ref-{hashlib.sha256(coordinate.encode('utf-8')).hexdigest()[:20]}",
+                "kind": kind,
+                "namespace": namespace,
+                "name": name,
+                "relation": "observed",
+                "observed": True,
+                "supporting_evidence_ids": [evidence_id] if evidence_id else [],
+            }
+            if cluster_id:
+                reference["cluster_id"] = cluster_id
+            if cluster_name:
+                reference["cluster_name"] = cluster_name
+            references.append(reference)
+    references = list({str(item["id"]): item for item in references}.values())
     references.sort(key=lambda item: (
         0 if item.get("relation") == "configures_from" else 1,
         0 if item.get("observed") else 1,
@@ -6245,6 +6337,21 @@ def _recent_object_references(
         str(item.get("name") or ""),
     ))
     return references[:limit]
+
+
+def _inquiry_reference_cluster_ids(
+    inquiry: InquirySemantics | None,
+    evidence: list[dict[str, object]],
+) -> set[str]:
+    """Resolve an opaque object follow-up to its observed source cluster."""
+
+    if inquiry is None or not inquiry.object_reference_id:
+        return set()
+    return {
+        str(item["cluster_id"])
+        for item in _recent_object_references(evidence)
+        if item.get("id") == inquiry.object_reference_id and item.get("cluster_id")
+    }
 
 
 def _recent_relationship_references(
@@ -8710,17 +8817,6 @@ def create_app(
             ),
         )
 
-    async def _api_runtime_heartbeat() -> None:
-        while True:
-            LOGGER.info(
-                "podpilot.runtime.heartbeat agent_mode=%s worker_count=%s "
-                "agent_command_timeout=%s",
-                app_settings.agent_mode,
-                app_settings.adhoc_worker_concurrency,
-                app_settings.agent_command_timeout_seconds,
-            )
-            await asyncio.sleep(app_settings.agent_heartbeat_seconds)
-
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
@@ -8769,10 +8865,6 @@ def create_app(
                 if migrated_targets != legacy_targets:
                     document.target_cluster_ids_json = json.dumps(migrated_targets, sort_keys=True)
             db_session.commit()
-        runtime_heartbeat_task = asyncio.create_task(
-            _api_runtime_heartbeat(),
-            name="podpilot-runtime-heartbeat",
-        )
         application.state.adhoc_run_tasks = {}
         worker_tasks: list[asyncio.Task[None]] = []
         if app_settings.adhoc_job_worker_enabled:
@@ -8799,11 +8891,9 @@ def create_app(
         try:
             yield
         finally:
-            runtime_heartbeat_task.cancel()
             for worker_task in worker_tasks:
                 worker_task.cancel()
             await asyncio.gather(
-                runtime_heartbeat_task,
                 *worker_tasks,
                 return_exceptions=True,
             )
@@ -8856,6 +8946,7 @@ def create_app(
         enrichment_limitations: list[str] | None = None,
         preferred_presentation: str | None = None,
         preferred_evidence_view: str | None = None,
+        registered_answer_complete: bool = False,
         agent_targets: dict[str, tuple[str, AgentClusterConnection | None]],
     ) -> str:
         if profile.api_type != "chat-completions":
@@ -8896,6 +8987,7 @@ def create_app(
                 "observations": enrichment_evidence or [],
                 "limitations": enrichment_limitations or [],
                 "preferred_presentation": preferred_presentation,
+                "registered_answer_complete": registered_answer_complete,
             }
             serialized_enrichment = redact_text(json.dumps(
                 enrichment_payload,
@@ -8917,8 +9009,8 @@ def create_app(
                     "the source was unavailable; never invent its cause or claim that a metrics "
                     "server, add-on, API, or resource is absent unless command output proves it. "
                     "For OpenShift current resource usage, the CLI forms are `oc adm top node` and "
-                    "`oc adm top pod`, not `oc top`. When preferred_presentation is a terminal "
-                    "registered answer, return a short acknowledgement without a tool call; normal "
+                    "`oc adm top pod`, not `oc top`. When registered_answer_complete is true, "
+                    "return a short acknowledgement without a tool call; normal "
                     "code will render that answer exactly once. You still have unrestricted execute_shell "
                     "access for verification, extension, mutation, or unrelated work.\n\n"
                     + serialized_enrichment
@@ -8936,9 +9028,8 @@ def create_app(
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
         empty_step_retry_used = False
-        terminal_registered_answer = (
-            preferred_evidence_view in {"metric_ranking", "deterministic_primary"}
-            and bool(preferred_presentation)
+        terminal_registered_answer = bool(
+            registered_answer_complete and preferred_presentation
         )
 
         while True:
@@ -8980,14 +9071,6 @@ def create_app(
                         break
                     elapsed_seconds = round(
                         asyncio.get_running_loop().time() - model_started
-                    )
-                    LOGGER.info(
-                        "podpilot.agentic.model_heartbeat actor=%s conversation_id=%s "
-                        "elapsed_seconds=%s timeout_seconds=%s",
-                        username,
-                        conversation_id,
-                        elapsed_seconds,
-                        profile.timeout_seconds,
                     )
                     if progress:
                         await progress(
@@ -9200,17 +9283,6 @@ def create_app(
                                 break
                             elapsed_seconds = round(
                                 asyncio.get_running_loop().time() - command_started
-                            )
-                            LOGGER.info(
-                                "podpilot.agentic.command_heartbeat actor=%s "
-                                "conversation_id=%s cluster_id=%s cluster=%r "
-                                "elapsed_seconds=%s timeout_seconds=%s",
-                                username,
-                                conversation_id,
-                                cluster_id,
-                                cluster_name,
-                                elapsed_seconds,
-                                app_settings.agent_command_timeout_seconds,
                             )
                             if progress:
                                 await progress(
@@ -9516,6 +9588,15 @@ def create_app(
                             inquiry=inquiry,
                             prior_metric_query=prior_metric_query,
                         )
+                    reference_cluster_ids = _inquiry_reference_cluster_ids(
+                        inquiry, evidence,
+                    )
+                    if reference_cluster_ids:
+                        agent_targets = {
+                            cluster_id: target
+                            for cluster_id, target in agent_targets.items()
+                            if cluster_id in reference_cluster_ids
+                        }
                     semantic_metric_plan = _semantic_metric_read_plan(inquiry)
                     semantic_audit_plan = _semantic_audit_read_plan(
                         inquiry,
@@ -9555,6 +9636,11 @@ def create_app(
                     ):
                         for selected_cluster in selected_clusters:
                             cluster_label = selected_cluster.name
+                            if (
+                                reference_cluster_ids
+                                and selected_cluster.id not in reference_cluster_ids
+                            ):
+                                continue
                             if not selected_cluster.is_enabled:
                                 enrichment_limitations.append(
                                     f"Cluster {cluster_label} is disabled; deterministic enrichment was skipped."
@@ -9665,6 +9751,7 @@ def create_app(
                         evidence=enrichment_evidence,
                         activity=enrichment_activity,
                     )
+                    failed_kafka_storage_terminal = False
                     if (
                         deterministic_answer is None
                         and _failed_kafka_topic_storage_is_terminal(
@@ -9678,6 +9765,7 @@ def create_app(
                         if failure_answer is not None:
                             deterministic_answer = {"content": failure_answer}
                             preferred_evidence_view = "deterministic_primary"
+                            failed_kafka_storage_terminal = True
                     deterministic_reads_succeeded = bool(enrichment_activity) and all(
                         item.get("status") == "succeeded"
                         for item in enrichment_activity
@@ -9690,6 +9778,19 @@ def create_app(
                         and preferred_evidence_view is None
                     ):
                         preferred_evidence_view = "deterministic_primary"
+                    registered_answer_complete = bool(
+                        deterministic_answer is not None
+                        and (
+                            failed_kafka_storage_terminal
+                            or (
+                                enrichment_terminal
+                                and deterministic_reads_succeeded
+                                and not _question_requires_agentic_investigation(
+                                    source_question, inquiry,
+                                )
+                            )
+                        )
+                    )
                     provider_phase = "unrestricted_agent"
                     return await _execute_unrestricted_agent_turn(
                         engine=engine,
@@ -9709,6 +9810,7 @@ def create_app(
                             if deterministic_answer is not None else None
                         ),
                         preferred_evidence_view=preferred_evidence_view,
+                        registered_answer_complete=registered_answer_complete,
                         agent_targets=agent_targets,
                     )
                 inquiry = None

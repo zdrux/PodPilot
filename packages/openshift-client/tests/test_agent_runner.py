@@ -120,7 +120,7 @@ def test_remote_runner_rejects_plain_http_cluster() -> None:
         })
 
 
-def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -> None:
+def test_runner_polls_silently_and_terminates_timed_out_process_group(monkeypatch) -> None:
     runner = _runner_module()
     events: list[tuple[str, dict[str, object]]] = []
 
@@ -157,8 +157,6 @@ def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -
         "sleep forever",
         {},
         request_id="request-1",
-        cluster_id="cluster-east",
-        cluster_name="East DEV",
         started=time.monotonic(),
     )
 
@@ -169,5 +167,5 @@ def test_runner_heartbeats_and_terminates_timed_out_process_group(monkeypatch) -
     assert timed_out is True
     assert stdout_bytes == len(b"partial output")
     assert stderr_bytes == len(b"terminated")
-    assert any(name == "command_heartbeat" for name, _ in events)
+    assert not any("heartbeat" in name for name, _ in events)
     assert any(name == "command_terminating" for name, _ in events)

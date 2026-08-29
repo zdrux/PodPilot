@@ -343,12 +343,10 @@ oc logs -n ai-ops deployment/podpilot -c oc-runner --since=10m
 oc logs -n ai-ops deployment/podpilot -c api --since=10m | grep podpilot.agentic.command
 ```
 
-An idle runner emits `runner_heartbeat`. An active command additionally emits
-`command_heartbeat`; the API writes `podpilot.agentic.command_heartbeat` and pushes a changing
-elapsed-time message into the live Ask timeline. At 300 seconds the runner terminates the shell
-process group and returns exit code `124`. The complete Ask run still expires at 900 seconds.
-While waiting for OpenRouter, the API similarly writes `podpilot.agentic.model_heartbeat` and uses
-the model profile's provider timeout.
+The runner and API suppress periodic idle, command, runtime, and model-wait heartbeat log entries.
+The API still pushes changing elapsed-time messages into the live Ask timeline. At 300 seconds the
+runner terminates the shell process group and returns exit code `124`; the complete Ask run still
+expires at 900 seconds, and model waits still use the model profile's provider timeout.
 
 Verify admission independently with any existing authenticated username:
 

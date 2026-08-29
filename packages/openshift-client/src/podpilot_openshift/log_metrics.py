@@ -240,7 +240,7 @@ class LokiQueryClient:
                     if self._tenant == "audit" else "cluster-logging-application-view"
                 )
                 message = (
-                    f"The cluster denied {tenant_label} access. Grant the PodPilot identity "
+                    f"The cluster denied {tenant_label} access (HTTP 403). Grant the PodPilot identity "
                     f"{role} and verify LokiStack tenant authorization."
                 )
             elif exc.response.status_code == 404:
@@ -273,7 +273,7 @@ class LokiQueryClient:
             if exc.response.status_code == 401:
                 message = "The remote Kubernetes API rejected the configured bearer token."
             elif exc.response.status_code == 403:
-                message = "The remote cluster denied access to the LokiStack Route."
+                message = "The remote cluster denied access to the LokiStack Route (HTTP 403)."
             elif exc.response.status_code == 404:
                 message = "The remote cluster does not expose the logging-loki Route."
             else:
