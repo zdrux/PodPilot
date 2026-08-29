@@ -90,6 +90,13 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
   path. If that authoritative read fails, unrestricted mode renders the collection limitation
   directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
+- Namespace-scoped Kafka topic-storage wording now discovers exact Strimzi Kafka CRs in the named
+  namespace and fans out one registered storage query per observed CR, grouped by topic. The path
+  bypasses fragile metric classification, renders successful results directly, and preserves empty,
+  denied, or partially unavailable states without entering the unrestricted shell loop.
+- An empty unrestricted model turn now receives one tool-free finalization request. If that request
+  is also empty, PodPilot reports an invalid agent response rather than mislabeling it as provider
+  unavailability.
 - Imperative Kafka deployment inventory wording now routes to the registered Strimzi Kafka reader.
   “Show/list all deployed Kafka clusters” runs once per selected OpenShift cluster and renders
   found, empty, and unavailable API states with complete coverage accounting instead of repeatedly

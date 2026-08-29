@@ -1092,6 +1092,12 @@ class ModelProvider(Protocol):
         api_key: str,
         messages: list[dict[str, object]],
     ) -> AgentStep: ...
+    def finalize_agent_step(
+        self,
+        profile: ModelProfileConfig,
+        api_key: str,
+        messages: list[dict[str, object]],
+    ) -> AgentStep: ...
 
 
 _ADHOC_PLANNER_INSTRUCTIONS = (
@@ -2139,6 +2145,31 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             tool_calls=calls,
         )
 
+    def finalize_agent_step(
+        self,
+        profile: ModelProfileConfig,
+        api_key: str,
+        messages: list[dict[str, object]],
+    ) -> AgentStep:
+        """Request the bounded final answer without exposing another shell tool call."""
+
+        try:
+            with _model_request_context("workflow.unrestricted_agent_finalization"):
+                response = self._client(profile, api_key).chat.completions.create(
+                    model=profile.chat_model,
+                    messages=messages,
+                    max_tokens=profile.max_output_tokens,
+                    **_chat_reasoning(profile),
+                )
+        except Exception as exc:
+            raise ModelProviderError(self._safe_error(exc)) from exc
+        message = response.choices[0].message
+        return AgentStep(
+            assistant_message={"role": "assistant", "content": message.content},
+            content=str(message.content) if message.content else None,
+            tool_calls=(),
+        )
+
     def _parse(self, profile, api_key, *, schema, instructions: str, payload: object, limit=None):
         client = self._client(profile, api_key)
         response_format = {
@@ -2729,3 +2760,10 @@ class OpenAIProviderRouter:
 
     def next_agent_step(self, profile, api_key, messages):
         return self._provider(profile).next_agent_step(profile, api_key, messages)
+
+    def finalize_agent_step(self, profile, api_key, messages):
+        provider = self._provider(profile)
+        finalizer = getattr(provider, "finalize_agent_step", None)
+        if callable(finalizer):
+            return finalizer(profile, api_key, messages)
+        return provider.next_agent_step(profile, api_key, messages)

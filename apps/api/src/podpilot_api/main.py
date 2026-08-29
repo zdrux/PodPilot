@@ -75,9 +75,11 @@ from podpilot_diagnostics.adhoc import (
     config_map_references_from_spec,
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
+    is_kafka_topic_storage_discovery_plan,
     normalize_read_intent,
     plan_catalog_read,
     plan_known_read,
+    plan_kafka_topic_storage_metrics,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
@@ -4394,6 +4396,40 @@ async def _collect_unrestricted_known_reads(
         scope_summary=plan.scope_summary,
         units_used=len(plan.intents),
     )
+
+
+def _observed_kafka_coordinates(
+    evidence: list[dict[str, object]],
+) -> list[tuple[str, str]]:
+    """Read exact Kafka CR coordinates only from registered list evidence."""
+
+    coordinates: list[tuple[str, str]] = []
+    for observation in evidence:
+        if observation.get("tool") != "list_resources":
+            continue
+        data = observation.get("data")
+        if not isinstance(data, dict) or data.get("resource") != "kafkas.kafka.strimzi.io":
+            continue
+        raw_objects = data.get("objects")
+        if isinstance(raw_objects, list):
+            for item in raw_objects:
+                if not isinstance(item, dict):
+                    continue
+                namespace = item.get("namespace")
+                name = item.get("name")
+                if isinstance(namespace, str) and isinstance(name, str):
+                    coordinates.append((namespace, name))
+        raw_items = data.get("items")
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                metadata = item.get("metadata") if isinstance(item, dict) else None
+                if not isinstance(metadata, dict):
+                    continue
+                namespace = metadata.get("namespace")
+                name = metadata.get("name")
+                if isinstance(namespace, str) and isinstance(name, str):
+                    coordinates.append((namespace, name))
+    return list(dict.fromkeys(coordinates))
 
 
 def _authoritative_unrestricted_failure(
@@ -9136,9 +9172,14 @@ def create_app(
                         "agent_thinking", "The unrestricted agent is choosing its next action."
                     )
                 model_started = asyncio.get_running_loop().time()
+                step_method = provider.next_agent_step
+                if empty_step_retry_used:
+                    finalizer = getattr(provider, "finalize_agent_step", None)
+                    if callable(finalizer):
+                        step_method = finalizer
                 model_task = asyncio.create_task(
                     run_in_threadpool(
-                        provider.next_agent_step,
+                        step_method,
                         profile,
                         api_key,
                         messages,
@@ -9194,7 +9235,8 @@ def create_app(
                         continue
                     raise ModelProviderError(
                         "The unrestricted agent returned neither a tool call nor a final answer "
-                        "after one finalization retry."
+                        "after one finalization retry.",
+                        failure_type="agent_contract",
                     )
                 content = agent_content
                 authoritative_failure = _authoritative_unrestricted_failure(activity)
@@ -9714,6 +9756,10 @@ def create_app(
                         or semantic_metric_plan
                         or known_read
                     )
+                    kafka_storage_discovery = is_kafka_topic_storage_discovery_plan(
+                        base_enrichment[0] if base_enrichment is not None else None
+                    )
+                    kafka_storage_metric_activity: list[dict[str, object]] = []
                     if base_enrichment is not None or (
                         inquiry is not None and inquiry.resource_query
                     ):
@@ -9787,15 +9833,60 @@ def create_app(
                                 collected.limitations if len(selected_clusters) == 1 else
                                 [f"Cluster {cluster_label}: {item}" for item in collected.limitations]
                             )
+                            if kafka_storage_discovery:
+                                metric_plan = plan_kafka_topic_storage_metrics(
+                                    provider_question,
+                                    _observed_kafka_coordinates(collected.evidence),
+                                )
+                                if metric_plan is not None:
+                                    metric_collection = await _collect_unrestricted_known_reads(
+                                        cluster_reader=reader,
+                                        plan=metric_plan,
+                                        cluster_id=selected_cluster.id,
+                                        cluster_name=cluster_label,
+                                        progress=progress,
+                                    )
+                                    enrichment_evidence.extend(metric_collection.evidence)
+                                    enrichment_activity.extend(metric_collection.activity)
+                                    kafka_storage_metric_activity.extend(
+                                        metric_collection.activity
+                                    )
+                                    metric_limitations = (
+                                        list(metric_plan.limitations)
+                                        + metric_collection.limitations
+                                    )
+                                    enrichment_limitations.extend(
+                                        metric_limitations if len(selected_clusters) == 1 else
+                                        [
+                                            f"Cluster {cluster_label}: {item}"
+                                            for item in metric_limitations
+                                        ]
+                                    )
                     metric_ranking_answer = _deterministic_metric_ranking_answer(
                         evidence=enrichment_evidence,
                         activity=enrichment_activity,
                     )
-                    deterministic_answer = (
+                    metric_answer = (
                         metric_ranking_answer
                         or _deterministic_metric_summary_answer(
                             evidence=enrichment_evidence,
                             activity=enrichment_activity,
+                        )
+                    )
+                    kafka_storage_failure = (
+                        _authoritative_unrestricted_failure(
+                            kafka_storage_metric_activity
+                        )
+                        if kafka_storage_discovery
+                        and kafka_storage_metric_activity
+                        and metric_answer is None
+                        else None
+                    )
+                    deterministic_answer = (
+                        metric_answer
+                        or (
+                            {"content": kafka_storage_failure}
+                            if kafka_storage_failure is not None else None
                         )
                         or _deterministic_pod_health_answer(
                             evidence=enrichment_evidence,
@@ -10780,9 +10871,16 @@ def create_app(
                     provider_phase,
                     str(exc),
                 )
-                contract_failure = isinstance(exc, ModelProviderError) and any(
-                    marker in str(exc).lower()
-                    for marker in ("schema", "does not match", "structured response")
+                agent_contract_failure = (
+                    isinstance(exc, ModelProviderError)
+                    and getattr(exc, "failure_type", "") == "agent_contract"
+                )
+                contract_failure = isinstance(exc, ModelProviderError) and (
+                    agent_contract_failure
+                    or any(
+                        marker in str(exc).lower()
+                        for marker in ("schema", "does not match", "structured response")
+                    )
                 )
                 provider_status = "invalid_response" if contract_failure else "unavailable"
                 if evidence:
@@ -10830,8 +10928,13 @@ def create_app(
                     validated = {
                         "answer_mode": "insufficient_evidence",
                         "content": (
-                            "The model returned an invalid structured response, so PodPilot could not "
-                            "complete this investigation. No cluster changes were attempted."
+                            (
+                                "The agent could not produce a valid final answer, so PodPilot could not "
+                                "complete this investigation. No cluster changes were attempted."
+                                if agent_contract_failure else
+                                "The model returned an invalid structured response, so PodPilot could not "
+                                "complete this investigation. No cluster changes were attempted."
+                            )
                             if contract_failure else
                             "The model provider is currently unavailable. No cluster changes were attempted."
                         ),

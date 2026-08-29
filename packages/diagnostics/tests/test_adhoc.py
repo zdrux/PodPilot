@@ -12,6 +12,7 @@ from podpilot_diagnostics.adhoc import (
     derive_evidence_relationship_graph,
     normalize_read_intent,
     plan_catalog_read,
+    plan_kafka_topic_storage_metrics,
     plan_known_read,
     plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
@@ -1640,6 +1641,44 @@ def test_kafka_non_inventory_question_does_not_use_inventory_shortcut(
     question: str,
 ) -> None:
     assert plan_known_read(question) is None
+
+
+def test_namespace_kafka_topic_storage_compiles_discovery_then_metric_reads() -> None:
+    planned = plan_known_read(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        inventory_limit=250,
+    )
+
+    assert planned is not None
+    discovery, terminal = planned
+    assert terminal is True
+    assert discovery.intents == [ReadIntent(
+        tool="list_resources",
+        resource="kafkas.kafka.strimzi.io",
+        kind="Kafka",
+        namespace="kafka-observability",
+        limit=250,
+    )]
+    metric_plan = plan_kafka_topic_storage_metrics(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        [("kafka-observability", "logs-kafka")],
+    )
+    assert metric_plan is not None
+    assert metric_plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="kafka_topic_storage",
+        metric_scope="kafka_cluster",
+        kind="Kafka",
+        namespace="kafka-observability",
+        name="logs-kafka",
+        range_seconds=300,
+        limit=10,
+        metric_group_by=["topic"],
+    )]
+    assert plan_kafka_topic_storage_metrics(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        [],
+    ) is None
 
 
 def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:

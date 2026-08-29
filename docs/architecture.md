@@ -95,6 +95,12 @@ loop. This also avoids assuming optional utilities such as `jq` exist in the run
 Registered Strimzi Kafka-cluster inventory is authoritative by the same principle: an unavailable
 Kafka API on one or every selected cluster is reported directly and cannot fall through to repeated
 guesses such as `oc get kakas`, `kafkas`, or `kafka` on a single cluster.
+Namespace-scoped Kafka topic-storage requests are a registered two-stage read. PodPilot first lists
+exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
+`kafka_topic_storage` query per observed CR and groups the result by topic. An empty namespace,
+partial metric failure, or denied monitoring read remains authoritative and cannot fall through to
+broker Pod exec. This resolves the Kafka name from observed API evidence instead of requiring the
+model or operator to supply it.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner polls the process silently and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible

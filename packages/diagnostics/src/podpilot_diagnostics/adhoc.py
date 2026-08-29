@@ -1398,6 +1398,19 @@ _KAFKA_INVENTORY_QUERY = re.compile(
     r"(?=.*\b(?:deployed|installed|running|exists?)\b)",
     re.IGNORECASE,
 )
+_KAFKA_TOPIC_STORAGE_QUERY = re.compile(
+    r"(?=.*\bkafka\b)"
+    r"(?=.*\btopics?\b)"
+    r"(?=.*\b(?:disk|storage|space|size|bytes?|usage|utili[sz]ation)\b)",
+    re.IGNORECASE,
+)
+_EXACT_KAFKA_CLUSTER_QUERY = re.compile(
+    r"\b(?:on|for)\s+(?:the\s+)?[`'\"]?"
+    r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\s+Kafka\b|"
+    r"\bKafka\s+(?:cluster\s+(?:named\s+|called\s+)?|named\s+|called\s+)[`'\"]?"
+    r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\b",
+    re.IGNORECASE,
+)
 _NON_INVENTORY_KAFKA_QUERY = re.compile(
     r"\b(?:metrics?|utili[sz]ation|usage|throughput|rates?|lag|storage|health|healthy|"
     r"status|configuration|configure|configured|why|how|topics?|users?|connectors?)\b",
@@ -1667,6 +1680,74 @@ def _cross_namespace_network_policy_plan(question: str) -> ReadPlan | None:
     )
 
 
+def is_kafka_topic_storage_discovery_plan(plan: ReadPlan | None) -> bool:
+    """Return whether a registered plan is the namespace-to-Kafka storage first stage."""
+
+    return bool(
+        plan is not None
+        and plan.goal_type == "compare"
+        and len(plan.intents) == 1
+        and plan.intents[0].tool == "list_resources"
+        and plan.intents[0].resource == "kafkas.kafka.strimzi.io"
+        and plan.intents[0].kind == "Kafka"
+        and plan.intents[0].namespace
+        and plan.next_step_summary
+    )
+
+
+def plan_kafka_topic_storage_metrics(
+    question: str,
+    kafka_clusters: list[tuple[str, str]],
+    *,
+    now: datetime | None = None,
+) -> ReadPlan | None:
+    """Compile bounded per-Kafka topic-storage reads from observed CR coordinates."""
+
+    coordinates = list(dict.fromkeys(
+        (namespace.lower(), name.lower())
+        for namespace, name in kafka_clusters
+        if _METRIC_IDENTIFIER.fullmatch(namespace)
+        and _METRIC_IDENTIFIER.fullmatch(name)
+    ))
+    if not coordinates:
+        return None
+    selected = coordinates[:6]
+    range_seconds = _requested_metric_range_seconds(question, now=now)
+    result_limit = _requested_metric_result_limit(
+        question, default=_DEFAULT_METRIC_RESULT_LIMIT,
+    )
+    limitations = []
+    if len(coordinates) > len(selected):
+        limitations.append(
+            "Topic storage was queried for the first 6 observed Kafka clusters; "
+            f"{len(coordinates) - len(selected)} additional cluster(s) were omitted by the read ceiling."
+        )
+    return ReadPlan(
+        goal_type="compare",
+        scope_summary=(
+            "Read topic storage for observed Strimzi Kafka clusters over "
+            f"{range_seconds} seconds."
+        ),
+        intents=[
+            ReadIntent(
+                tool="query_metrics",
+                metric="kafka_topic_storage",
+                metric_scope="kafka_cluster",
+                kind="Kafka",
+                namespace=namespace,
+                name=name,
+                range_seconds=range_seconds,
+                limit=result_limit,
+                metric_operation="show",
+                metric_statistic="current",
+                metric_group_by=["topic"],
+            )
+            for namespace, name in selected
+        ],
+        limitations=limitations,
+    )
+
+
 def plan_known_read(
     question: str,
     *,
@@ -1682,6 +1763,38 @@ def plan_known_read(
     metric_result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    kafka_storage_match = _KAFKA_TOPIC_STORAGE_QUERY.search(question)
+    explicit_namespace = _EXPLICIT_NAMESPACE_QUERY.search(question)
+    if (
+        kafka_storage_match
+        and explicit_namespace
+        and not _EXACT_KAFKA_CLUSTER_QUERY.search(question)
+    ):
+        namespace = (
+            explicit_namespace.group("prefix")
+            or explicit_namespace.group("suffix")
+        ).lower()
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    "Discover Strimzi Kafka clusters in namespace "
+                    f"{namespace} before reading topic storage."
+                ),
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="kafkas.kafka.strimzi.io",
+                    kind="Kafka",
+                    namespace=namespace,
+                    limit=inventory_limit,
+                )],
+                next_step_summary=(
+                    f"Query Kafka topic storage for each observed Kafka cluster over "
+                    f"{metric_range_seconds} seconds."
+                ),
+            ),
+            True,
+        )
     if _POD_HEALTH_QUERY.search(question) and not _POD_LOG_WORD_QUERY.search(question):
         namespace = _health_namespace_from_question(question)
         return (

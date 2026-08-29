@@ -7574,6 +7574,7 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         def __init__(self) -> None:
             super().__init__()
             self.agent_messages: list[list[dict[str, object]]] = []
+            self.finalization_messages: list[list[dict[str, object]]] = []
 
         def next_agent_step(self, profile, api_key, messages):
             assert profile.api_type == "chat-completions"
@@ -7610,6 +7611,11 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
                     content=None,
                     tool_calls=(),
                 )
+
+        def finalize_agent_step(self, profile, api_key, messages):
+            assert profile.api_type == "chat-completions"
+            assert api_key == "test-api-token"
+            self.finalization_messages.append(list(messages))
             return AgentStep(
                 assistant_message={"role": "assistant", "content": "RBAC denied the mutation."},
                 content="RBAC denied the mutation.",
@@ -7680,7 +7686,9 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])
-    retry_message = provider.agent_messages[2][-1]
+    assert len(provider.agent_messages) == 2
+    assert len(provider.finalization_messages) == 1
+    retry_message = provider.finalization_messages[0][-1]
     assert retry_message["role"] == "user"
     assert "return a concise final answer now" in str(retry_message["content"])
     engine = build_engine(settings)
@@ -8122,6 +8130,7 @@ def test_failed_unrestricted_kafka_topic_storage_stays_out_of_shell_fallback(
         db_session.commit()
     engine.dispose()
 
+
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
@@ -8158,6 +8167,130 @@ def test_failed_unrestricted_kafka_topic_storage_stays_out_of_shell_fallback(
         assert activity["preferred_evidence_view"] == "deterministic_primary"
         assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
     engine.dispose()
+
+
+def test_unrestricted_namespace_kafka_topic_storage_discovers_clusters_then_queries_metrics(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("registered Kafka storage discovery must bypass classification")
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("complete registered Kafka storage must bypass the shell loop")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            if intent.tool == "list_resources":
+                return ReadResult((AdHocObservation(
+                    id="kafka-discovery", tool="list_resources",
+                    summary="Read two Kafka resources.",
+                    source="kubernetes:kafka.strimzi.io:Kafka:kafka-observability/*",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "resource": "kafkas.kafka.strimzi.io", "kind": "Kafka",
+                        "scope": "kafka-observability",
+                        "names": ["logs-kafka", "unmonitored-kafka"],
+                        "objects": [
+                            {
+                                "namespace": "kafka-observability", "name": "logs-kafka",
+                            },
+                            {
+                                "namespace": "kafka-observability",
+                                "name": "unmonitored-kafka",
+                            },
+                        ],
+                        "objectListComplete": True,
+                    },
+                ),))
+            assert intent.metric == "kafka_topic_storage"
+            if intent.name == "unmonitored-kafka":
+                raise ReadOnlyExplorerError(
+                    "Thanos query failed (HTTP 403 Forbidden); grant cluster-monitoring-view."
+                )
+            return ReadResult((AdHocObservation(
+                id="kafka-storage", tool="query_metrics",
+                summary="Read topic storage for logs-kafka.",
+                source="thanos:query_range/kafka_topic_storage",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": "kafka_topic_storage", "scope": "kafka_cluster",
+                    "namespace": intent.namespace, "name": intent.name,
+                    "unit": "bytes", "limit": intent.limit, "complete": True,
+                    "ranking": [{
+                        "labels": {"topic": "logs-east-tm-system"},
+                        "current": 6_442_450_944, "average": 6_400_000_000,
+                        "maximum": 6_442_450_944,
+                    }],
+                },
+            ),))
+
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": (
+                    "show me the disk usage of kafka topics in "
+                    "kafka-observability namespace"
+                )
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert explorer.calls == [
+        ReadIntent(
+            tool="list_resources", resource="kafkas.kafka.strimzi.io", kind="Kafka",
+            namespace="kafka-observability", limit=500,
+        ),
+        ReadIntent(
+            tool="query_metrics", metric="kafka_topic_storage",
+            metric_scope="kafka_cluster", kind="Kafka",
+            namespace="kafka-observability", name="logs-kafka",
+            range_seconds=300, limit=10, metric_group_by=["topic"],
+        ),
+        ReadIntent(
+            tool="query_metrics", metric="kafka_topic_storage",
+            metric_scope="kafka_cluster", kind="Kafka",
+            namespace="kafka-observability", name="unmonitored-kafka",
+            range_seconds=300, limit=10, metric_group_by=["topic"],
+        ),
+    ]
+    assert "logs-east-tm-system" in rendered.text
+    assert "HTTP 403 Forbidden" in rendered.text
+    assert "model provider is currently unavailable" not in rendered.text.casefold()
+    assert "execute_shell" not in rendered.text
 
 
 def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(

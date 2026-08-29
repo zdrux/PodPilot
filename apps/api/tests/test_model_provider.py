@@ -395,6 +395,29 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert "cluster_id" in parameters["properties"]
 
 
+def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    step = provider.finalize_agent_step(
+        profile(
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+        ),
+        "secret-token",
+        [{"role": "user", "content": "Return the final answer now."}],
+    )
+
+    assert step.content
+    assert step.tool_calls == ()
+    request = completions.requests[0]
+    assert "tools" not in request
+    assert "tool_choice" not in request
+    assert "parallel_tool_calls" not in request
+
+
 @pytest.mark.parametrize("api_type", ["chat-completions", "responses"])
 def test_answer_adapter_recovers_only_supplied_exact_inline_citations(
     api_type: str,
