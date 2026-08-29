@@ -153,6 +153,10 @@ provider and credentials are healthy.
 
 ## Environment Variables
 
+- `PODPILOT_AGENT_MODE`, default `guarded`; `unrestricted` selects the lab-only Chat Completions
+  shell-tool loop and must be paired with the SNO runner sidecar.
+- `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.
+
 The current deployment uses these variables:
 
 - `PODPILOT_ENVIRONMENT`
@@ -444,6 +448,47 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
 
 ## OpenShift Deployment
 
+### Unrestricted agent simulation on SNO
+
+The agentic SNO overlay uses OpenRouter at `https://openrouter.ai/api/v1`, exact model ID
+`openai/gpt-oss-120b`, and API type `chat-completions`. It builds a second
+`podpilot-oc-runner` image from `Dockerfile.oc-runner`; the pinned OpenShift CLI stage supplies the
+Linux `oc` binary. The runner is a sidecar in the PodPilot Pod and therefore uses
+`system:serviceaccount:ai-ops:podpilot-investigator`, which must be able to read Pods and must not be
+able to patch Deployments.
+
+Set `OPENROUTER_API_KEY` and the external bootstrap kubeconfig in the Windows process, user, or
+machine environment, then run:
+
+```powershell
+.\scripts\deploy-agentic-sno.ps1
+```
+
+The helper connects through the existing short-lived lab bootstrap flow, checks the runtime RBAC,
+applies both binary BuildConfigs, builds both images, deploys the SNO overlay, waits for rollout,
+and pipes the OpenRouter key over stdin to the API container. The bootstrap module stores it under
+`openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
+fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
+
+Unrestricted turns retain additive deterministic enrichment. Questions recognized by the existing
+known-read compiler first use the registered API/Loki/Thanos reader and pass normalized evidence to
+the agent; the shell loop remains unrestricted afterward. For example, a top-namespace log-volume
+question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
+and average byte rate. Kubernetes Event counts are not an acceptable proxy for that result.
+
+Verify the deployed boundary:
+
+```powershell
+. .\scripts\connect-sno.ps1
+oc get pod -n ai-ops -l app.kubernetes.io/name=podpilot -o jsonpath='{.items[0].spec.serviceAccountName}{"`n"}'
+oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc auth can-i patch deployments --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc get deployment podpilot -n ai-ops -o jsonpath='{.spec.template.spec.containers[*].name}{"`n"}'
+```
+
+Expected results are `podpilot-investigator`, `yes`, `no`, and a container list containing
+`oc-runner`. Do not apply `deploy/openshift/overlays/poc-cluster-admin` to this simulation.
+
 1. Connect and apply the reusable namespace, service account, and read-only RBAC:
 
    ```powershell
@@ -673,6 +718,36 @@ names, and the requesting OpenShift user. A second run returns a conflict and
 must not duplicate tool activity. PodPilot does not actively probe the alert
 destination; `instance` is only an escaped exact-match label in the fixed Thanos
 queries.
+
+### Unrestricted-agent synthetic challenges
+
+The disposable `test` and `test2` namespaces contain five independent challenges
+for the unrestricted-agent lab: an unmatched node selector, a missing PVC, an
+oversized CPU request, a misspelled ConfigMap reference, and cross-namespace
+traffic denied by a NetworkPolicy. The last challenge runs `network-client` in
+`test`; it exits whenever it cannot reach the `network-target` HTTP Deployment in
+`test2`, then remains running once connectivity is restored.
+
+The fixture grants `ai-ops/podpilot-investigator` the built-in `admin` role only
+inside these two disposable namespaces. It does not grant cluster-admin or access
+to mutate other namespaces.
+
+```powershell
+. .\scripts\connect-sno.ps1
+oc apply --dry-run=client -f evals/live/agentic-challenges.yaml
+oc apply -f evals/live/agentic-challenges.yaml
+oc apply --dry-run=server -f evals/live/agentic-challenges.yaml
+oc get deployment,pod,pvc -n test
+oc get deployment,pod,service,networkpolicy -n test2
+oc auth can-i patch deployments -n test --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc auth can-i patch deployments -n test2 --as=system:serviceaccount:ai-ops:podpilot-investigator
+```
+
+Remove both namespaces to reset the complete challenge set:
+
+```powershell
+oc delete namespace test test2
+```
 
 The in-cluster URL, bearer-token pattern, and `cluster-monitoring-view` binding
 for Thanos follow Red Hat's [OpenShift 4.22 monitoring API CLI guidance](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.22/html/accessing_metrics/accessing-monitoring-apis-by-using-the-cli).

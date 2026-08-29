@@ -122,3 +122,10 @@ def test_model_timeout_ceiling_is_bounded() -> None:
         Settings(model_timeout_max_seconds=29)
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=301)
+
+
+def test_agent_mode_defaults_guarded_and_rejects_unknown_values() -> None:
+    assert Settings(_env_file=None).agent_mode == "guarded"
+    assert Settings(agent_mode="unrestricted").agent_mode == "unrestricted"
+    with pytest.raises(ValidationError):
+        Settings(agent_mode="unbounded")

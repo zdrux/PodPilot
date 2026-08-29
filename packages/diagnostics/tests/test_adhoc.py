@@ -1560,12 +1560,15 @@ def test_platform_metric_scopes_require_typed_coordinates() -> None:
         )
 
 
-@pytest.mark.parametrize("question", [
-    "Which namespaces are producing the biggest volume of logs on the cluster?",
-    "Rank namespaces by application log volume",
-    "Show log bytes by namespace",
+@pytest.mark.parametrize(("question", "expected_limit"), [
+    ("Which namespaces are producing the biggest volume of logs on the cluster?", 10),
+    ("Rank namespaces by application log volume", 10),
+    ("Show log bytes by namespace", 10),
+    ("Show me the top 5 namespaces that produce the most amount of logs", 5),
 ])
-def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: str) -> None:
+def test_cluster_log_volume_question_compiles_to_typed_metric_query(
+    question: str, expected_limit: int,
+) -> None:
     planned = plan_known_read(question)
 
     assert planned is not None
@@ -1576,7 +1579,7 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: st
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         range_seconds=300,
-        limit=10,
+        limit=expected_limit,
     )]
 
 

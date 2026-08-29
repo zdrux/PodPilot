@@ -91,6 +91,24 @@ class RecordingResponses:
         ))
 
 
+class ToolCallingCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None,
+            tool_calls=[SimpleNamespace(
+                id="call-shell-1",
+                function=SimpleNamespace(
+                    name="execute_shell",
+                    arguments=json.dumps({"command": "oc get pods -A"}),
+                ),
+            )],
+        ))])
+
+
 class InlineCitationCompletions(RecordingCompletions):
     def create(self, **kwargs):
         self.requests.append(kwargs)
@@ -347,6 +365,31 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert "structured citations array" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
     assert request["reasoning_effort"] == "high"
+
+
+def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> None:
+    completions = ToolCallingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    step = provider.next_agent_step(
+        profile(
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+        ),
+        "secret-token",
+        [{"role": "user", "content": "Inspect the cluster."}],
+    )
+
+    assert step.content is None
+    assert step.tool_calls[0].name == "execute_shell"
+    assert json.loads(step.tool_calls[0].arguments)["command"] == "oc get pods -A"
+    request = completions.requests[0]
+    assert request["model"] == "openai/gpt-oss-120b"
+    assert request["tool_choice"] == "auto"
+    assert request["parallel_tool_calls"] is False
+    assert request["tools"][0]["function"]["name"] == "execute_shell"
 
 
 @pytest.mark.parametrize("api_type", ["chat-completions", "responses"])

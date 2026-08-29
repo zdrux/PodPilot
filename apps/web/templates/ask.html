@@ -7,9 +7,17 @@
     <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
+        {% if agent_mode == 'unrestricted' %}
+        <span class="boundary-pill agent-mode-pill" tabindex="0"
+          data-tooltip="The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account."
+          aria-label="Unrestricted agent lab mode. The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.">
+          <span class="boundary-pill-icon" aria-hidden="true">!</span>
+          <span>Unrestricted lab mode</span>
+        </span>
+        {% endif %}
         <span class="boundary-pill" tabindex="0"
-          data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only."
-          aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only.">
+          data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
+          aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}">
           <span class="boundary-pill-icon" aria-hidden="true">i</span>
           <span>Cluster selection locked</span>
         </span>
@@ -270,7 +278,7 @@
       {% elif user.role.value < 20 %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and structured-output capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
+      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
     </div>
   </section>
 

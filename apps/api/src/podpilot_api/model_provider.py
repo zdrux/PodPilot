@@ -1051,6 +1051,20 @@ class ModelProviderError(RuntimeError):
         self.failure = failure or {}
 
 
+@dataclass(frozen=True)
+class AgentToolCall:
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class AgentStep:
+    assistant_message: dict[str, object]
+    content: str | None
+    tool_calls: tuple[AgentToolCall, ...]
+
+
 class ModelProvider(Protocol):
     def probe(self, profile: ModelProfileConfig, api_key: str) -> CapabilityReport: ...
     def interpret(
@@ -1071,6 +1085,12 @@ class ModelProvider(Protocol):
     def analyze_logs(
         self, profile: ModelProfileConfig, api_key: str, context: dict[str, object]
     ) -> AdHocLogAnalysis: ...
+    def next_agent_step(
+        self,
+        profile: ModelProfileConfig,
+        api_key: str,
+        messages: list[dict[str, object]],
+    ) -> AgentStep: ...
 
 
 _ADHOC_PLANNER_INSTRUCTIONS = (
@@ -1357,6 +1377,16 @@ def _normalized_concise_answer(
 
 class OpenAIResponsesProvider:
     """OpenAI Responses adapter; SDK objects never cross this boundary."""
+
+    def next_agent_step(
+        self,
+        profile: ModelProfileConfig,
+        api_key: str,
+        messages: list[dict[str, object]],
+    ) -> AgentStep:
+        raise ModelProviderError(
+            "Unrestricted agent mode requires a Chat Completions model profile."
+        )
 
     @staticmethod
     def _client(profile: ModelProfileConfig, api_key: str) -> OpenAI:
@@ -2020,6 +2050,78 @@ class OpenAIResponsesProvider:
 class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     """Strict JSON-schema adapter for OpenAI-compatible Chat Completions APIs."""
 
+    def next_agent_step(
+        self,
+        profile: ModelProfileConfig,
+        api_key: str,
+        messages: list[dict[str, object]],
+    ) -> AgentStep:
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "execute_shell",
+                "description": (
+                    "Execute an unrestricted Linux shell script in PodPilot's oc runner. "
+                    "The OpenShift oc CLI is installed and authenticated as the runner Pod's "
+                    "service account. Return codes, stdout, and stderr are returned verbatim."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "The complete bash script to execute.",
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        try:
+            with _model_request_context("workflow.unrestricted_agent"):
+                response = self._client(profile, api_key).chat.completions.create(
+                    model=profile.chat_model,
+                    messages=messages,
+                    tools=[tool],
+                    tool_choice="auto",
+                    parallel_tool_calls=False,
+                    max_tokens=profile.max_output_tokens,
+                    **_chat_reasoning(profile),
+                )
+        except Exception as exc:
+            raise ModelProviderError(self._safe_error(exc)) from exc
+        message = response.choices[0].message
+        calls = tuple(
+            AgentToolCall(
+                id=str(call.id),
+                name=str(call.function.name),
+                arguments=str(call.function.arguments),
+            )
+            for call in (message.tool_calls or [])
+        )
+        assistant_message: dict[str, object] = {
+            "role": "assistant",
+            "content": message.content,
+        }
+        if calls:
+            assistant_message["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    },
+                }
+                for call in calls
+            ]
+        return AgentStep(
+            assistant_message=assistant_message,
+            content=str(message.content) if message.content else None,
+            tool_calls=calls,
+        )
+
     def _parse(self, profile, api_key, *, schema, instructions: str, payload: object, limit=None):
         client = self._client(profile, api_key)
         response_format = {
@@ -2601,3 +2703,6 @@ class OpenAIProviderRouter:
 
     def analyze_logs(self, profile, api_key, context):
         return self._provider(profile).analyze_logs(profile, api_key, context)
+
+    def next_agent_step(self, profile, api_key, messages):
+        return self._provider(profile).next_agent_step(profile, api_key, messages)

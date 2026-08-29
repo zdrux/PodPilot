@@ -388,6 +388,26 @@ Machine and workload tests must prove namespace propagation; Node and ClusterOpe
 reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
 summary must preserve the complete-coverage rule before confirming absence.
 
+## Unrestricted SNO agent gates
+
+- Guarded mode remains the default in the portable runtime ConfigMap and the remote overlay does
+  not contain the runner sidecar.
+- The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
+  `serviceAccountName: podpilot-investigator`.
+- No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
+  validation must return `yes` for cluster-wide Pod GET and `no` for cluster-wide Deployment PATCH.
+- The runner image pins its OpenShift CLI source by digest, runs non-root with a read-only root
+  filesystem, drops all capabilities, binds only to `127.0.0.1:8090`, and uses a projected-token
+  `tokenFile` kubeconfig.
+- Provider tests must prove `openai/gpt-oss-120b` is sent through Chat Completions with
+  `tool_choice=auto`, sequential tool calls, assistant tool-call preservation, and correlated
+  `role=tool` results.
+- End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
+  returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
+- Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
+  `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
+  deterministic payload-volume table, and never substitutes Kubernetes Event counts.
+
 ## Rollback
 
 For production, reapply the previous immutable application image digest and

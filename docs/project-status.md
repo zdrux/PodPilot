@@ -1,15 +1,17 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-28
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.11.0 remains deployed on the disposable SNO lab. The 0.12.0 working tree
-is implemented and locally tested at schema head `0013_raw_model_responses`, but has
-not been deployed. It adds Ask-only multi-cluster routing, secret-backed cluster
+PodPilot 0.12.0 from feature branch `codex/unrestricted-agentic-mode` is deployed on the
+disposable SNO lab at schema head `0013_raw_model_responses`. The lab deployment has
+unrestricted agent mode enabled with OpenRouter Chat Completions, exact model
+`openai/gpt-oss-120b`, and the localhost `oc-runner` sidecar. It also adds Ask-only
+multi-cluster routing, secret-backed cluster
 management, immutable one-to-ten-cluster conversation selections, cluster-attributed
 evidence, and curated-memory prompt integration governed by explicit cluster targets,
 required tags, or global scope. Start a new session by reading this file and
@@ -22,6 +24,29 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- A feature-branch SNO-only unrestricted agent simulation now uses OpenRouter Chat Completions with
+  exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
+  function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
+  typed read/remediation approval inside the lab mode while retaining the durable run deadline,
+  output redaction before provider reuse, progress, and command metadata audit. The base and remote
+  deployments remain guarded.
+- The runner image copies a digest-pinned Linux `oc` binary into the pinned UBI Python runtime. The
+  SNO overlay runs it non-root under the existing `podpilot-investigator` Pod service account. The
+  deploy helper refuses to proceed if that identity can patch Deployments, builds both images,
+  deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
+  passed over stdin. The model-free suite passes locally with 628 tests and 82% aggregate coverage.
+  Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
+  verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
+  `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
+- Unrestricted turns now retain additive high-confidence deterministic enrichment. Registered
+  known reads execute before the shell loop across selected clusters, persist normalized evidence,
+  and supply preferred deterministic ranking tables to the model. The observed top-five namespace
+  log-volume wording now routes to the Loki application-log payload-byte reader rather than using
+  Kubernetes Events as a proxy, while arbitrary shell access remains available afterward. The
+  current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
+  that Loki is unavailable; clusters with the registered LokiStack integration render the byte
+  volume and average-rate table.
 
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
@@ -424,10 +449,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Last Verified State
 
-- Deployed application version: `0.11.0`; current source version: `0.12.0`.
+- Deployed application version: `0.12.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
-- Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 280 tests passing with 84% aggregate coverage.
+- Deployment: `ai-ops/podpilot`, last observed `1/1` Available with the API, OAuth proxy, and
+  `oc-runner` containers ready.
+- Local automated suite: 628 tests passing with 82% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

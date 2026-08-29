@@ -152,6 +152,16 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_run_timeout_seconds
+            - name: PODPILOT_AGENT_MODE
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_mode
+            - name: PODPILOT_AGENT_RUNNER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_runner_url
             - name: PODPILOT_MODEL_TIMEOUT_MAX_SECONDS
               valueFrom:
                 configMapKeyRef:

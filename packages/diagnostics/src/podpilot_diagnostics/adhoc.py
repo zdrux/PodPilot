@@ -1369,6 +1369,9 @@ _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\b(?:which|what)\s+(?:namespaces?|projects?)\b.*?"
     r"\b(?:producing|generating|writing)\b.*?\b(?:logs?|logging)\b|"
     r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
+    r"\b(?:produce|produces|producing|generate|generates|generating|write|writes|writing)\b.*?"
+    r"\b(?:most|highest|largest|biggest|greatest)\b.*?\b(?:logs?|logging)\b|"
+    r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
     r"\bby\s+(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b|"
     r"\b(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b.*?"
     r"\bby\s+(?:namespaces?|projects?)\b",

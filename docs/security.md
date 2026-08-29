@@ -52,11 +52,40 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
+### Lab-only unrestricted agent exception
+
+`deploy/openshift/overlays/sno-milestone-one/` deliberately enables
+`PODPILOT_AGENT_MODE=unrestricted` and adds a localhost-only `oc-runner` sidecar. In this mode a
+Chat Completions model may execute arbitrary Bash and `oc` commands without PodPilot's read
+schemas, mutation preview, or approval workflow. This is an explicit test fixture, not a production
+security boundary. The base and remote overlays remain guarded.
+
+High-confidence questions may additionally run through the existing registered deterministic
+read compiler before the shell loop. Those reads retain their normal fixed query construction,
+normalization, redaction, evidence persistence, and bounded presentation. They provide trusted
+product enrichment—such as Loki application-log byte rankings—but do not remove or constrain the
+agent's arbitrary shell tool.
+
+The runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the lab
+deployment helper fails before building if that identity can patch Deployments. Cluster RBAC and
+admission therefore remain the authoritative execution boundary. Command text and exit status are
+audited without stdout/stderr; shell output is secret-pattern redacted before it is returned to the
+provider and is not persisted as evidence. Normalized deterministic enrichment is persisted as
+evidence under the existing policy. Cluster output remains untrusted data and may contain
+prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root
+filesystem and dropped capabilities, and writes its tokenFile-based kubeconfig only to the shared
+ephemeral `/tmp` volume.
+
+Even with read-only RBAC, arbitrary shell execution can consume Pod resources, inspect files
+readable by the runner container, and make allowed network requests. Do not enable this overlay on
+a production cluster or compose it with `poc-cluster-admin`.
+
 - The reusable base in `deploy/openshift/` remains a read-only observer policy.
 - The disposable SNO development lab deliberately adds `cluster-admin` through
   `deploy/openshift/overlays/poc-cluster-admin/` so implementation and remediation
   experiments are not blocked by evolving RBAC.
-- The PoC exception does not relax product-level approval requirements: every
+- Outside the explicitly enabled unrestricted SNO fixture above, the PoC exception does not relax
+  product-level approval requirements: every
   proposed mutation must show its target, patch or command, risks, and rollback,
   then require a fresh explicit approval.
 - Production packaging must not install the PoC overlay. It should use separate

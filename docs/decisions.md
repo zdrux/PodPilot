@@ -1056,3 +1056,44 @@ claim. Nodes and ClusterOperators remain cluster-scoped; Machines and workload c
 namespace filters. Combined workload scans apply the scan ceiling per controller kind. A Node
 `Ready=False`, a Machine provisioning condition, and a Pod container waiting reason remain distinct
 health semantics.
+
+## 2026-08-28 - Unrestricted agent simulation uses a read-only oc sidecar
+
+Context: The guarded Ask loop cannot reproduce the behavior of a remote fully agentic deployment
+because every cluster interaction compiles through typed reads and mutations require registered
+approval. The SNO lab needs to exercise native multi-step tool calling with the same OpenRouter
+model as the remote cluster without accidentally granting the lab agent cluster-admin.
+
+Decision: Add a lab-only `unrestricted` agent mode that is enabled only by the SNO milestone
+overlay. Use OpenRouter Chat Completions with exact model `openai/gpt-oss-120b` and one
+`execute_shell` function. Execute calls through a localhost-only sidecar built with a pinned Linux
+`oc` binary. The sidecar shares `podpilot-investigator`; do not compose the `ai-observer`
+cluster-admin overlay. Keep guarded mode as the base/remote default. Retain an outer durable-run
+deadline, redaction before returning command output to the model, and command metadata audit, but
+bypass typed reads, registered remediation, preview, and approval inside the lab mode.
+
+Consequences: The model can choose arbitrary Bash and OpenShift CLI operations, while the actual
+cluster result is constrained only by the runtime service account's read-only RBAC and admission.
+This accurately surfaces forbidden mutations in the agent loop. It is intentionally unsuitable for
+production, does not make model output trustworthy, and must never be combined with the lab
+cluster-admin overlay.
+
+## 2026-08-28 - Unrestricted mode retains additive deterministic enrichment
+
+Context: A shell-only agent can miss product-specific capabilities that normal PodPilot code owns.
+For example, it may count Kubernetes Events as a proxy for log production even though PodPilot has
+an authenticated aggregate-only Loki application-log volume reader and a deterministic ranking
+presentation.
+
+Decision: Before each unrestricted shell loop, apply the existing high-confidence known-read
+compiler to the current question. Execute a matching registered plan across the selected clusters,
+persist its normalized evidence, and include both that evidence and any deterministic metric table
+in the agent context and final response. Keep `execute_shell` available without approval or typed
+tool restrictions after enrichment. Do not invoke the model planner merely to find an enrichment;
+unrecognized questions proceed directly to the unrestricted loop.
+
+Consequences: Common health, resource, metric-ranking, and log-volume questions retain PodPilot's
+fixed API semantics and presentation without reducing agent autonomy. Registered readers remain
+bounded by their own data-handling contracts, while shell actions remain bounded only by the Pod
+identity, admission, and the outer run deadline. Adding a new deterministic enrichment continues to
+require an explicit known-read compiler rule and tests.

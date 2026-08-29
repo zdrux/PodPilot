@@ -439,6 +439,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .subtitle-context { color: inherit; }
 .panel-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
 .boundary-pill { position: relative; min-height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 8px; border: 1px solid rgba(255, 157, 102, .28); border-radius: 999px; color: #d8b29c; background: rgba(255, 157, 102, .08); cursor: help; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.agent-mode-pill { border-color: rgba(255, 157, 102, .5); color: #f2c6aa; background: rgba(255, 157, 102, .12); }
 .boundary-pill-icon { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; color: #111; background: var(--orange); font-size: 11px; font-weight: 900; }
 .boundary-pill::after { position: absolute; z-index: 30; top: calc(100% + 8px); right: 0; width: max-content; max-width: min(430px, 76vw); padding: 9px 11px; border: 1px solid rgba(255, 157, 102, .3); border-radius: 8px; color: #e7d4c9; background: #17151a; box-shadow: 0 10px 28px rgba(0, 0, 0, .4); content: attr(data-tooltip); font-size: 11px; font-weight: 500; line-height: 1.5; white-space: normal; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .14s ease, transform .14s ease; }
 .boundary-pill:hover::after, .boundary-pill:focus-visible::after { opacity: 1; transform: translateY(0); }

@@ -63,6 +63,8 @@ from podpilot_api.main import (
     create_app,
 )
 from podpilot_api.model_provider import (
+    AgentStep,
+    AgentToolCall,
     AdHocAnswer,
     AdHocLogAnalysis,
     LogAnalysisIssue,
@@ -107,6 +109,7 @@ from podpilot_diagnostics.adhoc import (
 )
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
+from podpilot_openshift.agent_runner import AgentCommandResult
 from podpilot_openshift.credentials import CredentialStoreError
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
@@ -129,6 +132,31 @@ def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:
     assert _profile_is_usable(profile) is True
     profile.capabilities_json = json.dumps({"reachable": True, "structured_output": False})
     assert _profile_is_usable(profile) is False
+
+
+def test_unrestricted_mode_accepts_reduced_profile_with_tool_calling() -> None:
+    profile = ModelProfile(
+        provider_label="OpenRouter",
+        base_url="https://openrouter.ai/api/v1",
+        chat_model="openai/gpt-oss-120b",
+        api_type="chat-completions",
+        credential_key="openrouter_api_key",
+        timeout_seconds=240,
+        max_output_tokens=4096,
+        status="reduced_capability",
+        capabilities_json=json.dumps({
+            "reachable": True,
+            "authenticated": True,
+            "model_available": True,
+            "tls_valid": True,
+            "tool_calls": True,
+            "structured_output": False,
+        }),
+        updated_by="test",
+    )
+
+    assert _profile_is_usable(profile) is False
+    assert _profile_is_usable(profile, "unrestricted") is True
     profile.status = "unavailable"
     assert _profile_is_usable(profile) is False
 
@@ -6909,6 +6937,7 @@ def make_app(
     read_explorer: FakeReadExplorer | None = None,
     cluster_credential_store: MemoryCredentialStore | None = None,
     remote_read_explorer_factory=None,
+    agent_runner=None,
     settings_overrides: dict[str, object] | None = None,
 ):
     test_settings = {"adhoc_job_worker_enabled": False}
@@ -6939,6 +6968,7 @@ def make_app(
             read_explorer or FakeReadExplorer(),
             cluster_credential_store,
             remote_read_explorer_factory,
+            agent_runner,
         ),
         settings,
     )
@@ -7029,6 +7059,252 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert assistant is not None and json.loads(assistant.raw_responses_json) == []
         actions = list(db_session.scalars(select(AuditEvent.action)))
         assert "adhoc.message" in actions and "adhoc.answer" in actions
+    engine.dispose()
+
+
+def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, profile, api_key, messages):
+            assert profile.api_type == "chat-completions"
+            assert api_key == "test-api-token"
+            self.agent_messages.append(list(messages))
+            if len(self.agent_messages) == 1:
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "execute_shell",
+                                "arguments": json.dumps({
+                                    "command": "oc auth can-i patch deployments --all-namespaces"
+                                }),
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="call-1",
+                        name="execute_shell",
+                        arguments=json.dumps({
+                            "command": "oc auth can-i patch deployments --all-namespaces"
+                        }),
+                    ),),
+                )
+            return AgentStep(
+                assistant_message={"role": "assistant", "content": "RBAC denied the mutation."},
+                content="RBAC denied the mutation.",
+                tool_calls=(),
+            )
+
+    class Runner:
+        def __init__(self) -> None:
+            self.commands: list[str] = []
+
+        def execute(self, command: str) -> AgentCommandResult:
+            self.commands.append(command)
+            return AgentCommandResult(
+                command=command,
+                exit_code=1,
+                stdout="no\n",
+                stderr="",
+            )
+
+    provider = Provider()
+    runner = Runner()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        agent_runner=runner,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        assert 'class="boundary-pill agent-mode-pill"' in page.text
+        assert "Unrestricted lab mode" in page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Try to patch a deployment."},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+        assert "RBAC denied the mutation" in rendered.text
+
+    assert runner.commands == ["oc auth can-i patch deployments --all-namespaces"]
+    tool_message = provider.agent_messages[1][-1]
+    assert tool_message["role"] == "tool"
+    assert '"exit_code": 1' in str(tool_message["content"])
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["agent_mode"] == "unrestricted"
+        assert activity["reads"][0]["status"] == "failed"
+        audits = list(db_session.scalars(select(AuditEvent.action)))
+        assert "agentic.command" in audits
+    engine.dispose()
+
+
+def test_unrestricted_agent_receives_registered_log_volume_enrichment(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.agent_messages.append(list(messages))
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant",
+                    "content": "The Loki-backed namespace log-volume ranking is shown above.",
+                },
+                content="The Loki-backed namespace log-volume ranking is shown above.",
+                tool_calls=(),
+            )
+
+    class LogVolumeExplorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="log-volume-enrichment-1",
+                tool="query_metrics",
+                summary="Ranked namespaces by application-log payload volume.",
+                source="loki:application/query/top_log_volume_by_namespace",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": "top_log_volume_by_namespace",
+                    "scope": "cluster",
+                    "unit": "bytes",
+                    "averageUnit": "bytes_per_second",
+                    "rangeSeconds": 300,
+                    "limit": 5,
+                    "complete": True,
+                    "ranking": [{
+                        "labels": {"namespace": "payments"},
+                        "current": 4096,
+                        "average": 13.6533333333,
+                        "maximum": None,
+                    }],
+                },
+            ),))
+
+    provider = Provider()
+    explorer = LogVolumeExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Show me the top 5 namespaces that produce the most amount of logs"
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+        assert "Loki-backed namespace log-volume ranking" in rendered.text
+        assert "Payload volume" in rendered.text
+        assert "payments" in rendered.text
+        assert "Kubernetes events" not in rendered.text
+
+    assert explorer.calls == [ReadIntent(
+        tool="query_metrics",
+        metric="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        range_seconds=300,
+        limit=5,
+    )]
+    enrichment_message = provider.agent_messages[0][1]
+    assert enrichment_message["role"] == "system"
+    assert "loki:application/query/top_log_volume_by_namespace" in str(
+        enrichment_message["content"]
+    )
+    assert "Payload volume" in str(enrichment_message["content"])
+    assert "Kubernetes Event counts" in str(enrichment_message["content"])
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        conversation = db_session.scalar(select(AdHocConversation))
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert conversation is not None
+        assert json.loads(conversation.evidence_json)[0]["id"] == "log-volume-enrichment-1"
+        assert assistant is not None
+        assert assistant.answer_mode == "evidence_based"
+        assert json.loads(assistant.citations_json) == ["log-volume-enrichment-1"]
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["reads"][0]["source"] == "deterministic_enrichment"
+        assert activity["reads"][0]["status"] == "succeeded"
     engine.dispose()
 
 
@@ -10361,6 +10637,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
     assert "appendOptimisticTurn" in script
+    assert 'class="boundary-pill agent-mode-pill"' in template
+    assert ".agent-mode-pill" in styles
     assert "new URLSearchParams(new FormData(adhocForm))" in script
     assert 'requestBody.set("message", question)' in script
     assert "rawResponseToggle.disabled = true" in script

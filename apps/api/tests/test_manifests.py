@@ -148,6 +148,8 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "key": "adhoc_metrics_max_response_bytes",
     }
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
+    assert runtime["data"]["agent_mode"] == "guarded"
+    assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
@@ -201,6 +203,53 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert "--upstream-timeout=300s" in oauth_proxy["args"]
     route = yaml.safe_load((workload / "route.yaml").read_text())
     assert route["metadata"]["annotations"]["haproxy.router.openshift.io/timeout"] == "300s"
+
+
+def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
+    root = ROOT / "deploy" / "openshift"
+    overlay = root / "overlays" / "sno-milestone-one"
+    kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
+    runtime = yaml.safe_load((overlay / "runtime-config-patch.yaml").read_text())
+    runner_patch = yaml.safe_load((overlay / "agentic-runner-patch.yaml").read_text())
+    deployment = yaml.safe_load((root / "workload" / "deployment.yaml").read_text())
+    rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
+
+    assert runtime["data"]["agent_mode"] == "unrestricted"
+    assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
+    assert "../../../overlays/poc-cluster-admin" not in kustomization["resources"]
+    assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == (
+        "podpilot-investigator"
+    )
+    runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
+    assert runner["name"] == "oc-runner"
+    assert runner["image"] == "podpilot-oc-runner:latest"
+    assert all(
+        document.get("roleRef", {}).get("name") != "cluster-admin"
+        for document in rbac_documents
+    )
+
+
+def test_oc_runner_build_pins_cli_image_and_uses_separate_image_stream() -> None:
+    root = ROOT
+    dockerfile = (root / "Dockerfile.oc-runner").read_text()
+    build = yaml.safe_load(
+        (root / "deploy" / "openshift" / "build" / "sno-binary" /
+         "oc-runner-build-config.yaml").read_text()
+    )
+    assert "quay.io/openshift/origin-cli@sha256:" in dockerfile
+    assert "COPY --from=cli /usr/bin/oc" in dockerfile
+    assert build["spec"]["strategy"]["dockerStrategy"]["dockerfilePath"] == (
+        "Dockerfile.oc-runner"
+    )
+    assert build["spec"]["output"]["to"]["name"] == "podpilot-oc-runner:latest"
+
+
+def test_agentic_deploy_restarts_latest_tag_workload_after_build() -> None:
+    script = (ROOT / "scripts" / "deploy-agentic-sno.ps1").read_text()
+
+    assert "--from-archive=$buildArchive" in script
+    assert "oc rollout restart deployment/podpilot -n ai-ops" in script
+    assert "oc rollout status deployment/podpilot -n ai-ops --timeout=600s" in script
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:

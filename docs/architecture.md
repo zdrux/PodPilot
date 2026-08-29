@@ -26,7 +26,29 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 ## Current Runtime
 
-The current single Pod contains two containers. The OpenShift OAuth proxy is the
+The SNO milestone overlay has an optional lab-only unrestricted agent path. Before the free-form
+loop, normal code applies the existing high-confidence `plan_known_read` compiler to the current
+question. When it matches, PodPilot executes those registered readers across the selected clusters,
+persists their normalized evidence, and supplies the evidence plus any deterministic ranking table
+to the model. This preserves enrichments such as Loki-backed application-log volume, health
+summaries, and registered metric rankings; it is additive and does not restrict later agent actions.
+
+The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function. Tool calls go over
+Pod loopback to an `oc-runner` sidecar, which executes Bash with the Linux `oc` binary and returns
+exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
+model returns a final assistant message or the durable Ask run reaches its outer execution
+deadline. Beyond the optional deterministic enrichment, this path does not constrain the agent to
+`ReadIntent`, the read broker, typed remediation, preview, or approval. It does retain conversation ownership, provider credentials, redaction before model
+reuse/persistence, progress, command metadata audit, and the run deadline.
+
+The sidecar shares the Pod-level `podpilot-investigator` service account. In the composed SNO
+agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
+separate `ai-observer` cluster-admin overlay is not included. Consequently the model may ask for
+any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
+portable base and remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
+
+The guarded single Pod contains two containers; the unrestricted SNO fixture adds the runner as a
+third. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
 `127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
 highest matching elevated role from deployment-configured OpenShift Group lists

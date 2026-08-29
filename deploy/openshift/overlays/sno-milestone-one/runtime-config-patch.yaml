@@ -6,3 +6,5 @@ metadata:
 data:
   environment: sno-lab
   cluster_name: sno.192-168-0-200.sslip.io
+  agent_mode: unrestricted
+  adhoc_run_timeout_seconds: "900"
