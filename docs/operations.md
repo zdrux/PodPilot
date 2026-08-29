@@ -409,7 +409,21 @@ questions. Explicit list and count questions remain inventory-only. When a
 `list_resources` plan omits a deliberate limit, the broker replaces the model schema's
 20-object default with the configured bounded inventory window. When the model cannot turn
 validated list evidence into a useful final answer, PodPilot renders that evidence as a
-deterministic table instead.
+deterministic table instead. Every answer that cites successful current-turn `list_resources` or
+`search_resources` evidence also persists a bounded `grouped_resource_list` presentation. Ask
+renders one collapsible section per cluster with Kind, namespace, resource name, Ready state,
+completeness, scan count, and the matched field value when retained. Each populated cluster table
+can be downloaded as CSV. These rows come from normalized evidence and are HTML-escaped by the
+template; the UI does not parse or trust the model response as a table contract. At most 1,000
+rows are duplicated into presentation metadata, with omitted counts shown when the evidence
+contains more; the cited evidence and Markdown answer remain available.
+Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
+or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
+asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the
+display to that cluster without changing the conversation's locked cluster selection. The reply
+states that it reused an earlier snapshot and includes the original evidence provenance. Wording
+such as `current`, `still present`, `now`, `latest`, `refresh`, or `recheck` disables snapshot reuse
+and repeats the same bounded resource query against the requested cluster scope.
 If the model still returns an incomplete non-inventory answer after the bounded correction, exact
 object reads feed a redacted, question-focused deterministic answer with evidence citations.
 Known relationships such as CLF Kafka outputs and their pipelines are summarized directly;

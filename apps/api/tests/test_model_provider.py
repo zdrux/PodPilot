@@ -910,7 +910,7 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
             "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
             "metric_request",
         "audit_username", "audit_operation_scope", "audit_outcome", "audit_range_seconds",
-        "continues_prior_audit_query",
+        "continues_prior_audit_query", "continues_prior_resource_query",
     }
     assert request["max_tokens"] == 1000
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
@@ -938,6 +938,16 @@ def test_resource_inventory_capability_preserves_field_filter() -> None:
     assert inquiry.resource_filter == ResourceFieldFilterSemantics(
         field="spec.host", operator="contains", value=".az.cibc.com",
     )
+
+
+def test_resource_inventory_capability_preserves_prior_query_continuation() -> None:
+    inquiry = CapabilitySelection(
+        capability="resource_inventory", cardinality="collection",
+        resource_query="Route", continues_prior_resource_query=True,
+        evidence_goal="Present the prior Route search.",
+    ).to_inquiry_semantics()
+
+    assert inquiry.continues_prior_resource_query is True
 
 
 def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:

@@ -43,6 +43,7 @@ from podpilot_api.model_provider import (
     ModelProviderError,
     OpenAIProviderRouter,
     REASONING_EFFORTS,
+    ResourceFieldFilterSemantics,
     capture_model_diagnostics,
     capture_raw_model_responses,
     summarize_model_diagnostics,
@@ -2809,6 +2810,190 @@ def _deterministic_inventory_answer(
         "answer_mode": "evidence_based",
         "content": "\n".join(lines),
         "citations": [str(observation["id"])],
+    }
+
+
+def _resource_list_presentation(
+    *,
+    evidence: list[dict[str, object]],
+    activity: list[dict[str, object]],
+    citations: list[str],
+    max_rows: int = 1_000,
+) -> dict[str, object] | None:
+    """Build a bounded UI block from cited, successful resource-list evidence."""
+
+    successful_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") in {"list_resources", "search_resources"}
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    cited_ids = {str(item) for item in citations}
+    eligible_ids = successful_ids.intersection(cited_ids)
+    if not eligible_ids:
+        return None
+
+    def field_value(item: dict[str, object], path: str) -> str:
+        def resolve(current: object, segments: list[str]) -> list[object]:
+            if not segments:
+                if isinstance(current, list):
+                    values: list[object] = []
+                    for child in current:
+                        values.extend(resolve(child, []))
+                    return values
+                return [current]
+            if isinstance(current, list):
+                values = []
+                for child in current:
+                    values.extend(resolve(child, segments))
+                return values
+            if not isinstance(current, dict) or segments[0] not in current:
+                return []
+            return resolve(current[segments[0]], segments[1:])
+
+        values = [
+            value for value in resolve(item, path.split("."))
+            if value not in (None, "", [], {})
+        ]
+        if not values:
+            return "—"
+        value: object = values[0] if len(values) == 1 else values
+        return redact_text(_evidence_value(value, limit=512))
+
+    def ready_value(item: dict[str, object]) -> str:
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        conditions = status.get("conditions") if isinstance(status.get("conditions"), list) else []
+        for condition in conditions:
+            if (
+                isinstance(condition, dict)
+                and str(condition.get("type") or "").casefold() == "ready"
+            ):
+                return redact_text(str(condition.get("status") or "Unknown"))[:32]
+        return "Unknown"
+
+    groups: list[dict[str, object]] = []
+    total_count = 0
+    displayed_count = 0
+    kinds: set[str] = set()
+    match_fields: set[str] = set()
+    filtered = False
+    for observation in evidence:
+        evidence_id = str(observation.get("id") or "")
+        if evidence_id not in eligible_ids:
+            continue
+        tool = str(observation.get("tool") or "")
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        names = data.get("names") if isinstance(data.get("names"), list) else None
+        if names is None:
+            continue
+        kind = redact_text(str(data.get("kind") or "Resource"))[:253]
+        kinds.add(kind)
+        match_field = (
+            redact_text(str(data.get("matchField")))[:512]
+            if tool == "search_resources" and data.get("matchField") else None
+        )
+        if match_field:
+            filtered = True
+            match_fields.add(match_field)
+        complete = (
+            data.get("searchComplete") is True
+            if tool == "search_resources" else
+            bool(data.get("objectListComplete", not data.get("truncated")))
+        )
+        declared_count = data.get("count")
+        count = (
+            int(declared_count)
+            if isinstance(declared_count, int) and not isinstance(declared_count, bool)
+            else len(names)
+        )
+        total_count += count
+        refs = data.get("objects") if isinstance(data.get("objects"), list) else []
+        items = data.get("items") if isinstance(data.get("items"), list) else []
+        items_by_ref: dict[tuple[str, str], dict[str, object]] = {}
+        items_by_name: dict[str, dict[str, object]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            name = str(metadata.get("name") or "")
+            namespace = str(metadata.get("namespace") or "")
+            if name:
+                items_by_ref[(namespace, name)] = item
+                items_by_name.setdefault(name, item)
+        rows: list[dict[str, str]] = []
+        remaining = max(0, max_rows - displayed_count)
+        scope = str(data.get("scope") or "cluster")
+        for index, raw_name in enumerate(names[:remaining]):
+            name = redact_text(str(raw_name))[:253]
+            ref = refs[index] if index < len(refs) and isinstance(refs[index], dict) else {}
+            indexed_item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
+            indexed_metadata = (
+                indexed_item.get("metadata")
+                if isinstance(indexed_item.get("metadata"), dict) else {}
+            )
+            namespace = redact_text(str(
+                ref.get("namespace")
+                or indexed_metadata.get("namespace")
+                or (scope if scope != "cluster" else "—")
+            ))[:253]
+            item = (
+                items_by_ref.get(("" if namespace == "—" else namespace, name))
+                or items_by_name.get(name)
+                or indexed_item
+            )
+            rows.append({
+                "kind": kind,
+                "namespace": namespace,
+                "name": name,
+                "matched_value": field_value(item, match_field) if match_field else "—",
+                "ready": ready_value(item),
+            })
+        displayed_count += len(rows)
+        cluster_name = redact_text(str(
+            observation.get("cluster_name")
+            or observation.get("cluster_id")
+            or "OpenShift cluster"
+        ))[:253]
+        groups.append({
+            "cluster_id": str(observation.get("cluster_id") or cluster_name)[:253],
+            "cluster_name": cluster_name,
+            "evidence_id": evidence_id,
+            "kind": kind,
+            "count": count,
+            "displayed_count": len(rows),
+            "omitted_count": max(0, count - len(rows)),
+            "scanned_count": data.get("scannedCount"),
+            "complete": complete,
+            "match_field": match_field,
+            "match_operator": (
+                redact_text(str(data.get("matchOperator") or "exact"))[:32]
+                if match_field else None
+            ),
+            "match_value": (
+                redact_text(str(data.get("matchValue") or ""))[:512]
+                if match_field else None
+            ),
+            "rows": rows,
+        })
+
+    if not groups:
+        return None
+    return {
+        "version": 1,
+        "type": "grouped_resource_list",
+        "title": (
+            f"{'Filtered ' if filtered else ''}{next(iter(kinds))} results"
+            if len(kinds) == 1 else
+            f"{'Filtered ' if filtered else ''}resource results"
+        ),
+        "filtered": filtered,
+        "match_field": next(iter(match_fields)) if len(match_fields) == 1 else None,
+        "show_kind": len(kinds) > 1,
+        "total_count": total_count,
+        "displayed_count": displayed_count,
+        "omitted_count": max(0, total_count - displayed_count),
+        "groups": groups,
     }
 
 
@@ -5955,6 +6140,261 @@ def _latest_metric_query_semantics(
     return None
 
 
+def _latest_resource_query_semantics(
+    evidence: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Recover the latest validated resource collection for an elliptical follow-up."""
+
+    latest: dict[str, object] | None = None
+    signature: tuple[object, ...] | None = None
+    for item in reversed(evidence):
+        if (
+            item.get("tool") not in {"list_resources", "search_resources"}
+            or not isinstance(item.get("data"), dict)
+        ):
+            continue
+        data = item["data"]
+        kind = str(data.get("kind") or "").strip()
+        if not kind or not isinstance(data.get("names"), list):
+            continue
+        match_field = str(data.get("matchField") or "").strip() or None
+        match_operator = str(data.get("matchOperator") or "").strip() or None
+        match_value = str(data.get("matchValue") or "").strip() or None
+        candidate_signature = (
+            str(item.get("tool")), kind.casefold(),
+            str(data.get("resource") or "").casefold(),
+            str(data.get("apiVersion") or "").casefold(),
+            str(data.get("scope") or "cluster").casefold(),
+            str(data.get("labelSelector") or ""),
+            match_field, match_operator, match_value,
+        )
+        signature = candidate_signature
+        try:
+            query_limit = int(data.get("limit") or 100)
+        except (TypeError, ValueError):
+            query_limit = 100
+        latest = {
+            "tool": str(item.get("tool")),
+            "kind": kind[:253],
+            "resource": str(data.get("resource") or "")[:317] or None,
+            "api_version": str(data.get("apiVersion") or "")[:128] or None,
+            "namespace": (
+                str(data.get("scope"))[:253]
+                if data.get("scope") not in (None, "", "cluster") else None
+            ),
+            "label_selector": str(data.get("labelSelector") or "")[:512] or None,
+            "resource_filter": (
+                {
+                    "field": match_field,
+                    "operator": match_operator or "exact",
+                    "value": match_value,
+                }
+                if match_field and match_value else None
+            ),
+            "limit": min(100, max(1, query_limit)),
+            "evidence_ids": [],
+            "cluster_ids": [],
+            "cluster_names": [],
+            "collected_at": item.get("collected_at"),
+        }
+        break
+    if latest is None or signature is None:
+        return None
+
+    latest_by_cluster: dict[str, dict[str, object]] = {}
+    for item in reversed(evidence):
+        if (
+            item.get("tool") not in {"list_resources", "search_resources"}
+            or not isinstance(item.get("data"), dict)
+            or not item.get("id")
+        ):
+            continue
+        data = item["data"]
+        item_signature = (
+            str(item.get("tool")), str(data.get("kind") or "").strip().casefold(),
+            str(data.get("resource") or "").casefold(),
+            str(data.get("apiVersion") or "").casefold(),
+            str(data.get("scope") or "cluster").casefold(),
+            str(data.get("labelSelector") or ""),
+            str(data.get("matchField") or "").strip() or None,
+            str(data.get("matchOperator") or "").strip() or None,
+            str(data.get("matchValue") or "").strip() or None,
+        )
+        if item_signature != signature:
+            continue
+        cluster_key = str(
+            item.get("cluster_id") or item.get("cluster_name") or "cluster"
+        )
+        latest_by_cluster.setdefault(cluster_key, item)
+    selected = list(reversed(list(latest_by_cluster.values())))
+    latest["evidence_ids"] = [str(item["id"]) for item in selected]
+    latest["cluster_ids"] = [
+        str(item.get("cluster_id")) for item in selected if item.get("cluster_id")
+    ]
+    latest["cluster_names"] = [
+        str(item.get("cluster_name")) for item in selected if item.get("cluster_name")
+    ]
+    return latest
+
+
+_RESOURCE_FOLLOWUP_REFERENCE = re.compile(
+    r"(?i)\b(?:these|those|them|the\s+(?:previous|prior|above|same)\s+"
+    r"(?:results?|resources?|objects?|items?)|(?:previous|prior|above)\s+results?)\b"
+)
+_RESOURCE_FOLLOWUP_PRESENTATION = re.compile(
+    r"(?i)\b(?:show|list|display|give|count|group|sort|export|download|names?)\b"
+)
+_RESOURCE_FOLLOWUP_FRESHNESS = re.compile(
+    r"(?i)\b(?:current|currently|now|still|latest|refresh|recheck|again|today|live)\b"
+)
+
+
+def _resource_followup_reuses_snapshot(
+    question: str, prior_resource_query: dict[str, object] | None,
+) -> bool:
+    """Return true only for explicit presentation of a prior resource snapshot."""
+
+    if prior_resource_query is None:
+        return False
+    references_prior = _resource_followup_references_prior(question, prior_resource_query)
+    return bool(
+        references_prior
+        and _RESOURCE_FOLLOWUP_PRESENTATION.search(question)
+        and not _RESOURCE_FOLLOWUP_FRESHNESS.search(question)
+    )
+
+
+def _resource_followup_references_prior(
+    question: str, prior_resource_query: dict[str, object] | None,
+) -> bool:
+    """Recognize an explicit elliptical reference without interpreting cluster data."""
+
+    if prior_resource_query is None:
+        return False
+    kind = str(prior_resource_query.get("kind") or "")
+    references_prior = bool(_RESOURCE_FOLLOWUP_REFERENCE.search(question))
+    if not references_prior and kind:
+        references_prior = bool(re.search(
+            rf"(?i)\b(?:same|previous|prior|above)\s+{re.escape(kind)}s?\b",
+            question,
+        ))
+    return references_prior
+
+
+def _resolve_resource_inquiry(
+    *, question: str, inquiry: InquirySemantics | None,
+    prior_resource_query: dict[str, object] | None,
+) -> InquirySemantics | None:
+    """Carry a validated resource collection through an elliptical follow-up."""
+
+    if prior_resource_query is None:
+        return inquiry
+    continuation = _resource_followup_references_prior(question, prior_resource_query) or bool(
+        inquiry is not None and inquiry.continues_prior_resource_query
+    )
+    if not continuation:
+        return inquiry
+    prior_kind = str(prior_resource_query.get("kind") or "")
+    if (
+        inquiry is not None
+        and inquiry.resource_query
+        and not _resource_kind_matches_query(inquiry.resource_query, prior_kind)
+    ):
+        return inquiry
+    resource_filter = prior_resource_query.get("resource_filter")
+    return InquirySemantics(
+        mode="inventory", operation="inventory", cardinality="collection",
+        resource_query=prior_kind,
+        namespace=(
+            inquiry.namespace
+            if inquiry is not None and inquiry.namespace is not None else
+            prior_resource_query.get("namespace")
+        ),
+        label_selector=(
+            inquiry.label_selector
+            if inquiry is not None and inquiry.label_selector is not None else
+            prior_resource_query.get("label_selector")
+        ),
+        resource_filter=(
+            inquiry.resource_filter
+            if inquiry is not None and inquiry.resource_filter is not None else
+            ResourceFieldFilterSemantics.model_validate(resource_filter)
+            if isinstance(resource_filter, dict) else None
+        ),
+        result_limit=(
+            inquiry.result_limit
+            if inquiry is not None and inquiry.result_limit is not None else
+            int(prior_resource_query.get("limit") or 100)
+        ),
+        needs_object_details=False,
+        evidence_goal="Present or repeat the previously validated resource collection.",
+        continues_prior_resource_query=True,
+    )
+
+
+def _question_cluster_ids(
+    question: str, selected_clusters: list[object],
+) -> set[str]:
+    """Resolve one unique selected-cluster name or stable shortened alias."""
+
+    normalized_question = " ".join(re.findall(r"[a-z0-9]+", question.casefold()))
+    matches: dict[str, int] = {}
+    environment_suffixes = {
+        "dev", "development", "test", "testing", "qa", "uat", "sit",
+        "stage", "staging", "prod", "production",
+    }
+    for cluster in selected_clusters:
+        cluster_id = str(getattr(cluster, "id", "") or "")
+        name = str(getattr(cluster, "name", "") or "")
+        tokens = re.findall(r"[a-z0-9]+", name.casefold())
+        if not cluster_id or not tokens:
+            continue
+        aliases = {" ".join(tokens)}
+        if tokens[-1] in environment_suffixes and len(tokens) > 1:
+            aliases.add(" ".join(tokens[:-1]))
+        aliases = {alias for alias in aliases if len(alias) >= 4}
+        score = max((len(alias) for alias in aliases if re.search(
+            rf"(?:^|\s){re.escape(alias)}(?:\s|$)", normalized_question,
+        )), default=0)
+        if score:
+            matches[cluster_id] = score
+    if not matches:
+        return set()
+    best = max(matches.values())
+    winners = {cluster_id for cluster_id, score in matches.items() if score == best}
+    return winners if len(winners) == 1 else set()
+
+
+def _reuse_prior_resource_evidence(
+    *, evidence: list[dict[str, object]],
+    prior_resource_query: dict[str, object] | None,
+    cluster_ids: set[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Select a prior cited resource snapshot and represent its provenance as activity."""
+
+    if prior_resource_query is None:
+        return [], []
+    evidence_ids = {str(item) for item in prior_resource_query.get("evidence_ids") or []}
+    selected = [
+        item for item in evidence
+        if str(item.get("id") or "") in evidence_ids
+        and (
+            not cluster_ids
+            or str(item.get("cluster_id") or "") in cluster_ids
+        )
+    ]
+    activity = [{
+        "tool": str(item.get("tool") or "list_resources"),
+        "status": "succeeded",
+        "source": "prior_resource_snapshot",
+        "reused_snapshot": True,
+        "cluster_id": item.get("cluster_id"),
+        "cluster_name": item.get("cluster_name"),
+        "evidence_ids": [str(item["id"])],
+    } for item in selected if item.get("id")]
+    return selected, activity
+
+
 def _explicit_duration_seconds(question: str) -> int | None:
     match = re.search(
         r"(?i)\b(?P<count>\d{1,4})\s*(?:-|\s)?"
@@ -6243,6 +6683,7 @@ def _validate_inquiry_grounding(
     question: str,
     conversation: list[dict[str, str]],
     prior_audit_query: dict[str, object] | None,
+    prior_resource_query: dict[str, object] | None = None,
     object_references: list[dict[str, object]] | None = None,
     relationship_references: list[dict[str, object]] | None = None,
 ) -> None:
@@ -6264,6 +6705,10 @@ def _validate_inquiry_grounding(
         str(prior_audit_query.get("namespace") or "").casefold()
         if prior_audit_query and inquiry.continues_prior_audit_query else ""
     )
+    if inquiry.continues_prior_resource_query and prior_resource_query is None:
+        raise ModelProviderError(
+            "Capability selection continued a resource query that was not supplied."
+        )
     selected_reference = next((
         item for item in (object_references or [])
         if item.get("id") == inquiry.object_reference_id
@@ -6321,9 +6766,17 @@ def _validate_inquiry_grounding(
             and value
             and value.casefold() == prior_namespace
         )
+        inherited_resource_value = bool(
+            inquiry.continues_prior_resource_query
+            and prior_resource_query
+            and field_name in {"namespace", "label_selector"}
+            and value == prior_resource_query.get(field_name)
+        )
         if (
             value and value.casefold() not in grounding_text
-            and not inherited_audit_namespace and not grounded_by_reference
+            and not inherited_audit_namespace
+            and not inherited_resource_value
+            and not grounded_by_reference
         ):
             raise ModelProviderError(
                 f"Capability selection invented an ungrounded {field_name}."
@@ -6336,6 +6789,15 @@ def _validate_inquiry_grounding(
         raise ModelProviderError(
             "Capability selection invented an ungrounded audit_username."
         )
+    if inquiry.continues_prior_resource_query and prior_resource_query is not None:
+        prior_filter = prior_resource_query.get("resource_filter")
+        if (
+            inquiry.resource_filter is not None
+            and inquiry.resource_filter.model_dump() != prior_filter
+        ):
+            raise ModelProviderError(
+                "Capability selection changed the prior resource predicate without a grounded replacement."
+            )
     if inquiry.metric_request is not None:
         target = inquiry.metric_request.target
         for field_name in ("namespace", "name", "container"):
@@ -6870,6 +7332,7 @@ async def _classify_ad_hoc_inquiry(
     cluster_names: list[str],
     prior_audit_query: dict[str, object] | None = None,
     prior_metric_query: dict[str, object] | None = None,
+    prior_resource_query: dict[str, object] | None = None,
     evidence: list[dict[str, object]] | None = None,
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
@@ -6904,6 +7367,8 @@ async def _classify_ad_hoc_inquiry(
         context["prior_audit_query"] = prior_audit_query
     if prior_metric_query is not None:
         context["prior_metric_query"] = prior_metric_query
+    if prior_resource_query is not None:
+        context["prior_resource_query"] = prior_resource_query
     for attempt in range(1, 3):
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
@@ -6937,6 +7402,7 @@ async def _classify_ad_hoc_inquiry(
                 question=question,
                 conversation=conversation,
                 prior_audit_query=prior_audit_query,
+                prior_resource_query=prior_resource_query,
                 object_references=object_references,
                 relationship_references=relationship_references,
             )
@@ -6950,6 +7416,7 @@ async def _classify_ad_hoc_inquiry(
                     "Return one schema-valid registered capability selection. Correct the prior error: "
                     f"{str(exc)[:300]} Use only exact coordinates grounded in the supplied question or "
                     "recent context. Preserve prior_audit_query for an elliptical audit follow-up and "
+                    "preserve prior_resource_query for an elliptical resource-result follow-up. "
                     "override only explicitly changed fields. For an elliptical object follow-up, select "
                     "one exact id from recent_object_references instead of reconstructing coordinates. "
                     "For a relationship follow-up, select one exact id from "
@@ -7449,6 +7916,7 @@ def _semantic_resource_read_plan(
     namespace = inquiry.namespace if (
         inquiry.object_reference_id or inquiry.scope_reference_id
         or inquiry.relationship_reference_id
+        or inquiry.continues_prior_resource_query
         or grounded(inquiry.namespace)
     ) else None
     if inquiry.operation == "events":
@@ -7518,7 +7986,9 @@ def _semantic_resource_read_plan(
             False,
         )
     resource_filter = inquiry.resource_filter
-    if resource_filter is not None and grounded(resource_filter.value):
+    if resource_filter is not None and (
+        grounded(resource_filter.value) or inquiry.continues_prior_resource_query
+    ):
         return (
             ReadPlan(
                 goal_type=inquiry.planner_goal,
@@ -9363,6 +9833,11 @@ def create_app(
                     for item in enrichment_evidence or []
                     if item.get("id")
                 ]
+                resource_list_presentation = _resource_list_presentation(
+                    evidence=enrichment_evidence or [],
+                    activity=activity,
+                    citations=enrichment_citations,
+                )
                 assistant_message_id = str(uuid4())
                 now = datetime.now(timezone.utc)
                 with Session(engine) as db_session:
@@ -9410,6 +9885,7 @@ def create_app(
                             ),
                             "agent_mode": "unrestricted",
                             "preferred_evidence_view": preferred_evidence_view,
+                            "presentation": resource_list_presentation,
                         }, sort_keys=True),
                         provider_status="ready",
                         raw_responses_json="[]",
@@ -9792,16 +10268,29 @@ def create_app(
                             )
                         prior_audit_query = _latest_audit_query_semantics(evidence)
                         prior_metric_query = _latest_metric_query_semantics(evidence)
-                        inquiry = await _classify_ad_hoc_inquiry(
-                            model_provider=provider,
-                            profile=profile_snapshot,
-                            api_key=api_key,
-                            question=source_question,
-                            conversation=history,
-                            cluster_names=[item.name for item in selected_clusters],
-                            prior_audit_query=prior_audit_query,
-                            prior_metric_query=prior_metric_query,
-                            evidence=evidence,
+                        prior_resource_query = _latest_resource_query_semantics(evidence)
+                        reuse_prior_resource_snapshot = _resource_followup_reuses_snapshot(
+                            source_question, prior_resource_query,
+                        )
+                        inquiry = (
+                            _resolve_resource_inquiry(
+                                question=source_question,
+                                inquiry=None,
+                                prior_resource_query=prior_resource_query,
+                            )
+                            if reuse_prior_resource_snapshot else
+                            await _classify_ad_hoc_inquiry(
+                                model_provider=provider,
+                                profile=profile_snapshot,
+                                api_key=api_key,
+                                question=source_question,
+                                conversation=history,
+                                cluster_names=[item.name for item in selected_clusters],
+                                prior_audit_query=prior_audit_query,
+                                prior_metric_query=prior_metric_query,
+                                prior_resource_query=prior_resource_query,
+                                evidence=evidence,
+                            )
                         )
                         inquiry = _resolve_audit_inquiry(
                             question=source_question,
@@ -9814,9 +10303,24 @@ def create_app(
                             inquiry=inquiry,
                             prior_metric_query=prior_metric_query,
                         )
+                        inquiry = _resolve_resource_inquiry(
+                            question=source_question,
+                            inquiry=inquiry,
+                            prior_resource_query=prior_resource_query,
+                        )
+                    else:
+                        prior_resource_query = _latest_resource_query_semantics(evidence)
+                        reuse_prior_resource_snapshot = False
                     reference_cluster_ids = _inquiry_reference_cluster_ids(
                         inquiry, evidence,
                     )
+                    named_cluster_ids = _question_cluster_ids(
+                        source_question, selected_clusters,
+                    )
+                    if reference_cluster_ids and named_cluster_ids:
+                        reference_cluster_ids &= named_cluster_ids
+                    elif named_cluster_ids:
+                        reference_cluster_ids = named_cluster_ids
                     if reference_cluster_ids:
                         agent_targets = {
                             cluster_id: target
@@ -9857,13 +10361,31 @@ def create_app(
                         or semantic_metric_plan
                         or known_read
                     )
+                    if reuse_prior_resource_snapshot:
+                        reused_evidence, reused_activity = _reuse_prior_resource_evidence(
+                            evidence=evidence,
+                            prior_resource_query=prior_resource_query,
+                            cluster_ids=reference_cluster_ids,
+                        )
+                        enrichment_evidence.extend(reused_evidence)
+                        enrichment_activity.extend(reused_activity)
+                        if reused_evidence:
+                            collected_times = sorted({
+                                str(item.get("collected_at"))
+                                for item in reused_evidence if item.get("collected_at")
+                            })
+                            snapshot_time = collected_times[-1] if collected_times else "an earlier turn"
+                            enrichment_limitations.append(
+                                "Displayed the previously collected resource snapshot from "
+                                f"{snapshot_time}; no fresh cluster read was requested."
+                            )
                     kafka_storage_discovery = is_kafka_topic_storage_discovery_plan(
                         base_enrichment[0] if base_enrichment is not None else None
                     )
                     kafka_storage_metric_activity: list[dict[str, object]] = []
-                    if base_enrichment is not None or (
+                    if not reuse_prior_resource_snapshot and (base_enrichment is not None or (
                         inquiry is not None and inquiry.resource_query
-                    ):
+                    )):
                         for selected_cluster in selected_clusters:
                             cluster_label = selected_cluster.name
                             if (
@@ -10099,19 +10621,35 @@ def create_app(
                 inquiry = None
                 prior_audit_query = _latest_audit_query_semantics(evidence)
                 prior_metric_query = _latest_metric_query_semantics(evidence)
+                prior_resource_query = _latest_resource_query_semantics(evidence)
+                reuse_prior_resource_snapshot = bool(
+                    not followup_action
+                    and _resource_followup_reuses_snapshot(
+                        source_question, prior_resource_query,
+                    )
+                )
                 if not followup_action:
                     if progress:
                         await progress("planning", "Understanding the investigation request.")
-                    inquiry = await _classify_ad_hoc_inquiry(
-                        model_provider=provider,
-                        profile=profile_snapshot,
-                        api_key=api_key,
-                        question=source_question,
-                        conversation=history,
-                        cluster_names=[item.name for item in selected_clusters],
-                        prior_audit_query=prior_audit_query,
-                        prior_metric_query=prior_metric_query,
-                        evidence=evidence,
+                    inquiry = (
+                        _resolve_resource_inquiry(
+                            question=source_question,
+                            inquiry=None,
+                            prior_resource_query=prior_resource_query,
+                        )
+                        if reuse_prior_resource_snapshot else
+                        await _classify_ad_hoc_inquiry(
+                            model_provider=provider,
+                            profile=profile_snapshot,
+                            api_key=api_key,
+                            question=source_question,
+                            conversation=history,
+                            cluster_names=[item.name for item in selected_clusters],
+                            prior_audit_query=prior_audit_query,
+                            prior_metric_query=prior_metric_query,
+                            prior_resource_query=prior_resource_query,
+                            evidence=evidence,
+                        )
                     )
                     inquiry = _resolve_audit_inquiry(
                         question=source_question,
@@ -10124,6 +10662,11 @@ def create_app(
                         inquiry=inquiry,
                         prior_metric_query=prior_metric_query,
                     )
+                    inquiry = _resolve_resource_inquiry(
+                        question=source_question,
+                        inquiry=inquiry,
+                        prior_resource_query=prior_resource_query,
+                    )
                 provider_phase = "bounded_read_collection"
                 if not selected_clusters:
                     limitations.append("The conversation's selected clusters no longer exist.")
@@ -10133,8 +10676,32 @@ def create_app(
                 }
                 scope_summaries: list[str] = []
                 requested_cluster_id = str(followup_action.get("cluster_id") or "") if followup_action else ""
-                for cluster_index, selected_cluster in enumerate(selected_clusters):
+                named_cluster_ids = _question_cluster_ids(
+                    source_question, selected_clusters,
+                )
+                if reuse_prior_resource_snapshot:
+                    reused_evidence, reused_activity = _reuse_prior_resource_evidence(
+                        evidence=evidence,
+                        prior_resource_query=prior_resource_query,
+                        cluster_ids=named_cluster_ids,
+                    )
+                    activity.extend(reused_activity)
+                    if reused_evidence:
+                        collected_times = sorted({
+                            str(item.get("collected_at"))
+                            for item in reused_evidence if item.get("collected_at")
+                        })
+                        snapshot_time = collected_times[-1] if collected_times else "an earlier turn"
+                        limitations.append(
+                            "Displayed the previously collected resource snapshot from "
+                            f"{snapshot_time}; no fresh cluster read was requested."
+                        )
+                        scope_summaries.append("Reused the explicitly referenced prior resource snapshot.")
+                clusters_to_collect = [] if reuse_prior_resource_snapshot else selected_clusters
+                for cluster_index, selected_cluster in enumerate(clusters_to_collect):
                     if requested_cluster_id and selected_cluster.id != requested_cluster_id:
+                        continue
+                    if named_cluster_ids and selected_cluster.id not in named_cluster_ids:
                         continue
                     cluster_label = selected_cluster.name
                     if not selected_cluster.is_enabled:
@@ -10142,7 +10709,7 @@ def create_app(
                             f"Cluster {cluster_label} is disabled; PodPilot retained the session but did not connect."
                         )
                         continue
-                    clusters_remaining = len(selected_clusters) - cluster_index
+                    clusters_remaining = len(clusters_to_collect) - cluster_index
                     cluster_budget = max(1, remaining_budget // max(1, clusters_remaining))
                     cluster_budget = min(cluster_budget, remaining_budget)
                     if cluster_budget <= 0:
@@ -11079,6 +11646,11 @@ def create_app(
                     f"**Check performed:** {selected_check_label}\n\n"
                     f"{content}"
                 ).strip()
+        resource_list_presentation = _resource_list_presentation(
+            evidence=evidence,
+            activity=activity,
+            citations=[str(item) for item in validated.get("citations", [])],
+        )
         assistant_message_id = str(uuid4())
         with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
@@ -11111,6 +11683,7 @@ def create_app(
                         "preferred_evidence_view": (
                             "metric_ranking" if prefer_metric_card else None
                         ),
+                        "presentation": resource_list_presentation,
                     }, sort_keys=True
                 ),
                 provider_status=provider_status,
@@ -11576,6 +12149,14 @@ def create_app(
             citations = json.loads(row.citations_json)
             raw_activity_view = json.loads(row.tool_activity_json)
             activity_view = raw_activity_view if isinstance(raw_activity_view, dict) else {}
+            resource_presentation = activity_view.get("presentation")
+            if not (
+                isinstance(resource_presentation, dict)
+                and resource_presentation.get("version") == 1
+                and resource_presentation.get("type") == "grouped_resource_list"
+                and isinstance(resource_presentation.get("groups"), list)
+            ):
+                resource_presentation = None
             prefer_metric_card = (
                 row.role == "assistant"
                 and activity_view.get("preferred_evidence_view") == "metric_ranking"
@@ -11591,6 +12172,7 @@ def create_app(
                 "raw_responses": json.loads(row.raw_responses_json or "[]"),
                 "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
                 "prefer_metric_card": prefer_metric_card,
+                "resource_presentation": resource_presentation,
                 "created_at": row.created_at,
             })
         response = templates.TemplateResponse(

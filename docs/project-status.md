@@ -87,6 +87,14 @@ records remain, but execution now awaits a separate approval-gated action servic
   `search_resources` reads instead of whole-kind lists. Terminal completion requires the plan to
   preserve the exact field, operator, and grounded value; otherwise enrichment remains a seed for
   continued agent investigation. Empty searches report absence only with complete scan coverage.
+- Cited resource lists now carry a general versioned `grouped_resource_list` presentation built
+  from normalized evidence rather than model formatting. Ask renders cluster-grouped collapsible
+  tables for every resource Kind, includes retained search-field values and coverage state, and
+  offers CSV export while preserving Markdown as a backward-compatible fallback.
+- Elliptical resource-list follow-ups now recover a typed prior query from validated evidence.
+  Presentation-only requests can reuse and cluster-narrow the prior snapshot without a provider
+  call, while `current`/`still`/`now` wording preserves the same filters but performs a fresh read.
+  Unique selected-cluster aliases narrow one turn; the locked conversation selection is unchanged.
 - Thanos remains the preferred metric trend source. Node rankings and namespace-scoped Pod CPU or
   memory rankings now fall back to a current `metrics.k8s.io/v1beta1` snapshot when Thanos fails,
   with the lost history called out explicitly. When every registered read and shell verification

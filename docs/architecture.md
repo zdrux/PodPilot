@@ -447,9 +447,14 @@ Collected object names are retained separately from detailed projections.
 while `detailsTruncated` reports only status-detail compaction; the latter must
 not be presented as proof that more objects exist.
 The inventory object ceiling is deployment-configurable (500 by default, 1,000
-maximum). Explicit list/inventory requests are rendered by normal server code as
-an evidence-cited Markdown table from the collected `names` array, so model prose
-cannot omit the requested resource list. When the semantic classifier says names are
+maximum). Explicit list/inventory requests are rendered by normal server code from
+the collected `names` array, so model prose cannot omit the requested resource list.
+Every cited successful `list_resources` or `search_resources` observation also produces a
+versioned `grouped_resource_list` presentation block in the message metadata. The block contains
+bounded cluster groups, normalized Kind/namespace/name/Ready rows, search predicate values when
+retained, scan coverage, and evidence IDs. The web UI renders it as native, auto-escaped,
+collapsible tables with CSV export; it never parses provider Markdown or HTML to recover rows.
+The Markdown answer remains a backward-compatible prose and non-UI fallback. When the semantic classifier says names are
 sufficient, that deterministic table is the final answer: PodPilot skips the general
 final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
 completed inventory request. Multi-cluster totals distinguish clusters queried from
@@ -473,6 +478,17 @@ generally, discovery resolves an unqualified plural with supplied `apiVersion` a
 only when both agree with one advertised resource; mismatches fail closed. Preflight performs
 this resolution before the read budget advances. Same-plural APIs such as OpenShift and
 Knative Routes are not treated as interchangeable fallbacks after ambiguity or RBAC denial.
+
+Resource-collection conversations retain typed continuation state from the latest validated
+`list_resources` or `search_resources` observations: Kind, API/resource coordinates, namespace,
+label selector, exact field predicate, limit, source clusters, evidence IDs, and collection time.
+Elliptical presentation follow-ups such as “show these routes” reuse only that cited snapshot and
+create provenance-bearing synthetic activity; they do not depend on reconstructing the query from
+truncated chat prose or call the model. A unique normalized mention of one already-selected cluster
+(including an environment-suffix-shortened name such as `CMSP Central` for `CMSP Central DEV`)
+narrows only that turn. Ambiguous aliases do not narrow. Freshness terms such as `current`, `still`,
+`now`, or `refresh` inherit the typed query but execute a new bounded read. Prior snapshots are
+never silently represented as current state.
 Projected Route evidence treats `spec.to.name` and `spec.alternateBackends[].name` as
 observed Service references, so exact follow-up Service reads are not rejected as model
 inventions. Route protocol questions also have a deterministic cited interpretation: `edge`

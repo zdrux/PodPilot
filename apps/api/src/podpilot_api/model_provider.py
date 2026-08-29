@@ -476,6 +476,7 @@ class InquirySemantics(BaseModel):
     audit_outcome: Literal["all", "successful", "failed"] | None = None
     audit_range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
     continues_prior_audit_query: bool = False
+    continues_prior_resource_query: bool = False
 
     @field_validator(
         "resource_query", "object_name", "namespace", "container", "label_selector"
@@ -586,6 +587,12 @@ class InquirySemantics(BaseModel):
             self.continues_prior_audit_query,
         )):
             raise ValueError("audit fields are valid only for audit inquiries")
+        if self.continues_prior_resource_query and (
+            self.mode != "inventory" or self.cardinality != "collection"
+        ):
+            raise ValueError(
+                "prior resource-query continuation requires a collection inventory inquiry"
+            )
         if self.operation != "logs" and any((
             self.container, self.previous_logs, self.log_range_seconds,
         )):
@@ -652,6 +659,7 @@ class CapabilitySelection(BaseModel):
     audit_outcome: Literal["all", "successful", "failed"] | None = None
     audit_range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
     continues_prior_audit_query: bool = False
+    continues_prior_resource_query: bool = False
 
     @field_validator(
         "resource_query", "object_name", "namespace", "container", "label_selector",
@@ -696,6 +704,12 @@ class CapabilitySelection(BaseModel):
             self.continues_prior_audit_query,
         )):
             raise ValueError("audit arguments are valid only for cluster_audit_events")
+        if self.continues_prior_resource_query and (
+            self.capability != "resource_inventory" or self.cardinality != "collection"
+        ):
+            raise ValueError(
+                "prior resource-query continuation requires resource_inventory collection"
+            )
         if self.capability != "workload_logs" and any((
             self.container, self.previous_logs, self.log_range_seconds,
         )):
@@ -1965,6 +1979,12 @@ class OpenAIResponsesProvider:
                     "literal value. For example, 'Routes whose hostname contains .example.com' uses "
                     "field=spec.host, operator=contains, value=.example.com. Preserve this predicate; it is "
                     "material to the request and is not merely a requested output field. "
+                    "When prior_resource_query is supplied and the operator elliptically refers to its "
+                    "results (for example 'these routes', 'show those', or 'only the Central cluster'), "
+                    "inherit its resource Kind, field predicate, label selector, namespace, and limit unless "
+                    "the operator explicitly replaces one. Set continues_prior_resource_query=true only for "
+                    "that continuation. Presentation-only follow-ups may reuse the cited prior snapshot; "
+                    "fresh/current/still-present wording requires a new bounded read. "
                     "For events, use resource_query=Event and object_name for the exact related object whose "
                     "events were requested. For logs, extract the Pod resource, exact Pod and namespace when "
                     "available, container, previous_logs, and an explicit log_range_seconds. Never invent an "
@@ -2697,7 +2717,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "is constrained by an object field, return resource_filter with the dot-separated "
                 "Kubernetes field path, exact or contains operator, and the operator's literal value. "
                 "For example, Route hostname maps to spec.host. Preserve this predicate separately from "
-                "requested_fields because it changes which objects match. For events use "
+                "requested_fields because it changes which objects match. "
+                "When prior_resource_query is present and the operator refers to its results as these, "
+                "those, them, the previous results, or narrows them to one named selected cluster, inherit "
+                "its Kind and filters and set continues_prior_resource_query=true. Do not set it for an "
+                "unrelated resource request. Fresh/current/still-present wording means repeat the bounded "
+                "read; a display/count/group/export follow-up may reuse the prior cited snapshot. "
+                "For events use "
                 "resource_query=Event and object_name for the exact related object. Never invent an "
                 "omitted coordinate. Set needs_object_details when names alone cannot "
                 "answer. Requests for a "

@@ -78,6 +78,53 @@
           </details>
           {% endif %}
         </div>
+        {% if message.role == 'assistant' and message.resource_presentation %}
+        {% set presentation = message.resource_presentation %}
+        <section class="resource-result" aria-labelledby="resource-result-{{ message.id }}">
+          <div class="resource-result-heading">
+            <div>
+              <span class="evidence-tool">Observed resources</span>
+              <h3 id="resource-result-{{ message.id }}">{{ presentation.title }}</h3>
+              <p>{{ presentation.total_count }} matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster result{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
+            </div>
+          </div>
+          <div class="resource-result-groups">
+          {% for group in presentation.groups %}
+            <details class="resource-result-group" {% if presentation.groups | length == 1 and group.count <= 20 %}open{% endif %}>
+              <summary>
+                <span><strong>{{ group.cluster_name }}</strong><small>{{ group.kind }}{% if group.match_field %} · <code>{{ group.match_field }}</code> {{ group.match_operator }} <code>{{ group.match_value }}</code>{% endif %}</small></span>
+                <span class="resource-result-count">{{ group.count }} match{% if group.count != 1 %}es{% endif %}</span>
+                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Complete{% else %}Incomplete{% endif %}</span>
+              </summary>
+              {% if group.rows %}
+              <div class="resource-result-toolbar">
+                <small>{% if group.scanned_count is not none %}Scanned {{ group.scanned_count }} resource{% if group.scanned_count != 1 %}s{% endif %}. {% endif %}Showing {{ group.displayed_count }} of {{ group.count }} matches.</small>
+                <button class="button secondary compact-button" type="button"
+                  data-csv-table="resource-table-{{ message.id }}-{{ loop.index }}"
+                  data-csv-filename="podpilot-resource-results.csv">Download CSV</button>
+              </div>
+              <div class="resource-table-wrap">
+                <table id="resource-table-{{ message.id }}-{{ loop.index }}" class="resource-result-table">
+                  <thead><tr>{% if presentation.show_kind %}<th>Kind</th>{% endif %}<th>Namespace</th><th>Name</th>{% if group.match_field %}<th>{{ group.match_field }}</th>{% endif %}<th>Ready</th></tr></thead>
+                  <tbody>
+                  {% for row in group.rows %}
+                    <tr>{% if presentation.show_kind %}<td><code>{{ row.kind }}</code></td>{% endif %}<td><code>{{ row.namespace }}</code></td><td><code>{{ row.name }}</code></td>{% if group.match_field %}<td><code>{{ row.matched_value }}</code></td>{% endif %}<td>{{ row.ready }}</td></tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% if group.omitted_count %}<p class="resource-result-note">{{ group.omitted_count }} additional matching row{% if group.omitted_count != 1 %}s were{% else %} was{% endif %} not retained in this bounded presentation.</p>{% endif %}
+              {% elif group.count %}
+              <p class="resource-result-note">All {{ group.count }} matching row{% if group.count != 1 %}s were{% else %} was{% endif %} omitted from this bounded presentation. Review the cited evidence or CSV-capable groups above.</p>
+              {% else %}
+              <p class="resource-result-empty">{% if group.complete %}No matching resources were observed.{% else %}No match was observed before the scan ceiling; this result is inconclusive.{% endif %}</p>
+              {% endif %}
+            </details>
+          {% endfor %}
+          </div>
+          <small>Rows are rendered from cited, normalized cluster evidence—not parsed from the model response.</small>
+        </section>
+        {% endif %}
         {% if not message.prefer_metric_card %}
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
         {% endif %}

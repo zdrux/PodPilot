@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,6 +51,7 @@ from podpilot_api.main import (
     _inventory_plan_scope_errors,
     _latest_audit_query_semantics,
     _latest_metric_query_semantics,
+    _latest_resource_query_semantics,
     _metric_trend_view,
     _merge_validated_recommendations,
     _model_log_analysis_section,
@@ -59,14 +61,19 @@ from podpilot_api.main import (
     _preferred_metric_evidence_view,
     _profile_is_usable,
     _question_requires_agentic_investigation,
+    _question_cluster_ids,
     _reconcile_validated_answer_gaps,
     _recent_object_references,
+    _resource_list_presentation,
     _inquiry_reference_cluster_ids,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
     _semantic_resource_read_plan,
     _resolve_audit_inquiry,
     _resolve_metric_inquiry,
+    _resolve_resource_inquiry,
+    _resource_followup_reuses_snapshot,
+    _reuse_prior_resource_evidence,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -753,6 +760,48 @@ def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_q
     assert len(provider.calls) == 2
     assert provider.calls[0]["prior_audit_query"] == prior
     assert "structured_response_retry" in provider.calls[1]
+
+
+def test_semantic_classification_supplies_typed_prior_resource_query() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.context = None
+
+        def classify_ad_hoc(self, _profile, _api_key, context):
+            self.context = dict(context)
+            return InquirySemantics(
+                mode="inventory", operation="inventory", cardinality="collection",
+                resource_query="Route",
+                resource_filter=ResourceFieldFilterSemantics(
+                    field="spec.host", operator="contains", value=".az.cibc.com",
+                ),
+                continues_prior_resource_query=True,
+                evidence_goal="Present the prior Route search.",
+            )
+
+    provider = Provider()
+    prior = {
+        "kind": "Route", "limit": 100,
+        "resource_filter": {
+            "field": "spec.host", "operator": "contains", "value": ".az.cibc.com",
+        },
+        "evidence_ids": ["central-routes"],
+    }
+    result = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=provider,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="show me these routes",
+        conversation=[], cluster_names=["Central"], prior_resource_query=prior,
+    ))
+
+    assert result is not None and result.continues_prior_resource_query is True
+    assert provider.context is not None
+    assert provider.context["prior_resource_query"] == prior
 
 
 def test_invalid_capability_selection_does_not_use_wording_specific_fallback() -> None:
@@ -4144,6 +4193,82 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         assert fallback_text in fallback.text
 
 
+def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
+    tmp_path: Path,
+) -> None:
+    conversation_id = "00000000-0000-0000-0000-000000000191"
+    message_id = "00000000-0000-0000-0000-000000000192"
+    evidence_id = "resource-list-1"
+    presentation = {
+        "version": 1,
+        "type": "grouped_resource_list",
+        "title": "Filtered ConfigMap results",
+        "filtered": True,
+        "match_field": "data.environment",
+        "show_kind": False,
+        "total_count": 1,
+        "displayed_count": 1,
+        "omitted_count": 0,
+        "groups": [{
+            "cluster_id": "central",
+            "cluster_name": "Central <script>alert(1)</script>",
+            "evidence_id": evidence_id,
+            "kind": "ConfigMap",
+            "count": 1,
+            "displayed_count": 1,
+            "omitted_count": 0,
+            "scanned_count": 42,
+            "complete": True,
+            "match_field": "data.environment",
+            "match_operator": "exact",
+            "match_value": "production",
+            "rows": [{
+                "kind": "ConfigMap", "namespace": "platform",
+                "name": "feature-flags", "matched_value": "production",
+                "ready": "Unknown",
+            }],
+        }],
+    }
+    app, settings = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="ConfigMaps", status="active",
+            cluster_ids_json=json.dumps([SYSTEM_CLUSTER_ID]),
+            evidence_json=json.dumps([{
+                "id": evidence_id, "tool": "search_resources",
+                "summary": "Found one ConfigMap.", "data": {},
+            }]),
+        ))
+        db_session.add(AdHocMessage(
+            id=message_id, conversation_id=conversation_id, role="assistant", actor=None,
+            content="One matching ConfigMap was found.", answer_mode="evidence_based",
+            citations_json=json.dumps([evidence_id]),
+            tool_activity_json=json.dumps({"presentation": presentation}),
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        rendered = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert rendered.status_code == 200
+    assert 'class="resource-result"' in rendered.text
+    assert 'class="resource-result-group" open' in rendered.text
+    assert "Filtered ConfigMap results" in rendered.text
+    assert "data.environment" in rendered.text
+    assert "feature-flags" in rendered.text
+    assert "Showing 1 of 1 matches" in rendered.text
+    assert "Download CSV" in rendered.text
+    assert "Rows are rendered from cited, normalized cluster evidence" in rendered.text
+    assert "Central &lt;script&gt;alert(1)&lt;/script&gt;" in rendered.text
+    assert "Central <script>alert(1)</script>" not in rendered.text
+
+
 def test_model_targets_must_be_grounded_before_cluster_collection() -> None:
     invented = ReadPlan(
         scope_summary="Inspect a guessed collector.",
@@ -4629,6 +4754,217 @@ def test_incomplete_empty_field_search_is_inconclusive() -> None:
     assert "result is inconclusive" in content
     assert "No matching resources were returned" not in content
     assert "additional resources were not evaluated" in content
+
+
+def test_resource_list_presentation_is_generic_and_evidence_derived() -> None:
+    evidence = [
+        {
+            "id": "deployment-list", "cluster_id": "central",
+            "cluster_name": "Central", "tool": "list_resources",
+            "data": {
+                "kind": "Deployment", "scope": "apps", "count": 1,
+                "names": ["checkout"],
+                "objects": [{"namespace": "apps", "name": "checkout"}],
+                "items": [{
+                    "apiVersion": "apps/v1", "kind": "Deployment",
+                    "metadata": {"namespace": "apps", "name": "checkout"},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                }],
+                "objectListComplete": True,
+            },
+        },
+        {
+            "id": "configmap-search", "cluster_id": "east",
+            "cluster_name": "East", "tool": "search_resources",
+            "data": {
+                "kind": "ConfigMap", "scope": "cluster", "count": 1,
+                "scannedCount": 87, "names": ["feature-flags"],
+                "objects": [{"namespace": "platform", "name": "feature-flags"}],
+                "items": [{
+                    "apiVersion": "v1", "kind": "ConfigMap",
+                    "metadata": {"namespace": "platform", "name": "feature-flags"},
+                    "data": {"environment": "production"},
+                }],
+                "matchField": "data.environment", "matchOperator": "exact",
+                "matchValue": "production", "searchComplete": True,
+            },
+        },
+        {
+            "id": "uncited-pods", "cluster_id": "east", "tool": "list_resources",
+            "data": {"kind": "Pod", "names": ["must-not-render"]},
+        },
+    ]
+    activity = [
+        {"tool": item["tool"], "status": "succeeded", "evidence_ids": [item["id"]]}
+        for item in evidence
+    ]
+
+    presentation = _resource_list_presentation(
+        evidence=evidence,
+        activity=activity,
+        citations=["deployment-list", "configmap-search"],
+    )
+
+    assert presentation is not None
+    assert presentation["type"] == "grouped_resource_list"
+    assert presentation["version"] == 1
+    assert presentation["title"] == "Filtered resource results"
+    assert presentation["total_count"] == 2
+    assert presentation["show_kind"] is True
+    assert len(presentation["groups"]) == 2
+    assert presentation["groups"][0]["rows"] == [{
+        "kind": "Deployment", "namespace": "apps", "name": "checkout",
+        "matched_value": "—", "ready": "True",
+    }]
+    assert presentation["groups"][1]["match_field"] == "data.environment"
+    assert presentation["groups"][1]["rows"][0]["matched_value"] == "production"
+    assert "must-not-render" not in json.dumps(presentation)
+
+
+def test_resource_list_presentation_preserves_incomplete_empty_group() -> None:
+    presentation = _resource_list_presentation(
+        evidence=[{
+            "id": "jobs", "cluster_name": "Central", "tool": "search_resources",
+            "data": {
+                "kind": "Job", "scope": "cluster", "count": 0, "names": [],
+                "scannedCount": 500, "searchComplete": False,
+                "matchField": "status.failed", "matchOperator": "exact",
+                "matchValue": "1",
+            },
+        }],
+        activity=[{
+            "tool": "search_resources", "status": "succeeded",
+            "evidence_ids": ["jobs"],
+        }],
+        citations=["jobs"],
+    )
+
+    assert presentation is not None
+    assert presentation["groups"][0]["complete"] is False
+    assert presentation["groups"][0]["rows"] == []
+    assert presentation["groups"][0]["scanned_count"] == 500
+
+
+def test_resource_list_presentation_projects_match_values_through_lists() -> None:
+    presentation = _resource_list_presentation(
+        evidence=[{
+            "id": "pods", "tool": "search_resources",
+            "data": {
+                "kind": "Pod", "scope": "apps", "count": 1, "names": ["api-1"],
+                "items": [{
+                    "metadata": {"namespace": "apps", "name": "api-1"},
+                    "status": {"conditions": [
+                        {"type": "Ready", "status": "False"},
+                        {"type": "PodScheduled", "status": "True"},
+                    ]},
+                }],
+                "matchField": "status.conditions.type", "matchOperator": "contains",
+                "matchValue": "Ready", "searchComplete": True,
+            },
+        }],
+        activity=[{
+            "tool": "search_resources", "status": "succeeded", "evidence_ids": ["pods"],
+        }],
+        citations=["pods"],
+    )
+
+    assert presentation is not None
+    assert presentation["groups"][0]["rows"][0]["matched_value"] == (
+        '["Ready", "PodScheduled"]'
+    )
+    assert presentation["groups"][0]["rows"][0]["ready"] == "False"
+
+
+def test_latest_resource_query_recovers_multi_cluster_field_search() -> None:
+    evidence = [
+        {
+            "id": "central-routes", "tool": "search_resources",
+            "cluster_id": "central", "cluster_name": "CMSP Central DEV",
+            "collected_at": "2026-08-29T20:20:00+00:00",
+            "data": {
+                "resource": "routes.route.openshift.io",
+                "apiVersion": "route.openshift.io/v1", "kind": "Route",
+                "scope": "cluster", "names": ["central-route"], "limit": 100,
+                "matchField": "spec.host", "matchOperator": "contains",
+                "matchValue": ".az.cibc.com", "searchComplete": True,
+            },
+        },
+        {
+            "id": "east-routes", "tool": "search_resources",
+            "cluster_id": "east", "cluster_name": "CMSP East DEV",
+            "collected_at": "2026-08-29T20:20:01+00:00",
+            "data": {
+                "resource": "routes.route.openshift.io",
+                "apiVersion": "route.openshift.io/v1", "kind": "Route",
+                "scope": "cluster", "names": ["east-route"], "limit": 100,
+                "matchField": "spec.host", "matchOperator": "contains",
+                "matchValue": ".az.cibc.com", "searchComplete": True,
+            },
+        },
+    ]
+
+    prior = _latest_resource_query_semantics(evidence)
+
+    assert prior is not None
+    assert prior["kind"] == "Route"
+    assert prior["resource_filter"] == {
+        "field": "spec.host", "operator": "contains", "value": ".az.cibc.com",
+    }
+    assert prior["evidence_ids"] == ["central-routes", "east-routes"]
+    assert prior["cluster_ids"] == ["central", "east"]
+
+
+def test_resource_followup_inherits_query_but_freshness_requires_new_read() -> None:
+    prior = {
+        "kind": "Route", "namespace": None, "label_selector": None, "limit": 100,
+        "resource_filter": {
+            "field": "spec.host", "operator": "contains", "value": ".az.cibc.com",
+        },
+    }
+    presentation_question = "show me the list of these routes from CMSP Central"
+    fresh_question = "are these routes still present now in CMSP Central?"
+
+    assert _resource_followup_reuses_snapshot(presentation_question, prior) is True
+    assert _resource_followup_reuses_snapshot(fresh_question, prior) is False
+    inherited = _resolve_resource_inquiry(
+        question=fresh_question, inquiry=None, prior_resource_query=prior,
+    )
+    assert inherited is not None
+    assert inherited.resource_query == "Route"
+    assert inherited.resource_filter == ResourceFieldFilterSemantics(
+        field="spec.host", operator="contains", value=".az.cibc.com",
+    )
+    assert inherited.continues_prior_resource_query is True
+
+
+def test_question_cluster_ids_accepts_only_one_unique_selected_alias() -> None:
+    clusters = [
+        SimpleNamespace(id="central", name="CMSP Central DEV"),
+        SimpleNamespace(id="east", name="CMSP East DEV"),
+        SimpleNamespace(id="simplii", name="Simplii Central DEV"),
+    ]
+
+    assert _question_cluster_ids(
+        "show these routes from the CMSP Central cluster", clusters,
+    ) == {"central"}
+    assert _question_cluster_ids("show these routes", clusters) == set()
+    assert _question_cluster_ids("show these routes from Central", clusters) == set()
+
+
+def test_reuse_prior_resource_evidence_narrows_to_named_cluster() -> None:
+    evidence = [
+        {"id": "central", "tool": "search_resources", "cluster_id": "cluster-central"},
+        {"id": "east", "tool": "search_resources", "cluster_id": "cluster-east"},
+    ]
+    selected, activity = _reuse_prior_resource_evidence(
+        evidence=evidence,
+        prior_resource_query={"evidence_ids": ["central", "east"]},
+        cluster_ids={"cluster-central"},
+    )
+
+    assert [item["id"] for item in selected] == ["central"]
+    assert activity[0]["source"] == "prior_resource_snapshot"
+    assert activity[0]["reused_snapshot"] is True
 
 
 def test_plain_inventory_does_not_answer_field_predicate_question() -> None:
@@ -8548,16 +8884,41 @@ def test_unrestricted_route_field_filter_uses_registered_search_not_inventory(
         rendered = client.get(
             created.headers["location"], headers={"x-forwarded-user": "ivy"},
         )
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "show me the list of these routes"},
+            follow_redirects=False,
+        )
+        followup = client.get(
+            continued.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+        refreshed = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "are these routes still present now?"},
+            follow_redirects=False,
+        )
+        refreshed_page = client.get(
+            refreshed.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
 
-    assert explorer.calls == [ReadIntent(
+    expected_search = ReadIntent(
         tool="search_resources", resource="routes.route.openshift.io",
         api_version="route.openshift.io/v1", kind="Route",
         match_field="spec.host", match_value=".az.cibc.com",
         match_operator="contains", limit=100,
-    )]
+    )
+    assert explorer.calls == [expected_search, expected_search]
     assert "Filtered Route inventory" in rendered.text
     assert "payments" in rendered.text
+    assert 'class="resource-result"' in rendered.text
+    assert "payments.az.cibc.com" in rendered.text
     assert "500" not in rendered.text
+    assert followup.text.count("payments.az.cibc.com") >= 2
+    assert "no fresh cluster read was requested" in followup.text
+    assert "payments.az.cibc.com" in refreshed_page.text
 
 
 def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(

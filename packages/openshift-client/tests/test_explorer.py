@@ -594,6 +594,9 @@ def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
 
     observation = result.observations[0]
     assert observation.tool == "search_resources"
+    assert observation.data["queryContractVersion"] == 1
+    assert observation.data["limit"] == 5
+    assert observation.data["labelSelector"] is None
     assert observation.data["scannedCount"] == 300
     assert observation.data["count"] == 1
     assert observation.data["items"][0]["metadata"]["name"] == "route-275"
