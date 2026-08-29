@@ -38,13 +38,25 @@ records remain, but execution now awaits a separate approval-gated action servic
   deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
   passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
   promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
-  The model-free suite passes locally with 629 tests and 82% aggregate coverage.
+  Each unrestricted shell call names one selected cluster. The API brokers only that registered
+  cluster's stored token to the loopback runner, which uses and deletes a per-command kubeconfig.
+  The remote agentic overlay forces remote TLS verification off, while guarded deployments keep
+  the secure default. Runner/API logs expose redacted target, TLS, exit, duration, and byte-count
+  metadata, idle and in-flight heartbeats run every 10 seconds, failed-command summaries appear in
+  Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
+  124. The API turns command heartbeats into changing live Ask progress while the outer run retains
+  its 900-second deadline in the agentic overlays.
+  The model-free suite passes locally with 636 tests and 82% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
 - Unrestricted turns now retain additive high-confidence deterministic enrichment. Registered
   known reads execute before the shell loop across selected clusters, persist normalized evidence,
-  and supply preferred deterministic ranking tables to the model. The observed top-five namespace
+  and supply preferred deterministic ranking metadata to the model. Enriched metric rankings now
+  render through one native evidence card instead of stacking deterministic Markdown, a duplicate
+  model table, and the card. Card selection is data-driven for every renderable metric shape,
+  including node, storage, Kafka, and ingress results, rather than hard-coded to top CPU. The
+  observed top-five namespace
   log-volume wording now routes to the Loki application-log payload-byte reader rather than using
   Kubernetes Events as a proxy, while arbitrary shell access remains available afterward. The
   current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
@@ -278,7 +290,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift Logging views.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
-  response rather than conversation metadata. Questions are unlimited per
+  response rather than conversation metadata. Deletion also removes queued runs and
+  cancels a running in-process investigation so a stuck session never blocks its owner.
+  The content-free deletion audit records only how many active runs were cancelled.
+  Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
   bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
@@ -456,7 +471,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
 - Deployment: `ai-ops/podpilot`, last observed `1/1` Available with the API, OAuth proxy, and
   `oc-runner` containers ready.
-- Local automated suite: 629 tests passing with 82% aggregate coverage.
+- Local automated suite: 636 tests passing with 82% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

@@ -34,20 +34,32 @@ persists their normalized evidence, and supplies the evidence plus any determini
 to the model. This preserves enrichments such as Loki-backed application-log volume, health
 summaries, and registered metric rankings; it is additive and does not restrict later agent actions.
 
-The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function. Tool calls go over
-Pod loopback to an `oc-runner` sidecar, which executes Bash with the Linux `oc` binary and returns
+The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function.
+Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
+use the projected service-account identity. For a registered remote cluster the API resolves that
+cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback
+for that call only. The `oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
+Linux `oc` binary, deletes the kubeconfig, and returns
 exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
 model returns a final assistant message or the durable Ask run reaches its outer execution
 deadline. Beyond the optional deterministic enrichment, this path does not constrain the agent to
 `ReadIntent`, the read broker, typed remediation, preview, or approval. It does retain conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+Each shell process group also has an independent runner-side deadline. While it is active, the
+runner emits structured heartbeats and the API records changing elapsed-time progress events so the
+SSE timeline remains visibly live. Timeout returns exit code `124` and a redacted operator-visible
+limitation instead of leaving the run indefinitely on `agent_command`.
+Model calls use the same progress-heartbeat mechanism and the profile's provider timeout, so an
+agent can remain visibly active while choosing its next action without waiting indefinitely.
 
-The sidecar shares the Pod-level `podpilot-investigator` service account. In the composed SNO
+The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
 separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
 the standard remote identity and grants no additional RBAC. Consequently the model may ask for
 any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
 portable base and standard remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
+The optional remote agentic overlay also forces registered remote-cluster TLS verification off; the
+secure default remains on everywhere else.
 
 The guarded single Pod contains two containers; either unrestricted overlay adds the runner as a
 third. The OpenShift OAuth proxy is the
@@ -509,7 +521,9 @@ a replacement diagnostic path.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and
-evidence; deletion leaves a content-free audit event. There is no per-conversation
+evidence. Deleting a conversation atomically removes queued work and cancels any
+in-process running task before it can persist a late response; deletion leaves a
+content-free audit event with only the cancelled-run count. There is no per-conversation
 question limit. The model receives the ten most recent messages plus a bounded,
 durable digest of older messages. UI rendering is capped independently, evidence
 retains its existing bounded window, and a per-user one-minute request limit

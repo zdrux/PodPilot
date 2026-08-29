@@ -395,7 +395,8 @@ summary must preserve the complete-coverage rule before confirming absence.
 - The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
   `serviceAccountName: podpilot-investigator`.
 - The optional remote agentic overlay composes the guarded remote overlay plus the shared runner
-  component, renders both versioned ImageStreams, and contains no cluster-admin binding.
+  component, renders both versioned ImageStreams, forces remote TLS verification off, and contains
+  no cluster-admin binding.
 - No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
   validation must return `yes` for cluster-wide Pod GET and `no` for cluster-wide Deployment PATCH.
 - The runner image pins its OpenShift CLI source by digest, runs non-root with a read-only root
@@ -406,6 +407,13 @@ summary must preserve the complete-coverage rule before confirming absence.
   `role=tool` results.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
+- Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
+  token reaches the loopback runner, tokens never enter model messages or logs, the temporary
+  kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
+  summary is visible to the operator.
+- Runner watchdog tests must cover structured idle/in-flight logging, periodic API progress,
+  process-group termination at the command deadline, exit code `124`, and a loopback client timeout
+  longer than the runner deadline. Both containers retain working liveness/readiness probes.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
   `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
   deterministic payload-volume table, and never substitutes Kubernetes Event counts.

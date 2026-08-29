@@ -2061,9 +2061,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "function": {
                 "name": "execute_shell",
                 "description": (
-                    "Execute an unrestricted Linux shell script in PodPilot's oc runner. "
-                    "The OpenShift oc CLI is installed and authenticated as the runner Pod's "
-                    "service account. Return codes, stdout, and stderr are returned verbatim."
+                    "Execute an unrestricted Linux shell script against one selected OpenShift "
+                    "cluster through PodPilot's oc runner. The API brokers the selected cluster's "
+                    "credential; never put credentials in the command. Return codes, stdout, and "
+                    "stderr are returned verbatim."
                 ),
                 "parameters": {
                     "type": "object",
@@ -2071,9 +2072,15 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                         "command": {
                             "type": "string",
                             "description": "The complete bash script to execute.",
+                        },
+                        "cluster_id": {
+                            "type": "string",
+                            "description": (
+                                "The exact cluster_id from the selected-clusters list in the system message."
+                            ),
                         }
                     },
-                    "required": ["command"],
+                    "required": ["command", "cluster_id"],
                     "additionalProperties": False,
                 },
             },

@@ -866,7 +866,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!csrf || !form.dataset.deleteUrl) return;
-      if (!window.confirm("Delete this conversation and its collected evidence? This cannot be undone.")) return;
+      if (!window.confirm("Delete this conversation and its collected evidence? Any queued or running investigation will be cancelled. This cannot be undone.")) return;
       const button = form.querySelector('button[type="submit"]');
       if (button) { button.disabled = true; button.classList.add("is-busy"); button.setAttribute("aria-busy", "true"); }
       try {

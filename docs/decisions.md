@@ -1068,11 +1068,15 @@ Decision: Add an explicit `unrestricted` agent mode enabled by the SNO milestone
 optional additive `remote-poc-agentic` overlay. Use OpenRouter Chat Completions with exact model
 `openai/gpt-oss-120b` for the SNO simulation and one
 `execute_shell` function. Execute calls through a localhost-only sidecar built with a pinned Linux
-`oc` binary. The sidecar shares `podpilot-investigator`; do not compose the `ai-observer`
+`oc` binary. Each call names one selected cluster. Runtime-cluster calls use the sidecar's projected
+`podpilot-investigator` identity; registered remote calls receive only that target's API origin and
+stored token from the API over Pod loopback and use a deleted-after-use kubeconfig. Do not compose the `ai-observer`
 cluster-admin overlay. Keep guarded mode as the base and standard remote default. The remote
 agentic overlay inherits remote configuration and RBAC, adds a separately promoted versioned runner
-image, and grants no permissions itself. Retain an outer durable-run
-deadline, redaction before returning command output to the model, and command metadata audit, but
+image, grants no permissions itself, and explicitly forces remote-cluster TLS verification off for
+this environment. Retain an outer durable-run
+deadline, add a shorter per-command process-group timeout with runner/API heartbeats and live UI
+progress, retain redaction before returning command output to the model and command metadata audit, but
 bypass typed reads, registered remediation, preview, and approval inside the lab mode.
 
 Consequences: The model can choose arbitrary Bash and OpenShift CLI operations, while the actual
@@ -1090,13 +1094,22 @@ presentation.
 
 Decision: Before each unrestricted shell loop, apply the existing high-confidence known-read
 compiler to the current question. Execute a matching registered plan across the selected clusters,
-persist its normalized evidence, and include both that evidence and any deterministic metric table
-in the agent context and final response. Keep `execute_shell` available without approval or typed
+persist its normalized evidence, and include that evidence and its preferred presentation metadata
+in the agent context. For metric rankings, the native evidence card is the sole operator-visible
+table; deterministic Markdown and model-authored copies are not rendered beside it. Instruct the
+model to report only material additions rather than reproducing enriched tables. Keep
+`execute_shell` available without approval or typed
 tool restrictions after enrichment. Do not invoke the model planner merely to find an enrichment;
 unrecognized questions proceed directly to the unrestricted loop.
+
+The native-card preference is evidence-shape based rather than a metric-name allowlist. Any
+normalized `query_metrics` observation with renderable rows uses the card, including CPU, memory,
+node, storage, Kafka, ingress, and newly registered metrics. Empty or unsupported result shapes keep
+the deterministic text fallback so the UI never suppresses the only usable explanation.
 
 Consequences: Common health, resource, metric-ranking, and log-volume questions retain PodPilot's
 fixed API semantics and presentation without reducing agent autonomy. Registered readers remain
 bounded by their own data-handling contracts, while shell actions remain bounded only by the Pod
 identity, admission, and the outer run deadline. Adding a new deterministic enrichment continues to
-require an explicit known-read compiler rule and tests.
+require an explicit known-read compiler rule and tests. A single authoritative renderer also avoids
+showing the same ranking as deterministic Markdown, agent Markdown, and a native metric card.

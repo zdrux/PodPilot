@@ -390,6 +390,9 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
+    parameters = request["tools"][0]["function"]["parameters"]
+    assert parameters["required"] == ["command", "cluster_id"]
+    assert "cluster_id" in parameters["properties"]
 
 
 @pytest.mark.parametrize("api_type", ["chat-completions", "responses"])

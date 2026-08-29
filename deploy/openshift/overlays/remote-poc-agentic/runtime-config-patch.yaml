@@ -6,3 +6,4 @@ metadata:
 data:
   agent_mode: unrestricted
   adhoc_run_timeout_seconds: "900"
+  remote_cluster_tls_verify: "false"

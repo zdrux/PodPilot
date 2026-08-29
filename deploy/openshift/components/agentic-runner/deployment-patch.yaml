@@ -10,6 +10,17 @@ spec:
         - name: oc-runner
           image: podpilot-oc-runner:latest
           imagePullPolicy: Always
+          env:
+            - name: PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_command_timeout_seconds
+            - name: PODPILOT_AGENT_HEARTBEAT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_heartbeat_seconds
           livenessProbe:
             exec:
               command:

@@ -84,6 +84,8 @@ class Settings(BaseSettings):
     adhoc_run_timeout_seconds: float = Field(default=300.0, ge=1.0, le=900.0)
     agent_mode: Literal["guarded", "unrestricted"] = "guarded"
     agent_runner_url: str = "http://127.0.0.1:8090"
+    agent_command_timeout_seconds: float = Field(default=300.0, ge=5.0, le=600.0)
+    agent_heartbeat_seconds: float = Field(default=10.0, ge=2.0, le=60.0)
     model_timeout_max_seconds: float = Field(default=240.0, ge=30.0, le=300.0)
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
@@ -92,6 +94,7 @@ class Settings(BaseSettings):
     cluster_credential_store: Literal["environment", "kubernetes"] = "environment"
     cluster_secret_namespace: str = "ai-ops"
     cluster_secret_name: str = "podpilot-cluster-credentials"
+    remote_cluster_tls_verify: bool = True
     poc_mode: bool = False
 
     @field_validator(

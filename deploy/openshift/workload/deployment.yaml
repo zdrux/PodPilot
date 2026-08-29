@@ -162,6 +162,21 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: agent_runner_url
+            - name: PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_command_timeout_seconds
+            - name: PODPILOT_AGENT_HEARTBEAT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: agent_heartbeat_seconds
+            - name: PODPILOT_REMOTE_CLUSTER_TLS_VERIFY
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: remote_cluster_tls_verify
             - name: PODPILOT_MODEL_TIMEOUT_MAX_SECONDS
               valueFrom:
                 configMapKeyRef:

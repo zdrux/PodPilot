@@ -52,6 +52,7 @@ from podpilot_api.main import (
     _model_fact_cards,
     _parse_tags,
     _partition_investigation_gaps,
+    _preferred_metric_evidence_view,
     _profile_is_usable,
     _reconcile_validated_answer_gaps,
     _semantic_metric_read_plan,
@@ -3553,6 +3554,72 @@ def test_metric_only_reads_are_recognized_without_model_classification() -> None
         },
     ]) is False
     assert _current_reads_are_metric_rankings([]) is False
+
+
+@pytest.mark.parametrize(
+    ("metric", "unit", "labels"),
+    [
+        ("node_cpu_utilization", "percent", {"nodename": "worker-1"}),
+        ("memory_working_set", "bytes", {"namespace": "apps", "pod": "api-1"}),
+        ("persistent_volume_usage", "percent", {"persistentvolumeclaim": "data"}),
+        ("kafka_consumer_lag", "messages", {"topic": "orders", "consumergroup": "billing"}),
+        ("ingress_request_rate", "requests_per_second", {"route": "store"}),
+    ],
+)
+def test_native_metric_card_is_preferred_for_every_renderable_metric(
+    metric: str,
+    unit: str,
+    labels: dict[str, str],
+) -> None:
+    evidence = [{
+        "id": f"metric-{metric}",
+        "tool": "query_metrics",
+        "data": {
+            "metric": metric,
+            "scope": "cluster",
+            "unit": unit,
+            "complete": True,
+            "ranking": [{
+                "labels": labels,
+                "current": 4.0,
+                "average": 3.0,
+                "maximum": 5.0,
+            }],
+        },
+    }]
+    activity = [{
+        "tool": "query_metrics",
+        "status": "succeeded",
+        "evidence_ids": [f"metric-{metric}"],
+    }]
+
+    assert _preferred_metric_evidence_view(
+        evidence=evidence,
+        activity=activity,
+    ) == "metric_ranking"
+
+
+def test_native_metric_card_is_not_forced_for_empty_or_non_metric_evidence() -> None:
+    assert _preferred_metric_evidence_view(
+        evidence=[{
+            "id": "metric-empty",
+            "tool": "query_metrics",
+            "data": {"metric": "cpu_usage", "ranking": []},
+        }],
+        activity=[{
+            "tool": "query_metrics",
+            "status": "succeeded",
+            "evidence_ids": ["metric-empty"],
+        }],
+    ) is None
+    assert _preferred_metric_evidence_view(
+        evidence=[{"id": "pod-1", "tool": "get_resource", "data": {}}],
+        activity=[{
+            "tool": "get_resource",
+            "status": "succeeded",
+            "evidence_ids": ["pod-1"],
+        }],
+    ) is None
 
 
 def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
@@ -7109,7 +7176,8 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         def __init__(self) -> None:
             self.commands: list[str] = []
 
-        def execute(self, command: str) -> AgentCommandResult:
+        def execute(self, command: str, connection=None) -> AgentCommandResult:
+            assert connection is None
             self.commands.append(command)
             return AgentCommandResult(
                 command=command,
@@ -7257,6 +7325,7 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         db_session.commit()
     engine.dispose()
 
+
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
@@ -7272,10 +7341,12 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         rendered = client.get(
             created.headers["location"], headers={"x-forwarded-user": "ivy"}
         )
-        assert "Loki-backed namespace log-volume ranking" in rendered.text
+        assert "Loki-backed namespace log-volume ranking" not in rendered.text
+        assert "Top Application-Log Volume by Namespace" in rendered.text
         assert "Payload volume" in rendered.text
         assert "payments" in rendered.text
         assert "Kubernetes events" not in rendered.text
+        assert rendered.text.count("<table") == 1
 
     assert explorer.calls == [ReadIntent(
         tool="query_metrics",
@@ -7291,6 +7362,9 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
     )
     assert "Payload volume" in str(enrichment_message["content"])
     assert "Kubernetes Event counts" in str(enrichment_message["content"])
+    assert "Do not reproduce the enrichment as another table" in str(
+        enrichment_message["content"]
+    )
     engine = build_engine(settings)
     with Session(engine) as db_session:
         conversation = db_session.scalar(select(AdHocConversation))
@@ -7305,6 +7379,163 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         activity = json.loads(assistant.tool_activity_json)
         assert activity["reads"][0]["source"] == "deterministic_enrichment"
         assert activity["reads"][0]["status"] == "succeeded"
+        assert activity["preferred_evidence_view"] == "metric_ranking"
+    engine.dispose()
+
+
+def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
+    tmp_path: Path,
+) -> None:
+    cluster_ids = [
+        "30000000-0000-0000-0000-000000000001",
+        "30000000-0000-0000-0000-000000000002",
+    ]
+
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.steps = 0
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.agent_messages.append(list(messages))
+            if self.steps < 2:
+                cluster_id = cluster_ids[self.steps]
+                call_id = f"call-{self.steps + 1}"
+                self.steps += 1
+                arguments = json.dumps({
+                    "command": "oc get kafkas.kafka.strimzi.io -A -o name",
+                    "cluster_id": cluster_id,
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": "execute_shell", "arguments": arguments},
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id=call_id,
+                        name="execute_shell",
+                        arguments=arguments,
+                    ),),
+                )
+            return AgentStep(
+                assistant_message={"role": "assistant", "content": "Checked both clusters."},
+                content="Checked both clusters.",
+                tool_calls=(),
+            )
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, command, connection=None):
+            self.calls.append((command, connection))
+            if connection.cluster_id == cluster_ids[0]:
+                time.sleep(2.1)
+            failed = connection.cluster_id == cluster_ids[1]
+            return AgentCommandResult(
+                command=command,
+                exit_code=1 if failed else 0,
+                stdout="kafka.kafka.strimzi.io/vc-cluster\n" if not failed else "",
+                stderr="Unable to connect to the server: synthetic failure" if failed else "",
+            )
+
+    provider = Provider()
+    runner = Runner()
+    cluster_credentials = MemoryCredentialStore()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        cluster_credential_store=cluster_credentials,
+        model_provider=provider,
+        agent_runner=runner,
+        settings_overrides={
+            "agent_mode": "unrestricted",
+            "agent_heartbeat_seconds": 2,
+            "remote_cluster_tls_verify": False,
+        },
+    )
+    engine = build_engine(settings)
+    with TestClient(app):
+        pass
+    with Session(engine) as db_session:
+        now = datetime.now(timezone.utc)
+        for cluster_id, name in zip(cluster_ids, ("Central DEV", "East DEV"), strict=True):
+            key = f"cluster_{cluster_id.replace('-', '')}"
+            cluster_credentials.set(f"token-{name}", key)
+            db_session.add(Cluster(
+                id=cluster_id,
+                name=name,
+                api_url=f"https://api.{name.casefold().replace(' ', '-')}.example:6443",
+                credential_key=key,
+                tags_json="{}",
+                tls_verify=True,
+                is_enabled=True,
+                is_system=False,
+                status="ready",
+                created_by="ada",
+                updated_by="ada",
+                created_at=now,
+                updated_at=now,
+            ))
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Run the Kafka inventory command on both selected clusters.",
+                "cluster_ids": json.dumps(cluster_ids),
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+
+    assert [call[1].cluster_id for call in runner.calls] == cluster_ids
+    assert all(call[1].tls_verify is False for call in runner.calls)
+    assert "synthetic failure" in rendered.text
+    assert "East DEV" in rendered.text
+    assert all("token-" not in str(messages) for messages in provider.agent_messages)
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
+        run = db_session.scalar(select(AdHocRun))
+        assert assistant is not None
+        assert run is not None
+        activity = json.loads(assistant.tool_activity_json)
+        command_reads = [item for item in activity["reads"] if item["tool"] == "execute_shell"]
+        assert [item["cluster_id"] for item in command_reads] == cluster_ids
+        assert any("East DEV" in item for item in activity["limitations"])
+        assert any(
+            "Still executing on Central DEV" in item["message"]
+            for item in json.loads(run.progress_json)
+        )
     engine.dispose()
 
 
@@ -10134,7 +10365,9 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
     assert 'data-progress-phase="replanning"' not in page.text
 
 
-def test_owner_can_delete_conversation_and_evidence_with_audit_record(tmp_path: Path) -> None:
+def test_owner_can_delete_queued_conversation_and_evidence_with_audit_record(
+    tmp_path: Path,
+) -> None:
     app, settings = make_app(
         tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
     )
@@ -10148,6 +10381,15 @@ def test_owner_can_delete_conversation_and_evidence_with_audit_record(tmp_path: 
         db_session.add(AdHocMessage(
             id="00000000-0000-0000-0000-000000000090",
             conversation_id=conversation_id, role="user", actor="ivy", content="Delete me",
+        ))
+        db_session.add(AdHocRun(
+            id="00000000-0000-0000-0000-000000000091",
+            conversation_id=conversation_id,
+            created_by="ivy",
+            message_text="Delete me",
+            status="queued",
+            phase="queued",
+            progress_json="[]",
         ))
         db_session.commit()
     engine.dispose()
@@ -10171,8 +10413,14 @@ def test_owner_can_delete_conversation_and_evidence_with_audit_record(tmp_path: 
                 AdHocMessage.conversation_id == conversation_id
             )
         ) == 0
+        assert db_session.scalar(
+            select(func.count()).select_from(AdHocRun).where(
+                AdHocRun.conversation_id == conversation_id
+            )
+        ) == 0
         event = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "adhoc.delete"))
         assert event is not None and event.actor == "ivy"
+        assert json.loads(event.details_json)["cancelled_run_count"] == 1
     engine.dispose()
 
 
@@ -10346,39 +10594,27 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
         delete_active = client.post(
             f"/api/v1/adhoc-conversations/{conversation_id}/delete",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
         )
-        assert delete_active.status_code == 409
+        assert delete_active.status_code == 303
+        assert delete_active.headers["location"] == "/ask"
 
         provider.release_answer.set()
-        terminal = None
-        for _ in range(40):
-            terminal = client.get(
-                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-            ).json()
-            if terminal["status"] == "succeeded":
-                break
-            time.sleep(0.05)
-        assert terminal is not None and terminal["status"] == "succeeded"
-        assert terminal["phase"] == "complete"
-
-        event_stream = client.get(
-            f"/api/v1/adhoc-runs/{run_id}/events",
-            headers={"x-forwarded-user": "ivy"},
-        )
-        assert event_stream.status_code == 200
-        assert "event: progress" in event_stream.text
-        assert "event: complete" in event_stream.text
-        assert "Preparing an evidence-backed answer" in event_stream.text
-
-        completed = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "selector does not match" in completed.text
-        assert "Live investigation" not in completed.text
+        assert client.get(
+            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+        ).status_code == 404
+        assert client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        ).status_code == 404
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
-        run = db_session.get(AdHocRun, run_id)
-        assert run is not None and run.status == "succeeded"
-        assert run.assistant_message_id is not None
+        assert db_session.get(AdHocRun, run_id) is None
+        event = db_session.scalar(
+            select(AuditEvent).where(AuditEvent.action == "adhoc.delete")
+        )
+        assert event is not None
+        assert json.loads(event.details_json)["cancelled_run_count"] == 1
     engine.dispose()
 
 

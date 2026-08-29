@@ -150,6 +150,8 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
     assert runtime["data"]["agent_mode"] == "guarded"
     assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
+    assert runtime["data"]["agent_command_timeout_seconds"] == "300"
+    assert runtime["data"]["agent_heartbeat_seconds"] == "10"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
@@ -256,11 +258,15 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
     assert runtime["data"] == {
         "agent_mode": "unrestricted",
         "adhoc_run_timeout_seconds": "900",
+        "remote_cluster_tls_verify": "false",
     }
     assert image_stream["metadata"]["name"] == "podpilot-oc-runner"
-    assert runner_patch["spec"]["template"]["spec"]["containers"][0]["name"] == (
-        "oc-runner"
-    )
+    runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
+    assert runner["name"] == "oc-runner"
+    assert {item["name"] for item in runner["env"]} == {
+        "PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS",
+        "PODPILOT_AGENT_HEARTBEAT_SECONDS",
+    }
     assert all(
         document.get("roleRef", {}).get("name") != "cluster-admin"
         for document in rbac_documents

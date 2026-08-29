@@ -69,16 +69,27 @@ normalization, redaction, evidence persistence, and bounded presentation. They p
 product enrichment—such as Loki application-log byte rankings—but do not remove or constrain the
 agent's arbitrary shell tool.
 
-The runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
+For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators
 must perform the equivalent authorization review before applying the optional agentic overlay. Cluster RBAC and
-admission therefore remain the authoritative execution boundary. Command text and exit status are
-audited without stdout/stderr; shell output is secret-pattern redacted before it is returned to the
-provider and is not persisted as evidence. Normalized deterministic enrichment is persisted as
+admission therefore remain the authoritative execution boundary. For a selected registered remote
+cluster, the API reads only that cluster's token and brokers it over Pod loopback for one command.
+The runner writes a mode-0600 per-command kubeconfig under `/tmp` and deletes it after execution;
+the broker never places the token or kubeconfig in the model tool schema, command, result, or logs.
+This is not container-level credential isolation: the unrestricted sidecar shares the Pod service
+account, whose RBAC can read the two resourceName-restricted credential Secrets, and can inspect its
+projected token. Output redaction is defense in depth, not a guarantee against a model deliberately
+transforming secret bytes. Command text, target cluster, and exit status are
+audited. A bounded redacted stderr summary is retained only for failed commands; full shell output
+is secret-pattern redacted before it is returned to the provider and is not persisted as evidence.
+Normalized deterministic enrichment is persisted as
 evidence under the existing policy. Cluster output remains untrusted data and may contain
 prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root
-filesystem and dropped capabilities, and writes its tokenFile-based kubeconfig only to the shared
-ephemeral `/tmp` volume.
+filesystem and dropped capabilities. Runner logs contain target identity, TLS mode, exit code,
+duration, timeout state, and byte counts, never tokens, command text, stdout, or stderr. The runner
+emits startup/idle and in-flight command heartbeats. Every shell process group is terminated at the
+configured command deadline; the API has a slightly longer loopback HTTP deadline and the durable
+Ask job retains its outer deadline.
 
 Even with read-only RBAC, arbitrary shell execution can consume Pod resources, inspect files
 readable by the runner container, and make allowed network requests. Do not enable this overlay on
@@ -142,13 +153,16 @@ rotation, connection test, and disable operations require Approver-or-higher, CS
 content-free audit metadata. Disabling removes the Secret key but preserves historical
 conversation and evidence attribution.
 
-Remote Kubernetes API TLS verification defaults on. An Approver may explicitly disable
+Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
 stores the exception, connection tests audit it, and every affected Ask run adds an
-operator-visible limitation. The exception never applies implicitly, does not change
-model-provider or ordinary application TLS policy, and should not be used in production.
+operator-visible limitation. The `remote-poc-agentic` overlay is an explicit broader lab exception:
+it sets `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY=false`, forcing registered remote readers and runner
+commands in that deployment to skip certificate and hostname verification. The management page
+displays the environment override. This does not change model-provider or ordinary application TLS
+policy and should not be used in production.
 
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,

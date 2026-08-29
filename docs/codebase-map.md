@@ -58,7 +58,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/remediation.py`: typed action
   preview, read-only target validation, execution, and verification.
 - `packages/openshift-client/src/podpilot_openshift/agent_runner.py`: loopback client for the
-  lab-only unrestricted shell sidecar.
+  lab-only unrestricted shell sidecar, including per-command registered-cluster credential
+  brokering that never exposes tokens to model messages.
 - `packages/openshift-client/src/podpilot_openshift/checks.py`: registered,
   bounded monitoring signal, Service topology, and target event checks.
 - `packages/openshift-client/src/podpilot_openshift/metrics.py`: authenticated,

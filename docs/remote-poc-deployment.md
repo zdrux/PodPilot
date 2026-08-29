@@ -319,14 +319,36 @@ oc -n ai-ops get deployment podpilot \
   -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'
 oc -n ai-ops get configmap podpilot-runtime \
   -o jsonpath='{.data.agent_mode}{"\n"}'
+oc -n ai-ops get configmap podpilot-runtime \
+  -o jsonpath='{.data.remote_cluster_tls_verify}{"\n"}'
+oc -n ai-ops get configmap podpilot-runtime \
+  -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
 oc -n ai-ops exec deployment/podpilot -c oc-runner -- oc version --client
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 ```
 
-Expected results include `oc-runner api oauth-proxy`, `unrestricted`, a Linux
+Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `false`, `300 10`, a Linux
 OpenShift CLI client version, and the RBAC result appropriate to the remote
 identity. Review any `yes` result before exposing agentic mode; the sidecar will
 be able to exercise every permission granted to that service account.
+
+In a multi-cluster Ask session, the API resolves the token for each model-selected registered
+cluster from `podpilot-cluster-credentials` and passes it only over Pod loopback for that command.
+The runner uses `insecure-skip-tls-verify: true` because this overlay forces remote TLS verification
+off, deletes the per-command kubeconfig, and logs only cluster identity, TLS mode, exit code,
+duration, and output byte counts:
+
+```bash
+oc logs -n ai-ops deployment/podpilot -c oc-runner --since=10m
+oc logs -n ai-ops deployment/podpilot -c api --since=10m | grep podpilot.agentic.command
+```
+
+An idle runner emits `runner_heartbeat`. An active command additionally emits
+`command_heartbeat`; the API writes `podpilot.agentic.command_heartbeat` and pushes a changing
+elapsed-time message into the live Ask timeline. At 300 seconds the runner terminates the shell
+process group and returns exit code `124`. The complete Ask run still expires at 900 seconds.
+While waiting for OpenRouter, the API similarly writes `podpilot.agentic.model_heartbeat` and uses
+the model profile's provider timeout.
 
 Verify admission independently with any existing authenticated username:
 

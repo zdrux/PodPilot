@@ -156,6 +156,13 @@ provider and credentials are healthy.
 - `PODPILOT_AGENT_MODE`, default `guarded`; `unrestricted` selects the lab-only Chat Completions
   shell-tool loop and must be paired with the SNO runner sidecar.
 - `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.
+- `PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS`, default `300`; the runner terminates the complete shell
+  process group at this deadline and returns exit code `124`.
+- `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls runner/API log heartbeats and in-flight
+  command progress updates persisted to the active Ask run.
+- `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY`, default `true`; the remote agentic PoC overlay sets it to
+  `false`, forcing registered remote readers and runner commands to skip certificate and hostname
+  verification. This credential-interception risk is limited to that lab overlay.
 
 The current deployment uses these variables:
 
@@ -474,7 +481,12 @@ Unrestricted turns retain additive deterministic enrichment. Questions recognize
 known-read compiler first use the registered API/Loki/Thanos reader and pass normalized evidence to
 the agent; the shell loop remains unrestricted afterward. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
-and average byte rate. Kubernetes Event counts are not an acceptable proxy for that result.
+and average byte rate. Every renderable normalized metric result—not only top CPU, memory, and log
+volume—uses the native evidence card as its only visible table. This includes node, PVC, Kafka,
+ingress, and future metric profiles without a UI allowlist change. Empty or unsupported shapes keep
+the deterministic text fallback. Deterministic Markdown and any model-authored duplicate table are
+suppressed when a native card is available. Kubernetes Event counts are not an acceptable proxy for
+that result.
 
 Verify the deployed boundary:
 
@@ -495,8 +507,18 @@ The guarded remote overlay remains the default. After separately building and
 promoting `podpilot` and `podpilot-oc-runner` under the same immutable version,
 apply `deploy/openshift/overlays/remote-poc-agentic`. That overlay inherits the
 remote OAuth, storage, role mapping, and RBAC configuration and adds only the
-shared runner component plus `agent_mode: unrestricted`. It creates no second
+shared runner component plus `agent_mode: unrestricted` and
+`remote_cluster_tls_verify: false`. It creates no second
 Deployment: `oc-runner` is the third container in the existing PodPilot Pod.
+For multi-cluster conversations the model supplies one selected cluster ID per shell call. The API
+brokers only that cluster's stored token to the loopback runner, which deletes its temporary
+kubeconfig after the command. Inspect redacted execution metadata with
+`oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
+The runner logs startup and idle heartbeats plus command start, in-flight heartbeat, completion,
+termination, and timeout events. The API logs its own runtime, model-wait, and command heartbeats
+and publishes changing model/command elapsed-time messages to Ask. A command is
+bounded by the runner's 300-second process-group timeout, while the complete Ask job remains bounded
+by `adhoc_run_timeout_seconds`.
 See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
 authorization-audit, and rollback instructions.
 
@@ -1220,8 +1242,10 @@ Both endpoints are visible only to the conversation owner.
 
 On Pod startup, interrupted `running` rows are returned to `queued` and retried.
 The work is read-only, but a restart can therefore repeat model inference and
-bounded reads. While a run is active, a second turn and conversation deletion
-return HTTP 409. Inspect phase transitions without payloads through
+bounded reads. While a run is active, a second turn returns HTTP 409. The owner may
+still delete the conversation: queued runs are removed before claim, an in-process
+running task is cancelled, and the deletion audit record stores the cancelled-run
+count without question or evidence content. Inspect phase transitions without payloads through
 `podpilot.adhoc.*` application logs. The active assistant placeholder groups human-readable
 updates into phase sections in stable chronological order, including the planner's bounded working
 hypothesis, its proposed next check, and summaries of evidence actually found. New phase sections
