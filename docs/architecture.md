@@ -45,6 +45,9 @@ request, and bandwidth questions remain separate HAProxy metric semantics.
 Terminal high-confidence plans do not call the semantic classifier in unrestricted mode. This
 includes Strimzi Kafka existence and inventory questions, which compile to a bounded
 `kafkas.kafka.strimzi.io` list across namespaces and render from normalized API evidence.
+KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its observed
+namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
+topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
 The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls

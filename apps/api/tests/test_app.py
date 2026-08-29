@@ -7798,8 +7798,33 @@ def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
         def __init__(self) -> None:
             self.calls: list[ReadIntent] = []
 
+        def resource_catalog(self, *, query="", limit=120):
+            return [{
+                "resource": "kafkatopics.kafka.strimzi.io",
+                "apiVersion": "kafka.strimzi.io/v1beta2",
+                "kind": "KafkaTopic", "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
         def execute(self, intent: ReadIntent) -> ReadResult:
             self.calls.append(intent)
+            if intent.kind == "KafkaTopic":
+                return ReadResult((AdHocObservation(
+                    id="kafka-topic-inventory", tool="list_resources",
+                    summary="Read two KafkaTopic resources.",
+                    source="kubernetes:kafka.strimzi.io:KafkaTopic:vc-streams/*",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "resource": "kafkatopics.kafka.strimzi.io",
+                        "kind": "KafkaTopic", "scope": "vc-streams",
+                        "names": ["orders", "payments"],
+                        "objects": [
+                            {"namespace": "vc-streams", "name": "orders"},
+                            {"namespace": "vc-streams", "name": "payments"},
+                        ],
+                        "objectListComplete": True,
+                    },
+                ),))
             return ReadResult((AdHocObservation(
                 id="kafka-inventory", tool="list_resources",
                 summary="Read one Kafka resource.",
@@ -7812,6 +7837,11 @@ def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
                     "objects": [{
                         "namespace": "vc-streams", "name": "vc-cluster",
                         "ready": True,
+                    }],
+                    "items": [{
+                        "apiVersion": "kafka.strimzi.io/v1beta2", "kind": "Kafka",
+                        "metadata": {"namespace": "vc-streams", "name": "vc-cluster"},
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
                     }],
                     "objectListComplete": True,
                 },
@@ -7851,20 +7881,44 @@ def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
         rendered = client.get(
             created.headers["location"], headers={"x-forwarded-user": "ivy"},
         )
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "which topics are configured on the vc-cluster cluster?"},
+            follow_redirects=False,
+        )
+        followup = client.get(
+            continued.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
 
-    assert explorer.calls == [ReadIntent(
-        tool="list_resources", resource="kafkas.kafka.strimzi.io",
-        kind="Kafka", limit=500,
-    )]
+    assert explorer.calls == [
+        ReadIntent(
+            tool="list_resources", resource="kafkas.kafka.strimzi.io",
+            kind="Kafka", limit=500,
+        ),
+        ReadIntent(
+            tool="list_resources", resource="kafkatopics.kafka.strimzi.io",
+            api_version="kafka.strimzi.io/v1beta2", kind="KafkaTopic",
+            namespace="vc-streams", label_selector="strimzi.io/cluster=vc-cluster",
+            limit=500,
+        ),
+    ]
     assert "Kafka inventory" in rendered.text
     assert "vc-streams" in rendered.text
     assert "vc-cluster" in rendered.text
     assert "model provider is currently unavailable" not in rendered.text
+    assert "KafkaTopic inventory" in followup.text
+    assert "orders" in followup.text
+    assert "payments" in followup.text
+    assert "model provider is currently unavailable" not in followup.text
     engine = build_engine(settings)
     with Session(engine) as db_session:
-        assistant = db_session.scalar(select(AdHocMessage).where(
-            AdHocMessage.role == "assistant"
-        ))
+        assistant = db_session.scalar(
+            select(AdHocMessage)
+            .where(AdHocMessage.role == "assistant")
+            .order_by(AdHocMessage.created_at.desc())
+        )
         assert assistant is not None
         activity = json.loads(assistant.tool_activity_json)
         assert activity["preferred_evidence_view"] == "deterministic_primary"

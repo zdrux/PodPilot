@@ -6497,6 +6497,57 @@ def _explicit_audit_filters(question: str) -> dict[str, object]:
     return updates
 
 
+def _explicit_kafka_topic_inventory_inquiry(
+    question: str,
+    object_references: list[dict[str, object]],
+) -> InquirySemantics | None:
+    """Bind a KafkaTopic inventory follow-up to one previously observed Kafka CR."""
+
+    if not (
+        re.search(r"(?i)\b(?:kafka\s*)?topics?\b", question)
+        and re.search(
+            r"(?i)\b(?:configured|created|deployed|installed|exist|exists|"
+            r"show|list|which|what|are\s+there)\b",
+            question,
+        )
+    ):
+        return None
+    if re.search(
+        r"(?i)\b(?:metrics?|utili[sz]ation|usage|throughput|rates?|lag|storage|"
+        r"health|healthy|status|messages?|bytes?)\b",
+        question,
+    ):
+        return None
+    kafka_references = [
+        item for item in object_references
+        if str(item.get("kind") or "").casefold() == "kafka"
+        and item.get("name")
+    ]
+    if not kafka_references:
+        return None
+    lowered = question.casefold()
+    named_matches = [
+        item for item in kafka_references
+        if str(item.get("name") or "").casefold() in lowered
+    ]
+    selected = named_matches[0] if len(named_matches) == 1 else None
+    if selected is None and len(kafka_references) == 1 and re.search(
+        r"(?i)\b(?:this|that|the)\s+(?:kafka\s+)?cluster\b", question
+    ):
+        selected = kafka_references[0]
+    if selected is None:
+        return None
+    return InquirySemantics(
+        capability="resource_inventory",
+        mode="inventory", operation="inventory", cardinality="collection",
+        resource_query="KafkaTopic",
+        scope_reference_id=str(selected["id"]),
+        relationship_selector_key="strimzi.io/cluster",
+        needs_object_details=False,
+        evidence_goal="List KafkaTopic resources configured for the observed Kafka cluster.",
+    )
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -6514,10 +6565,15 @@ async def _classify_ad_hoc_inquiry(
     explicit_router_pods = _explicit_router_pod_metric_inquiry(question)
     if explicit_router_pods is not None:
         return explicit_router_pods
+    object_references = _recent_object_references(evidence or [])
+    explicit_kafka_topics = _explicit_kafka_topic_inventory_inquiry(
+        question, object_references,
+    )
+    if explicit_kafka_topics is not None:
+        return _bind_inquiry_scope_reference(explicit_kafka_topics, object_references)
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
         return None
-    object_references = _recent_object_references(evidence or [])
     relationship_references = _recent_relationship_references(evidence or [])
     context = {
         "question": redact_text(question)[:1000],
@@ -9567,6 +9623,16 @@ def create_app(
                             evidence=enrichment_evidence,
                             activity=enrichment_activity,
                             question=provider_question,
+                            inventory_only=(
+                                not inquiry.requested_fields
+                                if inquiry is not None and inquiry.mode == "inventory"
+                                else None
+                            ),
+                            preferred_kind=(
+                                inquiry.resource_query
+                                if inquiry is not None and inquiry.mode == "inventory"
+                                else None
+                            ),
                         )
                         or _deterministic_resource_detail_answer(
                             evidence=enrichment_evidence,
