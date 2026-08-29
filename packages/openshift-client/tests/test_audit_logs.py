@@ -140,6 +140,27 @@ def test_cluster_wide_delete_query_filters_in_loki_and_returns_all_users() -> No
     assert result.observations[0].summary.endswith("across all users.")
 
 
+def test_audit_resource_filter_is_applied_in_loki_and_projection() -> None:
+    pod_delete = json.loads(_event("alice", verb="delete"))
+    pod_delete["objectRef"].update({"resource": "pods", "name": "api-7d9"})
+    source = FakeAuditSource((
+        ("1787831940000000000", json.dumps(pod_delete)),
+        ("1787831930000000000", _event("bob", verb="delete")),
+    ))
+
+    result = BoundedAuditEventReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_audit_events", namespace="payments", audit_resource="pods",
+        audit_operation_scope="deletes", audit_outcome="all", limit=10,
+    ))
+
+    query = str(source.calls[0]["logql"])
+    assert r'audit_resource=~"(?i)^pods$"' in query
+    assert [event["name"] for event in result.observations[0].data["events"]] == [
+        "api-7d9"
+    ]
+    assert result.observations[0].data["resource"] == "pods"
+
+
 def test_namespace_audit_query_filters_in_loki_and_projection() -> None:
     payments = _event("alice", verb="patch")
     other = json.loads(_event("bob", verb="patch"))

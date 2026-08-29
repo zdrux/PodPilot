@@ -54,6 +54,13 @@ reuse/persistence, progress, command metadata audit, and the run deadline.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
 successful commands are not automatically repeated and the loop cannot retry indefinitely.
+When a terminal registered enrichment succeeds, its deterministic presentation is authoritative:
+PodPilot renders it once and suppresses any model-proposed shell call for the same turn. This
+prevents a second, less capable collection path from duplicating or contradicting typed evidence.
+Registered top-consumer metric evidence also acts as a typed continuation anchor. An elliptical
+follow-up that asks for the same CPU, memory, or namespace log-volume ranking over a different
+period reuses the prior metric, scope, coordinates, grouping, and limit while changing only the
+bounded time range.
 Each shell process group also has an independent runner-side deadline. While it is active, the
 runner emits structured heartbeats and the API records changing elapsed-time progress events so the
 SSE timeline remains visibly live. Timeout returns exit code `124` and a redacted operator-visible

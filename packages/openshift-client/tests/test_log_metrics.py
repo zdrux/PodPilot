@@ -78,6 +78,19 @@ def test_reader_caps_requested_period() -> None:
     assert "reduced to 3600 seconds" in result.limitations[0]
 
 
+def test_default_log_volume_policy_accepts_three_day_window() -> None:
+    source = FakeLogSource()
+
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_metrics", metric="top_log_volume_by_namespace",
+        metric_scope="cluster", range_seconds=259_200, limit=10,
+    ))
+
+    assert "[259200s]" in source.queries[0]
+    assert result.observations[0].data["rangeSeconds"] == 259_200
+    assert not any("reduced" in item for item in result.limitations)
+
+
 def _client(tmp_path: Path, handler, **overrides) -> LokiQueryClient:
     token = tmp_path / "token"
     token.write_text("fixture-token", encoding="utf-8")

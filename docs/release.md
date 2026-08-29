@@ -170,6 +170,9 @@ namespace/Deployment/node top-consumer rankings, deterministic namespace ranking
 range/step/series/point/body bounds, label redaction, statistics and trend summaries, and a
 clear distinction between usage versus configured requests/limits. Tests must prove the model
 and browser cannot submit PromQL or receive the ServiceAccount token.
+Ingress metric gates must cover frontend aggregate bandwidth, backend namespace/Route bandwidth,
+the router's `exported_namespace` label normalization, inbound/outbound pairing, three-day bounded
+resolution, and native trend rendering with a peak timestamp.
 Deployment tests must cover ReplicaSet/Pod ownership joins rather than name-prefix matching.
 Log-volume gates must verify authenticated LokiStack application-tenant requests, server-owned
 `bytes_over_time` LogQL, vector validation, namespace/series/body/time bounds, deterministic
@@ -177,7 +180,7 @@ multi-cluster rendering, and the absence of raw log lines. Manifest tests must r
 `cluster-monitoring-view` and bind the investigator only to the read-only OpenShift Logging
 application, infrastructure, and audit ClusterRoles.
 Range-routing tests must prove compact and worded durations preserve the operator request,
-sub-five-minute and over-ceiling values are bounded, `today` is derived from UTC midnight, and
+including week-based periods; sub-five-minute and over-ceiling values are bounded, `today` is derived from UTC midnight, and
 transport deadlines report the configured timeout.
 Node tests must cover bounded top CPU/memory rankings, optional namespace narrowing, retained
 namespace/Pod/container labels, and operator-visible wording that does not misrepresent
@@ -424,6 +427,13 @@ summary must preserve the complete-coverage rule before confirming absence.
   back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
 - Failure-authority tests must prove an unavailable registered source plus failed shell verification
   cannot become an unsupported model claim about a missing metrics server or add-on.
+- Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,
+  suppresses a competing unrestricted shell call, preserves all-user wording, and enforces explicit
+  namespace, delete-operation, and Kubernetes resource filters in both Loki and local projection.
+- Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
+  registered ranking and original top-N while changing only the requested range. The log-volume
+  fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day
+  ceiling, and never attempt `pods/exec` or `logcli`.
 - Agent-loop tests must prove one empty Chat Completions turn triggers exactly one finalization
   retry, reuses existing tool results, and does not replay a completed runner command.
 

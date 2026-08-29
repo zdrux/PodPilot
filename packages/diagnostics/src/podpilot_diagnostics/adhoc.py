@@ -167,6 +167,7 @@ class ReadIntent(BaseModel):
         "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
         "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
         "ingress_request_rate", "ingress_error_rate",
+        "ingress_bytes_in", "ingress_bytes_out",
         "machineconfigpool_updated", "machineconfigpool_degraded",
         "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
         "workload_availability", "persistent_volume_inode_usage",
@@ -197,6 +198,7 @@ class ReadIntent(BaseModel):
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
     threshold_value: float | None = None
     audit_username: str | None = Field(default=None, max_length=512)
+    audit_resource: str | None = Field(default=None, max_length=253)
     audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
     audit_search_until_limit: bool = False
@@ -302,6 +304,12 @@ class ReadIntent(BaseModel):
                 "kafka_under_replicated_partitions": {"kafka_cluster"},
                 "ingress_request_rate": {"route", "ingress_controller"},
                 "ingress_error_rate": {"route", "ingress_controller"},
+                "ingress_bytes_in": {
+                    "cluster", "namespace", "route", "ingress_controller",
+                },
+                "ingress_bytes_out": {
+                    "cluster", "namespace", "route", "ingress_controller",
+                },
                 "machineconfigpool_updated": {"machine_config_pool"},
                 "machineconfigpool_degraded": {"machine_config_pool"},
                 "hpa_current_replicas": {"horizontal_pod_autoscaler"},
@@ -426,12 +434,15 @@ class ReadIntent(BaseModel):
                 for character in self.audit_username
             ):
                 raise ValueError("audit username must not contain control characters")
+            if self.audit_resource and not _METRIC_IDENTIFIER.fullmatch(self.audit_resource):
+                raise ValueError("audit resource must be an exact Kubernetes resource name")
             if self.audit_operation_scope is None or self.audit_outcome is None:
                 raise ValueError(
                     "query_audit_events requires operation scope and outcome semantics"
                 )
         elif any((
             self.audit_username,
+            self.audit_resource,
             self.audit_operation_scope,
             self.audit_outcome,
             self.audit_search_until_limit,
@@ -1367,9 +1378,11 @@ _NAMESPACE_TOP_CONSUMERS_QUERY = re.compile(
 )
 _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\b(?:which|what)\s+(?:namespaces?|projects?)\b.*?"
-    r"\b(?:producing|generating|writing)\b.*?\b(?:logs?|logging)\b|"
+    r"\b(?:produce|produces|produced|producing|generate|generates|generated|generating|"
+    r"write|writes|wrote|written|writing)\b.*?\b(?:logs?|logging)\b|"
     r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
-    r"\b(?:produce|produces|producing|generate|generates|generating|write|writes|writing)\b.*?"
+    r"\b(?:produce|produces|produced|producing|generate|generates|generated|generating|"
+    r"write|writes|wrote|written|writing)\b.*?"
     r"\b(?:most|highest|largest|biggest|greatest)\b.*?\b(?:logs?|logging)\b|"
     r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
     r"\bby\s+(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b|"
@@ -1392,7 +1405,7 @@ _NODE_UTILIZATION_RANKING_QUERY = re.compile(
 _METRIC_DURATION_QUERY = re.compile(
     r"\b(?:last|past|previous)\s+"
     r"(?:(?P<count>\d{1,3}|one|a|an)\s*)?"
-    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b",
+    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)\b",
     re.IGNORECASE,
 )
 _METRIC_TOP_LIMIT_QUERY = re.compile(
@@ -1528,6 +1541,7 @@ def _requested_metric_range_seconds(
         1 if unit in {"s", "sec", "secs", "second", "seconds"} else
         60 if unit in {"m", "min", "mins", "minute", "minutes"} else
         3600 if unit in {"h", "hr", "hrs", "hour", "hours"} else
+        604_800 if unit in {"w", "week", "weeks"} else
         86_400
     )
     return min(

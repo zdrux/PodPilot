@@ -73,6 +73,9 @@ Registered-source failures are authoritative only as failures: the model may not
 add-on, API, or resource is absent from an unavailable adapter. If neither a registered reader nor
 a successful shell verification produces evidence, normal code replaces the model prose with the
 exact redacted collection failures.
+Conversely, a successful terminal registered enrichment is authoritative for its declared scope.
+The unrestricted loop does not execute a competing shell tool call in that turn, avoiding both
+duplicate output and unnecessary command execution after the bounded source answered the request.
 
 For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators

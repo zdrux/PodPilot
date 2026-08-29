@@ -498,6 +498,18 @@ snapshot. The UI records that no historical average or peak was available. The e
 CLI commands are `oc adm top node` and `oc adm top pod`; `oc top` is not a valid OpenShift command.
 When all registered reads and shell verification attempts fail, Ask reports the exact collection
 errors without accepting an agent-invented explanation for why a source was unavailable.
+Successful terminal audit enrichment is rendered once and ends collection for that turn. Audit
+queries can be bounded simultaneously by namespace, operation class, outcome, username, and an
+explicit common Kubernetes resource kind; for example, “who deleted Pods in ai-ops” queries Loki
+for completed delete operations on `pods` in `ai-ops` across all users. It does not fall back to the
+nonexistent `events.audit.k8s.io` Kubernetes resource.
+
+Metric period follow-ups preserve the latest registered top CPU, top memory, or namespace
+application-log-volume ranking. For example, after a top-namespace log-volume result, “show the log
+volume over a 3 day period” repeats the same Loki query with `rangeSeconds=259200`; it does not exec
+into Loki Pods or require `pods/exec`. An explicitly different metric does not inherit the prior
+query. The shipped `adhoc_logs_max_range_seconds` ceiling is seven days (`604800` seconds); longer
+requests are reduced to that bound and reported as limited.
 
 Verify the deployed boundary:
 
@@ -1180,7 +1192,8 @@ Metric trend questions use authenticated Thanos `/api/v1/query_range` through th
 and throttling; memory working set, requests, and limits; network receive/transmit rate;
 container restarts; PVC byte/inode utilization; Pod readiness; workload availability; HPA
 current/desired/maximum replicas; Kafka topic message/byte rates, storage, consumer lag, and
-under-replicated partitions; Route or IngressController request/error rates; MachineConfigPool
+under-replicated partitions; Route or IngressController request/error rates; cluster-wide,
+namespace, Route, and IngressController inbound/outbound HAProxy bandwidth; MachineConfigPool
 updated/degraded state; ClusterOperator conditions; API server/scheduler/etcd request, queue,
 latency, leadership, and size signals; Prometheus target, ingestion, active-series, rule-evaluation,
 and Alertmanager state; and LokiStack ingestion and query latency. Pod, namespace, and Deployment
@@ -1195,12 +1208,18 @@ installed. Overall node CPU and memory utilization uses node-exporter metrics. F
 using everything” questions, PodPilot collects both the overall node value and top workload
 containers; a gap can represent kernel, filesystem cache, host services, or unmonitored work.
 Requests and limits are configuration gauges, not measured usage.
+Ingress bandwidth uses the router frontend byte totals for aggregate controller or cluster traffic
+and backend byte totals for namespace/Route breakdowns. PodPilot converts those cumulative HAProxy
+values to bytes per second with server-owned, reset-aware rate expressions. Explicit periods such as
+three days use bounded range queries and the native metric card renders the retained samples as a
+time-series chart with the observed peak value and timestamp. This does not represent packet capture,
+client identity, or traffic that bypasses OpenShift ingress.
 Requests to rank Nodes by CPU or memory use overall node-exporter utilization grouped by Node,
 honor the requested top-N limit, and default to five minutes when no period is supplied. This is
 not the same as ranking monitored Pods or containers that happen to run on a Node.
 When a metric question supplies no period, PodPilot uses a five-minute window and reports the
 requested current/average/minimum/maximum statistic from that bounded result. Explicit periods such
-as `15m`, `2h`, or `7d` remain authoritative within the configured maximum-range policy. A current
+as `15m`, `2h`, `7d`, or `last week` remain authoritative within the configured maximum-range policy. A current
 request already uses the five-minute minimum, so failure guidance does not recommend shortening it
 or ask the operator to author PromQL.
 

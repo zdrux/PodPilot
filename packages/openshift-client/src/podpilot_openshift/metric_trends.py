@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from statistics import fmean
 from typing import Callable
@@ -40,6 +41,8 @@ _UNITS = {
     "kafka_under_replicated_partitions": "partitions",
     "ingress_request_rate": "requests_per_second",
     "ingress_error_rate": "requests_per_second",
+    "ingress_bytes_in": "bytes_per_second",
+    "ingress_bytes_out": "bytes_per_second",
     "machineconfigpool_updated": "percent",
     "machineconfigpool_degraded": "machines",
     "hpa_current_replicas": "replicas",
@@ -81,6 +84,8 @@ _PREREQUISITES = {
     "kafka_under_replicated_partitions": "Strimzi Kafka Exporter metrics",
     "ingress_request_rate": "OpenShift router HAProxy metrics",
     "ingress_error_rate": "OpenShift router HAProxy metrics",
+    "ingress_bytes_in": "OpenShift router HAProxy metrics",
+    "ingress_bytes_out": "OpenShift router HAProxy metrics",
     "machineconfigpool_updated": "Machine Config Operator metrics",
     "machineconfigpool_degraded": "Machine Config Operator metrics",
     "hpa_current_replicas": "kube-state-metrics HPA metrics",
@@ -434,20 +439,59 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             intent, default_labels=("topic",),
         )
     if metric in {"ingress_request_rate", "ingress_error_rate"}:
-        selectors = []
+        selectors = ['namespace="openshift-ingress"']
         if intent.metric_scope == "route":
             selectors.extend([
-                f"namespace={json.dumps(intent.namespace)}",
+                f"exported_namespace={json.dumps(intent.namespace)}",
                 f"route={json.dumps(intent.name)}",
             ])
         else:
-            selectors.append(f'pod=~"router-{intent.name}-.*"')
+            controller = re.escape(str(intent.name))
+            selectors.append(f'pod=~"router-{controller}-.*"')
         if metric == "ingress_error_rate":
             selectors.append('code=~"5.."')
+        expression = (
+            "clamp_min(rate(haproxy_server_http_responses_total{"
+            f"{','.join(selectors)}}}[{window}]), 0)"
+        )
+        expression = (
+            f'label_replace({expression}, "namespace", "$1", '
+            '"exported_namespace", "(.+)")'
+        )
         return _domain_aggregate(
-            "rate(haproxy_server_http_responses_total{"
-            f"{','.join(selectors)}}}[{window}])",
+            expression,
             intent, default_labels=("namespace", "route"),
+        )
+    if metric in {"ingress_bytes_in", "ingress_bytes_out"}:
+        direction = "in" if metric == "ingress_bytes_in" else "out"
+        route_dimensions = (
+            intent.metric_scope in {"namespace", "route"}
+            or any(value in {"namespace", "route"} for value in intent.metric_group_by)
+        )
+        family = "backend" if route_dimensions else "frontend"
+        selectors = ['namespace="openshift-ingress"']
+        if intent.metric_scope == "namespace":
+            selectors.append(f"exported_namespace={json.dumps(intent.namespace)}")
+        elif intent.metric_scope == "route":
+            selectors.extend([
+                f"exported_namespace={json.dumps(intent.namespace)}",
+                f"route={json.dumps(intent.name)}",
+            ])
+        elif intent.metric_scope == "ingress_controller":
+            controller = re.escape(str(intent.name))
+            selectors.append(f'pod=~"router-{controller}-.*"')
+        expression = (
+            f"clamp_min(rate(haproxy_{family}_bytes_{direction}_total{{"
+            f"{','.join(selectors)}}}[{window}]), 0)"
+        )
+        if family == "backend":
+            expression = (
+                f'label_replace({expression}, "namespace", "$1", '
+                '"exported_namespace", "(.+)")'
+            )
+        default_labels = ("namespace", "route") if intent.metric_scope == "route" else ()
+        return _domain_aggregate(
+            expression, intent, default_labels=default_labels,
         )
     if metric in {"machineconfigpool_updated", "machineconfigpool_degraded"}:
         selector = f"pool={json.dumps(intent.name)}"

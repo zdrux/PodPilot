@@ -1051,6 +1051,8 @@ def test_pod_log_request_compiles_bounded_name_discovery(question: str) -> None:
     ("previous 2 hours", 7200),
     ("last 7d", 604800),
     ("past hour", 3600),
+    ("last week", 604800),
+    ("previous 2 weeks", 1209600),
     ("last 30 seconds", 300),
     ("last 999 days", 7_776_000),
 ])
@@ -1565,6 +1567,7 @@ def test_platform_metric_scopes_require_typed_coordinates() -> None:
     ("Rank namespaces by application log volume", 10),
     ("Show log bytes by namespace", 10),
     ("Show me the top 5 namespaces that produce the most amount of logs", 5),
+    ("Show the namespaces that produced the most logs", 10),
 ])
 def test_cluster_log_volume_question_compiles_to_typed_metric_query(
     question: str, expected_limit: int,
@@ -1580,6 +1583,23 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(
         metric_scope="cluster",
         range_seconds=300,
         limit=expected_limit,
+    )]
+
+
+def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> None:
+    planned = plan_known_read(
+        "which namespaces produce the most amount of logs over the last week?"
+    )
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        range_seconds=604_800,
+        limit=10,
     )]
 
 
@@ -1727,6 +1747,26 @@ def test_audit_query_accepts_cluster_wide_filters_without_username() -> None:
 
     assert intent.audit_username is None
     assert intent.audit_operation_scope == "deletes"
+
+
+@pytest.mark.parametrize("metric", ["ingress_bytes_in", "ingress_bytes_out"])
+def test_ingress_bandwidth_accepts_cluster_route_and_namespace_scopes(metric: str) -> None:
+    cluster = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="cluster",
+        metric_operation="trend", range_seconds=259_200,
+    )
+    namespace = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="namespace",
+        namespace="payments", metric_operation="trend",
+    )
+    route = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="route", kind="Route",
+        namespace="payments", name="api", metric_operation="trend",
+    )
+
+    assert cluster.range_seconds == 259_200
+    assert namespace.namespace == "payments"
+    assert route.name == "api"
 
 
 @pytest.mark.parametrize(

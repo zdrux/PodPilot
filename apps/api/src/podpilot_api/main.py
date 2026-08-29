@@ -33,8 +33,11 @@ from podpilot_api.markdown import render_safe_markdown
 from podpilot_api.model_provider import (
     AdHocAnswer,
     AdHocLogAnalysis,
+    AgentStep,
     InquirySemantics,
     InvestigationChatAnswer,
+    MetricRequestSemantics,
+    MetricTargetSemantics,
     ModelProfileConfig,
     ModelProvider,
     ModelProviderError,
@@ -2155,7 +2158,18 @@ def _deterministic_audit_answer(
                     )
                 ) + " |"
             )
-    username = str(observations[0]["data"].get("username") or "the supplied user")
+    first_data = observations[0]["data"]
+    raw_username = first_data.get("username")
+    username = str(raw_username) if raw_username else None
+    resource = str(first_data.get("resource") or "") or None
+    operation_scope = str(first_data.get("operationScope") or "all")
+    operation_label = {
+        "deletes": "delete operation(s)",
+        "mutations": "mutation operation(s)",
+        "all": "completed operation(s)",
+    }.get(operation_scope, "completed operation(s)")
+    audience = f"for `{username}`" if username else "across all users"
+    resource_label = f" on `{resource}`" if resource else ""
     range_seconds = max(
         (int(item["data"].get("rangeSeconds") or 0) for item in observations),
         default=0,
@@ -2163,7 +2177,7 @@ def _deterministic_audit_answer(
     if rows:
         content = "\n".join([
             "## Cluster audit activity", "",
-            f"Found {total} matching completed operation(s) for `{username}` in the "
+            f"Found {total} matching {operation_label}{resource_label} {audience} in the "
             f"searched {range_seconds}-second audit window.", "",
             "| Cluster | Time | User | Operation | Target | HTTP result |",
             "|---|---|---|---|---|---|",
@@ -2172,7 +2186,7 @@ def _deterministic_audit_answer(
     else:
         content = (
             "## Cluster audit activity\n\n"
-            f"No matching completed audit operations for `{username}` were observed in the "
+            f"No matching {operation_label}{resource_label} {audience} were observed in the "
             f"last {range_seconds} seconds. This is a bounded observation, not proof that no older "
             "activity exists."
         )
@@ -3591,6 +3605,103 @@ def _format_metric_value(value: object, unit: str) -> str:
     return f"{numeric:.3f} {unit}".strip()
 
 
+def _metric_trend_view(data: dict[str, object]) -> dict[str, object] | None:
+    """Normalize bounded samples into safe, server-rendered chart coordinates."""
+
+    raw_series = data.get("series")
+    if not isinstance(raw_series, list):
+        return None
+    operation = str(data.get("operation") or "show")
+    range_seconds = data.get("rangeSeconds")
+    if operation == "rank" or (
+        operation not in {"trend", "compare"}
+        and isinstance(range_seconds, int)
+        and range_seconds <= DEFAULT_METRIC_RANGE_SECONDS
+    ):
+        return None
+    parsed_series: list[dict[str, object]] = []
+    all_points: list[tuple[datetime, float]] = []
+    identity_keys = (
+        "namespace", "route", "pod", "frontend", "service", "job", "instance",
+        "node", "nodename", "topic", "consumer_group", "consumergroup",
+    )
+    for item in raw_series[:6]:
+        if not isinstance(item, dict) or not isinstance(item.get("points"), list):
+            continue
+        points: list[tuple[datetime, float]] = []
+        for point in item["points"]:
+            if not isinstance(point, dict):
+                continue
+            value = point.get("value")
+            timestamp = point.get("timestamp")
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not isinstance(timestamp, str)
+            ):
+                continue
+            try:
+                observed_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            points.append((observed_at.astimezone(timezone.utc), float(value)))
+        if len(points) < 2:
+            continue
+        labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+        identity_parts = [
+            str(labels[key]) for key in identity_keys
+            if labels.get(key) not in (None, "")
+        ]
+        identity = " / ".join(dict.fromkeys(identity_parts)) or str(
+            data.get("name") or data.get("namespace") or data.get("scope") or "cluster"
+        )
+        parsed_series.append({"identity": identity, "raw_points": points})
+        all_points.extend(points)
+    if not parsed_series or not all_points:
+        return None
+    start = min(point[0] for point in all_points)
+    end = max(point[0] for point in all_points)
+    time_span = max((end - start).total_seconds(), 1.0)
+    values = [point[1] for point in all_points]
+    floor = min(0.0, min(values))
+    ceiling = max(values)
+    value_span = max(ceiling - floor, 1e-12)
+    chart_series: list[dict[str, object]] = []
+    global_peak = max(all_points, key=lambda point: point[1])
+    for index, item in enumerate(parsed_series):
+        raw_points = item["raw_points"]
+        coordinates = [
+            (
+                42.0 + ((observed_at - start).total_seconds() / time_span) * 916.0,
+                202.0 - ((value - floor) / value_span) * 172.0,
+            )
+            for observed_at, value in raw_points
+        ]
+        peak = max(raw_points, key=lambda point: point[1])
+        peak_index = raw_points.index(peak)
+        chart_series.append({
+            "identity": item["identity"],
+            "class_index": index,
+            "polyline": " ".join(
+                f"{x:.2f},{y:.2f}" for x, y in coordinates
+            ),
+            "peak_x": f"{coordinates[peak_index][0]:.2f}",
+            "peak_y": f"{coordinates[peak_index][1]:.2f}",
+            "peak": _format_metric_value(peak[1], str(data.get("unit") or "")),
+        })
+    return {
+        "series": chart_series,
+        "start": start.strftime("%b %d %H:%M UTC"),
+        "end": end.strftime("%b %d %H:%M UTC"),
+        "peak_at": global_peak[0].strftime("%b %d %H:%M UTC"),
+        "peak": _format_metric_value(global_peak[1], str(data.get("unit") or "")),
+        "minimum": _format_metric_value(floor, str(data.get("unit") or "")),
+        "maximum": _format_metric_value(ceiling, str(data.get("unit") or "")),
+    }
+
+
 def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     ranking = data.get("ranking")
     if not isinstance(ranking, list) or not ranking:
@@ -3770,6 +3881,8 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "kafka_under_replicated_partitions": "Kafka Under-Replicated Partitions",
         "ingress_request_rate": "Ingress Request Rate",
         "ingress_error_rate": "Ingress 5xx Rate",
+        "ingress_bytes_in": "Ingress Bandwidth Received",
+        "ingress_bytes_out": "Ingress Bandwidth Sent",
         "machineconfigpool_updated": "MachineConfigPool Updated",
         "machineconfigpool_degraded": "MachineConfigPool Degraded Machines",
         "hpa_current_replicas": "HPA Current Replicas",
@@ -3877,6 +3990,7 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         add("Statistics", data.get("statistics"))
         add("Complete", data.get("complete"))
         view["metric_ranking"] = _metric_ranking_view(data)
+        view["metric_trend"] = _metric_trend_view(data)
     elif tool == "query_audit_events":
         add("User", data.get("username"))
         add("Case-insensitive match", data.get("caseInsensitive"))
@@ -5535,6 +5649,8 @@ def _latest_audit_query_semantics(
         username = str(raw_username).strip() if raw_username is not None else None
         raw_namespace = data.get("namespace")
         namespace = str(raw_namespace).strip() if raw_namespace is not None else None
+        raw_resource = data.get("resource")
+        resource = str(raw_resource).strip() if raw_resource is not None else None
         operation_scope = str(data.get("operationScope") or "")
         outcome = str(data.get("outcomeFilter") or "")
         if (
@@ -5548,6 +5664,9 @@ def _latest_audit_query_semantics(
             or (namespace is not None and not re.fullmatch(
                 r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", namespace
             ))
+            or (resource is not None and not re.fullmatch(
+                r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", resource
+            ))
         ):
             continue
         try:
@@ -5557,7 +5676,7 @@ def _latest_audit_query_semantics(
             continue
         if not 1 <= limit <= 100 or not 300 <= range_seconds <= 7_776_000:
             continue
-        return {
+        semantics = {
             "username": username,
             "namespace": namespace,
             "operation_scope": operation_scope,
@@ -5565,7 +5684,247 @@ def _latest_audit_query_semantics(
             "limit": limit,
             "range_seconds": range_seconds,
         }
+        if resource is not None:
+            semantics["resource"] = resource
+        return semantics
     return None
+
+
+def _latest_metric_query_semantics(
+    evidence: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Recover a recent registered ranking so elliptical period follow-ups stay typed."""
+
+    supported = {
+        "top_cpu_consumers", "top_memory_consumers",
+        "top_log_volume_by_namespace",
+        "ingress_bytes_in", "ingress_bytes_out",
+    }
+    for item in reversed(evidence):
+        if item.get("tool") != "query_metrics" or not isinstance(item.get("data"), dict):
+            continue
+        data = item["data"]
+        metric = str(data.get("metric") or "")
+        scope = str(data.get("scope") or "")
+        if metric not in supported or scope not in {
+            "cluster", "namespace", "deployment", "node", "node_role",
+        }:
+            continue
+        try:
+            range_seconds = int(data.get("rangeSeconds") or 0)
+            limit = int(data.get("limit") or 10)
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= range_seconds <= 7_776_000 or not 1 <= limit <= 100:
+            continue
+        return {
+            "metric": metric,
+            "scope": scope,
+            "namespace": data.get("namespace"),
+            "name": data.get("name"),
+            "kind": data.get("kind"),
+            "group_by": data.get("groupBy") or [],
+            "range_seconds": range_seconds or DEFAULT_METRIC_RANGE_SECONDS,
+            "limit": limit,
+        }
+    return None
+
+
+def _explicit_duration_seconds(question: str) -> int | None:
+    match = re.search(
+        r"(?i)\b(?P<count>\d{1,4})\s*(?:-|\s)?"
+        r"(?P<unit>seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+        question,
+    )
+    if not match:
+        return None
+    multiplier = {
+        "s": 1, "sec": 1, "second": 1,
+        "m": 60, "min": 60, "minute": 60,
+        "h": 3600, "hr": 3600, "hour": 3600,
+        "d": 86_400, "day": 86_400,
+        "w": 604_800, "week": 604_800,
+    }
+    unit = match.group("unit").casefold().rstrip("s")
+    unit = {"secs": "sec", "mins": "min", "hrs": "hr"}.get(unit, unit)
+    seconds = int(match.group("count")) * multiplier[unit]
+    return min(seconds, 7_776_000)
+
+
+def _explicit_ingress_bandwidth_inquiry(
+    question: str, inquiry: InquirySemantics | None,
+) -> InquirySemantics | None:
+    """Keep unambiguous router-bandwidth questions on the registered metric path."""
+
+    if not (
+        re.search(r"(?i)\b(?:ingress|router|haproxy|routes?)\b", question)
+        and re.search(r"(?i)\b(?:bandwidth|traffic|bytes?|throughput)\b", question)
+    ):
+        return None
+    target = MetricTargetSemantics(scope="cluster", kind="Cluster")
+    if inquiry is not None and inquiry.metric_request is not None:
+        candidate = inquiry.metric_request.target
+        if candidate.scope in {"cluster", "namespace", "route", "ingress_controller"}:
+            target = candidate
+    lowered = question.casefold()
+    inbound = bool(re.search(r"\b(?:inbound|incoming|received?|bytes?\s+in)\b", lowered))
+    outbound = bool(re.search(r"\b(?:outbound|outgoing|sent|bytes?\s+out)\b", lowered))
+    signals = (
+        ["ingress_bytes_in"] if inbound and not outbound else
+        ["ingress_bytes_out"] if outbound and not inbound else
+        ["ingress_bytes_in", "ingress_bytes_out"]
+    )
+    group_by: list[str] = []
+    if re.search(r"(?i)\bby\s+(?:namespace|project)s?\b", question):
+        group_by = ["namespace"]
+    elif re.search(r"(?i)\bby\s+routes?\b", question):
+        group_by = ["route"]
+    requested_range = _explicit_duration_seconds(question)
+    if requested_range is None and inquiry is not None:
+        if inquiry.metric_request is not None:
+            requested_range = inquiry.metric_request.range_seconds
+        requested_range = requested_range or inquiry.metric_range_seconds
+    trend_requested = requested_range is not None or bool(
+        re.search(r"(?i)\b(?:spikes?|trend|over\s+time|history|historical)\b", question)
+    )
+    return InquirySemantics(
+        mode="metrics", operation="metrics", cardinality="collection",
+        resource_query=target.kind,
+        object_name=target.name,
+        namespace=target.namespace,
+        needs_object_details=True,
+        evidence_goal="Read registered OpenShift ingress bandwidth metrics.",
+        metric_request=MetricRequestSemantics(
+            signals=signals,
+            target=target,
+            operation="trend" if trend_requested else "show",
+            group_by=group_by,
+            range_seconds=requested_range or DEFAULT_METRIC_RANGE_SECONDS,
+            result_limit=(
+                inquiry.metric_request.result_limit
+                if inquiry is not None and inquiry.metric_request is not None else 10
+            ),
+        ),
+    )
+
+
+def _resolve_metric_inquiry(
+    *, question: str, inquiry: InquirySemantics | None,
+    prior_metric_query: dict[str, object] | None,
+) -> InquirySemantics | None:
+    """Carry a registered ranking through a same-metric period follow-up."""
+
+    explicit_ingress = _explicit_ingress_bandwidth_inquiry(question, inquiry)
+    if explicit_ingress is not None:
+        return explicit_ingress
+    if prior_metric_query is None:
+        return inquiry
+    prior_metric = str(prior_metric_query.get("metric") or "")
+    category = {
+        "top_log_volume_by_namespace": "log",
+        "top_cpu_consumers": "cpu",
+        "top_memory_consumers": "memory",
+        "ingress_bytes_in": "ingress_bandwidth",
+        "ingress_bytes_out": "ingress_bandwidth",
+    }.get(prior_metric)
+    if category is None:
+        return inquiry
+    lowered = question.casefold()
+    explicit_categories = {
+        name for name, pattern in {
+            "log": r"\blogs?\b.{0,40}\bvolume\b|\bvolume\b.{0,40}\blogs?\b",
+            "cpu": r"\bcpu\b",
+            "memory": r"\bmemor(?:y|ies)\b",
+            "ingress_bandwidth": (
+                r"\b(?:ingress|router|route|haproxy)\b.{0,50}"
+                r"\b(?:bandwidth|traffic|bytes?)\b|"
+                r"\b(?:bandwidth|traffic|bytes?)\b.{0,50}"
+                r"\b(?:ingress|router|route|haproxy)\b"
+            ),
+        }.items() if re.search(pattern, lowered)
+    }
+    duration_seconds = _explicit_duration_seconds(question)
+    same_metric = category in explicit_categories
+    elliptical_period = duration_seconds is not None and not explicit_categories
+    if not same_metric and not elliptical_period:
+        return inquiry
+    requested_range = duration_seconds
+    if inquiry is not None and inquiry.mode == "metrics":
+        requested_range = (
+            inquiry.metric_request.range_seconds
+            if inquiry.metric_request is not None and inquiry.metric_request.range_seconds
+            else inquiry.metric_range_seconds or requested_range
+        )
+    if category == "ingress_bandwidth":
+        scope = str(prior_metric_query.get("scope") or "cluster")
+        target_kind = {
+            "cluster": "Cluster",
+            "namespace": "Namespace",
+            "route": "Route",
+            "ingress_controller": "IngressController",
+        }.get(scope)
+        if target_kind is None:
+            return inquiry
+        return InquirySemantics(
+            mode="metrics", operation="metrics", cardinality="collection",
+            resource_query=target_kind,
+            object_name=(
+                str(prior_metric_query.get("name"))
+                if prior_metric_query.get("name") else None
+            ),
+            namespace=(
+                str(prior_metric_query.get("namespace"))
+                if prior_metric_query.get("namespace") else None
+            ),
+            needs_object_details=True,
+            evidence_goal="Read ingress bandwidth over the requested period.",
+            metric_request=MetricRequestSemantics(
+                signals=["ingress_bytes_in", "ingress_bytes_out"],
+                target=MetricTargetSemantics(
+                    scope=scope,
+                    kind=target_kind,
+                    namespace=(
+                        str(prior_metric_query.get("namespace"))
+                        if prior_metric_query.get("namespace") else None
+                    ),
+                    name=(
+                        str(prior_metric_query.get("name"))
+                        if prior_metric_query.get("name") else None
+                    ),
+                ),
+                operation="trend",
+                group_by=list(prior_metric_query.get("group_by") or []),
+                range_seconds=int(
+                    requested_range or prior_metric_query.get("range_seconds")
+                    or DEFAULT_METRIC_RANGE_SECONDS
+                ),
+                result_limit=int(prior_metric_query.get("limit") or 10),
+            ),
+        )
+    return InquirySemantics(
+        mode="metrics", operation="metrics", cardinality="collection",
+        resource_query={
+            "log": "Namespace", "cpu": "Pod", "memory": "Pod",
+            "ingress_bandwidth": "IngressController",
+        }[category],
+        object_name=(
+            str(prior_metric_query.get("name"))
+            if prior_metric_query.get("name") else None
+        ),
+        namespace=(
+            str(prior_metric_query.get("namespace"))
+            if prior_metric_query.get("namespace") else None
+        ),
+        needs_object_details=True,
+        evidence_goal="Repeat the prior registered metric query over the requested period.",
+        metric_query=prior_metric,
+        metric_scope=str(prior_metric_query.get("scope")),
+        result_limit=int(prior_metric_query.get("limit") or 10),
+        metric_range_seconds=int(
+            requested_range or prior_metric_query.get("range_seconds")
+            or DEFAULT_METRIC_RANGE_SECONDS
+        ),
+    )
 
 
 def _resolve_audit_inquiry(
@@ -5587,6 +5946,7 @@ def _resolve_audit_inquiry(
         return inquiry
     merged = InquirySemantics.model_validate({
         **inquiry.model_dump(),
+        "resource_query": inquiry.resource_query or prior_audit_query.get("resource"),
         "namespace": inquiry.namespace or prior_audit_query.get("namespace"),
         "audit_username": inquiry.audit_username or prior_audit_query.get("username"),
         "audit_operation_scope": (
@@ -6055,6 +6415,19 @@ def _explicit_metric_question(question: str) -> bool:
     ))
 
 
+def _explicit_audit_filters(question: str) -> dict[str, object]:
+    """Recover unambiguous audit filters that must not depend on model wording."""
+
+    updates: dict[str, object] = {}
+    if re.search(r"(?i)\b(?:delete|deleted|deletes|deleting|removed?)\b", question):
+        updates["audit_operation_scope"] = "deletes"
+    for alias, resource in _AUDIT_RESOURCE_ALIASES.items():
+        if re.search(rf"(?i)\b{re.escape(alias)}\b", question):
+            updates["resource_query"] = resource
+            break
+    return updates
+
+
 async def _classify_ad_hoc_inquiry(
     *,
     model_provider: ModelProvider,
@@ -6064,6 +6437,7 @@ async def _classify_ad_hoc_inquiry(
     conversation: list[dict[str, str]],
     cluster_names: list[str],
     prior_audit_query: dict[str, object] | None = None,
+    prior_metric_query: dict[str, object] | None = None,
     evidence: list[dict[str, object]] | None = None,
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
@@ -6088,6 +6462,8 @@ async def _classify_ad_hoc_inquiry(
     }
     if prior_audit_query is not None:
         context["prior_audit_query"] = prior_audit_query
+    if prior_metric_query is not None:
+        context["prior_metric_query"] = prior_metric_query
     for attempt in range(1, 3):
         try:
             classified = await run_in_threadpool(classify, profile, api_key, context)
@@ -6099,6 +6475,10 @@ async def _classify_ad_hoc_inquiry(
             classified = _bind_inquiry_relationship_reference(
                 classified, relationship_references
             )
+            if classified.mode == "audit":
+                explicit_audit_filters = _explicit_audit_filters(question)
+                if explicit_audit_filters:
+                    classified = classified.model_copy(update=explicit_audit_filters)
             if _explicit_metric_question(question) and classified.mode != "metrics":
                 raise ModelProviderError(
                     "The question explicitly requests telemetry; select metrics mode instead "
@@ -6179,6 +6559,7 @@ def _semantic_metric_read_plan(
                     "kafka_topic_bytes_out", "kafka_topic_storage",
                     "kafka_consumer_lag", "kafka_under_replicated_partitions",
                     "ingress_request_rate", "ingress_error_rate",
+                    "ingress_bytes_in", "ingress_bytes_out",
                     "cluster_operator_available", "cluster_operator_degraded",
                     "cluster_operator_progressing", "apiserver_request_rate",
                     "apiserver_error_rate", "apiserver_latency",
@@ -6237,6 +6618,12 @@ def _semantic_metric_read_plan(
             "kafka_under_replicated_partitions": {"kafka_cluster"},
             "ingress_request_rate": {"route", "ingress_controller"},
             "ingress_error_rate": {"route", "ingress_controller"},
+            "ingress_bytes_in": {
+                "cluster", "namespace", "route", "ingress_controller",
+            },
+            "ingress_bytes_out": {
+                "cluster", "namespace", "route", "ingress_controller",
+            },
             "machineconfigpool_updated": {"machine_config_pool"},
             "machineconfigpool_degraded": {"machine_config_pool"},
             "hpa_current_replicas": {"horizontal_pod_autoscaler"},
@@ -6308,6 +6695,8 @@ def _semantic_metric_read_plan(
             "kafka_under_replicated_partitions": {"topic", "partition"},
             "ingress_request_rate": {"namespace", "route", "code"},
             "ingress_error_rate": {"namespace", "route", "code"},
+            "ingress_bytes_in": {"namespace", "route"},
+            "ingress_bytes_out": {"namespace", "route"},
             "cluster_operator_available": {"operator"},
             "cluster_operator_degraded": {"operator"},
             "cluster_operator_progressing": {"operator"},
@@ -6471,6 +6860,26 @@ def _semantic_metric_read_plan(
     )
 
 
+_AUDIT_RESOURCE_ALIASES = {
+    "pod": "pods", "pods": "pods",
+    "deployment": "deployments", "deployments": "deployments",
+    "statefulset": "statefulsets", "statefulsets": "statefulsets",
+    "daemonset": "daemonsets", "daemonsets": "daemonsets",
+    "service": "services", "services": "services",
+    "route": "routes", "routes": "routes",
+    "configmap": "configmaps", "configmaps": "configmaps",
+    "secret": "secrets", "secrets": "secrets",
+    "node": "nodes", "nodes": "nodes",
+    "persistentvolumeclaim": "persistentvolumeclaims",
+    "persistentvolumeclaims": "persistentvolumeclaims",
+}
+
+
+def _audit_resource_name(resource_query: str | None) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]", "", str(resource_query or "").casefold())
+    return _AUDIT_RESOURCE_ALIASES.get(normalized)
+
+
 def _semantic_audit_read_plan(
     inquiry: InquirySemantics | None,
     *,
@@ -6486,12 +6895,16 @@ def _semantic_audit_read_plan(
     range_seconds = inquiry.audit_range_seconds or initial_range_seconds
     operation_scope = inquiry.audit_operation_scope or "all"
     outcome = inquiry.audit_outcome or "all"
+    resource = _audit_resource_name(inquiry.resource_query)
     operation_label = {
         "all": "audit operations",
         "mutations": "mutation audit operations",
         "deletes": "delete audit operations",
     }[operation_scope]
-    target_label = f" in namespace {inquiry.namespace}" if inquiry.namespace else ""
+    target_label = (
+        (f" on {resource}" if resource else "")
+        + (f" in namespace {inquiry.namespace}" if inquiry.namespace else "")
+    )
     return (
         ReadPlan(
             goal_type="logs",
@@ -6506,6 +6919,7 @@ def _semantic_audit_read_plan(
                 tool="query_audit_events",
                 namespace=inquiry.namespace,
                 audit_username=inquiry.audit_username,
+                audit_resource=resource,
                 audit_operation_scope=operation_scope,
                 audit_outcome=outcome,
                 audit_search_until_limit=search_until_limit,
@@ -8354,7 +8768,9 @@ def create_app(
                     "the source was unavailable; never invent its cause or claim that a metrics "
                     "server, add-on, API, or resource is absent unless command output proves it. "
                     "For OpenShift current resource usage, the CLI forms are `oc adm top node` and "
-                    "`oc adm top pod`, not `oc top`. You still have unrestricted execute_shell "
+                    "`oc adm top pod`, not `oc top`. When preferred_presentation is a terminal "
+                    "registered answer, return a short acknowledgement without a tool call; normal "
+                    "code will render that answer exactly once. You still have unrestricted execute_shell "
                     "access for verification, extension, mutation, or unrelated work.\n\n"
                     + serialized_enrichment
                 ),
@@ -8371,47 +8787,70 @@ def create_app(
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
         empty_step_retry_used = False
+        terminal_registered_answer = (
+            preferred_evidence_view in {"metric_ranking", "deterministic_primary"}
+            and bool(preferred_presentation)
+        )
 
         while True:
-            if progress:
-                await progress("agent_thinking", "The unrestricted agent is choosing its next action.")
-            model_started = asyncio.get_running_loop().time()
-            model_task = asyncio.create_task(
-                run_in_threadpool(
-                    provider.next_agent_step,
-                    profile,
-                    api_key,
-                    messages,
-                )
-            )
-            while True:
-                done, _ = await asyncio.wait(
-                    {model_task},
-                    timeout=app_settings.agent_heartbeat_seconds,
-                )
-                if model_task in done:
-                    step = model_task.result()
-                    break
-                elapsed_seconds = round(asyncio.get_running_loop().time() - model_started)
-                LOGGER.info(
-                    "podpilot.agentic.model_heartbeat actor=%s conversation_id=%s "
-                    "elapsed_seconds=%s timeout_seconds=%s",
-                    username,
-                    conversation_id,
-                    elapsed_seconds,
-                    profile.timeout_seconds,
-                )
+            if terminal_registered_answer:
                 if progress:
                     await progress(
-                        "agent_thinking",
-                        f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
-                        f"{profile.timeout_seconds:g}s provider timeout).",
+                        "finding",
+                        "The registered evidence fully answers this request.",
                     )
-                if elapsed_seconds >= profile.timeout_seconds + 10:
-                    model_task.cancel()
-                    raise ModelProviderError(
-                        "The unrestricted agent model call exceeded its configured timeout."
+                step = AgentStep(
+                    assistant_message={
+                        "role": "assistant",
+                        "content": "The registered evidence fully answers this request.",
+                    },
+                    content="The registered evidence fully answers this request.",
+                    tool_calls=(),
+                )
+            else:
+                if progress:
+                    await progress(
+                        "agent_thinking", "The unrestricted agent is choosing its next action."
                     )
+                model_started = asyncio.get_running_loop().time()
+                model_task = asyncio.create_task(
+                    run_in_threadpool(
+                        provider.next_agent_step,
+                        profile,
+                        api_key,
+                        messages,
+                    )
+                )
+                while True:
+                    done, _ = await asyncio.wait(
+                        {model_task},
+                        timeout=app_settings.agent_heartbeat_seconds,
+                    )
+                    if model_task in done:
+                        step = model_task.result()
+                        break
+                    elapsed_seconds = round(
+                        asyncio.get_running_loop().time() - model_started
+                    )
+                    LOGGER.info(
+                        "podpilot.agentic.model_heartbeat actor=%s conversation_id=%s "
+                        "elapsed_seconds=%s timeout_seconds=%s",
+                        username,
+                        conversation_id,
+                        elapsed_seconds,
+                        profile.timeout_seconds,
+                    )
+                    if progress:
+                        await progress(
+                            "agent_thinking",
+                            f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
+                            f"{profile.timeout_seconds:g}s provider timeout).",
+                        )
+                    if elapsed_seconds >= profile.timeout_seconds + 10:
+                        model_task.cancel()
+                        raise ModelProviderError(
+                            "The unrestricted agent model call exceeded its configured timeout."
+                        )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
                 if not agent_content:
@@ -8446,9 +8885,13 @@ def create_app(
                 authoritative_failure = _authoritative_unrestricted_failure(activity)
                 if authoritative_failure is not None:
                     content = authoritative_failure
+                elif terminal_registered_answer:
+                    content = str(preferred_presentation)
                 if (
                     preferred_presentation
-                    and preferred_evidence_view != "metric_ranking"
+                    and preferred_evidence_view not in {
+                        "metric_ranking", "deterministic_primary",
+                    }
                     and preferred_presentation not in agent_content
                     and authoritative_failure is None
                 ):
@@ -8833,6 +9276,7 @@ def create_app(
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
                     enrichment_limitations: list[str] = []
+                    enrichment_terminal = True
                     agent_targets: dict[
                         str, tuple[str, AgentClusterConnection | None]
                     ] = {}
@@ -8890,6 +9334,7 @@ def create_app(
                                 "planning", "Selecting registered enrichment capabilities."
                             )
                         prior_audit_query = _latest_audit_query_semantics(evidence)
+                        prior_metric_query = _latest_metric_query_semantics(evidence)
                         inquiry = await _classify_ad_hoc_inquiry(
                             model_provider=provider,
                             profile=profile_snapshot,
@@ -8898,6 +9343,7 @@ def create_app(
                             conversation=history,
                             cluster_names=[item.name for item in selected_clusters],
                             prior_audit_query=prior_audit_query,
+                            prior_metric_query=prior_metric_query,
                             evidence=evidence,
                         )
                         inquiry = _resolve_audit_inquiry(
@@ -8905,6 +9351,11 @@ def create_app(
                             inquiry=inquiry,
                             prior_audit_query=prior_audit_query,
                             max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
+                        )
+                        inquiry = _resolve_metric_inquiry(
+                            question=source_question,
+                            inquiry=inquiry,
+                            prior_metric_query=prior_metric_query,
                         )
                     semantic_metric_plan = _semantic_metric_read_plan(inquiry)
                     semantic_audit_plan = _semantic_audit_read_plan(
@@ -8993,7 +9444,8 @@ def create_app(
                                         )
                             if cluster_plan is None:
                                 continue
-                            enrichment_plan, _ = cluster_plan
+                            enrichment_plan, plan_terminal = cluster_plan
+                            enrichment_terminal = enrichment_terminal and plan_terminal
                             collected = await _collect_unrestricted_known_reads(
                                 cluster_reader=reader,
                                 plan=enrichment_plan,
@@ -9040,6 +9492,22 @@ def create_app(
                             question=provider_question,
                         )
                     )
+                    preferred_evidence_view = _preferred_metric_evidence_view(
+                        evidence=enrichment_evidence,
+                        activity=enrichment_activity,
+                    )
+                    deterministic_reads_succeeded = bool(enrichment_activity) and all(
+                        item.get("status") == "succeeded"
+                        for item in enrichment_activity
+                        if item.get("source") == "deterministic_enrichment"
+                    )
+                    if (
+                        deterministic_answer is not None
+                        and enrichment_terminal
+                        and deterministic_reads_succeeded
+                        and preferred_evidence_view is None
+                    ):
+                        preferred_evidence_view = "deterministic_primary"
                     provider_phase = "unrestricted_agent"
                     return await _execute_unrestricted_agent_turn(
                         engine=engine,
@@ -9058,14 +9526,12 @@ def create_app(
                             str(deterministic_answer["content"])
                             if deterministic_answer is not None else None
                         ),
-                        preferred_evidence_view=_preferred_metric_evidence_view(
-                            evidence=enrichment_evidence,
-                            activity=enrichment_activity,
-                        ),
+                        preferred_evidence_view=preferred_evidence_view,
                         agent_targets=agent_targets,
                     )
                 inquiry = None
                 prior_audit_query = _latest_audit_query_semantics(evidence)
+                prior_metric_query = _latest_metric_query_semantics(evidence)
                 if not followup_action:
                     if progress:
                         await progress("planning", "Understanding the investigation request.")
@@ -9077,6 +9543,7 @@ def create_app(
                         conversation=history,
                         cluster_names=[item.name for item in selected_clusters],
                         prior_audit_query=prior_audit_query,
+                        prior_metric_query=prior_metric_query,
                         evidence=evidence,
                     )
                     inquiry = _resolve_audit_inquiry(
@@ -9084,6 +9551,11 @@ def create_app(
                         inquiry=inquiry,
                         prior_audit_query=prior_audit_query,
                         max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
+                    )
+                    inquiry = _resolve_metric_inquiry(
+                        question=source_question,
+                        inquiry=inquiry,
+                        prior_metric_query=prior_metric_query,
                     )
                 provider_phase = "bounded_read_collection"
                 if not selected_clusters:
@@ -12493,6 +12965,9 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
+                prior_metric_query = _latest_metric_query_semantics(
+                    list(analysis_payload.get("observations", []))
+                )
                 inquiry = await _classify_ad_hoc_inquiry(
                     model_provider=provider,
                     profile=profile_snapshot,
@@ -12500,7 +12975,13 @@ def create_app(
                     question=message_text,
                     conversation=conversation,
                     cluster_names=[app_settings.cluster_name],
+                    prior_metric_query=prior_metric_query,
                     evidence=list(analysis_payload.get("observations", [])),
+                )
+                inquiry = _resolve_metric_inquiry(
+                    question=message_text,
+                    inquiry=inquiry,
+                    prior_metric_query=prior_metric_query,
                 )
                 original_evidence_ids = {
                     str(item.get("id")) for item in analysis_payload.get("observations", [])

@@ -49,7 +49,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
   byte counts and truncation flags.
-  The model-free suite passes locally with 645 tests and 82% aggregate coverage.
+  The model-free suite passes locally with 665 tests and 82% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
@@ -60,9 +60,19 @@ records remain, but execution now awaits a separate approval-gated action servic
   render through one native evidence card instead of stacking deterministic Markdown, a duplicate
   model table, and the card. Card selection is data-driven for every renderable metric shape,
   including node, storage, Kafka, and ingress results, rather than hard-coded to top CPU. The
+  native card now also renders bounded timestamped samples as an accessible time-series chart for
+  trend and extended-period requests, including the observed peak value and UTC timestamp.
+  Registered ingress bandwidth reads pair inbound and outbound HAProxy counters: frontend series
+  cover cluster/IngressController totals, while backend series provide normalized namespace/Route
+  breakdowns through the router's `exported_namespace` label. Exact compiled queries were verified
+  live against SNO as `podpilot-investigator` without router Secret or Pod exec access. The
   observed top-five namespace
   log-volume wording now routes to the Loki application-log payload-byte reader rather than using
-  Kubernetes Events as a proxy, while arbitrary shell access remains available afterward. The
+  Kubernetes Events as a proxy; arbitrary shell access remains available for non-terminal or
+  unrelated requests. The
+  deterministic wording accepts produce/produced/producing variants and week-based periods. Once a
+  terminal metric ranking succeeds, unrestricted mode renders it directly without invoking the
+  model shell loop, preventing redundant `oc exec`, `oc logs`, or empty-finalization failures. The
   current SNO fixture has no `openshift-logging` namespace, so its live probe truthfully reports
   that Loki is unavailable; clusters with the registered LokiStack integration render the byte
   volume and average-rate table.
@@ -71,6 +81,15 @@ records remain, but execution now awaits a separate approval-gated action servic
   with the lost history called out explicitly. When every registered read and shell verification
   fails, normal code reports the exact failures and suppresses unsupported model explanations such
   as claiming a metrics add-on is absent.
+- Successful terminal registered enrichments now render once and suppress a competing unrestricted
+  shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
+  outcome, username, and time range; an all-user Pod deletion query no longer shows an appended
+  `events.audit.k8s.io` RBAC failure or the misleading phrase “the supplied user.”
+- Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
+  namespace log-volume ranking. The original scope and top-N are retained while only the range is
+  replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting
+  `pods/exec` or `logcli`. The shipped log-analytics range ceiling is now seven days, allowing the
+  requested three-day window while retaining a bounded server-owned LogQL query.
 - Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
   API logs the anomaly, sends one corrective request using the existing tool results, and then
   either persists the recovered answer or fails explicitly after a second empty turn. It does not

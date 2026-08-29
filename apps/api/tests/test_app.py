@@ -48,6 +48,8 @@ from podpilot_api.main import (
     _investigation_unit_cost,
     _inventory_plan_scope_errors,
     _latest_audit_query_semantics,
+    _latest_metric_query_semantics,
+    _metric_trend_view,
     _merge_validated_recommendations,
     _model_log_analysis_section,
     _model_fact_cards,
@@ -60,6 +62,7 @@ from podpilot_api.main import (
     _semantic_audit_read_plan,
     _semantic_resource_read_plan,
     _resolve_audit_inquiry,
+    _resolve_metric_inquiry,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -864,6 +867,30 @@ def test_model_selected_audit_capability_without_username_queries_all_users() ->
         audit_search_until_limit=True,
         range_seconds=3600,
         limit=10,
+    )]
+
+
+def test_audit_compiler_scopes_delete_query_to_explicit_resource_kind() -> None:
+    compiled = _semantic_audit_read_plan(
+        InquirySemantics(
+            mode="audit", operation="audit", cardinality="collection",
+            resource_query="Pod", namespace="ai-ops",
+            audit_operation_scope="deletes", audit_outcome="all",
+            evidence_goal="Find who deleted Pods in ai-ops.",
+        ),
+        default_limit=20,
+        initial_range_seconds=3600,
+    )
+
+    assert compiled is not None
+    assert compiled[0].scope_summary == (
+        "List the last 20 delete audit operations on pods in namespace ai-ops "
+        "across all users."
+    )
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_audit_events", namespace="ai-ops", audit_resource="pods",
+        audit_operation_scope="deletes", audit_outcome="all",
+        audit_search_until_limit=True, range_seconds=3600, limit=20,
     )]
 
 
@@ -3431,6 +3458,32 @@ def test_deterministic_audit_answer_uses_only_current_turn_audit_evidence() -> N
     assert "Node" not in answer["content"]
 
 
+def test_deterministic_audit_answer_describes_all_user_resource_filter() -> None:
+    evidence = [{
+        "id": "audit-pods", "tool": "query_audit_events", "cluster_name": "Central",
+        "data": {
+            "username": None, "resource": "pods", "operationScope": "deletes",
+            "rangeSeconds": 3600, "events": [{
+                "timestamp": "2026-08-27T11:59:00+00:00", "username": "alice",
+                "verb": "delete", "resource": "pods", "namespace": "ai-ops",
+                "name": "api-7d9", "responseCode": 200,
+            }],
+        },
+    }]
+
+    answer = _deterministic_audit_answer(
+        evidence=evidence,
+        activity=[{
+            "status": "succeeded", "tool": "query_audit_events",
+            "evidence_ids": ["audit-pods"],
+        }],
+    )
+
+    assert answer is not None
+    assert "delete operation(s) on `pods` across all users" in answer["content"]
+    assert "the supplied user" not in answer["content"]
+
+
 def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
     compiled = _semantic_metric_read_plan(InquirySemantics(
         mode="metrics",
@@ -3453,6 +3506,82 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
         range_seconds=300,
         limit=10,
     )]
+
+
+def test_metric_period_followup_reuses_prior_log_volume_ranking() -> None:
+    prior = _latest_metric_query_semantics([{
+        "id": "log-volume-old", "tool": "query_metrics", "data": {
+            "metric": "top_log_volume_by_namespace", "scope": "cluster",
+            "rangeSeconds": 300, "limit": 10,
+        },
+    }])
+
+    resolved = _resolve_metric_inquiry(
+        question="Can you show me the log volume over a 3 day period?",
+        inquiry=InquirySemantics(
+            mode="metrics", operation="metrics", resource_query="Namespace",
+            needs_object_details=True, evidence_goal="Show log volume for three days.",
+            metric_request=MetricRequestSemantics(
+                target=MetricTargetSemantics(scope="cluster", kind="Cluster"),
+                signals=["application_log_volume"], operation="show",
+                range_seconds=259_200,
+            ),
+        ),
+        prior_metric_query=prior,
+    )
+
+    assert resolved is not None
+    assert resolved.metric_request is None
+    assert resolved.metric_query == "top_log_volume_by_namespace"
+    assert resolved.metric_scope == "cluster"
+    assert resolved.metric_range_seconds == 259_200
+    compiled = _semantic_metric_read_plan(resolved)
+    assert compiled is not None
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_metrics", metric="top_log_volume_by_namespace",
+        metric_scope="cluster", range_seconds=259_200, limit=10,
+    )]
+
+
+def test_metric_period_followup_reuses_ingress_bandwidth_as_both_directions() -> None:
+    prior = _latest_metric_query_semantics([{
+        "id": "ingress-out-old", "tool": "query_metrics", "data": {
+            "metric": "ingress_bytes_out", "scope": "cluster",
+            "operation": "trend", "groupBy": [], "rangeSeconds": 300, "limit": 10,
+        },
+    }])
+
+    resolved = _resolve_metric_inquiry(
+        question="Can you show that over a 3 day period to find a spike?",
+        inquiry=None,
+        prior_metric_query=prior,
+    )
+
+    assert resolved is not None
+    assert resolved.metric_request is not None
+    assert resolved.metric_request.signals == ["ingress_bytes_in", "ingress_bytes_out"]
+    assert resolved.metric_request.operation == "trend"
+    assert resolved.metric_request.range_seconds == 259_200
+
+
+def test_metric_period_followup_does_not_reuse_a_different_metric() -> None:
+    prior = {
+        "metric": "top_cpu_consumers", "scope": "namespace",
+        "namespace": "payments", "name": None,
+        "range_seconds": 300, "limit": 5,
+    }
+    inquiry = InquirySemantics(
+        mode="metrics", operation="metrics", resource_query="Namespace",
+        needs_object_details=True, evidence_goal="Show log volume.",
+        metric_query="top_log_volume_by_namespace", metric_scope="cluster",
+        metric_range_seconds=259_200,
+    )
+
+    assert _resolve_metric_inquiry(
+        question="show log volume over three days",
+        inquiry=inquiry,
+        prior_metric_query=prior,
+    ) == inquiry
 
 
 def test_log_volume_evidence_view_and_deterministic_answer() -> None:
@@ -3621,6 +3750,72 @@ def test_native_metric_card_is_not_forced_for_empty_or_non_metric_evidence() -> 
             "evidence_ids": ["pod-1"],
         }],
     ) is None
+
+
+def test_metric_trend_view_renders_bounded_points_and_peak_timestamp() -> None:
+    view = _metric_trend_view({
+        "metric": "ingress_bytes_out",
+        "scope": "cluster",
+        "unit": "bytes_per_second",
+        "operation": "trend",
+        "rangeSeconds": 259_200,
+        "series": [{
+            "labels": {},
+            "points": [
+                {"timestamp": "2026-08-26T12:00:00+00:00", "value": 1024.0},
+                {"timestamp": "2026-08-27T12:00:00+00:00", "value": 8192.0},
+                {"timestamp": "2026-08-29T12:00:00+00:00", "value": 2048.0},
+            ],
+        }],
+    })
+
+    assert view is not None
+    assert view["peak"] == "8.00 KiB/s"
+    assert view["peak_at"] == "Aug 27 12:00 UTC"
+    assert view["start"] == "Aug 26 12:00 UTC"
+    assert view["end"] == "Aug 29 12:00 UTC"
+    assert len(view["series"]) == 1
+    assert str(view["series"][0]["polyline"]).count(" ") == 2
+
+
+def test_ingress_bandwidth_semantics_compile_both_directions() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", operation="metrics", resource_query="Cluster",
+        needs_object_details=True, evidence_goal="Show ingress bandwidth for three days.",
+        metric_request=MetricRequestSemantics(
+            target=MetricTargetSemantics(scope="cluster", kind="Cluster"),
+            signals=["ingress_bytes_in", "ingress_bytes_out"],
+            operation="trend", range_seconds=259_200,
+        ),
+    ))
+
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert [(intent.metric, intent.metric_scope, intent.metric_operation) for intent in plan.intents] == [
+        ("ingress_bytes_in", "cluster", "trend"),
+        ("ingress_bytes_out", "cluster", "trend"),
+    ]
+    assert all(intent.range_seconds == 259_200 for intent in plan.intents)
+
+
+def test_explicit_ingress_bandwidth_overrides_loose_classifier_output() -> None:
+    resolved = _resolve_metric_inquiry(
+        question="Show ingress bandwidth over a 3 day period and identify a spike",
+        inquiry=InquirySemantics(
+            mode="explain", operation="explain", cardinality="unknown",
+            needs_object_details=False, evidence_goal="Explain bandwidth.",
+        ),
+        prior_metric_query=None,
+    )
+
+    assert resolved is not None
+    assert resolved.mode == "metrics"
+    assert resolved.metric_request is not None
+    assert resolved.metric_request.signals == ["ingress_bytes_in", "ingress_bytes_out"]
+    assert resolved.metric_request.operation == "trend"
+    assert resolved.metric_request.range_seconds == 259_200
+    assert resolved.metric_request.target.scope == "cluster"
 
 
 def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
@@ -7268,13 +7463,8 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
 
         def next_agent_step(self, profile, api_key, messages):
             self.agent_messages.append(list(messages))
-            return AgentStep(
-                assistant_message={
-                    "role": "assistant",
-                    "content": "The Loki-backed namespace log-volume ranking is shown above.",
-                },
-                content="The Loki-backed namespace log-volume ranking is shown above.",
-                tool_calls=(),
+            raise AssertionError(
+                "terminal log-volume evidence must bypass the unrestricted model loop"
             )
 
     class LogVolumeExplorer:
@@ -7284,7 +7474,7 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         def execute(self, intent: ReadIntent) -> ReadResult:
             self.calls.append(intent)
             return ReadResult((AdHocObservation(
-                id="log-volume-enrichment-1",
+                id=f"log-volume-enrichment-{len(self.calls)}",
                 tool="query_metrics",
                 summary="Ranked namespaces by application-log payload volume.",
                 source="loki:application/query/top_log_volume_by_namespace",
@@ -7294,8 +7484,8 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
                     "scope": "cluster",
                     "unit": "bytes",
                     "averageUnit": "bytes_per_second",
-                    "rangeSeconds": 300,
-                    "limit": 5,
+                    "rangeSeconds": intent.range_seconds,
+                    "limit": intent.limit,
                     "complete": True,
                     "ranking": [{
                         "labels": {"namespace": "payments"},
@@ -7344,7 +7534,7 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
             data={
-                "message": "Show me the top 5 namespaces that produce the most amount of logs"
+                "message": "which namespaces produce the most amount of logs over the last week?"
             },
             follow_redirects=False,
         )
@@ -7357,24 +7547,31 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         assert "payments" in rendered.text
         assert "Kubernetes events" not in rendered.text
         assert rendered.text.count("<table") == 1
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Can you show me the log volume over a 3 day period?"},
+            follow_redirects=False,
+        )
+        followup = client.get(
+            continued.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+        assert "Top Application-Log Volume by Namespace" in followup.text
+        assert "pods/exec" not in followup.text
+        assert "logcli" not in followup.text
 
-    assert explorer.calls == [ReadIntent(
-        tool="query_metrics",
-        metric="top_log_volume_by_namespace",
-        metric_scope="cluster",
-        range_seconds=300,
-        limit=5,
-    )]
-    enrichment_message = provider.agent_messages[0][1]
-    assert enrichment_message["role"] == "system"
-    assert "loki:application/query/top_log_volume_by_namespace" in str(
-        enrichment_message["content"]
-    )
-    assert "Payload volume" in str(enrichment_message["content"])
-    assert "Kubernetes Event counts" in str(enrichment_message["content"])
-    assert "Do not reproduce the enrichment as another table" in str(
-        enrichment_message["content"]
-    )
+    assert explorer.calls == [
+        ReadIntent(
+            tool="query_metrics", metric="top_log_volume_by_namespace",
+            metric_scope="cluster", range_seconds=604_800, limit=10,
+        ),
+        ReadIntent(
+            tool="query_metrics", metric="top_log_volume_by_namespace",
+            metric_scope="cluster", range_seconds=259_200, limit=10,
+        ),
+    ]
+    assert provider.agent_messages == []
     engine = build_engine(settings)
     with Session(engine) as db_session:
         conversation = db_session.scalar(select(AdHocConversation))
@@ -7382,14 +7579,129 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
             AdHocMessage.role == "assistant"
         ))
         assert conversation is not None
-        assert json.loads(conversation.evidence_json)[0]["id"] == "log-volume-enrichment-1"
+        evidence_items = json.loads(conversation.evidence_json)
+        assert [item["id"] for item in evidence_items] == [
+            "log-volume-enrichment-1", "log-volume-enrichment-2",
+        ]
         assert assistant is not None
         assert assistant.answer_mode == "evidence_based"
-        assert json.loads(assistant.citations_json) == ["log-volume-enrichment-1"]
         activity = json.loads(assistant.tool_activity_json)
         assert activity["reads"][0]["source"] == "deterministic_enrichment"
         assert activity["reads"][0]["status"] == "succeeded"
         assert activity["preferred_evidence_view"] == "metric_ranking"
+    engine.dispose()
+
+
+def test_terminal_unrestricted_audit_enrichment_suppresses_duplicate_shell_path(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, _profile, _api_key, _context):
+            return InquirySemantics(
+                mode="audit", operation="audit", cardinality="collection",
+                resource_query="Pod", namespace="ai-ops",
+                audit_operation_scope="all", audit_outcome="all",
+                evidence_goal="Find who deleted Pods in ai-ops.",
+            )
+
+        def next_agent_step(self, _profile, _api_key, _messages):
+            arguments = json.dumps({
+                "command": "oc get events.audit.k8s.io --all-namespaces",
+            })
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{
+                        "id": "duplicate-audit-call", "type": "function",
+                        "function": {"name": "execute_shell", "arguments": arguments},
+                    }],
+                },
+                content=None,
+                tool_calls=(AgentToolCall(
+                    id="duplicate-audit-call", name="execute_shell", arguments=arguments,
+                ),),
+            )
+
+    class AuditExplorer:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="audit-delete-pod", tool="query_audit_events",
+                summary="Read one matching Pod delete.",
+                source="loki:audit/query/user_actions",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "username": None, "namespace": "ai-ops", "resource": "pods",
+                    "operationScope": "deletes", "outcomeFilter": "all",
+                    "rangeSeconds": 3600, "events": [{
+                        "timestamp": "2026-08-29T12:00:00+00:00",
+                        "username": "alice", "verb": "delete", "resource": "pods",
+                        "namespace": "ai-ops", "name": "api-7d9", "responseCode": 200,
+                    }],
+                },
+            ),))
+
+    class Runner:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("terminal audit evidence must suppress the duplicate shell call")
+
+    explorer = AuditExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=explorer,
+        agent_runner=Runner(),
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "show me who deleted pods in the ai-ops namespace"},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert explorer.calls == [ReadIntent(
+        tool="query_audit_events", namespace="ai-ops", audit_resource="pods",
+        audit_operation_scope="deletes", audit_outcome="all",
+        audit_search_until_limit=True, range_seconds=3600, limit=20,
+    )]
+    assert "Cluster audit activity" in rendered.text
+    assert "alice" in rendered.text
+    assert "Agent analysis" not in rendered.text
+    assert "events.audit.k8s.io" not in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["preferred_evidence_view"] == "deterministic_primary"
+        assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
     engine.dispose()
 
 

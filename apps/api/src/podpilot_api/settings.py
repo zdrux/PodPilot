@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     adhoc_metrics_max_response_bytes: int = Field(
         default=1_048_576, ge=65_536, le=4_194_304
     )
-    adhoc_logs_max_range_seconds: int = Field(default=86_400, ge=3600, le=2_592_000)
+    adhoc_logs_max_range_seconds: int = Field(default=604_800, ge=3600, le=2_592_000)
     adhoc_audit_initial_range_seconds: int = Field(default=3600, ge=300, le=2_592_000)
     adhoc_audit_max_range_seconds: int = Field(default=86_400, ge=3600, le=7_776_000)
     adhoc_audit_default_limit: int = Field(default=20, ge=1, le=100)

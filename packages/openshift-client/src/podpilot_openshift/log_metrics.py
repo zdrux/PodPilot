@@ -306,7 +306,7 @@ class BoundedLogVolumeReader:
         self,
         source: LogVolumeQuerySource,
         *,
-        max_range_seconds: int = 86_400,
+        max_range_seconds: int = 604_800,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._source = source
