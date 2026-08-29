@@ -39,6 +39,12 @@ rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot whe
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
 limitation is persisted. If every registered read and agent verification command fails, normal code
 renders those exact collection failures and discards speculative model explanations of the outage.
+High-confidence router Pod resource-metric requests bypass model classification and compile to CPU
+and memory reads scoped to the `openshift-ingress` namespace and grouped by Pod. Router traffic,
+request, and bandwidth questions remain separate HAProxy metric semantics.
+Terminal high-confidence plans do not call the semantic classifier in unrestricted mode. This
+includes Strimzi Kafka existence and inventory questions, which compile to a bounded
+`kafkas.kafka.strimzi.io` list across namespaces and render from normalized API evidence.
 
 The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls

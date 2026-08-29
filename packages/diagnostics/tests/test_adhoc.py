@@ -1603,6 +1603,43 @@ def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> N
     )]
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "are there Kafka clusters deployed here?",
+        "are there Kafka instances installed on the selected OpenShift clusters?",
+        "are any Kafka deployments running here?",
+    ],
+)
+def test_kafka_existence_question_compiles_terminal_inventory(question: str) -> None:
+    planned = plan_known_read(question, inventory_limit=250)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "inventory"
+    assert plan.intents == [ReadIntent(
+        tool="list_resources",
+        resource="kafkas.kafka.strimzi.io",
+        kind="Kafka",
+        limit=250,
+    )]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "show Kafka cluster metrics",
+        "why is the Kafka cluster unhealthy?",
+        "show Kafka topics",
+    ],
+)
+def test_kafka_non_inventory_question_does_not_use_inventory_shortcut(
+    question: str,
+) -> None:
+    assert plan_known_read(question) is None
+
+
 def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:
     planned = plan_known_read(
         "show me the current cpu/mem utilization for worker nodes in the cluster"

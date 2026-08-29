@@ -42,6 +42,7 @@ from podpilot_api.main import (
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
+    _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _grounded_read_candidates,
     _investigation_capability_ledger,
@@ -3095,6 +3096,45 @@ def test_deterministic_metric_summary_combines_signals_and_node_rows() -> None:
     assert answer["citations"] == ["metric-cpu", "metric-memory"]
 
 
+def test_deterministic_metric_ranking_combines_distinct_registered_rankings() -> None:
+    evidence = [
+        {
+            "id": "top-cpu", "tool": "query_metrics", "cluster_name": "Central",
+            "data": {
+                "metric": "top_cpu_consumers", "unit": "cores", "complete": True,
+                "limit": 5, "ranking": [{
+                    "labels": {"namespace": "openshift-ingress", "pod": "router-a"},
+                    "current": 0.25, "average": 0.2, "maximum": 0.3,
+                }],
+            },
+        },
+        {
+            "id": "top-memory", "tool": "query_metrics", "cluster_name": "Central",
+            "data": {
+                "metric": "top_memory_consumers", "unit": "bytes", "complete": True,
+                "limit": 5, "ranking": [{
+                    "labels": {"namespace": "openshift-ingress", "pod": "router-a"},
+                    "current": 268_435_456, "average": 250_000_000,
+                    "maximum": 268_435_456,
+                }],
+            },
+        },
+    ]
+    activity = [{
+        "tool": "query_metrics", "status": "succeeded",
+        "evidence_ids": ["top-cpu", "top-memory"],
+    }]
+
+    answer = _deterministic_metric_ranking_answer(
+        evidence=evidence, activity=activity,
+    )
+
+    assert answer is not None
+    assert "CPU-consuming pods" in answer["content"]
+    assert "memory-consuming pods" in answer["content"]
+    assert answer["citations"] == ["top-cpu", "top-memory"]
+
+
 def test_deterministic_metric_summary_filters_threshold_rows() -> None:
     evidence = [{
         "id": "metric-threshold", "tool": "query_metrics", "cluster_name": "Central",
@@ -3816,6 +3856,63 @@ def test_explicit_ingress_bandwidth_overrides_loose_classifier_output() -> None:
     assert resolved.metric_request.operation == "trend"
     assert resolved.metric_request.range_seconds == 259_200
     assert resolved.metric_request.target.scope == "cluster"
+
+
+def test_explicit_router_pod_metrics_compile_native_namespace_reads() -> None:
+    resolved = _resolve_metric_inquiry(
+        question="show me router pod metrics",
+        inquiry=None,
+        prior_metric_query=None,
+    )
+
+    assert resolved is not None
+    assert resolved.mode == "metrics"
+    assert resolved.namespace == "openshift-ingress"
+    assert resolved.metric_request is not None
+    assert resolved.metric_request.signals == ["cpu_usage", "memory_working_set"]
+    assert resolved.metric_request.target == MetricTargetSemantics(
+        scope="namespace", kind="Namespace", namespace="openshift-ingress",
+    )
+    assert resolved.metric_request.operation == "rank"
+    assert resolved.metric_request.group_by == ["pod"]
+    compiled = _semantic_metric_read_plan(resolved)
+    assert compiled is not None
+    plan, terminal = compiled
+    assert terminal is True
+    assert [(intent.metric, intent.metric_scope) for intent in plan.intents] == [
+        ("top_cpu_consumers", "namespace"),
+        ("top_memory_consumers", "namespace"),
+    ]
+    assert all(intent.namespace == "openshift-ingress" for intent in plan.intents)
+    assert all(intent.metric_group_by == ["pod"] for intent in plan.intents)
+
+
+def test_explicit_router_pod_metrics_bypass_model_classifier() -> None:
+    class Provider:
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("the deterministic router metric route must run first")
+
+    inquiry = asyncio.run(_classify_ad_hoc_inquiry(
+        model_provider=Provider(),
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        question="show me router pod metrics",
+        conversation=[], cluster_names=["Central"], evidence=[],
+    ))
+
+    assert inquiry is not None
+    assert inquiry.metric_request is not None
+    assert inquiry.metric_request.target.namespace == "openshift-ingress"
+
+
+def test_router_traffic_question_stays_out_of_pod_resource_override() -> None:
+    assert _explicit_router_pod_metric_inquiry(
+        "show me router pod traffic metrics"
+    ) is None
 
 
 def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
@@ -7589,6 +7686,189 @@ def test_unrestricted_agent_receives_registered_log_volume_enrichment(
         assert activity["reads"][0]["source"] == "deterministic_enrichment"
         assert activity["reads"][0]["status"] == "succeeded"
         assert activity["preferred_evidence_view"] == "metric_ranking"
+    engine.dispose()
+
+
+def test_unrestricted_router_pod_metrics_are_terminal_native_enrichment(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("router Pod metrics must bypass model classification")
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("terminal router metrics must bypass the shell loop")
+
+    class MetricExplorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            current = 0.25 if intent.metric == "top_cpu_consumers" else 268_435_456
+            unit = "cores" if intent.metric == "top_cpu_consumers" else "bytes"
+            return ReadResult((AdHocObservation(
+                id=f"router-{intent.metric}", tool="query_metrics",
+                summary=f"Ranked router Pods by {intent.metric}.",
+                source=f"thanos:query_range/{intent.metric}",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "metric": intent.metric, "scope": intent.metric_scope,
+                    "namespace": intent.namespace, "unit": unit,
+                    "operation": intent.metric_operation,
+                    "statistic": intent.metric_statistic,
+                    "groupBy": intent.metric_group_by,
+                    "rangeSeconds": intent.range_seconds, "limit": intent.limit,
+                    "complete": True,
+                    "ranking": [{
+                        "labels": {
+                            "namespace": "openshift-ingress", "pod": "router-default-abc",
+                        },
+                        "current": current, "average": current, "maximum": current,
+                    }],
+                },
+            ),))
+
+    explorer = MetricExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "show me router pod metrics"},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert [(intent.metric, intent.namespace) for intent in explorer.calls] == [
+        ("top_cpu_consumers", "openshift-ingress"),
+        ("top_memory_consumers", "openshift-ingress"),
+    ]
+    assert "Top CPU Consumers" in rendered.text
+    assert "Top Memory Consumers" in rendered.text
+    assert "router-default-abc" in rendered.text
+    assert "model provider is currently unavailable" not in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["preferred_evidence_view"] == "metric_ranking"
+        assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
+    engine.dispose()
+
+
+def test_unrestricted_kafka_existence_question_is_terminal_native_inventory(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def classify_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("terminal known reads must bypass model classification")
+
+        def next_agent_step(self, *_args, **_kwargs):
+            raise AssertionError("terminal Kafka inventory must bypass the shell loop")
+
+    class KafkaExplorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="kafka-inventory", tool="list_resources",
+                summary="Read one Kafka resource.",
+                source="kubernetes:kafka.strimzi.io:Kafka:cluster/*",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "resource": "kafkas.kafka.strimzi.io",
+                    "kind": "Kafka", "scope": "cluster",
+                    "names": ["vc-cluster"],
+                    "objects": [{
+                        "namespace": "vc-streams", "name": "vc-cluster",
+                        "ready": True,
+                    }],
+                    "objectListComplete": True,
+                },
+            ),))
+
+    explorer = KafkaExplorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "are there Kafka clusters deployed here?"},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert explorer.calls == [ReadIntent(
+        tool="list_resources", resource="kafkas.kafka.strimzi.io",
+        kind="Kafka", limit=500,
+    )]
+    assert "Kafka inventory" in rendered.text
+    assert "vc-streams" in rendered.text
+    assert "vc-cluster" in rendered.text
+    assert "model provider is currently unavailable" not in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["preferred_evidence_view"] == "deterministic_primary"
+        assert not any(item["tool"] == "execute_shell" for item in activity["reads"])
     engine.dispose()
 
 

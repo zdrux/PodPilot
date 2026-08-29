@@ -1390,6 +1390,18 @@ _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\bby\s+(?:namespaces?|projects?)\b",
     re.IGNORECASE,
 )
+_KAFKA_INVENTORY_QUERY = re.compile(
+    r"(?=.*\bkafka\b)"
+    r"(?=.*\b(?:clusters?|instances?|installations?|deployments?)\b)"
+    r"(?=.*(?:\bare\s+there\b|\bare\s+any\b))"
+    r"(?=.*\b(?:deployed|installed|running|exists?)\b)",
+    re.IGNORECASE,
+)
+_NON_INVENTORY_KAFKA_QUERY = re.compile(
+    r"\b(?:metrics?|utili[sz]ation|usage|throughput|rates?|lag|storage|health|healthy|"
+    r"status|configuration|configure|configured|why|how|topics?|users?|connectors?)\b",
+    re.IGNORECASE,
+)
 _WORKER_NODE_UTILIZATION_QUERY = re.compile(
     r"(?=.*\b(?:worker|compute)\s+nodes?\b)"
     r"(?=.*\bcpu\b)(?=.*\b(?:mem|memory)\b)"
@@ -1817,6 +1829,23 @@ def plan_known_read(
                     metric_scope="cluster",
                     range_seconds=metric_range_seconds,
                     limit=metric_result_limit,
+                )],
+            ),
+            True,
+        )
+    if (
+        _KAFKA_INVENTORY_QUERY.search(question)
+        and not _NON_INVENTORY_KAFKA_QUERY.search(question)
+    ):
+        return (
+            ReadPlan(
+                goal_type="inventory",
+                scope_summary="List Strimzi Kafka resources across all namespaces.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="kafkas.kafka.strimzi.io",
+                    kind="Kafka",
+                    limit=inventory_limit,
                 )],
             ),
             True,

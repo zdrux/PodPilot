@@ -2223,8 +2223,31 @@ def _deterministic_metric_ranking_answer(
         return None
 
     metric = str(observations[0]["data"].get("metric"))
-    if any(str(item["data"].get("metric")) != metric for item in observations):
-        return None
+    distinct_metrics = list(dict.fromkeys(
+        str(item["data"].get("metric")) for item in observations
+    ))
+    if len(distinct_metrics) > 1:
+        sections: list[str] = []
+        citations: list[str] = []
+        for current_metric in distinct_metrics:
+            partial = _deterministic_metric_ranking_answer(
+                evidence=[
+                    item for item in observations
+                    if str(item["data"].get("metric")) == current_metric
+                ],
+                activity=activity,
+            )
+            if partial is None:
+                continue
+            sections.append(str(partial["content"]))
+            citations.extend(str(item) for item in partial.get("citations") or [])
+        if not sections:
+            return None
+        return {
+            "answer_mode": "evidence_based",
+            "content": "\n\n".join(sections),
+            "citations": list(dict.fromkeys(citations)),
+        }
     unit = str(observations[0]["data"].get("unit") or "")
     title = {
         "top_cpu_consumers": "CPU",
@@ -5808,12 +5831,58 @@ def _explicit_ingress_bandwidth_inquiry(
     )
 
 
+def _explicit_router_pod_metric_inquiry(question: str) -> InquirySemantics | None:
+    """Keep unambiguous router Pod resource usage on the registered metric path."""
+
+    if not (
+        re.search(r"(?i)\b(?:openshift[ -]?)?(?:ingress|router|haproxy)\b", question)
+        and re.search(r"(?i)\bpods?\b", question)
+        and re.search(r"(?i)\b(?:metrics?|utili[sz]ation|usage|cpu|memory)\b", question)
+    ):
+        return None
+    if re.search(
+        r"(?i)\b(?:bandwidth|traffic|throughput|requests?|responses?|errors?|"
+        r"latency|bytes?\s*(?:in|out)?|routes?)\b",
+        question,
+    ):
+        return None
+    requested_range = _explicit_duration_seconds(question)
+    operation = "trend" if requested_range is not None or re.search(
+        r"(?i)\b(?:spikes?|trend|over\s+time|history|historical)\b", question
+    ) else "rank"
+    signals = ["cpu_usage", "memory_working_set"]
+    lowered = question.casefold()
+    if re.search(r"\bcpu\b", lowered) and not re.search(r"\bmemor(?:y|ies)\b", lowered):
+        signals = ["cpu_usage"]
+    elif re.search(r"\bmemor(?:y|ies)\b", lowered) and not re.search(r"\bcpu\b", lowered):
+        signals = ["memory_working_set"]
+    return InquirySemantics(
+        mode="metrics", operation="metrics", cardinality="collection",
+        resource_query="Pod", namespace="openshift-ingress",
+        needs_object_details=True,
+        evidence_goal="Read registered CPU and memory metrics for OpenShift router Pods.",
+        metric_request=MetricRequestSemantics(
+            signals=signals,
+            target=MetricTargetSemantics(
+                scope="namespace", kind="Namespace", namespace="openshift-ingress",
+            ),
+            operation=operation,
+            group_by=["pod"],
+            range_seconds=requested_range or DEFAULT_METRIC_RANGE_SECONDS,
+            result_limit=20,
+        ),
+    )
+
+
 def _resolve_metric_inquiry(
     *, question: str, inquiry: InquirySemantics | None,
     prior_metric_query: dict[str, object] | None,
 ) -> InquirySemantics | None:
     """Carry a registered ranking through a same-metric period follow-up."""
 
+    explicit_router_pods = _explicit_router_pod_metric_inquiry(question)
+    if explicit_router_pods is not None:
+        return explicit_router_pods
     explicit_ingress = _explicit_ingress_bandwidth_inquiry(question, inquiry)
     if explicit_ingress is not None:
         return explicit_ingress
@@ -6442,6 +6511,9 @@ async def _classify_ad_hoc_inquiry(
 ) -> InquirySemantics | None:
     """Ask the model for coarse semantics, retrying one invalid structured response."""
 
+    explicit_router_pods = _explicit_router_pod_metric_inquiry(question)
+    if explicit_router_pods is not None:
+        return explicit_router_pods
     classify = getattr(model_provider, "classify_ad_hoc", None)
     if not callable(classify):
         return None
@@ -9328,7 +9400,17 @@ def create_app(
                         inventory_limit=app_settings.adhoc_inventory_max_objects,
                     )
                     inquiry = None
-                    if not followup_action:
+                    terminal_kafka_inventory = bool(
+                        known_read is not None
+                        and known_read[1]
+                        and known_read[0].intents
+                        and all(
+                            intent.tool == "list_resources"
+                            and intent.resource == "kafkas.kafka.strimzi.io"
+                            for intent in known_read[0].intents
+                        )
+                    )
+                    if not followup_action and not terminal_kafka_inventory:
                         if progress:
                             await progress(
                                 "planning", "Selecting registered enrichment capabilities."

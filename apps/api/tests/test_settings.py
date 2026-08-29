@@ -79,10 +79,10 @@ def test_metric_trend_bounds_are_configurable(monkeypatch) -> None:
 
 
 def test_loki_timeout_defaults_to_scan_safe_value_and_is_bounded() -> None:
-    assert Settings(_env_file=None).loki_timeout_seconds == 30
-    assert Settings(loki_timeout_seconds=60).loki_timeout_seconds == 60
+    assert Settings(_env_file=None).loki_timeout_seconds == 90
+    assert Settings(loki_timeout_seconds=120).loki_timeout_seconds == 120
     with pytest.raises(ValidationError):
-        Settings(loki_timeout_seconds=61)
+        Settings(loki_timeout_seconds=121)
 
 
 def test_audit_query_defaults_and_bounds_are_configurable() -> None:

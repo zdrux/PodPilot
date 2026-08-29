@@ -49,7 +49,7 @@ class LokiQueryClient:
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
         route_discovery_tls_verify: bool = True,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 90.0,
         max_series: int = 50,
         max_response_bytes: int = 65_536,
         tenant: str = "application",

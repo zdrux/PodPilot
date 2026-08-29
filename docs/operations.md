@@ -200,8 +200,8 @@ The current deployment uses these variables:
 - `PODPILOT_LOKI_URL`, defaulting to
   `https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application`
 - `PODPILOT_LOKI_ROUTE_NAME`, default `logging-loki`, for registered remote clusters
-- `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `30`, with a hard accepted range of
-  `1` through `60`
+- `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `90`, with a hard accepted range of
+  `1` through `120`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_ADHOC_AUDIT_INITIAL_RANGE_SECONDS`, default `3600` (one hour), is the
