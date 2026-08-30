@@ -422,6 +422,9 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
   `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.
+- Scoped log-volume tests must prove exact namespace, Pod, and Node totals; Pod rankings within a
+  namespace; cluster-wide Pod and Node rankings; server-owned selectors/groupings; and that no
+  matching log lines or model-authored LogQL cross the evidence boundary.
 - Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
   catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
   back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.

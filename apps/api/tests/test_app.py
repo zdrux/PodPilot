@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ from podpilot_api.main import (
     _adhoc_answer_advisories,
     _adhoc_capability_wording_issue,
     _adhoc_evidence_view,
+    _agent_collector_error_detail,
     _bind_plan_log_intents,
     _classify_ad_hoc_inquiry,
     _collect_bounded_cluster_reads,
@@ -55,6 +57,7 @@ from podpilot_api.main import (
     _profile_is_usable,
     _question_requires_agentic_investigation,
     _question_cluster_ids,
+    _normalize_agent_collector_arguments,
     _recent_object_references,
     _resource_list_presentation,
     _inquiry_reference_cluster_ids,
@@ -2476,6 +2479,31 @@ def test_operator_evidence_view_builds_metric_ranking_for_direct_rendering() -> 
     }
 
 
+def test_operator_evidence_view_builds_scoped_log_volume_dimensions() -> None:
+    view = _adhoc_evidence_view({
+        "id": "metric-log-pods", "tool": "query_metrics",
+        "source": "loki:application/query/application_log_volume",
+        "data": {
+            "metric": "application_log_volume", "scope": "namespace",
+            "namespace": "payments", "groupBy": ["pod"],
+            "unit": "bytes", "averageUnit": "bytes_per_second", "complete": True,
+            "ranking": [{
+                "labels": {"namespace": "payments", "pod": "api-1"},
+                "average": 1024, "current": 1_048_576, "maximum": None,
+            }],
+        },
+    })["metric_ranking"]
+
+    assert view["title"] == "Top Application-Log Volume by Pod"
+    assert view["columns"] == [
+        {"key": "namespace", "label": "Namespace"},
+        {"key": "pod", "label": "Pod"},
+    ]
+    assert view["average_label"] == "Average rate"
+    assert view["current_label"] == "Payload volume"
+    assert view["show_maximum"] is False
+
+
 def test_metric_card_derives_node_and_generic_kafka_dimensions() -> None:
     node = _adhoc_evidence_view({
         "id": "metric-node-cpu", "tool": "query_metrics",
@@ -3445,6 +3473,57 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
         range_seconds=300,
         limit=10,
     )]
+
+
+def test_semantic_log_volume_plan_ranks_pods_within_namespace() -> None:
+    compiled = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", operation="metrics", resource_query="Pod",
+        needs_object_details=True,
+        evidence_goal="Rank Pods by application-log volume in payments.",
+        metric_request=MetricRequestSemantics(
+            target=MetricTargetSemantics(
+                scope="namespace", kind="Namespace", namespace="payments",
+            ),
+            signals=["application_log_volume"], operation="rank",
+            group_by=["pod"], result_limit=5, range_seconds=300,
+        ),
+    ))
+
+    assert compiled is not None
+    assert compiled[0].intents == [ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", metric_group_by=["pod"],
+        range_seconds=300, limit=5,
+    )]
+
+
+def test_semantic_log_volume_plan_reads_exact_pod_and_node() -> None:
+    pod = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", operation="metrics", resource_query="Pod",
+        needs_object_details=True, evidence_goal="Read Pod log volume.",
+        metric_request=MetricRequestSemantics(
+            target=MetricTargetSemantics(
+                scope="pod", kind="Pod", namespace="payments", name="api-1",
+            ),
+            signals=["application_log_volume"], operation="show",
+        ),
+    ))
+    node = _semantic_metric_read_plan(InquirySemantics(
+        mode="metrics", operation="metrics", resource_query="Node",
+        needs_object_details=True, evidence_goal="Read Node log volume.",
+        metric_request=MetricRequestSemantics(
+            target=MetricTargetSemantics(
+                scope="node", kind="Node", name="worker-0",
+            ),
+            signals=["application_log_volume"], operation="show",
+        ),
+    ))
+
+    assert pod is not None and pod[0].intents[0].metric_scope == "pod"
+    assert pod[0].intents[0].name == "api-1"
+    assert node is not None and node[0].intents[0].metric_scope == "node"
+    assert node[0].intents[0].name == "worker-0"
 
 
 def test_metric_period_followup_reuses_prior_log_volume_ranking() -> None:
@@ -8221,8 +8300,8 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
                 "cluster_id": SYSTEM_CLUSTER_ID,
                 "namespace": "ai-ops",
                 "audit_username": "druciare-adm",
-                "audit_operation_scope": "deletes",
-                "audit_outcome": "all",
+                "audit_operation_scope": "delete",
+                "audit_outcome": "any",
                 "range_seconds": 3600,
                 "limit": 5,
             },
@@ -8359,6 +8438,15 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
     assert [intent.tool for intent in explorer.calls] == [
         "search_resources", "http_probe", "query_audit_events", "query_metrics",
     ]
+    audit_intent = next(
+        intent for intent in explorer.calls if intent.tool == "query_audit_events"
+    )
+    assert audit_intent.audit_operation_scope == "deletes"
+    assert audit_intent.audit_outcome == "all"
+    metric_intent = next(
+        intent for intent in explorer.calls if intent.tool == "query_metrics"
+    )
+    assert metric_intent.range_seconds == 300
     assert len(provider.agent_messages) == 5
     assert "checkout.az.cibc.com" in json.dumps(provider.agent_messages[1])
     assert "TLSv1.3" in json.dumps(provider.agent_messages[2])
@@ -8380,6 +8468,107 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         assert assistant.answer_mode == "evidence_based"
         assert len(json.loads(assistant.citations_json)) == 4
     engine.dispose()
+
+
+def test_unrestricted_audit_argument_normalization_is_broad_and_error_safe() -> None:
+    aliases = _normalize_agent_collector_arguments("query_audit_events", {
+        "audit_operation_scope": "delete",
+        "audit_outcome": "any",
+    })
+    defaults = _normalize_agent_collector_arguments("query_audit_events", {})
+
+    assert aliases == {
+        "audit_operation_scope": "deletes",
+        "audit_outcome": "all",
+    }
+    assert defaults == {
+        "audit_operation_scope": "all",
+        "audit_outcome": "all",
+    }
+
+    with pytest.raises(ValidationError) as captured:
+        ReadIntent(
+            tool="query_audit_events",
+            audit_operation_scope="destroy",  # type: ignore[arg-type]
+            audit_outcome="all",
+        )
+    detail = _agent_collector_error_detail(captured.value)
+    assert "audit_operation_scope" in detail
+    assert "errors.pydantic.dev" not in detail
+    assert "input_value" not in detail
+
+
+def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> None:
+    normalized = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "log_entries_total",
+            "metric_scope": "logs",
+            "range_seconds": 3600,
+        },
+        question="Show me the namespaces that produce the most logs",
+    )
+
+    assert normalized["metric"] == "top_log_volume_by_namespace"
+    assert normalized["metric_scope"] == "cluster"
+    assert normalized["metric_operation"] == "rank"
+    assert normalized["metric_group_by"] == ["namespace"]
+    assert normalized["range_seconds"] == 300
+
+    explicit_period = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "top-log-volume-by-namespace",
+            "metric_scope": "namespaces",
+        },
+        question="Which namespaces generated the most logs in the last 2 hours?",
+    )
+    assert explicit_period["metric"] == "top_log_volume_by_namespace"
+    assert explicit_period["metric_scope"] == "cluster"
+    assert explicit_period["range_seconds"] == 7200
+
+    unrelated = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {"metric": "log_entries_total", "metric_scope": "logging"},
+        question="Show the total logs for this workload",
+    )
+    assert unrelated["metric"] == "log_entries_total"
+
+    namespace_pods = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "top_log_volume_by_pod", "metric_scope": "namespaces",
+            "namespace": "payments", "range_seconds": 3600,
+        },
+        question="Which pods in namespace payments produce the most logs?",
+    )
+    assert namespace_pods["metric"] == "application_log_volume"
+    assert namespace_pods["metric_scope"] == "namespace"
+    assert namespace_pods["metric_operation"] == "rank"
+    assert namespace_pods["metric_group_by"] == ["pod"]
+    assert namespace_pods["range_seconds"] == 300
+
+    cluster_nodes = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {"metric": "log_entries_total", "metric_scope": "logs"},
+        question="Rank the nodes that generate the most logs",
+    )
+    assert cluster_nodes["metric"] == "application_log_volume"
+    assert cluster_nodes["metric_scope"] == "cluster"
+    assert cluster_nodes["metric_group_by"] == ["node"]
+
+    exact_node = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "node_log_volume", "metric_scope": "node",
+            "name": "worker-0",
+        },
+        question="Show application log volume for node worker-0",
+    )
+    assert exact_node["metric"] == "application_log_volume"
+    assert exact_node["metric_scope"] == "node"
+    assert exact_node["metric_operation"] == "show"
+    assert exact_node.get("metric_group_by") is None
 
 
 def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(

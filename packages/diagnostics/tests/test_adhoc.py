@@ -1496,6 +1496,53 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         )
 
 
+def test_application_log_volume_supports_exact_targets_and_bounded_rankings() -> None:
+    exact_namespace = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+    )
+    exact_pod = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="pod", namespace="payments", name="api-1",
+    )
+    exact_node = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="node", name="worker-0",
+    )
+    namespace_pods = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", metric_group_by=["pod"],
+    )
+    cluster_pods = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace", "pod"],
+    )
+    cluster_nodes = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank", metric_group_by=["node"],
+    )
+
+    assert exact_namespace.metric_scope == "namespace"
+    assert exact_pod.name == "api-1"
+    assert exact_node.name == "worker-0"
+    assert namespace_pods.metric_group_by == ["pod"]
+    assert cluster_pods.metric_group_by == ["namespace", "pod"]
+    assert cluster_nodes.metric_group_by == ["node"]
+
+    with pytest.raises(ValidationError, match="approved group_by dimension"):
+        ReadIntent(
+            tool="query_metrics", metric="application_log_volume",
+            metric_scope="namespace", namespace="payments", metric_operation="rank",
+        )
+    with pytest.raises(ValidationError, match="grouping is incompatible"):
+        ReadIntent(
+            tool="query_metrics", metric="application_log_volume",
+            metric_scope="cluster", metric_operation="rank", metric_group_by=["pod"],
+        )
+
+
 def test_platform_metric_scopes_require_typed_coordinates() -> None:
     kafka = ReadIntent(
         tool="query_metrics", metric="kafka_consumer_lag",

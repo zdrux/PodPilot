@@ -2056,6 +2056,10 @@ class OpenAIResponsesProvider:
                     "object_name=worker. This is node utilization, not a pod-consumer ranking. "
                     "For namespace application-log volume or logging-throughput rankings, set "
                     "metric_query=top_log_volume_by_namespace and metric_scope=cluster. "
+                    "For application-log volume of an exact Namespace, Pod, or Node, or to rank "
+                    "Pods within a Namespace or Nodes across a Cluster, use metric_request with "
+                    "signal application_log_volume, exact target coordinates, and group_by pod or "
+                    "node only when a ranking was requested. "
                     "When the operator supplies a metric period, convert it exactly to "
                     "metric_range_seconds; for example 5m is 300 and 2h is 7200. "
                     "For cluster_audit_events, extract an exact supplied username into audit_username; leave it "
@@ -2260,8 +2264,16 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "query_metrics",
             "Query a registered bounded metric through PodPilot's Thanos or Loki metric "
             "adapter. Use this before improvising raw PromQL or LogQL; the helper selects the "
-            "correct backend for the metric. Its result returns to you and never ends the "
-            "investigation.",
+            "correct backend for the metric. For a namespace application-log-volume ranking, use "
+            "metric=top_log_volume_by_namespace, metric_scope=cluster, metric_operation=rank, "
+            "and metric_group_by=[namespace]. For application-log volume of one exact namespace, "
+            "Pod, or Node, use metric=application_log_volume with the corresponding namespace, "
+            "pod, or node scope and no grouping. To rank Pods within one namespace, use namespace "
+            "scope with metric_group_by=[pod]; to rank Pods cluster-wide, group by [namespace,pod]; "
+            "to rank Nodes cluster-wide, group by [node]. Rankings use metric_operation=rank and "
+            "exact targets use metric_operation=show. Do not invent a wider period when the operator did "
+            "not supply one; the default is 300 seconds. Its result returns to you and never ends "
+            "the investigation.",
             (
                 "metric", "metric_scope", "api_version", "kind", "namespace", "name",
                 "container", "metric_operation", "metric_statistic", "metric_group_by",
@@ -2897,6 +2909,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "object_name=worker; do not classify it as a pod ranking. "
                 "For namespace application-log volume rankings, return "
                 "metric_query=top_log_volume_by_namespace with cluster scope. "
+                "For application-log volume of an exact Namespace, Pod, or Node, or a Pod/Node "
+                "ranking, use metric_request with application_log_volume and the exact target; "
+                "group by pod or node only for a ranking. "
                 "Convert an explicitly requested metric period to metric_range_seconds. "
                 "For cluster_audit_events, extract the exact supplied username and namespace, put an explicitly "
                 "requested Kubernetes resource kind in resource_query, select deletes for delete-only "

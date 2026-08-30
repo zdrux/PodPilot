@@ -163,20 +163,23 @@ Context: Operators need to find namespaces producing the most logs, but Kubernet
 `pods/log` reads cannot provide complete historical cluster-wide volume and arbitrary LogQL
 would expose raw logs, unbounded cost, and a new injection surface.
 
-Decision: Register `top_log_volume_by_namespace` as a typed cluster metric. Normal code sends
-one fixed `bytes_over_time` application-tenant query through the authenticated OpenShift
-LokiStack gateway and retains only namespace, payload bytes, average byte rate, time bounds,
-and completeness. Explicit relative periods are parsed into typed seconds, `today` is elapsed UTC
-day, an omitted period defaults to one hour, and the deployment cap is 24 hours. Bind the
+Decision: Register `top_log_volume_by_namespace` and scoped `application_log_volume` as typed
+metrics. Normal code sends reviewed `bytes_over_time` application-tenant queries through the
+authenticated OpenShift LokiStack gateway. Supported dimensions are namespace, Pod, and Node;
+exact totals and bounded rankings retain only normalized dimensions, payload bytes, average byte
+rate, time bounds, and completeness. Explicit relative periods are parsed into typed seconds,
+`today` is elapsed UTC day, an omitted period defaults to five minutes, and the shipped deployment
+cap is seven days. Bind the
 investigator to OpenShift's read-only application, infrastructure, and audit logging roles;
 retain its existing `cluster-monitoring-view` binding. OpenShift's supported audit role is
 `cluster-logging-audit-view`, not `cluster-monitoring-audit-view`.
 
-Consequences: Ask can render deterministic multi-cluster log-volume tables without returning
-log lines or accepting model-authored LogQL. The values describe observed payload bytes, not
-compressed storage. Cluster-wide gateway authorization still carries broader technical read
+Consequences: Ask can render deterministic multi-cluster namespace, Pod, and Node log-volume
+tables without returning log lines or accepting model-authored LogQL. Pod rankings within a
+namespace stay server-filtered rather than collecting raw logs. The values describe observed
+payload bytes, not compressed storage. Cluster-wide gateway authorization still carries broader technical read
 capacity, so production network and workload isolation must protect the identity.
-The Loki transport defaults to a 30-second deadline and reports deadline expiry distinctly from
+The Loki transport defaults to a 90-second deadline and reports deadline expiry distinctly from
 DNS, TLS, HTTP, and generic availability failures.
 
 ## 2026-08-25 - Typed metric trends use server-owned PromQL

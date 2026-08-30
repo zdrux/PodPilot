@@ -414,6 +414,10 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",
     ]
+    assert "metric=top_log_volume_by_namespace" in metric_tool["description"]
+    assert "metric=application_log_volume" in metric_tool["description"]
+    assert "rank Pods within one namespace" in metric_tool["description"]
+    assert "default is 300 seconds" in metric_tool["description"]
 
 
 def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:

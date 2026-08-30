@@ -34,9 +34,9 @@ built-in `cluster-reader`, `cluster-monitoring-view`,
 Platform Alertmanager runs in `openshift-monitoring`, not `openshift-logging`.
 No logging-namespace Role is required for Alertmanager. Ordinary container logs
 are read through the Kubernetes `pods/log` subresource under `cluster-reader`.
-Aggregate Loki application-log analytics are implemented for the registered
-`top_log_volume_by_namespace` metric. They use only server-owned LogQL and retain no log
-lines. The installation must expose a standard `openshift-logging/logging-loki` Route and
+Aggregate Loki application-log analytics are implemented for registered namespace, Pod, and Node
+volume queries. They use only server-owned LogQL and retain no log lines. The installation must
+expose a standard `openshift-logging/logging-loki` Route and
 grant the registered identity `cluster-logging-application-view` plus cluster-wide LokiStack
 OpenShift authorization. The base runtime identity also receives the read-only infrastructure
 and audit logging views. Arbitrary LogQL and raw Log Store queries remain unavailable.

@@ -163,6 +163,7 @@ class ReadIntent(BaseModel):
         "network_receive", "network_transmit", "container_restarts",
         "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
         "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
         "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
         "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
@@ -362,6 +363,28 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "top_log_volume_by_namespace requires cluster scope"
                 )
+            if self.metric == "application_log_volume":
+                if self.metric_scope not in {"cluster", "namespace", "pod", "node"}:
+                    raise ValueError(
+                        "application_log_volume requires cluster, namespace, pod, or node scope"
+                    )
+                grouping = tuple(self.metric_group_by)
+                valid_groupings = {
+                    "cluster": {("namespace",), ("node",), ("namespace", "pod")},
+                    "namespace": {(), ("pod",)},
+                    "pod": {()},
+                    "node": {()},
+                }
+                if grouping not in valid_groupings[self.metric_scope]:
+                    raise ValueError(
+                        "application_log_volume grouping is incompatible with the selected scope"
+                    )
+                is_ranking = bool(grouping)
+                if is_ranking != (self.metric_operation == "rank"):
+                    raise ValueError(
+                        "application_log_volume rankings require an approved group_by dimension; "
+                        "exact targets use the show operation without grouping"
+                    )
             cluster_node_ranking = (
                 self.metric in {"node_cpu_utilization", "node_memory_utilization"}
                 and self.metric_scope == "cluster"
@@ -393,14 +416,19 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "persistent_volume_claim scope supports only volume utilization metrics"
                 )
-            if self.metric_scope in {"node", "node_role"} and any(
+            if (
+                self.metric != "application_log_volume"
+                and self.metric_scope in {"node", "node_role"}
+                and any(
                 grouping not in {"cluster", "node"} for grouping in self.metric_group_by
+                )
             ):
                 raise ValueError("node metrics can group only by node")
             if (
                 "node" in self.metric_group_by
                 and self.metric_scope not in {"node", "node_role"}
                 and not cluster_node_ranking
+                and self.metric != "application_log_volume"
             ):
                 raise ValueError(
                     "node grouping requires node or node-role scope, or a cluster Node ranking"

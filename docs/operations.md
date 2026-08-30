@@ -564,7 +564,11 @@ the default 20-row display limit.
 If the Loki audit query times out, is denied, or only succeeds on some selected clusters, that exact
 registered result returns to the agent. The tool contract identifies Kubernetes Events and
 `events.audit.k8s.io` as different data sources, and the result remains an observation rather than a
-stop signal. The audit helper does not depend on `jq` being installed in `oc-runner`.
+stop signal. The unrestricted tool boundary canonicalizes harmless natural-language variants such
+as `delete` to `deletes` and `any` to `all`; omitted operation and outcome filters default to the
+broad `all` semantics. Other invalid arguments return compact field-level guidance without echoed
+model input or Pydantic documentation URLs. The audit helper does not depend on `jq` being installed
+in `oc-runner`.
 
 Kafka deployment inventory wording such as “show me all the deployed Kafka clusters” uses the
 registered `kafkas.kafka.strimzi.io` list on every selected OpenShift cluster. The rendered table
@@ -578,6 +582,14 @@ volume over a 3 day period” repeats the same Loki query with `rangeSeconds=259
 into Loki Pods or require `pods/exec`. An explicitly different metric does not inherit the prior
 query. The shipped `adhoc_logs_max_range_seconds` ceiling is seven days (`604800` seconds); longer
 requests are reduced to that bound and reported as limited.
+
+The unrestricted metric helper canonicalizes harmless metric and scope spelling variants before
+validating a typed request. A question that explicitly ranks namespaces by generated log volume is
+bound to `top_log_volume_by_namespace` with cluster scope, rank operation, and namespace grouping.
+When the operator supplies no period, this Loki query uses the bounded five-minute default instead
+of accepting a model-invented wider range; explicit numeric periods remain authoritative. Invalid
+metric arguments return compact field-level feedback to the agent so it can correct its next tool
+call without exposing raw validation internals in the chat.
 
 When an operator selects an object from prior multi-cluster evidence, PodPilot carries the opaque
 reference's source cluster into the next turn. Investigative reads and shell commands are limited
@@ -1309,11 +1321,15 @@ rendered generically, up to six identity columns, so new registered metrics do n
 table template.
 
 `top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
-payload bytes observed during the bounded period. Its average is bytes per second; the total is
-not compressed object-store consumption, and the tool returns no log lines. Explicit relative
+payload bytes observed during the bounded period. The registered `application_log_volume` variant
+also supports totals for an exact namespace, Pod, or Node; Pod rankings within an exact namespace;
+cluster-wide Pod rankings identified by namespace and Pod; and cluster-wide Node rankings. These
+queries use the reviewed OpenShift log labels `kubernetes_namespace_name`, `kubernetes_pod_name`,
+and `kubernetes_host`. Their average is bytes per second; the total is not compressed object-store
+consumption, and the tool returns no log lines. Explicit relative
 periods such as `5m`, `30 minutes`, `2h`, and `7d` are converted to bounded seconds; `today`
-means elapsed time since 00:00 UTC. An omitted period defaults to one hour, the minimum is five
-minutes, and `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS` caps execution at 24 hours. A Loki deadline
+means elapsed time since 00:00 UTC. An omitted period defaults to five minutes, the minimum is five
+minutes, and `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS` defaults to seven days. A Loki deadline
 failure identifies the configured timeout instead of reporting generic gateway unavailability.
 
 `PODPILOT_ADHOC_METRICS_MAX_RANGE_SECONDS` defaults to 2592000 (30 days) and accepts up to

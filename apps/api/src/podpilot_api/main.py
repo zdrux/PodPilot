@@ -17,6 +17,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
@@ -2056,6 +2057,7 @@ def _deterministic_metric_ranking_answer(
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") in {
             "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+            "application_log_volume",
         }
     ]
     if not observations:
@@ -2092,6 +2094,7 @@ def _deterministic_metric_ranking_answer(
         "top_cpu_consumers": "CPU",
         "top_memory_consumers": "memory",
         "top_log_volume_by_namespace": "application-log volume",
+        "application_log_volume": "application-log volume",
     }[metric]
     rows: list[str] = []
     citations: list[str] = []
@@ -2117,9 +2120,17 @@ def _deterministic_metric_ranking_answer(
         for rank, item in enumerate(ranked, 1):
             labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
             namespace = str(labels.get("namespace") or "—")
-            if metric == "top_log_volume_by_namespace":
+            if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
+                identity_keys = (
+                    [str(value) for value in data.get("groupBy")]
+                    if isinstance(data.get("groupBy"), list) and data.get("groupBy")
+                    else [key for key in ("namespace", "pod", "node") if labels.get(key)]
+                )
+                identity = " / ".join(
+                    f"`{labels.get(key)}`" for key in identity_keys if labels.get(key)
+                ) or "`target`"
                 rows.append(
-                    f"| `{cluster_name}` | {rank} | `{namespace}` | "
+                    f"| `{cluster_name}` | {rank} | {identity} | "
                     f"{_format_metric_value(item.get('current'), unit)} | "
                     f"{_format_metric_value(item.get('average'), 'bytes_per_second')} |"
                 )
@@ -2131,10 +2142,16 @@ def _deterministic_metric_ranking_answer(
             )
 
     qualifier = f"top {requested_limit} " if requested_limit else ""
-    if metric == "top_log_volume_by_namespace":
+    if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
+        target_label = (
+            "Namespace" if metric == "top_log_volume_by_namespace" else "Target"
+        )
+        target_phrase = (
+            "namespace" if metric == "top_log_volume_by_namespace" else "target"
+        )
         content = (
-            f"## {qualifier}{title} by namespace and cluster\n\n"
-            "| OpenShift cluster | Rank | Namespace | Payload volume | Average rate |\n"
+            f"## {qualifier}{title} by {target_phrase} and cluster\n\n"
+            f"| OpenShift cluster | Rank | {target_label} | Payload volume | Average rate |\n"
             "|---|---:|---|---:|---:|\n"
             + "\n".join(rows)
             + "\n\nValues are application-log payload bytes observed by Loki during the bounded "
@@ -2181,6 +2198,7 @@ def _deterministic_metric_summary_answer(
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") not in {
             "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+            "application_log_volume",
         }
     ]
     if not observations:
@@ -3655,9 +3673,12 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         return None
     unit = str(data.get("unit") or "")
     metric_name = str(data.get("metric") or "metric")
+    log_volume_metric = metric_name in {
+        "top_log_volume_by_namespace", "application_log_volume",
+    }
     average_unit = (
         "bytes_per_second"
-        if metric_name == "top_log_volume_by_namespace"
+        if log_volume_metric
         else unit
     )
     rows: list[dict[str, object]] = []
@@ -3811,6 +3832,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "top_cpu_consumers": "Top CPU Consumers",
         "top_memory_consumers": "Top Memory Consumers",
         "top_log_volume_by_namespace": "Top Application-Log Volume by Namespace",
+        "application_log_volume": "Application-Log Volume",
         "node_cpu_utilization": "Node CPU Utilization",
         "node_memory_utilization": "Node Memory Utilization",
         "cpu_usage": "CPU Usage",
@@ -3860,6 +3882,18 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "logging_ingestion_rate": "Loki Ingestion Rate",
         "logging_query_latency": "Loki p99 Query Latency",
     }.get(metric_name, metric_name.replace("_", " ").title())
+    if metric_name == "application_log_volume":
+        group_by = data.get("groupBy") if isinstance(data.get("groupBy"), list) else []
+        scope = str(data.get("scope") or "target").replace("_", " ").title()
+        metric_title = (
+            "Top Application-Log Volume by Pod"
+            if "pod" in group_by else
+            "Top Application-Log Volume by Node"
+            if "node" in group_by else
+            "Top Application-Log Volume by Namespace"
+            if "namespace" in group_by else
+            f"Application-Log Volume for {scope}"
+        )
     namespace_only = metric_name == "top_log_volume_by_namespace"
     return {
         "title": metric_title,
@@ -3869,19 +3903,19 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "columns": columns,
         "complete": data.get("complete") is True,
         "namespace_only": namespace_only,
-        "show_maximum": not namespace_only,
+        "show_maximum": not log_volume_metric,
         "description": (
             "Application-log payload volume observed during the bounded period; "
             "this is not compressed storage consumption."
-            if namespace_only else
+            if log_volume_metric else
             "Current values compared within this bounded result. Average and peak "
             "cover the collected period."
         ),
         "average_label": (
-            "Average rate" if metric_name == "top_log_volume_by_namespace" else "Average"
+            "Average rate" if log_volume_metric else "Average"
         ),
         "current_label": (
-            "Payload volume" if metric_name == "top_log_volume_by_namespace" else "Current"
+            "Payload volume" if log_volume_metric else "Current"
         ),
     }
 
@@ -5372,7 +5406,7 @@ def _latest_metric_query_semantics(
 
     supported = {
         "top_cpu_consumers", "top_memory_consumers",
-        "top_log_volume_by_namespace",
+        "top_log_volume_by_namespace", "application_log_volume",
         "ingress_bytes_in", "ingress_bytes_out",
     }
     for item in reversed(evidence):
@@ -5799,6 +5833,7 @@ def _resolve_metric_inquiry(
     prior_metric = str(prior_metric_query.get("metric") or "")
     category = {
         "top_log_volume_by_namespace": "log",
+        "application_log_volume": "log",
         "top_cpu_consumers": "cpu",
         "top_memory_consumers": "memory",
         "ingress_bytes_in": "ingress_bandwidth",
@@ -6537,6 +6572,138 @@ def _explicit_audit_filters(question: str) -> dict[str, object]:
     return updates
 
 
+def _normalize_agent_collector_arguments(
+    tool_name: str, arguments: dict[str, object], *, question: str = "",
+) -> dict[str, object]:
+    """Canonicalize harmless model vocabulary at the typed collector boundary."""
+
+    normalized = dict(arguments)
+    if tool_name == "query_metrics":
+        metric = re.sub(
+            r"[^a-z0-9]+", "_", str(normalized.get("metric") or "").strip().casefold()
+        ).strip("_")
+        scope = re.sub(
+            r"[^a-z0-9]+", "_",
+            str(normalized.get("metric_scope") or "").strip().casefold(),
+        ).strip("_")
+        metric_aliases = {
+            "application_log_volume_by_namespace": "top_log_volume_by_namespace",
+            "log_volume_by_namespace": "top_log_volume_by_namespace",
+            "namespace_log_volume": "top_log_volume_by_namespace",
+            "top_log_namespaces": "top_log_volume_by_namespace",
+            "top_logs_by_namespace": "top_log_volume_by_namespace",
+            "log_volume": "application_log_volume",
+            "application_logs_volume": "application_log_volume",
+            "pod_log_volume": "application_log_volume",
+            "log_volume_by_pod": "application_log_volume",
+            "top_log_volume_by_pod": "application_log_volume",
+            "node_log_volume": "application_log_volume",
+            "log_volume_by_node": "application_log_volume",
+            "top_log_volume_by_node": "application_log_volume",
+        }
+        scope_aliases = {
+            "all": "cluster", "cluster_wide": "cluster", "clusterwide": "cluster",
+            "clusters": "cluster", "namespaces": "namespace", "pods": "pod",
+            "deployments": "deployment", "workloads": "workload", "nodes": "node",
+            "node_roles": "node_role", "pvc": "persistent_volume_claim",
+            "pvcs": "persistent_volume_claim", "kafka": "kafka_cluster",
+            "routes": "route", "logs": "logging",
+        }
+        metric = metric_aliases.get(metric, metric)
+        scope = scope_aliases.get(scope, scope)
+        log_ranking_question = bool(
+            re.search(r"(?i)\b(?:namespaces?|projects?|pods?|nodes?)\b", question)
+            and re.search(r"(?i)\b(?:logs?|logging)\b", question)
+            and re.search(
+                r"(?i)\b(?:most|top|rank|highest|largest|produce|generate)\w*\b",
+                question,
+            )
+        )
+        if metric == "log_entries_total" and log_ranking_question:
+            if re.search(r"(?i)\bpods?\b", question):
+                metric = "application_log_volume"
+                if normalized.get("namespace"):
+                    scope = "namespace"
+                    normalized["metric_group_by"] = ["pod"]
+                else:
+                    scope = "cluster"
+                    normalized["metric_group_by"] = ["namespace", "pod"]
+            elif re.search(r"(?i)\bnodes?\b", question):
+                metric = "application_log_volume"
+                scope = "cluster"
+                normalized["metric_group_by"] = ["node"]
+            else:
+                metric = "top_log_volume_by_namespace"
+        normalized["metric"] = metric
+        normalized["metric_scope"] = scope
+        if metric == "top_log_volume_by_namespace":
+            normalized["metric_scope"] = "cluster"
+            normalized["metric_operation"] = "rank"
+            normalized["metric_group_by"] = ["namespace"]
+        elif metric == "application_log_volume":
+            raw_metric = str(arguments.get("metric") or "").casefold()
+            ranking_alias = "top" in raw_metric or "_by_" in raw_metric
+            implied_dimension = (
+                "pod" if ranking_alias and "pod" in raw_metric else
+                "node" if ranking_alias and "node" in raw_metric else
+                None
+            )
+            if implied_dimension == "pod":
+                if normalized.get("namespace"):
+                    normalized["metric_scope"] = "namespace"
+                    normalized["metric_group_by"] = ["pod"]
+                else:
+                    normalized["metric_scope"] = "cluster"
+                    normalized["metric_group_by"] = ["namespace", "pod"]
+            elif implied_dimension == "node":
+                normalized["metric_scope"] = "cluster"
+                normalized["metric_group_by"] = ["node"]
+            normalized["metric_operation"] = (
+                "rank" if normalized.get("metric_group_by") else "show"
+            )
+        explicit_range = _explicit_duration_seconds(question)
+        normalized["range_seconds"] = explicit_range or DEFAULT_METRIC_RANGE_SECONDS
+        return normalized
+
+    if tool_name != "query_audit_events":
+        return normalized
+
+    operation_aliases = {
+        "*": "all", "any": "all", "all": "all",
+        "delete": "deletes", "deleted": "deletes", "deletion": "deletes",
+        "deletions": "deletes", "deletes": "deletes",
+        "mutation": "mutations", "mutations": "mutations",
+        "write": "mutations", "writes": "mutations", "change": "mutations",
+        "changes": "mutations",
+    }
+    outcome_aliases = {
+        "*": "all", "any": "all", "all": "all",
+        "success": "successful", "succeeded": "successful",
+        "successful": "successful", "allowed": "successful",
+        "failure": "failed", "failures": "failed", "error": "failed",
+        "errors": "failed", "denied": "failed", "forbidden": "failed",
+        "failed": "failed",
+    }
+    operation = str(normalized.get("audit_operation_scope") or "all").strip().casefold()
+    outcome = str(normalized.get("audit_outcome") or "all").strip().casefold()
+    normalized["audit_operation_scope"] = operation_aliases.get(operation, operation)
+    normalized["audit_outcome"] = outcome_aliases.get(outcome, outcome)
+    return normalized
+
+
+def _agent_collector_error_detail(exc: Exception) -> str:
+    """Return actionable validation detail without Pydantic URLs or echoed inputs."""
+
+    if isinstance(exc, ValidationError):
+        issues: list[str] = []
+        for item in exc.errors(include_url=False, include_input=False):
+            location = ".".join(str(part) for part in item.get("loc", ())) or "arguments"
+            message = str(item.get("msg") or "is invalid")
+            issues.append(f"{location}: {message}")
+        return "Invalid typed collector arguments: " + "; ".join(issues[:4])
+    return redact_text(str(exc))[:2_000]
+
+
 def _explicit_kafka_topic_inventory_inquiry(
     question: str,
     object_references: list[dict[str, object]],
@@ -6714,6 +6881,13 @@ def _semantic_metric_read_plan(
             request.operation == "rank"
             and scope in {"cluster", "node_role"}
             and "node" in request.group_by
+            and all(
+                signal in {
+                    "cpu_usage", "memory_working_set",
+                    "node_cpu_utilization", "node_memory_utilization",
+                }
+                for signal in signals
+            )
         )
         if node_ranking and scope == "cluster":
             signals = [
@@ -6732,9 +6906,9 @@ def _semantic_metric_read_plan(
                 rank_signals = {
                     "cpu_usage": "top_cpu_consumers",
                     "memory_working_set": "top_memory_consumers",
-                    "application_log_volume": "top_log_volume_by_namespace",
                 }
                 rankable_domain_signals = {
+                    "application_log_volume",
                     "persistent_volume_usage", "persistent_volume_inode_usage",
                     "kafka_topic_messages_in", "kafka_topic_bytes_in",
                     "kafka_topic_bytes_out", "kafka_topic_storage",
@@ -6757,8 +6931,6 @@ def _semantic_metric_read_plan(
                 ):
                     return None
                 signals = [rank_signals.get(signal, signal) for signal in signals]
-        elif "application_log_volume" in signals:
-            return None
         if len(signals) != len(set(signals)):
             signals = list(dict.fromkeys(signals))
         volume_signals = {"persistent_volume_usage", "persistent_volume_inode_usage"}
@@ -6784,13 +6956,28 @@ def _semantic_metric_read_plan(
             scope != "cluster" or len(signals) != 1
         ):
             return None
+        if "application_log_volume" in signals:
+            if len(signals) != 1 or scope not in {"cluster", "namespace", "pod", "node"}:
+                return None
+            grouping = tuple(request.group_by)
+            valid_groupings = {
+                "cluster": {("namespace",), ("node",), ("namespace", "pod")},
+                "namespace": {(), ("pod",)},
+                "pod": {()},
+                "node": {()},
+            }
+            if grouping not in valid_groupings[scope]:
+                return None
+            if bool(grouping) != (request.operation == "rank"):
+                return None
         if (scope in {"node", "node_role"} or node_ranking) and any(
             grouping not in {"cluster", "node"} for grouping in request.group_by
-        ):
+        ) and "application_log_volume" not in signals:
             return None
         if scope == "persistent_volume_claim" and request.group_by:
             return None
         signal_scopes = {
+            "application_log_volume": {"cluster", "namespace", "pod", "node"},
             "kafka_topic_messages_in": {"kafka_cluster"},
             "kafka_topic_bytes_in": {"kafka_cluster"},
             "kafka_topic_bytes_out": {"kafka_cluster"},
@@ -6868,6 +7055,7 @@ def _semantic_metric_read_plan(
             ):
                 return None
         grouping_support = {
+            "application_log_volume": {"namespace", "pod", "node"},
             "kafka_topic_messages_in": {"topic"},
             "kafka_topic_bytes_in": {"topic"},
             "kafka_topic_bytes_out": {"topic"},
@@ -6921,6 +7109,7 @@ def _semantic_metric_read_plan(
             "node" in request.group_by
             and scope not in {"node", "node_role"}
             and not node_ranking
+            and "application_log_volume" not in signals
         ):
             return None
         metric_scope = "workload" if scope == "workload" else scope
@@ -8738,15 +8927,12 @@ def create_app(
                         raw_arguments = json.loads(tool_call.arguments)
                         if not isinstance(raw_arguments, dict):
                             raise ValueError("arguments must be an object")
-                        collector_arguments = dict(raw_arguments)
+                        collector_arguments = _normalize_agent_collector_arguments(
+                            tool_call.name, raw_arguments, question=question,
+                        )
                         requested_cluster_id = str(
                             collector_arguments.pop("cluster_id", "") or ""
                         ).strip()
-                        if (
-                            tool_call.name == "query_metrics"
-                            and "range_seconds" not in collector_arguments
-                        ):
-                            collector_arguments["range_seconds"] = DEFAULT_METRIC_RANGE_SECONDS
                         if not requested_cluster_id and len(agent_targets) == 1:
                             requested_cluster_id = next(iter(agent_targets))
                         if requested_cluster_id not in agent_targets:
@@ -8804,7 +8990,7 @@ def create_app(
                         agent_limitations.extend(collector_limitations)
                         collector_status = "succeeded"
                     except (ReadOnlyExplorerError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                        collector_error = redact_text(str(exc))[:2_000]
+                        collector_error = _agent_collector_error_detail(exc)
                         collector_status = (
                             "denied_or_unavailable"
                             if isinstance(exc, ReadOnlyExplorerError) else "invalid"

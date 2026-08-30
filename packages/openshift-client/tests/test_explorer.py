@@ -1208,3 +1208,31 @@ def test_thanos_node_ranking_falls_back_to_current_kubernetes_metrics_snapshot()
     assert observation.data["ranking"][0]["current"] == 50.0
     assert observation.data["rangeSeconds"] == 0
     assert "current snapshot" in result.limitations[0]
+
+
+def test_application_log_volume_routes_to_registered_loki_reader():
+    class LogReader:
+        def __init__(self) -> None:
+            self.intents: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.intents.append(intent)
+            return ReadResult((AdHocObservation(
+                id="log-volume", tool="query_metrics", summary="Read Pod log volume.",
+                source="loki:application/query/application_log_volume",
+                collected_at=datetime.now(timezone.utc),
+                data={"metric": "application_log_volume", "ranking": []},
+            ),))
+
+    reader = LogReader()
+    target = KubernetesReadOnlyExplorer(log_metric_reader=reader)
+    intent = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", metric_group_by=["pod"],
+    )
+
+    result = target.execute(intent)
+
+    assert reader.intents == [intent]
+    assert result.observations[0].source.endswith("application_log_volume")

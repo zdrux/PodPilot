@@ -1057,7 +1057,9 @@ class KubernetesReadOnlyExplorer:
                     )
                 return self._audit_reader.execute(intent)
             if intent.tool == "query_metrics":
-                if intent.metric == "top_log_volume_by_namespace":
+                if intent.metric in {
+                    "top_log_volume_by_namespace", "application_log_volume",
+                }:
                     if self._log_metric_reader is None:
                         raise ReadOnlyExplorerError(
                             "The authenticated log analytics adapter is unavailable."

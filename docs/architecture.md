@@ -310,9 +310,12 @@ server, and etcd scopes. Normal code compiles server-owned PromQL and calls `/ap
 matrix results, caps series/points/body/time, redacts labels, and persists normalized points
 plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
 is increased automatically when necessary to keep the series within its point ceiling.
-The registered `top_log_volume_by_namespace` metric is an aggregate-only exception backed by
-the LokiStack application tenant. Normal code owns its fixed `bytes_over_time` LogQL, accepts
-only vector results, and persists namespace, payload bytes, average byte rate, time bounds, and
+Registered application-log-volume metrics are aggregate-only exceptions backed by the LokiStack
+application tenant. Normal code owns their `bytes_over_time` LogQL and permits only reviewed
+namespace, Pod, and Node label selectors/groupings. The broker supports cluster rankings by
+namespace or Node, cluster-wide Pod rankings identified by namespace and Pod, Pod rankings within
+one exact namespace, and totals for one exact namespace, Pod, or Node. It accepts only vector
+results and persists normalized dimensions, payload bytes, average byte rate, time bounds, and
 completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
 Normal code parses common explicit relative periods before deterministic execution, while the
 semantic classifier carries `metric_range_seconds` for other wording. Requested values remain
