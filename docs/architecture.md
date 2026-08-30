@@ -81,8 +81,11 @@ KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its
 namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
-The API then sends OpenAI-compatible Chat Completions requests with the five typed read helpers and
-one `execute_shell` function.
+The API then sends OpenAI-compatible Chat Completions requests with bounded typed read helpers and
+one `execute_shell` function. Broad Pod health questions use the anomaly-first
+`pod_health_summary` helper, optionally scoped by namespace and label selector. A universal healthy
+conclusion requires its complete-scan flag; a resource inventory with compacted status detail cannot
+substitute for complete health coverage.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
 use the projected service-account identity. For a registered remote cluster the API resolves that
 cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback

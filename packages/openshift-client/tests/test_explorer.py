@@ -782,6 +782,34 @@ def test_pod_health_summary_finds_crashloop_after_healthy_payload_prefix() -> No
     assert data["byReason"] == {"CrashLoopBackOff": 1}
 
 
+def test_pod_health_summary_scopes_the_scan_with_a_label_selector() -> None:
+    class SelectedPodResource:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def get(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(items=[], metadata={})
+
+    resource = SelectedPodResource()
+    target, _, _ = explorer(resource)
+
+    result = target.execute(ReadIntent(
+        tool="pod_health_summary", namespace="openshift-logging",
+        label_selector="app.kubernetes.io/name=loki", limit=20,
+    ))
+
+    assert resource.calls == [{
+        "limit": 100,
+        "namespace": "openshift-logging",
+        "label_selector": "app.kubernetes.io/name=loki",
+    }]
+    data = result.observations[0].data
+    assert data["labelSelector"] == "app.kubernetes.io/name=loki"
+    assert data["scanComplete"] is True
+    assert "matching label selector app.kubernetes.io/name=loki" in data["scope"]
+
+
 def test_pod_health_summary_includes_init_failures_and_excludes_completed_pods() -> None:
     init_failure = FakeObject(payload={
         "metadata": {

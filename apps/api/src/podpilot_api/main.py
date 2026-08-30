@@ -2971,6 +2971,32 @@ def _deterministic_pod_health_answer(
     }
 
 
+def _is_broad_pod_health_question(question: str) -> bool:
+    """Identify broad Pod-health coverage requests without capturing causal/log diagnosis."""
+
+    return bool(
+        re.search(r"(?i)\bpods?\b", question)
+        and re.search(r"(?i)\b(?:health|healthy|unhealthy|ready|running|status)\b", question)
+        and not re.search(r"(?i)\b(?:why|cause|causing|logs?)\b", question)
+    )
+
+
+def _claims_complete_pod_health(content: str) -> bool:
+    """Detect a positive universal Pod-health claim that requires complete typed coverage."""
+
+    universal_positive = bool(
+        re.search(r"(?i)\b(?:all|every)\b", content)
+        and re.search(r"(?i)\bpods?\b", content)
+        and re.search(r"(?i)\b(?:healthy|ready|running|up)\b", content)
+    )
+    universal_absence = bool(
+        re.search(r"(?i)\b(?:no|none)\b", content)
+        and re.search(r"(?i)\bpods?\b", content)
+        and re.search(r"(?i)\b(?:unhealthy|unready|not\s+ready|failing|failed)\b", content)
+    )
+    return universal_positive or universal_absence
+
+
 def _deterministic_resource_health_answer(
     *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
 ) -> dict[str, object] | None:
@@ -8696,8 +8722,11 @@ def create_app(
                 "a scoped trust-bypass comparison; an unverified success does not prove identity. "
                 "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
                 "not the cluster audit log. Use query_metrics for registered metrics before improvising "
-                "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. A typed "
-                "collector result is an observation returned to you, never a final answer or stop signal. "
+                "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. "
+                "Use pod_health_summary for broad questions about whether Pods are healthy, Ready, or "
+                "running. Prefer its anomaly-first complete scan over list_resources, and never claim all "
+                "matching Pods are healthy unless its scanComplete field is true. "
+                "A typed collector result is an observation returned to you, never a final answer or stop signal. "
                 "A collector's complete flag refers only to that bounded collection. Interpret every result, "
                 "decide whether further investigation is useful, and write the operator-facing conclusion "
                 "yourself.\n\nSelected clusters:\n"
@@ -8825,11 +8854,41 @@ def create_app(
                         failure_type="agent_contract",
                     )
                 content = agent_content
-                enrichment_citations = [
-                    str(item["id"])
-                    for item in agent_evidence
-                    if item.get("id")
-                ]
+                agent_conclusion_status = "agent_reported"
+                deterministic_health = (
+                    _deterministic_pod_health_answer(
+                        evidence=agent_evidence, activity=activity,
+                    )
+                    if _is_broad_pod_health_question(question) else None
+                )
+                if deterministic_health is not None:
+                    content = str(deterministic_health["content"])
+                    enrichment_citations = [
+                        str(item) for item in deterministic_health.get("citations", [])
+                    ]
+                    agent_conclusion_status = str(
+                        deterministic_health.get("conclusion_status") or "unresolved"
+                    )
+                else:
+                    enrichment_citations = [
+                        str(item["id"])
+                        for item in agent_evidence
+                        if item.get("id")
+                    ]
+                    if (
+                        _is_broad_pod_health_question(question)
+                        and _claims_complete_pod_health(content)
+                    ):
+                        content = (
+                            "**PodPilot could not confirm that all matching Pods are healthy.** "
+                            "The collected evidence did not include a complete typed Pod-health scan, "
+                            "so a universal health conclusion would be unsupported."
+                        )
+                        agent_conclusion_status = "unresolved"
+                        agent_limitations.append(
+                            "A complete pod_health_summary result is required before PodPilot can "
+                            "claim that all matching Pods are healthy."
+                        )
                 effective_preferred_evidence_view = (
                     preferred_evidence_view
                     or _preferred_metric_evidence_view(
@@ -8882,7 +8941,7 @@ def create_app(
                             "suggested_followup_actions": [],
                             "guidance_next_checks": [],
                             "investigation_gaps": [],
-                            "conclusion_status": "agent_reported",
+                            "conclusion_status": agent_conclusion_status,
                             "agent_mode": "unrestricted",
                             "preferred_evidence_view": effective_preferred_evidence_view,
                             "presentation": resource_list_presentation,
@@ -8919,6 +8978,7 @@ def create_app(
             for tool_call in step.tool_calls:
                 if tool_call.name in {
                     "list_resources", "search_resources",
+                    "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
                 }:
                     collector_cluster_id = ""

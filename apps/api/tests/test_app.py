@@ -43,9 +43,11 @@ from podpilot_api.main import (
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _grounded_read_candidates,
+    _claims_complete_pod_health,
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _inventory_plan_scope_errors,
+    _is_broad_pod_health_question,
     _latest_audit_query_semantics,
     _latest_metric_query_semantics,
     _latest_resource_query_semantics,
@@ -299,6 +301,18 @@ def test_deterministic_pod_health_answer_refuses_incomplete_absence_claim() -> N
     assert answer["conclusion_status"] == "unresolved"
     assert "scan was incomplete" in answer["content"]
     assert "cannot be concluded" in answer["content"]
+
+
+def test_broad_pod_health_guard_detects_universal_claims_but_not_log_diagnosis() -> None:
+    assert _is_broad_pod_health_question(
+        "Are all the Loki pods in openshift-logging running healthy?"
+    ) is True
+    assert _is_broad_pod_health_question(
+        "Why are the Loki pod logs showing errors?"
+    ) is False
+    assert _claims_complete_pod_health("All Loki Pods are running and healthy.") is True
+    assert _claims_complete_pod_health("No unhealthy Pods were found.") is True
+    assert _claims_complete_pod_health("Two Pods are not Ready.") is False
 
 
 def test_deterministic_resource_health_answer_reports_anomaly() -> None:
@@ -8299,6 +8313,15 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
             },
         ),
         (
+            "pod_health_summary",
+            {
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "namespace": "openshift-logging",
+                "label_selector": "app.kubernetes.io/name=loki",
+                "limit": 100,
+            },
+        ),
+        (
             "http_probe",
             {
                 "cluster_id": SYSTEM_CLUSTER_ID,
@@ -8381,6 +8404,21 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
                         "fields": {"spec.host": "checkout.az.cibc.com"},
                     }],
                 }
+            elif intent.tool == "pod_health_summary":
+                data = {
+                    "healthSummaryVersion": 1,
+                    "scope": intent.namespace,
+                    "labelSelector": intent.label_selector,
+                    "scannedCount": 12,
+                    "scanComplete": True,
+                    "anomalyCount": 0,
+                    "returnedAnomalyCount": 0,
+                    "anomaliesComplete": True,
+                    "byReason": {},
+                    "bySeverity": {},
+                    "anomalies": [],
+                    "objects": [],
+                }
             elif intent.tool == "http_probe":
                 data = {
                     "url": intent.url, "connectHost": intent.connect_host,
@@ -8450,8 +8488,14 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         )
 
     assert [intent.tool for intent in explorer.calls] == [
-        "search_resources", "http_probe", "query_audit_events", "query_metrics",
+        "search_resources", "pod_health_summary", "http_probe",
+        "query_audit_events", "query_metrics",
     ]
+    health_intent = next(
+        intent for intent in explorer.calls if intent.tool == "pod_health_summary"
+    )
+    assert health_intent.namespace == "openshift-logging"
+    assert health_intent.label_selector == "app.kubernetes.io/name=loki"
     audit_intent = next(
         intent for intent in explorer.calls if intent.tool == "query_audit_events"
     )
@@ -8461,11 +8505,12 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         intent for intent in explorer.calls if intent.tool == "query_metrics"
     )
     assert metric_intent.range_seconds == 300
-    assert len(provider.agent_messages) == 5
+    assert len(provider.agent_messages) == 6
     assert "checkout.az.cibc.com" in json.dumps(provider.agent_messages[1])
-    assert "TLSv1.3" in json.dumps(provider.agent_messages[2])
-    assert "druciare-adm" in json.dumps(provider.agent_messages[3])
-    assert "cpu_usage" in json.dumps(provider.agent_messages[4])
+    assert "app.kubernetes.io/name=loki" in json.dumps(provider.agent_messages[2])
+    assert "TLSv1.3" in json.dumps(provider.agent_messages[3])
+    assert "druciare-adm" in json.dumps(provider.agent_messages[4])
+    assert "cpu_usage" in json.dumps(provider.agent_messages[5])
     assert "completion does not mean the investigation is complete" in json.dumps(
         provider.agent_messages[1]
     )
@@ -8477,10 +8522,126 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
             AdHocMessage.role == "assistant"
         ))
         assert conversation is not None
-        assert len(json.loads(conversation.evidence_json)) == 4
+        assert len(json.loads(conversation.evidence_json)) == 5
         assert assistant is not None
         assert assistant.answer_mode == "evidence_based"
-        assert len(json.loads(assistant.citations_json)) == 4
+        assert len(json.loads(assistant.citations_json)) == 5
+    engine.dispose()
+
+
+def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.steps = 0
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.agent_messages.append(list(messages))
+            if self.steps:
+                return _agent_final_step(
+                    "All 75 Pods are healthy based on the inventory table."
+                )
+            self.steps += 1
+            arguments = json.dumps({
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "namespace": "openshift-logging",
+                "label_selector": "app.kubernetes.io/name=loki",
+                "limit": 100,
+            })
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{
+                        "id": "loki-health", "type": "function",
+                        "function": {
+                            "name": "pod_health_summary", "arguments": arguments,
+                        },
+                    }],
+                },
+                content=None,
+                tool_calls=(AgentToolCall(
+                    id="loki-health", name="pod_health_summary", arguments=arguments,
+                ),),
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="loki-health-complete", tool="pod_health_summary",
+                summary="Detected no Pod health anomalies after evaluating 14 Loki Pods.",
+                source="kubernetes:v1:Pod/health:openshift-logging",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "healthSummaryVersion": 1,
+                    "scope": "openshift-logging matching label selector app.kubernetes.io/name=loki",
+                    "labelSelector": "app.kubernetes.io/name=loki",
+                    "scannedCount": 14,
+                    "scanLimit": 500,
+                    "scanComplete": True,
+                    "anomalyCount": 0,
+                    "returnedAnomalyCount": 0,
+                    "anomaliesComplete": True,
+                    "byReason": {}, "bySeverity": {}, "anomalies": [], "objects": [],
+                },
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider, read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Are all the Loki Pods in openshift-logging running healthy?"},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert len(explorer.calls) == 1
+    assert explorer.calls[0].tool == "pod_health_summary"
+    assert explorer.calls[0].label_selector == "app.kubernetes.io/name=loki"
+    tool_payload = json.loads(str(provider.agent_messages[1][-1]["content"]))
+    assert tool_payload["observations"][0]["data"]["scanComplete"] is True
+    assert "No current Pod health anomalies were found across all 14 evaluated Pods" in rendered.text
+    assert "All 75 Pods are healthy based on the inventory table" not in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        assert json.loads(assistant.citations_json) == ["loki-health-complete"]
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["conclusion_status"] == "confirmed"
     engine.dispose()
 
 

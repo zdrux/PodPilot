@@ -1883,6 +1883,8 @@ class KubernetesReadOnlyExplorer:
             kwargs: dict[str, object] = {"limit": min(100, scan_limit - scanned)}
             if namespace:
                 kwargs["namespace"] = namespace
+            if intent.label_selector:
+                kwargs["label_selector"] = intent.label_selector
             if token:
                 kwargs["_continue"] = token
             response = resource.get(**kwargs)
@@ -1946,6 +1948,8 @@ class KubernetesReadOnlyExplorer:
             returned_bytes += encoded_bytes
         anomalies_complete = len(returned) == len(detected)
         scope = namespace or "cluster"
+        if intent.label_selector:
+            scope = f"{scope} matching label selector {intent.label_selector}"
         limitations: list[str] = []
         if not scan_complete:
             limitations.append(
@@ -1973,6 +1977,7 @@ class KubernetesReadOnlyExplorer:
                 "kind": "Pod",
                 "healthSummaryVersion": 1,
                 "scope": scope,
+                "labelSelector": intent.label_selector,
                 "scannedCount": scanned,
                 "scanLimit": scan_limit,
                 "scanComplete": scan_complete,

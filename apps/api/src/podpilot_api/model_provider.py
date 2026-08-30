@@ -2236,6 +2236,16 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ),
             ("resource", "api_version", "kind", "match_field", "match_value"),
         )
+        pod_health_tool = collector_tool(
+            "pod_health_summary",
+            "Evaluate current Pod and container health with an anomaly-first bounded scan. Use "
+            "this for questions asking whether all Pods in a namespace or label-selected workload "
+            "are running, Ready, or healthy. A complete zero-anomaly result supports an all-healthy "
+            "conclusion; an incomplete scan does not. Prefer this over list_resources for universal "
+            "Pod-health conclusions. This helper returns evidence to you and never ends the investigation.",
+            ("namespace", "label_selector", "limit"),
+            (),
+        )
         http_probe_tool = collector_tool(
             "http_probe",
             "Run a bounded, unauthenticated HTTP(S) connectivity, TLS, and response probe from "
@@ -2286,6 +2296,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             shell_tool,
             list_resources_tool,
             search_resources_tool,
+            pod_health_tool,
             http_probe_tool,
             audit_tool,
             metric_tool,

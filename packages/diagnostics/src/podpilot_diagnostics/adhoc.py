@@ -488,12 +488,16 @@ class ReadIntent(BaseModel):
             "cluster_operator_health_summary", "machine_health_summary",
             "workload_health_summary",
         }
+        unsupported_health_selector = (
+            self.label_selector if self.tool != "pod_health_summary" else None
+        )
         if self.tool in health_summary_tools and any((
             self.resource, self.api_version, self.name,
-            self.label_selector, self.container, self.previous,
+            unsupported_health_selector, self.container, self.previous,
         )):
             raise ValueError(
-                "health summary reads accept only their typed scope and result limit"
+                "health summary reads accept only their typed scope, optional Pod label selector, "
+                "and result limit"
             )
         if self.tool != "workload_health_summary" and self.tool in health_summary_tools and self.kind:
             raise ValueError("kind is valid only for workload_health_summary")

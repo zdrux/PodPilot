@@ -393,7 +393,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
         "execute_shell", "list_resources", "search_resources",
-        "http_probe", "query_audit_events", "query_metrics",
+        "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
@@ -401,6 +401,10 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     tools_by_name = {
         item["function"]["name"]: item["function"] for item in request["tools"]
     }
+    health_tool = tools_by_name["pod_health_summary"]
+    assert health_tool["parameters"]["required"] == ["cluster_id"]
+    assert "label_selector" in health_tool["parameters"]["properties"]
+    assert "complete zero-anomaly result" in health_tool["description"]
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]

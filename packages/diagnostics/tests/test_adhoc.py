@@ -787,15 +787,20 @@ def test_known_resource_coordinates_are_canonicalized() -> None:
     assert normalized.limit == 3
 
 
-def test_pod_health_summary_accepts_only_scope_and_result_limit() -> None:
-    assert ReadIntent(
-        tool="pod_health_summary", namespace="payments", limit=50
-    ).namespace == "payments"
+def test_pod_health_summary_accepts_scope_selector_and_result_limit() -> None:
+    intent = ReadIntent(
+        tool="pod_health_summary", namespace="payments",
+        label_selector="app.kubernetes.io/name=loki", limit=50,
+    )
+    assert intent.namespace == "payments"
+    assert intent.label_selector == "app.kubernetes.io/name=loki"
 
     with pytest.raises(ValueError, match="accept only their typed scope"):
         ReadIntent(
             tool="pod_health_summary", resource="pods", namespace="payments"
         )
+    with pytest.raises(ValueError, match="accept only their typed scope"):
+        ReadIntent(tool="node_health_summary", label_selector="role=worker")
 
 
 @pytest.mark.parametrize("question", [
