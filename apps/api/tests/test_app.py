@@ -22,6 +22,7 @@ from podpilot_api.main import (
     _adhoc_evidence_view,
     _agent_collector_error_detail,
     _bind_plan_log_intents,
+    _build_delegated_read_only_explorer,
     _classify_ad_hoc_inquiry,
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
@@ -186,6 +187,31 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     ) is False
     assert _read_only_proxy_allows("PATCH", "/apis/apps/v1/deployments/api") is False
     assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
+
+
+def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    constructor_thread: list[int] = []
+
+    def build_explorer(**kwargs):
+        constructor_thread.append(threading.get_ident())
+        assert kwargs["api_url"].endswith("/opaque-capability")
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        KubernetesReadOnlyExplorer, "for_remote_cluster", build_explorer
+    )
+    explorer = asyncio.run(_build_delegated_read_only_explorer(
+        proxy_url=(
+            "http://127.0.0.1:8080/internal/delegated-proxy/opaque-capability"
+        ),
+        settings=Settings(),
+    ))
+
+    assert explorer is not None
+    assert constructor_thread and constructor_thread[0] != event_loop_thread
 
 
 def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:
@@ -12574,6 +12600,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script
     assert 'pickerLabel.replaceChildren()' in script
+    assert ".delegated-connect-panel .cluster-picker-menu { top: calc(100% + 7px); bottom: auto; }" in styles
     assert 'textarea.value = ""' in script
     assert "new EventSource" in script
     assert "thinking-spinner" in template

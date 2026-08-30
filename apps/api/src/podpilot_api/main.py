@@ -160,6 +160,27 @@ def _read_only_proxy_allows(method: str, remote_path: str) -> bool:
     )
 
 
+async def _build_delegated_read_only_explorer(
+    *, proxy_url: str, settings: Settings
+) -> KubernetesReadOnlyExplorer:
+    """Build a brokered explorer without blocking the broker's ASGI event loop."""
+
+    return await run_in_threadpool(
+        KubernetesReadOnlyExplorer.for_remote_cluster,
+        api_url=proxy_url,
+        token="broker-injected",
+        tls_verify=False,
+        max_payload_bytes=settings.adhoc_max_payload_bytes,
+        log_tail_lines=settings.workload_log_tail_lines,
+        max_log_bytes=settings.workload_max_log_bytes,
+        max_search_scan_objects=settings.adhoc_search_max_scan_objects,
+        http_probe=BoundedHttpProbe(
+            timeout_seconds=settings.adhoc_http_probe_timeout_seconds,
+            max_response_bytes=settings.adhoc_http_probe_max_bytes,
+        ),
+    )
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -9972,18 +9993,14 @@ def create_app(
                             f"{connection.read_only_proxy_capability}"
                         )
                         try:
-                            reader = KubernetesReadOnlyExplorer.for_remote_cluster(
-                                api_url=proxy_url,
-                                token="broker-injected",
-                                tls_verify=False,
-                                max_payload_bytes=app_settings.adhoc_max_payload_bytes,
-                                log_tail_lines=app_settings.workload_log_tail_lines,
-                                max_log_bytes=app_settings.workload_max_log_bytes,
-                                max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
-                                http_probe=BoundedHttpProbe(
-                                    timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
-                                    max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
-                                ),
+                            # DynamicClient performs synchronous API discovery while it is
+                            # constructed. The broker is served by this same ASGI process, so
+                            # construction on the event-loop thread deadlocks until the proxy
+                            # request times out. Keep discovery in the worker pool so the loop
+                            # remains available to service the loopback request.
+                            reader = await _build_delegated_read_only_explorer(
+                                proxy_url=proxy_url,
+                                settings=app_settings,
                             )
                         except Exception as exc:
                             limitations.append(
