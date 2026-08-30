@@ -255,6 +255,13 @@
         {% if message.activity and message.activity.limitations %}
         <ul class="answer-limitations">{% for item in message.activity.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
         {% endif %}
+        {% if message.activity and message.activity.diagnostics %}
+        <details class="answer-diagnostics">
+          <summary>Tool-call diagnostics <small>{{ message.activity.diagnostics | length }} rejected attempt{% if message.activity.diagnostics | length != 1 %}s{% endif %}</small></summary>
+          <p>PodPilot rejected these malformed agent calls before execution and returned correction guidance to the model.</p>
+          <ul>{% for item in message.activity.diagnostics %}<li>{{ item }}</li>{% endfor %}</ul>
+        </details>
+        {% endif %}
         {% if message.activity and message.activity.recommended_next_checks %}
         <section class="recommended-checks">
           <h3>Suggested next checks</h3>

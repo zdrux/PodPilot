@@ -374,13 +374,26 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     provider = OpenAIChatCompletionsProvider()
     provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
 
+    selected_cluster_ids = [
+        "47de8d71-b582-4017-8d5a-c542c79ab709",
+        "921fbbe6-6bb0-4879-bd64-ede839e2f3d9",
+    ]
     step = provider.next_agent_step(
         profile(
             base_url="https://openrouter.ai/api/v1",
             chat_model="openai/gpt-oss-120b",
         ),
         "secret-token",
-        [{"role": "user", "content": "Inspect the cluster."}],
+        [{
+            "role": "system",
+            "content": (
+                "Agent instructions.\nSelected clusters:\n"
+                + json.dumps([
+                    {"cluster_id": item, "cluster_name": f"Cluster {index}"}
+                    for index, item in enumerate(selected_cluster_ids, 1)
+                ])
+            ),
+        }, {"role": "user", "content": "Inspect the cluster."}],
     )
 
     assert step.content is None
@@ -398,13 +411,28 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
     assert "cluster_id" in parameters["properties"]
+    assert parameters["properties"]["cluster_id"]["enum"] == selected_cluster_ids
+    assert "one tool call per cluster" in parameters["properties"]["cluster_id"]["description"]
     tools_by_name = {
         item["function"]["name"]: item["function"] for item in request["tools"]
     }
+    assert tools_by_name["execute_shell"]["strict"] is True
+    assert all(
+        "strict" not in item["function"]
+        for item in request["tools"]
+        if item["function"]["name"] != "execute_shell"
+    )
+    assert all(
+        item["function"]["parameters"]["properties"]["cluster_id"]["enum"]
+        == selected_cluster_ids
+        for item in request["tools"]
+    )
     health_tool = tools_by_name["pod_health_summary"]
     assert health_tool["parameters"]["required"] == ["cluster_id"]
     assert "label_selector" in health_tool["parameters"]["properties"]
     assert "complete zero-anomaly result" in health_tool["description"]
+    assert "Do not use this tool for inventory" in tools_by_name["search_resources"]["description"]
+    assert "Both match_field and match_value are mandatory" in tools_by_name["search_resources"]["description"]
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]

@@ -7468,6 +7468,33 @@ def _agent_collector_error_detail(exc: Exception) -> str:
     return redact_text(str(exc))[:2_000]
 
 
+def _agent_tool_retry_guidance(
+    *, tool_name: str, error: str, selected_cluster_ids: list[str]
+) -> str:
+    """Give the model a bounded correction without changing its requested target."""
+
+    allowed = ", ".join(selected_cluster_ids)
+    if "cluster_id must identify" in error:
+        return (
+            "Retry with exactly one cluster_id from this allowed set: "
+            f"{allowed}. For a multi-cluster comparison, issue one separate tool call per cluster."
+        )
+    if tool_name == "search_resources" and (
+        "requires match_field and match_value" in error
+        or "match_field" in error
+        or "match_value" in error
+    ):
+        return (
+            "search_resources is only for a filtered field search and requires both "
+            "match_field and match_value. For inventory, use execute_shell with a bounded "
+            "oc get command and exactly one allowed cluster_id."
+        )
+    return (
+        "Correct the arguments using the tool schema and retry only if this read remains "
+        "material to the operator's request."
+    )
+
+
 def _safe_exception_diagnostics(exc: BaseException) -> str:
     """Render a bounded, redacted exception chain without traceback locals."""
 
@@ -9705,6 +9732,7 @@ def create_app(
         messages.append({"role": "user", "content": question})
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
+        agent_diagnostics: list[str] = []
         agent_evidence: list[dict[str, object]] = list(enrichment_evidence or [])
         typed_units_used = 0
         empty_step_retry_used = False
@@ -9868,6 +9896,7 @@ def create_app(
                         tool_activity_json=json.dumps({
                             "reads": activity,
                             "limitations": agent_limitations,
+                            "diagnostics": agent_diagnostics[-8:],
                             "recommended_next_checks": [],
                             "suggested_followup_actions": [],
                             "guidance_next_checks": [],
@@ -9920,6 +9949,7 @@ def create_app(
                     collector_status = "invalid"
                     collector_error: str | None = None
                     collector_diagnostic_ref: str | None = None
+                    collector_retry_guidance: str | None = None
                     intent: ReadIntent | None = None
                     try:
                         raw_arguments = json.loads(tool_call.arguments)
@@ -9990,15 +10020,30 @@ def create_app(
                     except (ReadOnlyExplorerError, TypeError, ValueError, json.JSONDecodeError) as exc:
                         collector_diagnostic_ref = uuid4().hex[:12]
                         collector_error = _agent_collector_error_detail(exc)
-                        collector_status = (
-                            "denied_or_unavailable"
-                            if isinstance(exc, ReadOnlyExplorerError) else "invalid"
+                        argument_error = (
+                            isinstance(exc, (ValidationError, TypeError, json.JSONDecodeError))
+                            or str(exc).startswith("arguments must be an object")
+                            or "cluster_id must identify" in str(exc)
                         )
-                        agent_limitations.append(
-                            f"Cluster {collector_cluster_name or collector_cluster_id or 'unknown'} "
-                            f"— {tool_call.name}: {collector_error} "
+                        collector_status = (
+                            "invalid" if argument_error else "denied_or_unavailable"
+                        )
+                        collector_retry_guidance = _agent_tool_retry_guidance(
+                            tool_name=tool_call.name,
+                            error=collector_error,
+                            selected_cluster_ids=list(agent_targets),
+                        )
+                        issue = (
+                            f"{tool_call.name}: {collector_error} "
                             f"(diagnostic ref {collector_diagnostic_ref})"
                         )
+                        if collector_status == "invalid":
+                            agent_diagnostics.append(issue)
+                        else:
+                            agent_limitations.append(
+                                f"Cluster {collector_cluster_name or collector_cluster_id or 'unresolved'} "
+                                f"— {issue}"
+                            )
                         LOGGER.warning(
                             "podpilot.agentic.collector_failed actor=%s conversation_id=%s "
                             "cluster_id=%s cluster=%r collector=%s diagnostic_ref=%s "
@@ -10041,6 +10086,8 @@ def create_app(
                         result_payload["error"] = collector_error
                     if collector_diagnostic_ref:
                         result_payload["diagnostic_ref"] = collector_diagnostic_ref
+                    if collector_retry_guidance:
+                        result_payload["retry_guidance"] = collector_retry_guidance
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -10083,6 +10130,7 @@ def create_app(
                 connection: AgentClusterConnection | None = None
                 tool_error: str | None = None
                 command_diagnostic_ref: str | None = None
+                command_retry_guidance: str | None = None
                 try:
                     arguments = json.loads(tool_call.arguments)
                     if tool_call.name != "execute_shell":
@@ -10103,6 +10151,15 @@ def create_app(
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                     tool_error = f"The tool call arguments were invalid: {exc}"
                     command_diagnostic_ref = uuid4().hex[:12]
+                    command_retry_guidance = _agent_tool_retry_guidance(
+                        tool_name="execute_shell",
+                        error=tool_error,
+                        selected_cluster_ids=list(agent_targets),
+                    )
+                    agent_diagnostics.append(
+                        f"execute_shell: {tool_error} "
+                        f"(diagnostic ref {command_diagnostic_ref})"
+                    )
                     LOGGER.warning(
                         "podpilot.agentic.command_rejected actor=%s conversation_id=%s "
                         "cluster_id=%s cluster=%r diagnostic_ref=%s error=%r",
@@ -10128,6 +10185,7 @@ def create_app(
                     result_payload = {
                         "error": tool_error,
                         "diagnostic_ref": command_diagnostic_ref,
+                        "retry_guidance": command_retry_guidance,
                     }
                 else:
                     command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
@@ -10226,7 +10284,7 @@ def create_app(
                 exit_code = result_payload.get("exit_code")
                 stderr_summary = redact_text(str(result_payload.get("stderr") or "")).strip()
                 stderr_summary = " ".join(stderr_summary.split())[:500]
-                if exit_code != 0:
+                if exit_code != 0 and tool_error is None:
                     failure_detail = (
                         stderr_summary
                         or redact_text(str(result_payload.get("error") or "command failed"))[:500]

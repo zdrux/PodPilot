@@ -447,6 +447,10 @@ summary must preserve the complete-coverage rule before confirming absence.
   capability; the proxy must allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while
   rejecting writes, exec/attach/proxy/port-forward variants, and Secret reads. Action commands must
   receive the action capability without exposing the user's token to the model or runner.
+- Agent-tool correction tests must prove cluster IDs are constrained to the selected set, one call
+  cannot concatenate multiple targets, unfiltered inventory is redirected from `search_resources`
+  to bounded `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved
+  limitations. Genuine runner and collector failures must remain prominent.
 - Delegated-session lifecycle tests must prove later logins append clusters to the current browser
   session, individual removal revokes only the selected token, removed clusters disappear from new
   conversation selectors, and existing conversations retain durable history while requiring

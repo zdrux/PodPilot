@@ -104,6 +104,10 @@ when to invoke them, how to interpret their observations, and whether to continu
 helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
 approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+Agent tool schemas enumerate the conversation's selected cluster IDs and require one target per
+call. Malformed arguments are rejected before cluster execution with bounded correction guidance.
+Those model-formatting mistakes remain audited and appear only in collapsed tool-call diagnostics;
+actual collector denials, unavailable sources, and non-zero commands remain visible limitations.
 The standing agent instructions require initial Pod and container log reads to use an exact scope
 when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
 The agent may narrow or expand subsequent reads in bounded increments when that sample is

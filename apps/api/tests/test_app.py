@@ -8861,6 +8861,130 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     engine.dispose()
 
 
+def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnostics(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, _profile, _api_key, messages):
+            self.agent_messages.append(list(messages))
+            step = len(self.agent_messages)
+            if step == 1:
+                arguments = json.dumps({
+                    "cluster_id": SYSTEM_CLUSTER_ID,
+                    "resource": "clusterlogforwarders",
+                    "api_version": "observability.openshift.io/v1",
+                    "kind": "ClusterLogForwarder",
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "bad-search", "type": "function",
+                            "function": {
+                                "name": "search_resources", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="bad-search", name="search_resources", arguments=arguments,
+                    ),),
+                )
+            if step == 2:
+                arguments = json.dumps({
+                    "cluster_id": f"{SYSTEM_CLUSTER_ID},another-cluster",
+                    "command": "oc get clusterlogforwarders -A -o json",
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "bad-cluster", "type": "function",
+                            "function": {
+                                "name": "execute_shell", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="bad-cluster", name="execute_shell", arguments=arguments,
+                    ),),
+                )
+            return _agent_final_step(
+                "The malformed calls were rejected before any cluster request was executed."
+            )
+
+    class Runner:
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("Malformed shell arguments must not reach the runner.")
+
+    provider = Provider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        agent_runner=Runner(),
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Compare ClusterLogForwarders."},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+
+    assert '<details class="answer-diagnostics">' in rendered.text
+    assert "2 rejected attempts" in rendered.text
+    assert '<ul class="answer-limitations">' not in rendered.text
+    assert "Cluster unknown" not in rendered.text
+    search_feedback = json.loads(str(provider.agent_messages[1][-1]["content"]))
+    assert "For inventory, use execute_shell" in search_feedback["retry_guidance"]
+    command_feedback = json.loads(str(provider.agent_messages[2][-1]["content"]))
+    assert "exactly one cluster_id" in command_feedback["retry_guidance"]
+    assert SYSTEM_CLUSTER_ID in command_feedback["retry_guidance"]
+
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert activity["limitations"] == []
+        assert len(activity["diagnostics"]) == 2
+        assert [item["status"] for item in activity["reads"]] == ["invalid", "invalid"]
+    engine.dispose()
+
+
 def test_unrestricted_agent_is_not_forced_through_registered_log_volume_enrichment(
     tmp_path: Path,
 ) -> None:

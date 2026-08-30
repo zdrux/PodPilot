@@ -73,6 +73,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   typed collectors remain supported. Both delegated modes can enumerate with deliberately bounded
   read-only `oc get` commands and then fetch the exact object details required for comparison. The
   broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
+- Agent tool schemas now enumerate selected cluster IDs and explicitly reserve `search_resources`
+  for field-filtered searches. Rejected model-formatting attempts receive retry guidance and render
+  as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
+  and command failures remain visible.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide

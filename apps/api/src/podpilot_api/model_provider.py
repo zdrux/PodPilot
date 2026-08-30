@@ -2177,12 +2177,44 @@ class OpenAIResponsesProvider:
 class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     """Strict JSON-schema adapter for OpenAI-compatible Chat Completions APIs."""
 
+    @staticmethod
+    def _selected_cluster_ids(messages: list[dict[str, object]]) -> list[str]:
+        marker = "\nSelected clusters:\n"
+        for message in messages:
+            if message.get("role") != "system":
+                continue
+            content = str(message.get("content") or "")
+            if marker not in content:
+                continue
+            try:
+                catalog = json.loads(content.rsplit(marker, 1)[1])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(catalog, list):
+                continue
+            return list(dict.fromkeys(
+                str(item.get("cluster_id") or "").strip()
+                for item in catalog
+                if isinstance(item, dict) and item.get("cluster_id")
+            ))[:10]
+        return []
+
     def next_agent_step(
         self,
         profile: ModelProfileConfig,
         api_key: str,
         messages: list[dict[str, object]],
     ) -> AgentStep:
+        selected_cluster_ids = self._selected_cluster_ids(messages)
+        cluster_id_schema: dict[str, object] = {
+            "type": "string",
+            "description": (
+                "Exactly one cluster_id from the selected-clusters list. To inspect multiple "
+                "clusters, make one tool call per cluster; never concatenate IDs."
+            ),
+        }
+        if selected_cluster_ids:
+            cluster_id_schema["enum"] = selected_cluster_ids
         shell_tool = {
             "type": "function",
             "function": {
@@ -2200,16 +2232,12 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                             "type": "string",
                             "description": "The complete bash script to execute.",
                         },
-                        "cluster_id": {
-                            "type": "string",
-                            "description": (
-                                "The exact cluster_id from the selected-clusters list in the system message."
-                            ),
-                        }
+                        "cluster_id": deepcopy(cluster_id_schema),
                     },
                     "required": ["command", "cluster_id"],
                     "additionalProperties": False,
                 },
+                "strict": True,
             },
         }
         intent_properties = ReadIntent.model_json_schema()["properties"]
@@ -2225,12 +2253,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "cluster_id": {
-                                "type": "string",
-                                "description": (
-                                    "The exact cluster_id from the selected-clusters list."
-                                ),
-                            },
+                            "cluster_id": deepcopy(cluster_id_schema),
                             **{field: deepcopy(intent_properties[field]) for field in fields},
                         },
                         "required": ["cluster_id", *required],
@@ -2241,8 +2264,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
 
         search_resources_tool = collector_tool(
             "search_resources",
-            "Search a Kubernetes/OpenShift object's exact dot-separated field path using a "
+            "Do not use this tool for inventory. Search a Kubernetes/OpenShift object's exact "
+            "dot-separated field path using a "
             "server-bounded scan. Prefer this over dumping a resource list and grepping it. "
+            "Both match_field and match_value are mandatory. For inventory without an exact "
+            "field filter, use execute_shell with a bounded oc get command instead. "
             "The result returns to you and never ends the investigation.",
             (
                 "resource", "api_version", "kind", "namespace", "label_selector",
