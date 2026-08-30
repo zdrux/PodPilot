@@ -1139,7 +1139,8 @@ class KubernetesReadOnlyExplorer:
             raise ReadOnlyExplorerError(detail) from exc
         except Exception as exc:
             raise ReadOnlyExplorerError(
-                "The requested cluster evidence could not be collected because the Kubernetes API client failed."
+                "The requested cluster evidence could not be collected because the Kubernetes API "
+                f"client failed ({type(exc).__name__})."
             ) from exc
 
     def _current_metrics_fallback(

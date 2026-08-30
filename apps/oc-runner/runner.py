@@ -317,6 +317,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
                 ACTIVE_COMMANDS.pop(request_id, None)
             if temporary_kubeconfig:
                 kubeconfig_path.unlink(missing_ok=True)
+        duration_ms = round((time.monotonic() - started) * 1000)
         _event(
             "command_complete",
             request_id=request_id,
@@ -324,7 +325,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             cluster_name=cluster_name,
             exit_code=exit_code,
             timed_out=timed_out,
-            duration_ms=round((time.monotonic() - started) * 1000),
+            duration_ms=duration_ms,
             stdout_bytes=stdout_bytes,
             stderr_bytes=stderr_bytes,
             stdout_truncated=stdout_bytes > MAX_OUTPUT_BYTES,
@@ -333,6 +334,8 @@ class RunnerHandler(BaseHTTPRequestHandler):
         self._send_json(
             200,
             {
+                "request_id": request_id,
+                "duration_ms": duration_ms,
                 "exit_code": exit_code,
                 "stdout": stdout,
                 "stderr": stderr,

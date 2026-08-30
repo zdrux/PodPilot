@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import secrets
+import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -6730,6 +6731,28 @@ def _agent_collector_error_detail(exc: Exception) -> str:
     return redact_text(str(exc))[:2_000]
 
 
+def _safe_exception_diagnostics(exc: BaseException) -> str:
+    """Render a bounded, redacted exception chain without traceback locals."""
+
+    chain: list[dict[str, object]] = []
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(chain) < 4:
+        seen.add(id(current))
+        frames = traceback.extract_tb(current.__traceback__)[-5:]
+        chain.append({
+            "type": type(current).__name__,
+            "detail": redact_text(str(current))[:1_000],
+            "frames": [
+                f"{frame.filename.rsplit('/', 1)[-1].rsplit(chr(92), 1)[-1]}:"
+                f"{frame.lineno}:{frame.name}"
+                for frame in frames
+            ],
+        })
+        current = current.__cause__ or current.__context__
+    return json.dumps(chain, sort_keys=True)
+
+
 def _explicit_kafka_topic_inventory_inquiry(
     question: str,
     object_references: list[dict[str, object]],
@@ -8988,6 +9011,7 @@ def create_app(
                     collector_limitations: list[str] = []
                     collector_status = "invalid"
                     collector_error: str | None = None
+                    collector_diagnostic_ref: str | None = None
                     intent: ReadIntent | None = None
                     try:
                         raw_arguments = json.loads(tool_call.arguments)
@@ -9056,6 +9080,7 @@ def create_app(
                         agent_limitations.extend(collector_limitations)
                         collector_status = "succeeded"
                     except (ReadOnlyExplorerError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        collector_diagnostic_ref = uuid4().hex[:12]
                         collector_error = _agent_collector_error_detail(exc)
                         collector_status = (
                             "denied_or_unavailable"
@@ -9063,7 +9088,24 @@ def create_app(
                         )
                         agent_limitations.append(
                             f"Cluster {collector_cluster_name or collector_cluster_id or 'unknown'} "
-                            f"— {tool_call.name}: {collector_error}"
+                            f"— {tool_call.name}: {collector_error} "
+                            f"(diagnostic ref {collector_diagnostic_ref})"
+                        )
+                        LOGGER.warning(
+                            "podpilot.agentic.collector_failed actor=%s conversation_id=%s "
+                            "cluster_id=%s cluster=%r collector=%s diagnostic_ref=%s "
+                            "arguments=%s exception_chain=%s",
+                            username,
+                            conversation_id,
+                            collector_cluster_id,
+                            collector_cluster_name,
+                            tool_call.name,
+                            collector_diagnostic_ref,
+                            json.dumps({
+                                str(key): redact_text(str(value))[:500]
+                                for key, value in collector_arguments.items()
+                            }, sort_keys=True),
+                            _safe_exception_diagnostics(exc),
                         )
 
                     evidence_ids = [
@@ -9089,6 +9131,8 @@ def create_app(
                     }
                     if collector_error:
                         result_payload["error"] = collector_error
+                    if collector_diagnostic_ref:
+                        result_payload["diagnostic_ref"] = collector_diagnostic_ref
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -9104,6 +9148,7 @@ def create_app(
                         "status": collector_status,
                         "observations": len(collector_evidence),
                         "evidence_ids": evidence_ids,
+                        "diagnostic_ref": collector_diagnostic_ref,
                     }
                     activity.append(activity_item)
                     with Session(engine) as db_session:
@@ -9118,6 +9163,7 @@ def create_app(
                                 "cluster_name": collector_cluster_name,
                                 "target": safe_collector_arguments,
                                 "evidence_ids": evidence_ids,
+                                "diagnostic_ref": collector_diagnostic_ref,
                             }, sort_keys=True),
                         ))
                         db_session.commit()
@@ -9128,6 +9174,7 @@ def create_app(
                 cluster_name = ""
                 connection: AgentClusterConnection | None = None
                 tool_error: str | None = None
+                command_diagnostic_ref: str | None = None
                 try:
                     arguments = json.loads(tool_call.arguments)
                     if tool_call.name != "execute_shell":
@@ -9147,6 +9194,17 @@ def create_app(
                     cluster_name, connection = agent_targets[cluster_id]
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                     tool_error = f"The tool call arguments were invalid: {exc}"
+                    command_diagnostic_ref = uuid4().hex[:12]
+                    LOGGER.warning(
+                        "podpilot.agentic.command_rejected actor=%s conversation_id=%s "
+                        "cluster_id=%s cluster=%r diagnostic_ref=%s error=%r",
+                        username,
+                        conversation_id,
+                        cluster_id,
+                        cluster_name,
+                        command_diagnostic_ref,
+                        redact_text(tool_error)[:1_000],
+                    )
 
                 if progress:
                     await progress(
@@ -9159,10 +9217,13 @@ def create_app(
                     )
                 result_payload: dict[str, object]
                 if tool_error is not None:
-                    result_payload = {"error": tool_error}
+                    result_payload = {
+                        "error": tool_error,
+                        "diagnostic_ref": command_diagnostic_ref,
+                    }
                 else:
+                    command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
                     try:
-                        command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
                         LOGGER.info(
                             "podpilot.agentic.command_start actor=%s conversation_id=%s "
                             "cluster_id=%s cluster=%r tls_verify=%s command_sha256=%s",
@@ -9200,27 +9261,53 @@ def create_app(
                                     f"{app_settings.agent_command_timeout_seconds:g}s timeout).",
                                 )
                         result_payload = result.to_dict()
-                        LOGGER.info(
+                        log_method = LOGGER.info if result.exit_code == 0 else LOGGER.warning
+                        stderr_tail = (
+                            " ".join(redact_text(result.stderr).strip().split())[-2_000:]
+                            if result.exit_code != 0 else ""
+                        )
+                        if result.exit_code != 0:
+                            command_diagnostic_ref = uuid4().hex[:12]
+                            result_payload["diagnostic_ref"] = command_diagnostic_ref
+                        log_method(
                             "podpilot.agentic.command_complete actor=%s conversation_id=%s "
-                            "cluster_id=%s cluster=%r exit_code=%s stdout_bytes=%s stderr_bytes=%s",
+                            "cluster_id=%s cluster=%r command_sha256=%s runner_request_id=%s "
+                            "diagnostic_ref=%s exit_code=%s duration_ms=%s timed_out=%s "
+                            "stdout_bytes=%s stderr_bytes=%s stdout_truncated=%s "
+                            "stderr_truncated=%s stderr_tail=%r",
                             username,
                             conversation_id,
                             cluster_id,
                             cluster_name,
+                            command_hash,
+                            result.request_id,
+                            command_diagnostic_ref,
                             result.exit_code,
+                            result.duration_ms,
+                            result.timed_out,
                             len(result.stdout.encode(errors="replace")),
                             len(result.stderr.encode(errors="replace")),
+                            result.stdout_truncated,
+                            result.stderr_truncated,
+                            stderr_tail,
                         )
                     except AgentRunnerError as exc:
-                        result_payload = {"error": str(exc)}
+                        command_diagnostic_ref = uuid4().hex[:12]
+                        result_payload = {
+                            "error": str(exc),
+                            "diagnostic_ref": command_diagnostic_ref,
+                        }
                         LOGGER.warning(
                             "podpilot.agentic.command_failed actor=%s conversation_id=%s "
-                            "cluster_id=%s cluster=%r error_type=%s",
+                            "cluster_id=%s cluster=%r command_sha256=%s diagnostic_ref=%s "
+                            "exception_chain=%s",
                             username,
                             conversation_id,
                             cluster_id,
                             cluster_name,
-                            type(exc).__name__,
+                            command_hash,
+                            command_diagnostic_ref,
+                            _safe_exception_diagnostics(exc),
                         )
                 safe_result = redact_text(json.dumps(result_payload, sort_keys=True, default=str))
                 messages.append({
@@ -9239,7 +9326,7 @@ def create_app(
                     agent_limitations.append(
                         f"Cluster {cluster_name or cluster_id or 'unknown'}: shell command failed"
                         + (f" with exit code {exit_code}" if exit_code is not None else "")
-                        + f" ({failure_detail})."
+                        + f" ({failure_detail}; diagnostic ref {command_diagnostic_ref})."
                     )
                 activity_item = {
                     "tool": "execute_shell",
@@ -9251,6 +9338,7 @@ def create_app(
                         "completed" if exit_code == 0 else
                         "failed" if exit_code is not None else "invalid"
                     ),
+                    "diagnostic_ref": command_diagnostic_ref,
                     "evidence_ids": [],
                 }
                 activity.append(activity_item)
@@ -9265,6 +9353,7 @@ def create_app(
                             "cluster_id": cluster_id,
                             "cluster_name": cluster_name,
                             "exit_code": exit_code,
+                            "diagnostic_ref": command_diagnostic_ref,
                         }, sort_keys=True),
                     ))
                     db_session.commit()

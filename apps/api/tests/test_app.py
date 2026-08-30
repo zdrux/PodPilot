@@ -71,6 +71,7 @@ from podpilot_api.main import (
     _resolve_resource_inquiry,
     _resource_followup_reuses_snapshot,
     _reuse_prior_resource_evidence,
+    _safe_exception_diagnostics,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -8967,7 +8968,7 @@ def test_unrestricted_kafka_inventory_does_not_run_without_agent_selected_reads(
 
 
 def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     cluster_ids = [
         "30000000-0000-0000-0000-000000000001",
@@ -9027,6 +9028,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
                 exit_code=1 if failed else 0,
                 stdout="kafka.kafka.strimzi.io/vc-cluster\n" if not failed else "",
                 stderr="Unable to connect to the server: synthetic failure" if failed else "",
+                request_id="runner-east" if failed else "runner-central",
+                duration_ms=416,
             )
 
     provider = Provider()
@@ -9116,6 +9119,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         activity = json.loads(assistant.tool_activity_json)
         command_reads = [item for item in activity["reads"] if item["tool"] == "execute_shell"]
         assert [item["cluster_id"] for item in command_reads] == cluster_ids
+        failed_read = next(item for item in command_reads if item["status"] == "failed")
+        assert re.fullmatch(r"[0-9a-f]{12}", failed_read["diagnostic_ref"])
         assert any("East DEV" in item for item in activity["limitations"])
         assert all(
             "TLS verification is disabled" not in item
@@ -9126,6 +9131,25 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
             for item in json.loads(run.progress_json)
         )
     engine.dispose()
+    assert "runner_request_id=runner-east" in caplog.text
+    assert "stderr_tail='Unable to connect to the server: synthetic failure'" in caplog.text
+    assert re.search(r"diagnostic_ref=[0-9a-f]{12}", caplog.text)
+
+
+def test_safe_exception_diagnostics_redacts_chain_and_includes_frames() -> None:
+    try:
+        try:
+            raise RuntimeError("request failed token=sensitive-token")
+        except RuntimeError as exc:
+            raise ReadOnlyExplorerError("collector failed") from exc
+    except ReadOnlyExplorerError as exc:
+        diagnostics = json.loads(_safe_exception_diagnostics(exc))
+
+    assert [item["type"] for item in diagnostics] == [
+        "ReadOnlyExplorerError", "RuntimeError",
+    ]
+    assert diagnostics[1]["detail"] == "request failed token=[REDACTED]"
+    assert diagnostics[1]["frames"]
 
 
 def test_ask_raw_response_toggle_preserves_the_single_agent_answer_attempt(

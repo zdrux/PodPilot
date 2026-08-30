@@ -623,6 +623,11 @@ brokers only that cluster's stored token to the loopback runner, which deletes i
 kubeconfig after the command. Inspect redacted execution metadata with
 `oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
 The runner logs startup plus command start, completion, termination, and timeout events. The API
+logs a matching runner request ID, command hash, duration, timeout and truncation flags, and a
+bounded redacted stderr tail for non-zero commands. Typed Kubernetes/OpenShift collector failures
+include a diagnostic reference plus a bounded redacted exception chain and traceback frame
+locations. Use the diagnostic reference shown in Ask to find the matching API log entry; neither
+log stream records cluster credentials or complete command output. The API
 publishes changing model/command elapsed-time messages to Ask without periodic runtime, model-wait,
 or command heartbeat log entries. A command is
 bounded by the runner's 300-second process-group timeout, while the complete Ask job remains bounded

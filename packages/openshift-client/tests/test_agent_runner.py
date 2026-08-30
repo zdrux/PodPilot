@@ -10,7 +10,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from podpilot_openshift.agent_runner import AgentClusterConnection, OcAgentRunnerClient
+from podpilot_openshift.agent_runner import (
+    AgentClusterConnection,
+    AgentRunnerError,
+    OcAgentRunnerClient,
+)
 
 
 def _runner_module():
@@ -82,6 +86,45 @@ def test_agent_runner_client_brokers_one_remote_cluster_credential(monkeypatch) 
             "tls_verify": False,
         },
     }
+
+
+def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch) -> None:
+    def fake_post(url, *, json, timeout):
+        request = httpx.Request("POST", url)
+        return httpx.Response(200, request=request, json={
+            "request_id": "runner-request-1",
+            "duration_ms": 812,
+            "exit_code": 1,
+            "stdout": "partial",
+            "stderr": "oc: forbidden",
+            "timed_out": False,
+            "stdout_truncated": True,
+            "stderr_truncated": False,
+        })
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    result = OcAgentRunnerClient("http://127.0.0.1:8090").execute("oc get pods")
+
+    assert result.request_id == "runner-request-1"
+    assert result.duration_ms == 812
+    assert result.stdout_truncated is True
+    assert result.stderr_truncated is False
+    assert result.timed_out is False
+
+
+def test_agent_runner_client_surfaces_redacted_http_failure(monkeypatch) -> None:
+    def fake_post(url, *, json, timeout):
+        request = httpx.Request("POST", url)
+        return httpx.Response(
+            400,
+            request=request,
+            json={"error": "invalid token=sensitive-token"},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    with pytest.raises(AgentRunnerError, match=r"HTTP 400.*token=\[REDACTED\]"):
+        OcAgentRunnerClient("http://127.0.0.1:8090").execute("oc get pods")
 
 
 def test_remote_runner_kubeconfig_disables_tls_and_is_removable() -> None:
