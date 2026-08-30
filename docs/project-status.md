@@ -77,6 +77,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   for field-filtered searches. Rejected model-formatting attempts receive retry guidance and render
   as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
   and command failures remain visible.
+- Delegated typed collectors initialize their Kubernetes discovery clients in the worker pool. A
+  collector can therefore call the loopback token broker without deadlocking the ASGI event loop or
+  starving liveness and readiness probes while an investigation is running.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide

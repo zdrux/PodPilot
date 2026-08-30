@@ -447,6 +447,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   capability; the proxy must allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while
   rejecting writes, exec/attach/proxy/port-forward variants, and Secret reads. Action commands must
   receive the action capability without exposing the user's token to the model or runner.
+- Delegated typed-reader tests must prove lazy Kubernetes discovery runs outside the ASGI event loop,
+  so loopback broker requests and liveness/readiness probes remain serviceable during collector
+  initialization.
 - Agent-tool correction tests must prove cluster IDs are constrained to the selected set, one call
   cannot concatenate multiple targets, unfiltered inventory is redirected from `search_resources`
   to bounded `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved

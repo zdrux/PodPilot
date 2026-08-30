@@ -590,9 +590,33 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
 
 
 def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
+    constructor_threads: list[int] = []
+    event_loop_threads: set[int] = set()
+
+    class Explorer:
+        def preflight(self, _intent) -> None:
+            return None
+
+        def execute(self, _intent) -> ReadResult:
+            return ReadResult((AdHocObservation(
+                id="clf-search-result",
+                tool="search_resources",
+                summary="Found the requested ClusterLogForwarder.",
+                source="kubernetes:observability.openshift.io/v1:ClusterLogForwarder",
+                collected_at=datetime.now(timezone.utc),
+                data={"kind": "ClusterLogForwarder", "objects": []},
+            ),))
+
+    def build_explorer(**_kwargs):
+        constructor_threads.append(threading.get_ident())
+        return Explorer()
+
+    monkeypatch.setattr(
+        KubernetesReadOnlyExplorer, "for_remote_cluster", build_explorer
+    )
 
     class Provider(FakeModelProvider):
         def __init__(self) -> None:
@@ -604,6 +628,30 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
             self.agent_messages.append(list(messages))
             self.calls += 1
             if self.calls == 1:
+                arguments = json.dumps({
+                    "cluster_id": cluster_id,
+                    "resource": "clusterlogforwarders",
+                    "api_version": "observability.openshift.io/v1",
+                    "kind": "ClusterLogForwarder",
+                    "match_field": "metadata.name",
+                    "match_value": "instance",
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "search-clf", "type": "function",
+                            "function": {
+                                "name": "search_resources", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="search-clf", name="search_resources", arguments=arguments,
+                    ),),
+                )
+            if self.calls == 2:
                 arguments = json.dumps({
                     "command": (
                         "oc get clusterlogforwarders.observability.openshift.io "
@@ -649,6 +697,12 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
         agent_runner=runner,
         settings_overrides={"delegated_access_enabled": True},
     )
+
+    @app.middleware("http")
+    async def capture_event_loop_thread(request, call_next):
+        event_loop_threads.add(threading.get_ident())
+        return await call_next(request)
+
     engine = build_engine(settings)
     with TestClient(app) as client:
         with Session(engine) as db_session:
@@ -693,6 +747,8 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
         )
 
     assert "configuration was inspected" in rendered.text
+    assert constructor_threads
+    assert constructor_threads[0] not in event_loop_threads
     assert len(runner.calls) == 1
     command, runner_connection = runner.calls[0]
     assert command.startswith("oc get clusterlogforwarders")

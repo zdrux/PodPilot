@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -104,6 +104,9 @@ when to invoke them, how to interpret their observations, and whether to continu
 helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
 approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+Lazy delegated typed-reader construction, including Kubernetes dynamic-client discovery through the
+loopback broker, runs in a worker thread. It must not block the ASGI event loop that serves that same
+broker or the health endpoints.
 Agent tool schemas enumerate the conversation's selected cluster IDs and require one target per
 call. Malformed arguments are rejected before cluster execution with bounded correction guidance.
 Those model-formatting mistakes remain audited and appear only in collapsed tool-call diagnostics;

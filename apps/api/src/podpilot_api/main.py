@@ -192,6 +192,16 @@ async def _build_delegated_read_only_explorer(
     )
 
 
+async def _resolve_agent_reader(
+    reader_or_factory: ReadOnlyExplorer | Callable[[], ReadOnlyExplorer],
+) -> ReadOnlyExplorer:
+    """Resolve lazy readers without blocking the ASGI loop on API discovery."""
+
+    if callable(reader_or_factory):
+        return await run_in_threadpool(reader_or_factory)
+    return reader_or_factory
+
+
 def _json_default(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -9985,17 +9995,15 @@ def create_app(
                                 "observations, the shell escape hatch, or return the best supported answer"
                             )
                         reader_or_factory = agent_readers[collector_cluster_id]
+                        try:
+                            reader = await _resolve_agent_reader(reader_or_factory)
+                        except Exception as exc:
+                            raise ValueError(
+                                "the typed collector client could not be initialized "
+                                f"({type(exc).__name__})"
+                            ) from exc
                         if callable(reader_or_factory):
-                            try:
-                                reader = reader_or_factory()
-                            except Exception as exc:
-                                raise ValueError(
-                                    "the typed collector client could not be initialized "
-                                    f"({type(exc).__name__})"
-                                ) from exc
                             agent_readers[collector_cluster_id] = reader
-                        else:
-                            reader = reader_or_factory
                         if progress:
                             await progress(
                                 "collecting",
