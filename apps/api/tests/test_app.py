@@ -8001,6 +8001,11 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         assert 'class="boundary-pill caution-summary agent-mode-pill"' in page.text
         assert "Session cautions" in page.text
         assert "Unrestricted lab mode" in page.text
+        assert "Delegated session ended" not in page.text
+        assert 'data-starter-available="true"' in page.text
+        composer = re.search(r'<textarea id="adhoc-message"[^>]*>', page.text)
+        assert composer is not None
+        assert "disabled" not in composer.group(0)
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
         created = client.post(
@@ -11780,6 +11785,16 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             assert conversation.execution_mode == "delegated_unrestricted"
             assert conversation.delegated_session_id
             assert json.loads(conversation.cluster_ids_json) == [cluster_id]
+        client.cookies.delete("podpilot_delegated_session")
+        ended_page = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
+        )
+        assert "Delegated session ended" in ended_page.text
+        ended_composer = re.search(
+            r'<textarea id="adhoc-message"[^>]*>', ended_page.text
+        )
+        assert ended_composer is not None
+        assert "disabled" in ended_composer.group(0)
     engine.dispose()
 
 
