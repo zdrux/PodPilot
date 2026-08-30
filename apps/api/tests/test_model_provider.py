@@ -391,9 +391,36 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
+    assert [item["function"]["name"] for item in request["tools"]] == [
+        "execute_shell", "list_resources", "search_resources",
+        "query_audit_events", "query_metrics",
+    ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
     assert "cluster_id" in parameters["properties"]
+    audit_tool = request["tools"][3]["function"]
+    assert "Kubernetes Events" in audit_tool["description"]
+    assert audit_tool["parameters"]["required"] == [
+        "cluster_id", "audit_operation_scope", "audit_outcome",
+    ]
+    metric_tool = request["tools"][4]["function"]
+    assert metric_tool["parameters"]["required"] == [
+        "cluster_id", "metric", "metric_scope",
+    ]
+
+
+def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_openai(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("podpilot_api.model_provider.OpenAI", fake_openai)
+
+    OpenAIResponsesProvider._client(profile(max_retries=5), "secret-token")
+
+    assert captured["max_retries"] == 5
 
 
 def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:

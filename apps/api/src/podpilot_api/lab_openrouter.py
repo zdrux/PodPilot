@@ -71,6 +71,7 @@ def main() -> int:
         profile.max_input_tokens = 131_072
         profile.max_output_tokens = 16_384
         profile.timeout_seconds = 240
+        profile.max_retries = 3
         profile.temperature = None
         profile.reasoning_effort = "high"
         profile.reasoning_efforts_json = json.dumps(["low", "medium", "high"])

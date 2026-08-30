@@ -52,13 +52,13 @@ log interpretation.
 ## Current Runtime
 
 The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
-agent path. Before the free-form loop, normal code may use high-confidence metric, audit, or
-catalog-grounded semantics to expose validated read candidates. Those compilers do not execute a
-read, choose a direction, or decide that the request is complete. The agent selects reads through
-the same guarded boundary as any other read, receives their normalized evidence, and alone decides
-whether to investigate further or answer. This preserves enrichments such as Loki-backed
-application-log volume, health summaries, and registered metric rankings without turning an
-enrichment pack into an orchestration policy.
+agent path. The Chat Completions model can select typed `list_resources`, `search_resources`,
+`query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
+shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
+normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
+tool observation and control returns to the model; neither success nor a collector-level
+`complete` field ends the investigation. This preserves exact field filtering, Loki audit
+projection, and registered metric backends without making a collector the orchestrator.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
@@ -81,7 +81,8 @@ KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its
 namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
-The API then sends OpenAI-compatible Chat Completions requests with one `execute_shell` function.
+The API then sends OpenAI-compatible Chat Completions requests with the four typed read helpers and
+one `execute_shell` function.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
 use the projected service-account identity. For a registered remote cluster the API resolves that
 cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback
@@ -89,8 +90,10 @@ for that call only. The `oc-runner` creates a mode-0600 temporary kubeconfig, ex
 Linux `oc` binary, deletes the kubeconfig, and returns
 exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
 model returns a final assistant message or the durable Ask run reaches its outer execution
-deadline. Beyond the optional deterministic enrichment, this path does not constrain the agent to
-`ReadIntent`, the read broker, typed remediation, preview, or approval. It does retain conversation ownership, provider credentials, redaction before model
+deadline. Typed helpers are validated as `ReadIntent` values, but the model chooses whether and
+when to invoke them, how to interpret their observations, and whether to continue through another
+helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
+approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
@@ -137,8 +140,10 @@ Dedicated drain threads consume stdout and stderr as the process runs, retain a 
 each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`
 from buffering arbitrary command output up to the sidecar's memory limit while preserving true byte
 counts and truncation flags in metadata-only runner logs.
-Model calls use the same elapsed-time progress mechanism and the profile's provider timeout, so an
-agent can remain visibly active while choosing its next action without waiting indefinitely.
+Model calls use the same elapsed-time progress mechanism. Each profile configures a per-attempt
+provider timeout and transient retry count (default three); the SDK retries timeouts, abrupt
+connection failures, rate limits, and transient server responses while the durable Ask deadline
+remains the outer bound.
 
 The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the

@@ -8185,6 +8185,182 @@ def test_unrestricted_pending_pod_question_is_driven_by_agent_without_collector_
     assert "Question-focused resource evidence" not in rendered.text
 
 
+def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
+    tmp_path: Path,
+) -> None:
+    calls = [
+        (
+            "search_resources",
+            {
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "resource": "routes.route.openshift.io",
+                "api_version": "route.openshift.io/v1",
+                "kind": "Route",
+                "match_field": "spec.host",
+                "match_value": ".az.cibc.com",
+                "match_operator": "contains",
+                "limit": 100,
+            },
+        ),
+        (
+            "query_audit_events",
+            {
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "namespace": "ai-ops",
+                "audit_username": "druciare-adm",
+                "audit_operation_scope": "deletes",
+                "audit_outcome": "all",
+                "range_seconds": 3600,
+                "limit": 5,
+            },
+        ),
+        (
+            "query_metrics",
+            {
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "metric": "cpu_usage",
+                "metric_scope": "namespace",
+                "namespace": "ai-ops",
+                "range_seconds": 900,
+                "limit": 5,
+            },
+        ),
+    ]
+
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.index = 0
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.agent_messages.append(list(messages))
+            if self.index >= len(calls):
+                return _agent_final_step(
+                    "I interpreted the filtered routes, audit activity, and metrics together."
+                )
+            name, arguments = calls[self.index]
+            self.index += 1
+            call_id = f"typed-{self.index}"
+            encoded = json.dumps(arguments)
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{
+                        "id": call_id, "type": "function",
+                        "function": {"name": name, "arguments": encoded},
+                    }],
+                },
+                content=None,
+                tool_calls=(AgentToolCall(
+                    id=call_id, name=name, arguments=encoded,
+                ),),
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            data: dict[str, object]
+            if intent.tool == "search_resources":
+                data = {
+                    "resource": intent.resource, "kind": intent.kind,
+                    "matchField": intent.match_field, "matchValue": intent.match_value,
+                    "matchOperator": intent.match_operator, "count": 1,
+                    "scannedCount": 40, "searchComplete": True,
+                    "objects": [{
+                        "namespace": "payments", "name": "checkout",
+                        "fields": {"spec.host": "checkout.az.cibc.com"},
+                    }],
+                }
+            elif intent.tool == "query_audit_events":
+                data = {
+                    "namespace": intent.namespace, "username": intent.audit_username,
+                    "operationScope": intent.audit_operation_scope,
+                    "outcome": intent.audit_outcome, "count": 1, "complete": True,
+                    "events": [{
+                        "timestamp": "2026-08-29T12:00:00Z",
+                        "username": "druciare-adm", "verb": "delete",
+                        "resource": "pods", "namespace": "ai-ops", "responseCode": 200,
+                    }],
+                }
+            else:
+                data = {
+                    "metric": intent.metric, "scope": intent.metric_scope,
+                    "namespace": intent.namespace, "unit": "cores", "complete": True,
+                    "ranking": [{
+                        "labels": {"namespace": "ai-ops"},
+                        "current": 0.5, "average": 0.4, "maximum": 0.6,
+                    }],
+                }
+            return ReadResult((AdHocObservation(
+                id=f"typed-{intent.tool}", tool=intent.tool,
+                summary=f"Collected {intent.tool} evidence.",
+                source=f"test:{intent.tool}", collected_at=datetime.now(timezone.utc),
+                data=data,
+            ),))
+
+    provider = Provider()
+    explorer = Explorer()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider, read_explorer=explorer,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Investigate the filtered routes, audit activity, and metrics."},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert [intent.tool for intent in explorer.calls] == [
+        "search_resources", "query_audit_events", "query_metrics",
+    ]
+    assert len(provider.agent_messages) == 4
+    assert "checkout.az.cibc.com" in json.dumps(provider.agent_messages[1])
+    assert "druciare-adm" in json.dumps(provider.agent_messages[2])
+    assert "cpu_usage" in json.dumps(provider.agent_messages[3])
+    assert "completion does not mean the investigation is complete" in json.dumps(
+        provider.agent_messages[1]
+    )
+    assert "interpreted the filtered routes" in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        conversation = db_session.scalar(select(AdHocConversation))
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert conversation is not None
+        assert len(json.loads(conversation.evidence_json)) == 3
+        assert assistant is not None
+        assert assistant.answer_mode == "evidence_based"
+        assert len(json.loads(assistant.citations_json)) == 3
+    engine.dispose()
+
+
 def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(
     tmp_path: Path,
 ) -> None:
@@ -12882,6 +13058,19 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         )
         assert rejected_temperature.status_code == 422
         assert "temperature is outside" in rejected_temperature.json()["detail"]
+        rejected_retries = client.post(
+            "/api/v1/model-profile",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "provider_label": "Invalid retries",
+                "base_url": "https://models.example.test/v1",
+                "chat_model": "test-model",
+                "api_token": "test-api-token",
+                "max_retries": "11",
+            },
+        )
+        assert rejected_retries.status_code == 422
+        assert "retries" in rejected_retries.json()["detail"]
         saved = client.post(
             "/api/v1/model-profile",
             headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
@@ -12892,6 +13081,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
                 "embedding_model": "text-embedding-3-small",
                 "api_token": "test-api-token",
                 "timeout_seconds": "30",
+                "max_retries": "4",
                 "max_output_tokens": "1200",
                 "temperature": "0",
             },
@@ -12914,6 +13104,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
             profile = db_session.get(ModelProfile, 1)
             assert profile is not None
             assert profile.temperature == 0
+            assert profile.max_retries == 4
             captured_probe = json.loads(profile.last_probe_diagnostics_json)
             assert captured_probe["outcome"] == "ready"
             assert captured_probe["calls"] == []
@@ -12953,6 +13144,8 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
         assert "Authorization headers and request bodies are never stored" in diagnostics_page.text
         assert 'name="temperature"' in diagnostics_page.text
         assert 'value="0.0"' in diagnostics_page.text
+        assert 'name="max_retries"' in diagnostics_page.text
+        assert 'value="4"' in diagnostics_page.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:

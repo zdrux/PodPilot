@@ -5,6 +5,7 @@ import re
 import ssl
 import time
 from collections.abc import Iterator
+from copy import deepcopy
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -73,6 +74,7 @@ class ModelProfileConfig:
     max_input_tokens: int = 128_000
     reasoning_effort: str | None = None
     temperature: float | None = None
+    max_retries: int = 3
 
 
 def _responses_reasoning(profile: ModelProfileConfig) -> dict[str, object]:
@@ -1477,7 +1479,7 @@ class OpenAIResponsesProvider:
                 api_key=api_key,
                 base_url=profile.base_url.rstrip("/"),
                 timeout=profile.timeout_seconds,
-                max_retries=0,
+                max_retries=profile.max_retries,
                 http_client=httpx.Client(
                     verify=verify,
                     timeout=profile.timeout_seconds,
@@ -2156,7 +2158,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         api_key: str,
         messages: list[dict[str, object]],
     ) -> AgentStep:
-        tool = {
+        shell_tool = {
             "type": "function",
             "function": {
                 "name": "execute_shell",
@@ -2185,12 +2187,98 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 },
             },
         }
+        intent_properties = ReadIntent.model_json_schema()["properties"]
+
+        def collector_tool(
+            name: str, description: str, fields: tuple[str, ...], required: tuple[str, ...]
+        ) -> dict[str, object]:
+            return {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "cluster_id": {
+                                "type": "string",
+                                "description": (
+                                    "The exact cluster_id from the selected-clusters list."
+                                ),
+                            },
+                            **{field: deepcopy(intent_properties[field]) for field in fields},
+                        },
+                        "required": ["cluster_id", *required],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+
+        tools = [
+            shell_tool,
+            collector_tool(
+                "list_resources",
+                "Collect a bounded Kubernetes/OpenShift resource inventory. This helper returns "
+                "evidence to you and never ends the investigation.",
+                ("resource", "api_version", "kind", "namespace", "label_selector", "limit"),
+                ("resource", "api_version", "kind"),
+            ),
+            collector_tool(
+                "search_resources",
+                "Search a Kubernetes/OpenShift object's exact dot-separated field path using a "
+                "server-bounded scan. Prefer this over dumping a resource list and grepping it. "
+                "The result returns to you and never ends the investigation.",
+                (
+                    "resource", "api_version", "kind", "namespace", "label_selector",
+                    "match_field", "match_value", "match_operator", "limit",
+                ),
+                ("resource", "api_version", "kind", "match_field", "match_value"),
+            ),
+            collector_tool(
+                "query_audit_events",
+                "Query the registered, bounded Loki audit-log source. Kubernetes Events and "
+                "events.audit.k8s.io are not cluster audit logs. Use this helper for audit actors, "
+                "operations, resources, namespaces, and outcomes. Its result returns to you and "
+                "never ends the investigation.",
+                (
+                    "namespace", "audit_username", "audit_resource", "audit_operation_scope",
+                    "audit_outcome", "audit_search_until_limit", "range_seconds", "limit",
+                ),
+                ("audit_operation_scope", "audit_outcome"),
+            ),
+            collector_tool(
+                "query_metrics",
+                "Query a registered bounded metric through PodPilot's Thanos or Loki metric "
+                "adapter. Use this before improvising raw PromQL or LogQL; the helper selects the "
+                "correct backend for the metric. Its result returns to you and never ends the "
+                "investigation.",
+                (
+                    "metric", "metric_scope", "api_version", "kind", "namespace", "name",
+                    "container", "metric_operation", "metric_statistic", "metric_group_by",
+                    "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
+                    "limit",
+                ),
+                ("metric", "metric_scope"),
+            ),
+        ]
+        audit_parameters = tools[3]["function"]["parameters"]["properties"]
+        audit_parameters["audit_search_until_limit"]["description"] = (
+            "Set true only when the operator explicitly asks for a last/top N result so the "
+            "bounded reader may widen backward until N matches or its policy ceiling. Keep false "
+            "for vague 'recent' requests."
+        )
+        metric_parameters = tools[4]["function"]["parameters"]["properties"]
+        metric_parameters["range_seconds"]["default"] = 300
+        metric_parameters["range_seconds"]["description"] = (
+            "Requested metric period in seconds. Use 300 when the operator supplies no period; "
+            "do not invent a wide range."
+        )
         try:
             with _model_request_context("workflow.unrestricted_agent"):
                 response = self._client(profile, api_key).chat.completions.create(
                     model=profile.chat_model,
                     messages=messages,
-                    tools=[tool],
+                    tools=tools,
                     tool_choice="auto",
                     parallel_tool_calls=False,
                     max_tokens=profile.max_output_tokens,

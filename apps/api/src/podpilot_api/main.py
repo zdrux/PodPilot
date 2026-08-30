@@ -271,6 +271,7 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         max_input_tokens=profile.max_input_tokens,
         reasoning_effort=profile.reasoning_effort,
         temperature=profile.temperature,
+        max_retries=profile.max_retries,
     )
 
 
@@ -8459,6 +8460,7 @@ def create_app(
         enrichment_limitations: list[str] | None = None,
         preferred_evidence_view: str | None = None,
         agent_targets: dict[str, tuple[str, AgentClusterConnection | None]],
+        agent_readers: dict[str, ReadOnlyExplorer | Callable[[], ReadOnlyExplorer]],
     ) -> str:
         if profile.api_type != "chat-completions":
             raise ModelProviderError(
@@ -8477,8 +8479,9 @@ def create_app(
             "role": "system",
             "content": (
                 "You are PodPilot running in an explicitly enabled lab-only unrestricted agent mode. "
-                "You have an execute_shell tool in a Linux sidecar with the OpenShift oc CLI already "
-                "authenticated to the current cluster as the Pod's service account. Work autonomously: "
+                "You have typed read-only collector tools plus an execute_shell escape hatch in a Linux "
+                "sidecar with the OpenShift oc CLI already authenticated to the current cluster as the "
+                "Pod's service account. Work autonomously: "
                 "run whatever oc commands or shell scripts are useful, inspect their results, revise your "
                 "approach, and continue until the operator's request is complete. Do not ask for approval "
                 "before a command. Kubernetes RBAC and admission responses are authoritative; if an operation "
@@ -8488,7 +8491,15 @@ def create_app(
                 " Every execute_shell call targets exactly one of the selected clusters listed "
                 "below. Supply its cluster_id with the command. Run the necessary command on each "
                 "selected cluster when the operator asks for a multi-cluster result. Never place a "
-                "bearer token, kubeconfig, or credential in a command.\n\nSelected clusters:\n"
+                "bearer token, kubeconfig, or credential in a command. "
+                "Use search_resources for requested object-field filters instead of dumping a full list. "
+                "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
+                "not the cluster audit log. Use query_metrics for registered metrics before improvising "
+                "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. A typed "
+                "collector result is an observation returned to you, never a final answer or stop signal. "
+                "A collector's complete flag refers only to that bounded collection. Interpret every result, "
+                "decide whether further investigation is useful, and write the operator-facing conclusion "
+                "yourself.\n\nSelected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),
         }]
@@ -8533,6 +8544,8 @@ def create_app(
         messages.append({"role": "user", "content": question})
         activity: list[dict[str, object]] = list(enrichment_activity or [])
         agent_limitations: list[str] = list(enrichment_limitations or [])
+        agent_evidence: list[dict[str, object]] = list(enrichment_evidence or [])
+        typed_units_used = 0
         empty_step_retry_used = False
         while True:
             if progress:
@@ -8568,9 +8581,13 @@ def create_app(
                     await progress(
                         "agent_thinking",
                         f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
-                        f"{profile.timeout_seconds:g}s provider timeout).",
+                        f"{profile.timeout_seconds:g}s per-attempt timeout; "
+                        f"up to {profile.max_retries} transient retries).",
                     )
-                if elapsed_seconds >= profile.timeout_seconds + 10:
+                provider_call_deadline = (
+                    profile.timeout_seconds * (profile.max_retries + 1) + 30
+                )
+                if elapsed_seconds >= provider_call_deadline:
                     model_task.cancel()
                     raise ModelProviderError(
                         "The unrestricted agent model call exceeded its configured timeout."
@@ -8609,11 +8626,17 @@ def create_app(
                 content = agent_content
                 enrichment_citations = [
                     str(item["id"])
-                    for item in enrichment_evidence or []
+                    for item in agent_evidence
                     if item.get("id")
                 ]
+                effective_preferred_evidence_view = (
+                    preferred_evidence_view
+                    or _preferred_metric_evidence_view(
+                        evidence=agent_evidence, activity=activity,
+                    )
+                )
                 resource_list_presentation = _resource_list_presentation(
-                    evidence=enrichment_evidence or [],
+                    evidence=agent_evidence,
                     activity=activity,
                     citations=enrichment_citations,
                     suppress_markdown_table=False,
@@ -8633,7 +8656,7 @@ def create_app(
                         for item in existing_evidence
                         if isinstance(item, dict) and item.get("id")
                     }
-                    for item in enrichment_evidence or []:
+                    for item in agent_evidence:
                         if item.get("id"):
                             evidence_by_id[str(item["id"])] = item
                     conversation.evidence_json = json.dumps(
@@ -8660,7 +8683,7 @@ def create_app(
                             "investigation_gaps": [],
                             "conclusion_status": "agent_reported",
                             "agent_mode": "unrestricted",
-                            "preferred_evidence_view": preferred_evidence_view,
+                            "preferred_evidence_view": effective_preferred_evidence_view,
                             "presentation": resource_list_presentation,
                         }, sort_keys=True),
                         provider_status="ready",
@@ -8693,6 +8716,155 @@ def create_app(
 
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
+                if tool_call.name in {
+                    "list_resources", "search_resources",
+                    "query_audit_events", "query_metrics",
+                }:
+                    collector_cluster_id = ""
+                    collector_cluster_name = ""
+                    collector_arguments: dict[str, object] = {}
+                    collector_evidence: list[dict[str, object]] = []
+                    collector_limitations: list[str] = []
+                    collector_status = "invalid"
+                    collector_error: str | None = None
+                    intent: ReadIntent | None = None
+                    try:
+                        raw_arguments = json.loads(tool_call.arguments)
+                        if not isinstance(raw_arguments, dict):
+                            raise ValueError("arguments must be an object")
+                        collector_arguments = dict(raw_arguments)
+                        requested_cluster_id = str(
+                            collector_arguments.pop("cluster_id", "") or ""
+                        ).strip()
+                        if (
+                            tool_call.name == "query_metrics"
+                            and "range_seconds" not in collector_arguments
+                        ):
+                            collector_arguments["range_seconds"] = DEFAULT_METRIC_RANGE_SECONDS
+                        if not requested_cluster_id and len(agent_targets) == 1:
+                            requested_cluster_id = next(iter(agent_targets))
+                        if requested_cluster_id not in agent_targets:
+                            raise ValueError(
+                                "cluster_id must identify one of the selected clusters: "
+                                + ", ".join(agent_targets)
+                            )
+                        collector_cluster_id = requested_cluster_id
+                        collector_cluster_name = agent_targets[collector_cluster_id][0]
+                        if collector_cluster_id not in agent_readers:
+                            raise ValueError(
+                                "the typed collector is unavailable for this cluster connection"
+                            )
+                        intent = normalize_read_intent(ReadIntent(
+                            tool=tool_call.name,
+                            **collector_arguments,
+                        ))
+                        unit_cost = _investigation_unit_cost(intent)
+                        if typed_units_used + unit_cost > app_settings.adhoc_max_reads_per_turn:
+                            raise ValueError(
+                                "the bounded typed-read budget is exhausted; use existing "
+                                "observations, the shell escape hatch, or return the best supported answer"
+                            )
+                        reader_or_factory = agent_readers[collector_cluster_id]
+                        if callable(reader_or_factory):
+                            try:
+                                reader = reader_or_factory()
+                            except Exception as exc:
+                                raise ValueError(
+                                    "the typed collector client could not be initialized "
+                                    f"({type(exc).__name__})"
+                                ) from exc
+                            agent_readers[collector_cluster_id] = reader
+                        else:
+                            reader = reader_or_factory
+                        if progress:
+                            await progress(
+                                "collecting",
+                                f"Running the agent-selected {tool_call.name} helper on "
+                                f"{collector_cluster_name}.",
+                            )
+                        preflight = getattr(reader, "preflight", None)
+                        if callable(preflight):
+                            await run_in_threadpool(preflight, intent)
+                        typed_units_used += unit_cost
+                        result = await run_in_threadpool(reader.execute, intent)
+                        for observation in result.observations:
+                            attributed = observation.to_dict()
+                            attributed["cluster_id"] = collector_cluster_id
+                            attributed["cluster_name"] = collector_cluster_name
+                            collector_evidence.append(attributed)
+                        collector_limitations.extend(str(item) for item in result.limitations)
+                        agent_evidence.extend(collector_evidence)
+                        agent_evidence = agent_evidence[-app_settings.adhoc_max_evidence :]
+                        agent_limitations.extend(collector_limitations)
+                        collector_status = "succeeded"
+                    except (ReadOnlyExplorerError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                        collector_error = redact_text(str(exc))[:2_000]
+                        collector_status = (
+                            "denied_or_unavailable"
+                            if isinstance(exc, ReadOnlyExplorerError) else "invalid"
+                        )
+                        agent_limitations.append(
+                            f"Cluster {collector_cluster_name or collector_cluster_id or 'unknown'} "
+                            f"— {tool_call.name}: {collector_error}"
+                        )
+
+                    evidence_ids = [
+                        str(item.get("id")) for item in collector_evidence if item.get("id")
+                    ]
+                    safe_collector_arguments = {
+                        str(key): redact_text(str(value))
+                        for key, value in collector_arguments.items()
+                    }
+                    result_payload: dict[str, object] = {
+                        "status": collector_status,
+                        "collector": tool_call.name,
+                        "cluster_id": collector_cluster_id,
+                        "cluster_name": collector_cluster_name,
+                        "observations": _compact_provider_value(
+                            collector_evidence, string_limit=4_000, list_limit=1_000,
+                        ),
+                        "limitations": collector_limitations,
+                        "collector_boundary": (
+                            "This helper call has returned. Its completion does not mean the "
+                            "investigation is complete; interpret the observations and choose the next action."
+                        ),
+                    }
+                    if collector_error:
+                        result_payload["error"] = collector_error
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": redact_text(json.dumps(
+                            result_payload, sort_keys=True, default=_json_default,
+                        )),
+                    })
+                    activity_item = {
+                        "tool": tool_call.name,
+                        "cluster_id": collector_cluster_id,
+                        "cluster_name": collector_cluster_name,
+                        "target": safe_collector_arguments,
+                        "status": collector_status,
+                        "observations": len(collector_evidence),
+                        "evidence_ids": evidence_ids,
+                    }
+                    activity.append(activity_item)
+                    with Session(engine) as db_session:
+                        db_session.add(AuditEvent(
+                            actor=username,
+                            action="agentic.collector",
+                            outcome=collector_status,
+                            details_json=json.dumps({
+                                "conversation_id": conversation_id,
+                                "collector": tool_call.name,
+                                "cluster_id": collector_cluster_id,
+                                "cluster_name": collector_cluster_name,
+                                "target": safe_collector_arguments,
+                                "evidence_ids": evidence_ids,
+                            }, sort_keys=True),
+                        ))
+                        db_session.commit()
+                    continue
+
                 command = ""
                 cluster_id = ""
                 cluster_name = ""
@@ -8977,6 +9149,9 @@ def create_app(
                     agent_targets: dict[
                         str, tuple[str, AgentClusterConnection | None]
                     ] = {}
+                    agent_readers: dict[
+                        str, ReadOnlyExplorer | Callable[[], ReadOnlyExplorer]
+                    ] = {}
                     for selected_cluster in selected_clusters:
                         cluster_label = selected_cluster.name
                         if not selected_cluster.is_enabled:
@@ -8986,6 +9161,7 @@ def create_app(
                             continue
                         if selected_cluster.is_system:
                             agent_targets[selected_cluster.id] = (cluster_label, None)
+                            agent_readers[selected_cluster.id] = cluster_reader
                             continue
                         try:
                             cluster_token = await run_in_threadpool(
@@ -9015,6 +9191,10 @@ def create_app(
                                 tls_verify=effective_tls_verify,
                             ),
                         )
+                        agent_readers[selected_cluster.id] = (
+                            lambda cluster=selected_cluster, token=cluster_token:
+                            remote_cluster_reader(cluster, token)
+                        )
                         if not effective_tls_verify:
                             enrichment_limitations.append(
                                 f"Cluster {cluster_label} API TLS verification is disabled; "
@@ -9041,6 +9221,7 @@ def create_app(
                         enrichment_limitations=enrichment_limitations,
                         preferred_evidence_view=None,
                         agent_targets=agent_targets,
+                        agent_readers=agent_readers,
                     )
                 inquiry = None
                 prior_audit_query = _latest_audit_query_semantics(evidence)
@@ -10681,7 +10862,9 @@ def create_app(
                     "temperature": row.temperature,
                     "reasoning_effort": row.reasoning_effort,
                     "reasoning_efforts": _profile_reasoning_efforts(row),
-                    "timeout_seconds": row.timeout_seconds, "status": row.status,
+                    "timeout_seconds": row.timeout_seconds,
+                    "max_retries": row.max_retries,
+                    "status": row.status,
                     "capabilities": json.loads(row.capabilities_json),
                     "tool_calling_hint": row.tool_calling_hint, "vision_hint": row.vision_hint,
                     "is_active": row.is_active, "last_error": row.last_error,
@@ -10780,21 +10963,23 @@ def create_app(
             raise HTTPException(status_code=422, detail="Custom CA input must not contain a private key.")
         try:
             timeout_seconds = float(form.get("timeout_seconds", "30"))
+            max_retries = int(form.get("max_retries", "3"))
             max_input_tokens = int(form.get("max_input_tokens", "128000"))
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
             temperature = float(temperature_text) if temperature_text else None
         except ValueError as exc:
             raise HTTPException(
                 status_code=422,
-                detail="Timeout, token budget, and temperature must be numeric.",
+                detail="Timeout, retries, token budget, and temperature must be numeric.",
             ) from exc
         if (not 3 <= timeout_seconds <= app_settings.model_timeout_max_seconds
+                or not 0 <= max_retries <= 10
                 or not 1_024 <= max_input_tokens <= 2_000_000
                 or not 128 <= max_output_tokens <= 131_072
                 or (temperature is not None and not 0 <= temperature <= 2)):
             raise HTTPException(
                 status_code=422,
-                detail="Timeout, token budget, or temperature is outside the allowed range.",
+                detail="Timeout, retries, token budget, or temperature is outside the allowed range.",
             )
         try:
             profile_id = int(profile_id_text) if profile_id_text else None
@@ -10843,6 +11028,7 @@ def create_app(
             profile.tool_calling_hint = form.get("tool_calling_hint") == "true"
             profile.vision_hint = form.get("vision_hint") == "true"
             profile.timeout_seconds = timeout_seconds
+            profile.max_retries = max_retries
             profile.max_output_tokens = max_output_tokens
             profile.status = "not_tested"
             profile.capabilities_json = "{}"
@@ -10863,6 +11049,7 @@ def create_app(
                     "reasoning_efforts": reasoning_efforts,
                     "default_reasoning_effort": reasoning_effort or "provider_default",
                     "temperature": temperature if temperature is not None else "provider_default",
+                    "max_retries": max_retries,
                 }, sort_keys=True),
             ))
             db_session.commit()

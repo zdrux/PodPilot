@@ -238,7 +238,7 @@ The current deployment uses these variables:
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
 Model profile metadata (API type, base URL, model names, available reasoning levels,
-TLS mode/custom CA, capability hints, timeout, and token budgets) is configured through
+TLS mode/custom CA, capability hints, per-attempt timeout, transient retry count, and token budgets) is configured through
 `/settings/model` and stored in SQLite. Local development reads `OPENAI_API_KEY`
 without persisting it. In OpenShift, every profile has an opaque key in the fixed
 Secret above. Saving a token sends it through the OAuth-protected HTTPS Route;
@@ -264,6 +264,12 @@ with endpoints that do not accept temperature. An explicit value is sent to clas
 planning, answer, analysis, and capability-probe calls through both supported API types.
 Temperature `0` generally reduces sampling variation but is not a determinism guarantee;
 providers may ignore or reject it, so test the profile after changing the value.
+
+Each profile also sets **Transient retries**, default `3` and allowed range `0`–`10`. The OpenAI
+client applies that retry count to timeouts, abrupt connection failures, rate limits, and transient
+server responses. Authentication, validation, and ordinary client errors are not made successful
+by retrying. The profile timeout applies per attempt; the durable Ask execution deadline remains
+the outer limit for the complete agent run.
 
 Completed Ask replies persist a bounded model-diagnostics record for the calls made during that
 turn. The collapsed **Model usage** control beneath the PodPilot author rail shows aggregate input,
@@ -507,10 +513,12 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 `openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
-Unrestricted turns retain additive deterministic enrichment. Known-read and metric, audit, and
-catalog-grounded compilers expose validated candidates; they never execute automatically and never
-decide whether the turn is complete. The agent selects a candidate or another safe read, interprets
-the resulting evidence, and decides when to answer. Wording such as “show”, “list”, “top”, “why”,
+Unrestricted turns expose `list_resources`, `search_resources`, `query_audit_events`, and
+`query_metrics` as model-selected helper tools alongside `execute_shell`. They never execute
+automatically and never decide whether the turn is complete. Their normalized observations return
+to the model as tool results, are persisted as evidence, and can drive native tables and metric
+cards. The agent interprets the results and decides whether to invoke another helper, use the shell
+escape hatch, or answer. Wording such as “show”, “list”, “top”, “why”,
 “investigate”, “diagnose”, and “root cause” does not create a server-owned completion route. A
 native card is a rendering choice, not a completion signal. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
@@ -534,7 +542,8 @@ snapshot. The UI records that no historical average or peak was available. The e
 CLI commands are `oc adm top node` and `oc adm top pod`; `oc top` is not a valid OpenShift command.
 When all registered reads and shell verification attempts fail, Ask reports the exact collection
 errors without accepting an agent-invented explanation for why a source was unavailable.
-Successful explicit audit retrieval is rendered once and ends collection for that turn. Audit
+Successful explicit audit retrieval returns a normalized observation to the agent; it does not end
+the turn. Audit
 queries can be bounded simultaneously by namespace, operation class, outcome, username, and an
 explicit common Kubernetes resource kind; for example, “who deleted Pods in ai-ops” queries Loki
 for completed delete operations on `pods` in `ai-ops` across all users. It does not fall back to the
@@ -547,9 +556,10 @@ An explicit count such as “last 5” starts at the initial audit window and ex
 until five matches are found or the policy ceiling is reached. “Recent” without a count performs
 one initial-window query and returns however many matches exist; it does not widen merely to fill
 the default 20-row display limit.
-If the Loki audit query times out, is denied, or only succeeds on some selected clusters, PodPilot
-reports that registered result directly. It does not ask the unrestricted agent to substitute
-`oc get events.audit.k8s.io`, and it does not depend on `jq` being installed in `oc-runner`.
+If the Loki audit query times out, is denied, or only succeeds on some selected clusters, that exact
+registered result returns to the agent. The tool contract identifies Kubernetes Events and
+`events.audit.k8s.io` as different data sources, and the result remains an observation rather than a
+stop signal. The audit helper does not depend on `jq` being installed in `oc-runner`.
 
 Kafka deployment inventory wording such as “show me all the deployed Kafka clusters” uses the
 registered `kafkas.kafka.strimzi.io` list on every selected OpenShift cluster. The rendered table

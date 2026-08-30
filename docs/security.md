@@ -63,19 +63,19 @@ security boundary. The base and standard `remote-poc` overlays remain guarded. T
 overlay adds no RBAC of its own and therefore exercises every permission already granted to
 `podpilot-investigator` on that target cluster.
 
-High-confidence and schema-valid semantic questions may additionally run through the existing
-registered deterministic known-read, metric, audit, and catalog-grounded resource compilers before
-the shell loop. Those reads retain their normal fixed query construction,
-normalization, redaction, evidence persistence, and bounded presentation. They provide trusted
-product enrichment—such as Loki application-log byte rankings—but do not remove or constrain the
-agent's arbitrary shell tool.
+The unrestricted loop exposes registered resource-list, object-field-search, metric, and audit
+collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
+normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
+bounded presentation. The API never invokes them merely because a classifier or enrichment pack
+recognized a request. Their observations return to the model, which alone chooses the next tool or
+the final answer.
 Registered-source failures are authoritative only as failures: the model may not infer that an
 add-on, API, or resource is absent from an unavailable adapter. If neither a registered reader nor
 a successful shell verification produces evidence, normal code replaces the model prose with the
 exact redacted collection failures.
-Conversely, a successful terminal registered enrichment is authoritative for its declared scope.
-The unrestricted loop does not execute a competing shell tool call in that turn, avoiding both
-duplicate output and unnecessary command execution after the bounded source answered the request.
+Conversely, a successful registered observation is authoritative only for its declared scope.
+Collector completion never disconnects, cancels, or terminates the model loop; the model may
+interpret it, correlate it with another helper, verify it through shell, or answer.
 
 For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators
