@@ -368,11 +368,12 @@ overfetching four times the requested number of verbose raw records under the ge
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname
 verification for a credential-bearing request and permits interception of the bearer token
-and evidence. The UI, audit event, connection status, and affected Ask answers keep the
-exception visible. Prefer repairing trust and do not use the exception in production.
+and evidence. The UI, audit event, connection status, and a compact affected-session indicator keep
+the exception visible without repeating it beneath every Ask answer. Prefer repairing trust and do
+not use the exception in production.
 PodPilot suppresses urllib3's identical per-request `InsecureRequestWarning` for these explicitly
 accepted connections to avoid log spam; this does not suppress connection failures or remove the
-operator-visible and audited TLS warning.
+operator-visible session indicator and audited TLS warning.
 
 An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
 is pinned when the first question is submitted; **Change** opens a new conversation while

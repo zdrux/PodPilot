@@ -8718,6 +8718,9 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
     assert all(call[1].tls_verify is False for call in runner.calls)
     assert "synthetic failure" in rendered.text
     assert "East DEV" in rendered.text
+    assert "Cluster TLS exception" in rendered.text
+    assert "API TLS verification is disabled" not in rendered.text
+    assert "credentials and evidence are vulnerable to interception" not in rendered.text
     assert all("token-" not in str(messages) for messages in provider.agent_messages)
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -8729,6 +8732,10 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         command_reads = [item for item in activity["reads"] if item["tool"] == "execute_shell"]
         assert [item["cluster_id"] for item in command_reads] == cluster_ids
         assert any("East DEV" in item for item in activity["limitations"])
+        assert all(
+            "TLS verification is disabled" not in item
+            for item in activity["limitations"]
+        )
         assert any(
             "Still executing on Central DEV" in item["message"]
             for item in json.loads(run.progress_json)

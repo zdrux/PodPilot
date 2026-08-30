@@ -15,6 +15,14 @@
           <span>Unrestricted lab mode</span>
         </span>
         {% endif %}
+        {% if has_unverified_cluster_tls %}
+        <span class="boundary-pill" tabindex="0"
+          data-tooltip="One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details."
+          aria-label="Cluster TLS exception. One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.">
+          <span class="boundary-pill-icon" aria-hidden="true">!</span>
+          <span>Cluster TLS exception</span>
+        </span>
+        {% endif %}
         <span class="boundary-pill" tabindex="0"
           data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
           aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}">

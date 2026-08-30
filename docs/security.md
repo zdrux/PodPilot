@@ -168,8 +168,9 @@ Remote Kubernetes API TLS verification defaults on in portable and guarded deplo
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
-stores the exception, connection tests audit it, and every affected Ask run adds an
-operator-visible limitation. The `remote-poc-agentic` overlay is an explicit broader lab exception:
+stores the exception, connection tests audit it, and every affected Ask session displays one
+compact connection-boundary indicator instead of repeating a limitation under each answer. The
+`remote-poc-agentic` overlay is an explicit broader lab exception:
 it sets `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY=false`, forcing registered remote readers and runner
 commands in that deployment to skip certificate and hostname verification. The management page
 displays the environment override. This does not change model-provider or ordinary application TLS

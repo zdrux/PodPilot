@@ -9195,11 +9195,6 @@ def create_app(
                             lambda cluster=selected_cluster, token=cluster_token:
                             remote_cluster_reader(cluster, token)
                         )
-                        if not effective_tls_verify:
-                            enrichment_limitations.append(
-                                f"Cluster {cluster_label} API TLS verification is disabled; "
-                                "credentials and evidence are vulnerable to interception."
-                            )
                     # In unrestricted mode the agent owns discovery from the first action.
                     # Registered collectors, semantic compilers, prior snapshots, and enrichment
                     # packs are intentionally not executed ahead of the agent or injected as a
@@ -9343,10 +9338,6 @@ def create_app(
                                 f"Cluster {cluster_label}: the Kubernetes API client could not be initialized ({type(exc).__name__})."
                             )
                             continue
-                        if not selected_cluster.tls_verify:
-                            limitations.append(
-                                f"Cluster {cluster_label} API TLS verification is disabled; the bearer token and evidence are vulnerable to interception."
-                            )
                     if progress:
                         await progress("selecting_cluster", f"Investigating cluster {cluster_label}.")
                     prior_cluster_evidence = [
@@ -10102,6 +10093,7 @@ def create_app(
                 "selected_cluster_ids": [SYSTEM_CLUSTER_ID],
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": app_settings.agent_mode,
+                "has_unverified_cluster_tls": False,
             },
         )
         if csrf_is_new:
@@ -10218,6 +10210,15 @@ def create_app(
                 "selected_cluster_ids": conversation_cluster_ids,
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": app_settings.agent_mode,
+                "has_unverified_cluster_tls": any(
+                    item.id in conversation_cluster_ids
+                    and not item.is_system
+                    and (
+                        not item.tls_verify
+                        or not app_settings.remote_cluster_tls_verify
+                    )
+                    for item in available_clusters
+                ),
             },
         )
         if csrf_is_new:
