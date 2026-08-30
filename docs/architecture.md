@@ -158,6 +158,9 @@ OAuth token for each Kubernetes request and applies the registered cluster's sys
 trust. Conversation rows retain only the execution mode, owning PodPilot session ID, and immutable
 cluster IDs—never the token. The sidecar can therefore issue CREATE, PATCH, APPLY, and DELETE
 requests when the remote user's RBAC permits them, without receiving the bearer token itself.
+The delegated picker reads every enabled entry from the cluster registry. For the system entry,
+the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
+the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
 
 In the legacy feature-flag-off lab mode, the sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the

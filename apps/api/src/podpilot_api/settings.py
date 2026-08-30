@@ -33,9 +33,16 @@ class Settings(BaseSettings):
     delegated_login_timeout_seconds: float = Field(default=15.0, ge=3.0, le=60.0)
     delegated_login_attempts_per_minute: int = Field(default=5, ge=1, le=30)
     delegated_proxy_timeout_seconds: float = Field(default=310.0, ge=5.0, le=900.0)
+    delegated_system_api_url: str = "https://kubernetes.default.svc"
+    delegated_system_oauth_authorization_url: str = (
+        "https://oauth-openshift.openshift-authentication.svc/oauth/authorize"
+    )
     alertmanager_url: str = "https://alertmanager-main.openshift-monitoring.svc:9094"
     service_account_token_path: Path = Path(
         "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    )
+    service_account_ca_path: Path = Path(
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
     )
     service_ca_path: Path = Path(
         "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"

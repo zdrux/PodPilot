@@ -11729,6 +11729,8 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
+        assert settings.cluster_name in page.text
+        assert "PodPilot system cluster" in page.text
         connected = client.post(
             "/api/v1/delegated-sessions/connect",
             headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
@@ -11758,6 +11760,66 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             assert conversation.delegated_session_id
             assert json.loads(conversation.cluster_ids_json) == [cluster_id]
     engine.dispose()
+
+
+def test_delegated_operator_can_connect_the_system_cluster(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from podpilot_openshift.delegated import DelegatedIdentity
+
+    clients: list[dict[str, object]] = []
+
+    class LoginClient:
+        def __init__(self, **kwargs) -> None:
+            clients.append(kwargs)
+
+        def login(self, username: str, password: str) -> DelegatedIdentity:
+            assert (username, password) == ("local-user", "one-time-password")
+            return DelegatedIdentity(
+                username="local-user", uid="local-uid", token="sha256~local-token"
+            )
+
+        def revoke(self, _token: str) -> bool:
+            return True
+
+    api_ca_path = tmp_path / "api-ca.crt"
+    service_ca_path = tmp_path / "service-ca.crt"
+    api_ca_path.write_text("api-ca", encoding="utf-8")
+    service_ca_path.write_text("service-ca", encoding="utf-8")
+    monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", LoginClient)
+    app, _ = make_app(
+        tmp_path,
+        assignments={"dana": Role.DELEGATED_OPERATOR},
+        source=FakeAlertSource(),
+        settings_overrides={
+            "delegated_access_enabled": True,
+            "service_account_ca_path": api_ca_path,
+            "service_ca_path": service_ca_path,
+        },
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        connected = client.post(
+            "/api/v1/delegated-sessions/connect",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "cluster_ids": json.dumps([SYSTEM_CLUSTER_ID]),
+                "username": "local-user",
+                "password": "one-time-password",
+                "consent": "on",
+            },
+        )
+
+    assert connected.status_code == 200
+    assert connected.json()["connected"][0]["cluster_id"] == SYSTEM_CLUSTER_ID
+    assert clients[0]["api_url"] == "https://kubernetes.default.svc"
+    assert clients[0]["authorization_endpoint_override"] == (
+        "https://oauth-openshift.openshift-authentication.svc/oauth/authorize"
+    )
+    assert clients[0]["custom_ca_pem"] == "api-ca\nservice-ca\n"
 
 
 def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Path) -> None:

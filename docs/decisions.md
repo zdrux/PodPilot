@@ -1204,7 +1204,8 @@ each user's Kubernetes permissions. Some DEV operators need the agent to exercis
 remote RBAC, including writes, without changing the remote clusters or persisting their credentials.
 
 Decision: When delegated access is enabled, users in no configured PodPilot role group become
-Delegated Operators. They explicitly select only Approver-registered clusters, accept an
+Delegated Operators. They explicitly select enabled clusters from the same PodPilot registry used
+by cluster management—including the runtime system cluster—accept an
 unrestricted warning, and complete an OpenShift challenging-client login with one credential pair.
 Passwords are discarded after exchange. Tokens stay in API memory for two hours and are injected by
 a capability-based loopback proxy; they are never given to the model or runner. The runner receives

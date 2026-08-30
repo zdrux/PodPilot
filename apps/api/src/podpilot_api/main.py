@@ -8493,6 +8493,33 @@ def create_app(
         monitoring_timeout_seconds=app_settings.thanos_timeout_seconds,
         monitoring_max_series=app_settings.thanos_max_series,
     )
+
+    def delegated_cluster_endpoint(cluster: Cluster) -> tuple[str, str | None, str | None]:
+        if not cluster.is_system:
+            return cluster.api_url, cluster.custom_ca_pem, None
+        try:
+            api_ca = app_settings.service_account_ca_path.read_text(encoding="utf-8")
+            service_ca = app_settings.service_ca_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise DelegatedLoginError(
+                "The PodPilot system-cluster trust bundle is unavailable."
+            ) from exc
+        return (
+            app_settings.delegated_system_api_url,
+            f"{api_ca.rstrip()}\n{service_ca.rstrip()}\n",
+            app_settings.delegated_system_oauth_authorization_url,
+        )
+
+    def delegated_login_client(cluster: Cluster) -> OpenShiftDelegatedLoginClient:
+        api_url, custom_ca_pem, authorization_endpoint_override = (
+            delegated_cluster_endpoint(cluster)
+        )
+        return OpenShiftDelegatedLoginClient(
+            api_url=api_url,
+            custom_ca_pem=custom_ca_pem,
+            authorization_endpoint_override=authorization_endpoint_override,
+            timeout_seconds=app_settings.delegated_login_timeout_seconds,
+        )
     cluster_reader = read_explorer or KubernetesReadOnlyExplorer(
         max_payload_bytes=app_settings.adhoc_max_payload_bytes,
         log_tail_lines=app_settings.workload_log_tail_lines,
@@ -8749,10 +8776,10 @@ def create_app(
             raise HTTPException(status_code=401, detail="The delegated cluster session has expired.")
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, connection.cluster_id)
-            if cluster is None or not cluster.is_enabled or cluster.is_system:
+            if cluster is None or not cluster.is_enabled:
                 raise HTTPException(status_code=404, detail="The delegated cluster is unavailable.")
-            api_url = cluster.api_url.rstrip("/")
-            custom_ca_pem = cluster.custom_ca_pem
+            api_url, custom_ca_pem, _ = delegated_cluster_endpoint(cluster)
+            api_url = api_url.rstrip("/")
         body = await request.body()
         if len(body) > 10 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="The delegated Kubernetes request is too large.")
@@ -9660,12 +9687,7 @@ def create_app(
                                 f"Cluster {cluster_label} is disabled; unrestricted commands were skipped."
                             )
                             continue
-                        if selected_cluster.is_system and delegated_session_id:
-                            enrichment_limitations.append(
-                                "The PodPilot system cluster cannot be used in a delegated session."
-                            )
-                            continue
-                        if selected_cluster.is_system:
+                        if selected_cluster.is_system and not delegated_session_id:
                             agent_targets[selected_cluster.id] = (cluster_label, None)
                             agent_readers[selected_cluster.id] = cluster_reader
                             continue
@@ -9721,12 +9743,13 @@ def create_app(
                             "http://127.0.0.1:8080/internal/delegated-proxy/"
                             f"{connection.proxy_capability}"
                         )
+                        delegated_api_url, _, _ = delegated_cluster_endpoint(selected_cluster)
                         agent_targets[selected_cluster.id] = (
                             cluster_label,
                             AgentClusterConnection(
                                 cluster_id=selected_cluster.id,
                                 cluster_name=cluster_label,
-                                api_url=selected_cluster.api_url,
+                                api_url=delegated_api_url,
                                 token=None,
                                 tls_verify=True,
                                 proxy_url=proxy_url,
@@ -10546,12 +10569,7 @@ def create_app(
             if cluster is None:
                 continue
             revoked = await run_in_threadpool(
-                OpenShiftDelegatedLoginClient(
-                    api_url=cluster.api_url,
-                    custom_ca_pem=cluster.custom_ca_pem,
-                    timeout_seconds=app_settings.delegated_login_timeout_seconds,
-                ).revoke,
-                connection.token,
+                delegated_login_client(cluster).revoke, connection.token
             )
             LOGGER.info(
                 "podpilot.delegated.token_revoke cluster_id=%s owner=%s revoked=%s",
@@ -10670,9 +10688,7 @@ def create_app(
         )
         with Session(request.app.state.engine) as db_session:
             clusters = list(db_session.scalars(
-                select(Cluster).where(
-                    Cluster.is_enabled.is_(True), Cluster.is_system.is_(False)
-                ).order_by(Cluster.name)
+                select(Cluster).where(Cluster.is_enabled.is_(True)).order_by(Cluster.name)
             ))
             cluster_names = {item.id: item.name for item in clusters}
             recent = recent_conversations_for(db_session, user.username)
@@ -10733,7 +10749,6 @@ def create_app(
         with Session(request.app.state.engine, expire_on_commit=False) as db_session:
             clusters = list(db_session.scalars(select(Cluster).where(
                 Cluster.id.in_(cluster_ids), Cluster.is_enabled.is_(True),
-                Cluster.is_system.is_(False),
             )))
         by_id = {item.id: item for item in clusters}
         if len(by_id) != len(cluster_ids):
@@ -10745,25 +10760,14 @@ def create_app(
             cluster = by_id[cluster_id]
             try:
                 identity = await run_in_threadpool(
-                    OpenShiftDelegatedLoginClient(
-                        api_url=cluster.api_url,
-                        custom_ca_pem=cluster.custom_ca_pem,
-                        timeout_seconds=app_settings.delegated_login_timeout_seconds,
-                    ).login,
-                    username,
-                    password,
+                    delegated_login_client(cluster).login, username, password
                 )
                 prior = request.app.state.delegated_vault.pop_connection(
                     session_id=session_id, owner=user.username, cluster_id=cluster.id
                 )
                 if prior is not None:
                     await run_in_threadpool(
-                        OpenShiftDelegatedLoginClient(
-                            api_url=cluster.api_url,
-                            custom_ca_pem=cluster.custom_ca_pem,
-                            timeout_seconds=app_settings.delegated_login_timeout_seconds,
-                        ).revoke,
-                        prior.token,
+                        delegated_login_client(cluster).revoke, prior.token
                     )
                 connection = request.app.state.delegated_vault.put(
                     session_id=session_id,
@@ -10844,12 +10848,7 @@ def create_app(
             cluster = cluster_by_id.get(connection.cluster_id)
             if cluster is not None:
                 await run_in_threadpool(
-                    OpenShiftDelegatedLoginClient(
-                        api_url=cluster.api_url,
-                        custom_ca_pem=cluster.custom_ca_pem,
-                        timeout_seconds=app_settings.delegated_login_timeout_seconds,
-                    ).revoke,
-                    connection.token,
+                    delegated_login_client(cluster).revoke, connection.token
                 )
         response = RedirectResponse("/oauth/sign_out", status_code=303)
         response.delete_cookie(DELEGATED_SESSION_COOKIE)

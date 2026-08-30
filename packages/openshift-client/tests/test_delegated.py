@@ -66,6 +66,44 @@ def test_challenging_login_refuses_cross_origin_redirect_before_credentials() ->
         client.login("alice", "password")
 
 
+def test_challenging_login_can_use_a_trusted_internal_oauth_endpoint() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        if request.url.path == "/.well-known/oauth-authorization-server":
+            return httpx.Response(200, json={
+                "authorization_endpoint": "https://oauth.apps.example/oauth/authorize",
+            })
+        if request.url.path == "/oauth/authorize" and "authorization" not in request.headers:
+            assert request.url.host == "oauth-openshift.openshift-authentication.svc"
+            return httpx.Response(401, headers={"WWW-Authenticate": "Basic realm=openshift"})
+        if request.url.path == "/oauth/authorize":
+            assert request.url.host == "oauth-openshift.openshift-authentication.svc"
+            return httpx.Response(302, headers={
+                "Location": (
+                    "https://oauth-openshift.openshift-authentication.svc/"
+                    "#access_token=sha256~system-user-token"
+                ),
+            })
+        if request.url.path == "/apis/user.openshift.io/v1/users/~":
+            return httpx.Response(200, json={
+                "metadata": {"name": "alice", "uid": "uid-alice"},
+            })
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    identity = OpenShiftDelegatedLoginClient(
+        api_url="https://kubernetes.default.svc",
+        authorization_endpoint_override=(
+            "https://oauth-openshift.openshift-authentication.svc/oauth/authorize"
+        ),
+        transport=httpx.MockTransport(handler),
+    ).login("alice", "password")
+
+    assert identity.token == "sha256~system-user-token"
+    assert "oauth.apps.example" not in requested_hosts
+
+
 def test_custom_ca_rejects_private_key_material() -> None:
     with pytest.raises(DelegatedLoginError, match="private key"):
         validate_custom_ca("-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----")

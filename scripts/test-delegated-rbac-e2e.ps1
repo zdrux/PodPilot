@@ -247,14 +247,14 @@ try {
     $delegatedCsrf = Get-CsrfToken -User $delegatedUser -Session $delegatedSession -Path '/delegated/connect'
     $connected = Invoke-PodPilotPost -User $delegatedUser -Session $delegatedSession `
         -Csrf $delegatedCsrf -Path '/api/v1/delegated-sessions/connect' -Body @{
-            cluster_ids = (ConvertTo-Json @($clusterId) -Compress)
+            cluster_ids = (ConvertTo-Json @($systemClusterId, $clusterId) -Compress)
             username = $delegatedUser
             password = $delegatedPassword
             consent = 'on'
         }
     $connectionResult = $connected.Content | ConvertFrom-Json
-    if ($connectionResult.status -ne 'connected' -or $connectionResult.connected.Count -ne 1) {
-        throw 'The namespace-scoped user could not establish a delegated cluster session.'
+    if ($connectionResult.status -ne 'connected' -or $connectionResult.connected.Count -ne 2) {
+        throw 'The namespace-scoped user could not connect both the system and registered remote clusters.'
     }
     $delegatedCookieMatch = [regex]::Match(
         [string]($connected.Headers.'Set-Cookie' -join ';'),
@@ -304,6 +304,7 @@ try {
 
     Write-Output "E2E PASS investigator_user=$investigatorUser role=Investigator direct_cluster_role=cluster-admin guarded_delete_blocked=true runner_commands=0"
     Write-Output "E2E PASS delegated_user=$delegatedUser role=DelegatedOperator namespace=$testNamespace login=true create=true delete=true outside_namespace_denied=true"
+    Write-Output "E2E PASS system_cluster_id=$systemClusterId delegated_login=true"
     Write-Output "E2E PASS remote_cluster_id=$clusterId name='$clusterName' custom_ca=true"
 }
 finally {

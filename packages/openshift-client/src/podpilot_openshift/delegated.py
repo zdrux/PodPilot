@@ -50,6 +50,7 @@ class OpenShiftDelegatedLoginClient:
         *,
         api_url: str,
         custom_ca_pem: str | None = None,
+        authorization_endpoint_override: str | None = None,
         timeout_seconds: float = 15.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -66,6 +67,10 @@ class OpenShiftDelegatedLoginClient:
             raise DelegatedLoginError("Delegated login requires a registered HTTPS Kubernetes API origin.")
         self.api_url = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
         self.verify = tls_context(custom_ca_pem)
+        self.authorization_endpoint_override = (
+            self._validated_authorization_endpoint(authorization_endpoint_override)
+            if authorization_endpoint_override else None
+        )
         self.timeout_seconds = timeout_seconds
         self.transport = transport
 
@@ -80,14 +85,13 @@ class OpenShiftDelegatedLoginClient:
             ) as client:
                 response = client.get(f"{self.api_url}/.well-known/oauth-authorization-server")
                 response.raise_for_status()
-                endpoint = urlsplit(str(response.json().get("authorization_endpoint") or ""))
+                advertised = str(response.json().get("authorization_endpoint") or "")
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             raise DelegatedLoginError(
                 f"The remote OpenShift OAuth discovery probe failed ({type(exc).__name__})."
             ) from exc
-        if endpoint.scheme != "https" or not endpoint.hostname:
-            raise DelegatedLoginError("The cluster advertised an invalid OAuth authorization endpoint.")
-        return urlunsplit((endpoint.scheme, endpoint.netloc, endpoint.path, "", ""))
+        advertised_endpoint = self._validated_authorization_endpoint(advertised)
+        return self.authorization_endpoint_override or advertised_endpoint
 
     def login(self, username: str, password: str) -> DelegatedIdentity:
         username = username.strip()
@@ -102,7 +106,12 @@ class OpenShiftDelegatedLoginClient:
             ) as client:
                 metadata = client.get(f"{self.api_url}/.well-known/oauth-authorization-server")
                 metadata.raise_for_status()
-                authorization_endpoint = str(metadata.json().get("authorization_endpoint") or "")
+                advertised_endpoint = self._validated_authorization_endpoint(
+                    str(metadata.json().get("authorization_endpoint") or "")
+                )
+                authorization_endpoint = (
+                    self.authorization_endpoint_override or advertised_endpoint
+                )
                 token = self._challenge_for_token(
                     client, authorization_endpoint=authorization_endpoint,
                     username=username, password=password,
@@ -197,3 +206,20 @@ class OpenShiftDelegatedLoginClient:
             current_url = urlunsplit((target.scheme, target.netloc, target.path, target.query, ""))
             supplied_basic = False
         raise DelegatedLoginError("The remote OAuth flow exceeded its redirect limit.")
+
+    @staticmethod
+    def _validated_authorization_endpoint(value: str | None) -> str:
+        endpoint = urlsplit((value or "").strip())
+        if (
+            endpoint.scheme != "https"
+            or not endpoint.hostname
+            or endpoint.username
+            or endpoint.password
+            or endpoint.fragment
+        ):
+            raise DelegatedLoginError(
+                "The cluster advertised an invalid OAuth authorization endpoint."
+            )
+        return urlunsplit(
+            (endpoint.scheme, endpoint.netloc, endpoint.path, endpoint.query, "")
+        )

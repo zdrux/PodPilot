@@ -9,8 +9,8 @@ selected.
 
 PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
 disposable SNO lab at schema head `0020_delegated_sessions`. The 2026-08-30 rollout uses
-application image digest `sha256:1bf9a751e24d0c6d2d3d83b48f1e5c8a84ae4275bfd0ad3981124e7ec9fcc4e7`
-and runner digest `sha256:f144e58f0cc8b26acfa89a31c8353970d58473df5a165f2231e339963ad6040a`.
+application image digest `sha256:24c21e01eecf949ea2d2aea0a9adfa060e90541221e137754154beb9aff5efb7`
+and runner digest `sha256:911d1c5fe6e49d99ee138998ab48667c1275023ce35d0bdcdfd10064c86f671b`.
 The lab has delegated access enabled, a two-hour in-memory session bound, verified remote TLS,
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
@@ -29,8 +29,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 ## Implemented
 
 - Branch `codex/delegated-unrestricted-sessions` adds explicit Delegated Operator sessions for users
-  outside every configured PodPilot role group. Approvers register DEV cluster API origins and
-  optional custom CA bundles; users multi-select clusters, complete one-time username/password
+  outside every configured PodPilot role group. The delegated picker uses the same enabled cluster
+  registry as cluster management, including the runtime system cluster. Approvers register additional
+  DEV cluster API origins and optional custom CA bundles; users multi-select clusters, complete one-time username/password
   challenge logins, and receive two-hour memory-only delegated sessions. New conversations lock
   their cluster set and execution mode. Unrestricted `oc` requests traverse a random loopback API
   capability whose broker injects the user's token; the runner receives neither that token nor the

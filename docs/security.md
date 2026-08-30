@@ -57,13 +57,14 @@ local development. Rotate any credential exposed in source control or chat.
 When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
 configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
 Operator application role. This is not inferred inside a conversation. The user must select only
-Approver-registered, enabled remote clusters, enter one username/password pair, and accept the
+enabled entries from PodPilot's configured cluster registry, including the runtime system cluster,
+enter one username/password pair, and accept the
 unrestricted-agent warning. PodPilot performs the OpenShift challenging-client OAuth exchange,
 validates `/users/~`, and immediately discards the password.
 The API sends Basic credentials only after a Basic challenge from the exact HTTPS origin advertised
 by that cluster's verified OAuth discovery document and refuses later cross-origin redirects.
 Because all selected DEV clusters receive the same credentials, Approvers and users must trust every
-selected cluster registration and its CA; a malicious but trusted API registration can advertise a
+selected remote-cluster registration and its CA; a malicious but trusted API registration can advertise a
 credential-capturing OAuth endpoint.
 
 The returned OAuth token is retained only in API-process memory, keyed by a random HttpOnly
@@ -93,6 +94,9 @@ Each registered remote cluster may carry an Approver-managed PEM CA bundle (maxi
 private keys rejected). PodPilot appends it to system trust for OAuth discovery/login, identity
 validation, delegated API proxying, revocation, and tokenless connection tests. TLS verification
 remains enabled; a custom CA is not an insecure-mode fallback.
+For the runtime system cluster, PodPilot uses the in-cluster Kubernetes API and OpenShift OAuth
+service endpoints with their projected API and service CA bundles; the user's token still crosses
+the same memory-only broker and is evaluated by normal OpenShift RBAC.
 
 ### Explicit unrestricted agent exception
 

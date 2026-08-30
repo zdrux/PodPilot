@@ -164,6 +164,11 @@ provider and credentials are healthy.
   throttling for multi-cluster credential submissions.
 - `PODPILOT_DELEGATED_PROXY_TIMEOUT_SECONDS`, default `310`; bounds one brokered Kubernetes API
   request from the runner.
+- `PODPILOT_DELEGATED_SYSTEM_API_URL`, default `https://kubernetes.default.svc`, and
+  `PODPILOT_DELEGATED_SYSTEM_OAUTH_AUTHORIZATION_URL`, defaulting to the internal
+  `oauth-openshift` service, are the verified in-cluster endpoints used when a delegated user
+  selects PodPilot's system cluster. The API and service CA paths come from
+  `PODPILOT_SERVICE_ACCOUNT_CA_PATH` and `PODPILOT_SERVICE_CA_PATH`.
 - Approvers paste a remote cluster's PEM trust bundle into **Manage → Clusters → Custom Kubernetes
   API CA bundle**. Save and run **Test connection**; a tokenless delegated cluster reports successful
   TLS and OAuth discovery without asking for a user's credentials.
