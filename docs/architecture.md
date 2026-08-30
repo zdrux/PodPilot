@@ -52,13 +52,16 @@ log interpretation.
 ## Current Runtime
 
 The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
-agent path. The Chat Completions model can select typed `list_resources`, `search_resources`,
-`http_probe`, `query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
+agent path. The Chat Completions model can select typed `search_resources`, `http_probe`,
+`query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
 shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
+The broad LIST collector remains behind the broker for deterministic internal use and rollback,
+but the shipped runtime disables it for guarded planning and unrestricted tool schemas omit it.
+Unrestricted enumeration uses bounded read-only `oc get` commands.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the

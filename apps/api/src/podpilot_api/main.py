@@ -4914,6 +4914,7 @@ def _grounded_read_candidates(
     preferred_resource_query: str | None = None,
     collection_analysis_required: bool = False,
     detail_fanout_limit: int = 10,
+    list_tool_enabled: bool = True,
     limit: int = 12,
 ) -> list[_GroundedReadCandidate]:
     """Build compact non-executable choices backed only by trusted server state."""
@@ -4936,6 +4937,11 @@ def _grounded_read_candidates(
         relation: str | None = None,
     ) -> None:
         prepared = normalize_read_intent(intent)
+        if prepared.tool == "list_resources" and not list_tool_enabled:
+            # The broad LIST helper is intentionally not model-facing. Keep the
+            # collector implementation for deterministic internal diagnostics and
+            # existing evidence, but do not offer it as an agent action.
+            return
         signature = _read_intent_signature(prepared)
         if (
             signature in seen_intents
@@ -8413,7 +8419,9 @@ async def _collect_bounded_cluster_reads(
                 "mode": "candidate_selection",
                 "direct_intents_allowed": True,
                 "direct_intent_tools": [
-                    "discover_resources", "get_resource", "list_resources", "search_resources",
+                    "discover_resources", "get_resource",
+                    *(["list_resources"] if settings.adhoc_list_tool_enabled else []),
+                    "search_resources",
                 ],
                 "remaining_reads": remaining_reads,
                 "remaining_investigation_units": remaining_reads,
@@ -8464,6 +8472,7 @@ async def _collect_bounded_cluster_reads(
                 catalog_entries=catalog_entries,
                 collection_analysis_required=collection_analysis_required,
                 detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
+                list_tool_enabled=settings.adhoc_list_tool_enabled,
             )
             requested_candidate = next((
                 candidate for candidate in requested_candidates
@@ -8508,6 +8517,7 @@ async def _collect_bounded_cluster_reads(
                     ),
                     collection_analysis_required=collection_analysis_required,
                     detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
+                    list_tool_enabled=settings.adhoc_list_tool_enabled,
                 )
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -8548,6 +8558,13 @@ async def _collect_bounded_cluster_reads(
                     evidence=evidence,
                 )
                 binding_errors.extend(_inventory_plan_scope_errors(bound_plan, inquiry))
+                if not settings.adhoc_list_tool_enabled and any(
+                    intent.tool == "list_resources" for intent in bound_plan.intents
+                ):
+                    binding_errors.append(
+                        "The broad list_resources helper is disabled. Use an exact GET, a bounded "
+                        "field search, or report that enumeration is unavailable in read-only mode."
+                    )
                 target_errors = [*candidate_errors, *binding_errors]
                 prepared_signatures: list[str] = []
                 for proposed_intent in bound_plan.intents:
@@ -9473,6 +9490,9 @@ def create_app(
                 "request, or expand it deliberately in bounded increments instead of dumping the "
                 "entire log. "
                 "Use search_resources for requested object-field filters instead of dumping a full list. "
+                "The typed list_resources helper is unavailable. When an inventory is necessary, use a "
+                "bounded read-only `oc get` command through execute_shell and request only fields needed "
+                "for the operator's question. Never dump Secrets or credentials. "
                 "Use http_probe for an exact observed HTTP(S) endpoint. connect_host preserves the "
                 "URL hostname as HTTP Host and TLS SNI while connecting to an observed address. Keep "
                 "TLS verification enabled unless the operator's investigation specifically requires "
@@ -9481,12 +9501,14 @@ def create_app(
                 "not the cluster audit log. Use query_metrics for registered metrics before improvising "
                 "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. "
                 "Use pod_health_summary for broad questions about whether Pods are healthy, Ready, or "
-                "running. Prefer its anomaly-first complete scan over list_resources, and never claim all "
+                "running. Prefer its anomaly-first complete scan over a broad Pod dump, and never claim all "
                 "matching Pods are healthy unless its scanComplete field is true. "
                 "A typed collector result is an observation returned to you, never a final answer or stop signal. "
                 "A collector's complete flag refers only to that bounded collection. Interpret every result, "
                 "decide whether further investigation is useful, and write the operator-facing conclusion "
-                "yourself.\n\nSelected clusters:\n"
+                "yourself. When presenting multiple comparable items, use a concise GitHub-flavored "
+                "Markdown table with a header row; keep explanatory conclusions outside the table.\n\n"
+                "Selected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),
         }]

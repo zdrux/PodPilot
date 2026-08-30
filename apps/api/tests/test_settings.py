@@ -66,6 +66,12 @@ def test_detail_fanout_ceiling_is_small_and_configurable(monkeypatch) -> None:
         Settings(adhoc_detail_fanout_max_objects=26)
 
 
+def test_list_tool_can_be_disabled_from_runtime_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_LIST_TOOL_ENABLED", "false")
+
+    assert Settings(_env_file=None).adhoc_list_tool_enabled is False
+
+
 def test_evidence_payload_ceiling_is_configurable(monkeypatch) -> None:
     monkeypatch.setenv("PODPILOT_ADHOC_MAX_PAYLOAD_BYTES", "96000")
 

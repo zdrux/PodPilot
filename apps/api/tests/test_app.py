@@ -254,6 +254,63 @@ def test_resource_analysis_coverage_requires_details_in_final_model_context() ->
     }]
 
 
+def test_disabled_list_tool_is_not_offered_as_a_grounded_candidate() -> None:
+    candidates = _grounded_read_candidates(
+        question="List Widgets.", evidence=[], relationship_graph={},
+        recovery_anchor_plan=ReadPlan(
+            scope_summary="List Widgets.",
+            intents=[ReadIntent(
+                tool="list_resources", resource="widgets.example.io",
+                api_version="example.io/v1", kind="Widget",
+            )],
+        ),
+        seen_intents=set(), list_tool_enabled=False,
+    )
+
+    assert candidates == []
+
+
+def test_disabled_list_tool_rejects_model_authored_list_without_execution() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            return ReadPlan(
+                scope_summary="List Widgets.",
+                intents=[ReadIntent(
+                    tool="list_resources", resource="widgets.example.io",
+                    api_version="example.io/v1", kind="Widget",
+                )],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            raise AssertionError("disabled list tool must not execute")
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[], adhoc_list_tool_enabled=False,
+        ),
+        actor="ivy", workflow_id="list-disabled", question="List Widgets.",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert explorer.calls == []
+    assert result.evidence == []
+    assert any("did not select a safe evidence read" in item for item in result.limitations)
+
+
 def _agent_accepts_seeded_evidence(*args, **kwargs) -> ReadPlan:
     context = kwargs.get("context") or args[-1]
     evidence_ids = [
@@ -8454,6 +8511,8 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     system_prompt = str(provider.agent_messages[0][0]["content"])
     assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
     assert "Never fetch unbounded Pod logs by default" in system_prompt
+    assert "typed list_resources helper is unavailable" in system_prompt
+    assert "Markdown table with a header row" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])

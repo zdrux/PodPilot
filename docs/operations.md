@@ -459,11 +459,13 @@ place and the UI labels them as answer-derived; this presentation conversion doe
 contents authoritative evidence. Extraction is bounded to eight tables, 24 columns, 1,000 rows per
 table, and 4,096 characters per cell. Tables beyond those bounds remain in the safe Markdown fallback.
 The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
-`list_resources` exists to make broad Kubernetes discovery safe and reproducible: it resolves a
+The internal `list_resources` collector exists to make broad Kubernetes discovery safe and reproducible: it resolves a
 live API resource, enforces namespace/RBAC/sensitivity policy and bounded pagination, normalizes
 identity plus approved object projections, records completeness and truncation separately, redacts
-evidence, and preserves provenance for citations and native tables. It is a collection primitive,
-not a claim that the operator's question has been answered.
+evidence, and preserves provenance for citations and native tables. It is not model-facing when
+`PODPILOT_ADHOC_LIST_TOOL_ENABLED=false`, which is the shipped OpenShift setting. Existing LIST
+evidence and deterministic internal diagnostics remain readable. Read-only agents must instead use
+exact GETs or bounded field searches and report when unknown collection enumeration is unavailable.
 Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
 or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
 asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the
@@ -542,7 +544,7 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 `openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
-Unrestricted turns expose `list_resources`, `search_resources`, `http_probe`,
+Unrestricted turns expose `search_resources`, `http_probe`,
 `query_audit_events`, and `query_metrics` as model-selected helper tools alongside
 `execute_shell`. The probe performs a bounded unauthenticated HEAD or GET for an exact observed
 HTTP(S) URL; an optional connect address preserves the URL hostname for Host and TLS SNI, and TLS
@@ -551,7 +553,8 @@ They never execute
 automatically and never decide whether the turn is complete. Their normalized observations return
 to the model as tool results, are persisted as evidence, and can drive native tables and metric
 cards. The agent interprets the results and decides whether to invoke another helper, use the shell
-escape hatch, or answer. Wording such as “show”, “list”, “top”, “why”,
+escape hatch, or answer. When enumeration is necessary, the unrestricted agent uses a deliberately
+bounded read-only `oc get` command. Wording such as “show”, “list”, “top”, “why”,
 “investigate”, “diagnose”, and “root cause” does not create a server-owned completion route. A
 native card is a rendering choice, not a completion signal. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
@@ -1234,6 +1237,10 @@ from 1 to 25 with `PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS`, or edit
 the cap, or does not retain every exact object reference, PodPilot performs no blanket or sampled
 GET fan-out and tells the operator to narrow the scope. A complete analysis claim requires exact
 GET detail for every listed object to be present in the final model context.
+
+`PODPILOT_ADHOC_LIST_TOOL_ENABLED` controls whether guarded model planning may select the broad
+LIST helper. The OpenShift runtime ConfigMap ships `adhoc_list_tool_enabled: "false"`. Set it to
+`"true"` only to restore the bounded helper experiment, then restart the Deployment.
 
 Detailed object projections have a separate byte ceiling. Configure it with
 `PODPILOT_ADHOC_MAX_PAYLOAD_BYTES`, or edit `data.adhoc_max_payload_bytes` in

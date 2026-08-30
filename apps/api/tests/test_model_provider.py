@@ -392,7 +392,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "list_resources", "search_resources",
+        "execute_shell", "search_resources",
         "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
     ]
     parameters = request["tools"][0]["function"]["parameters"]

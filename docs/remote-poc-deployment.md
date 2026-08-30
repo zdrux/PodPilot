@@ -142,6 +142,9 @@ every identity authenticated by OpenShift receives that role automatically.
 The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for
 returned LIST evidence and `adhoc_search_max_scan_objects` to `"2000"` for bounded
 projected-field searches that return only matches.
+The same ConfigMap ships `adhoc_list_tool_enabled: "false"`, removing the broad LIST helper from
+guarded model planning. Unrestricted/action agents may enumerate with deliberately bounded
+read-only `oc get` commands; investigator-only agents must use exact GETs or field searches.
 Collection analysis separately defaults `adhoc_detail_fanout_max_objects` to `"10"`. PodPilot
 automatically GETs every object only for complete inventories at or below this cap; larger or
 incomplete inventories remain inventory-only until the user narrows the request.

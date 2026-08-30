@@ -337,7 +337,7 @@ but recommendation prose, graph hints, and gap text must never execute directly 
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
 Candidate-first gates must prove that candidate rounds use the compact `ActionSelection` schema,
 candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, and model-authored
-reads are limited to discovery, GET, LIST, and bounded field search. Tests must prove authored reads
+reads are limited to discovery, GET, and bounded field search when the LIST feature flag is off. Tests must prove authored reads
 still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight, duplicate suppression,
 and budgets. When a corrected action selection contains only malformed object reads, PodPilot must
 discard them, execute nothing, and safely answer from evidence already collected instead of reporting
@@ -360,7 +360,12 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
-Resource-presentation gates must merge repeated cited LIST/search observations by cluster and Kind,
+The shipped manifest must set `adhoc_list_tool_enabled` to false, guarded planning must neither offer
+nor execute LIST candidates under that setting, and unrestricted tool schemas must omit
+`list_resources`. Final-answer prompts must request Markdown tables for comparable multi-item
+results; presentation tests must continue proving that answer-derived tables are bounded, sanitized,
+and not treated as evidence. Resource-presentation gates must merge repeated cited internal
+LIST/search observations by cluster and Kind,
 deduplicate resource identity by Kind/namespace/name, retain every contributing evidence ID, and mark
 the merged group incomplete if any contributing read was incomplete.
 They must also prove that exact operator URLs become grounded probe candidates only after Route
