@@ -1,15 +1,17 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-29
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.11.0 remains deployed on the disposable SNO lab. The 0.12.0 working tree
-is implemented and locally tested at schema head `0013_raw_model_responses`, but has
-not been deployed. It adds Ask-only multi-cluster routing, secret-backed cluster
+PodPilot 0.12.0 from feature branch `codex/unrestricted-agentic-mode` is deployed on the
+disposable SNO lab at schema head `0013_raw_model_responses`. The lab deployment has
+unrestricted agent mode enabled with OpenRouter Chat Completions, exact model
+`openai/gpt-oss-120b`, and the localhost `oc-runner` sidecar. It also adds Ask-only
+multi-cluster routing, secret-backed cluster
 management, immutable one-to-ten-cluster conversation selections, cluster-attributed
 evidence, and curated-memory prompt integration governed by explicit cluster targets,
 required tags, or global scope. Start a new session by reading this file and
@@ -22,6 +24,107 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
+  `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and
+  enrichment packs can expose grounded candidates and native views but cannot force a read,
+  continue/stop decision, terminal result, or replacement conclusion. Valid agent stops are
+  respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
+  Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
+  runtime orchestration. The final agent sees bounded raw log evidence directly.
+- Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
+  citations lower evidence status and add limitations instead of erasing the response. Native
+  resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide
+  prose. Deterministic conclusions remain only as provider/contract-failure fallbacks.
+
+- A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
+  exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
+  function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
+  typed read/remediation approval inside the explicit agentic mode while retaining the durable run deadline,
+  output redaction before provider reuse, progress, and command metadata audit. The base and
+  standard remote deployments remain guarded; unrestricted remote deployment is an explicit
+  additive overlay.
+- The runner image copies a digest-pinned Linux `oc` binary into the pinned UBI Python runtime. The
+  SNO overlay runs it non-root under the existing `podpilot-investigator` Pod service account. The
+  deploy helper refuses to proceed if that identity can patch Deployments, builds both images,
+  deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
+  passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
+  promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
+  Each unrestricted shell call names one selected cluster. The API brokers only that registered
+  cluster's stored token to the loopback runner, which uses and deletes a per-command kubeconfig.
+  The remote agentic overlay forces remote TLS verification off, while guarded deployments keep
+  the secure default. Runner/API logs expose redacted target, TLS, exit, duration, and byte-count
+  metadata, periodic heartbeat logs are suppressed in both containers, failed-command summaries appear in
+  Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
+  124. The API still publishes changing live Ask progress while the outer run retains
+  its 900-second deadline in the agentic overlays. Runner stdout and stderr are now drained
+  concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
+  exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
+  byte counts and truncation flags.
+  The model-free suite passes locally with 665 tests and 82% aggregate coverage.
+  Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
+  verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
+  `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
+- Natural-language resource field predicates are now first-class semantic constraints. Collection
+  requests such as Route hostnames containing a supplied suffix compile to bounded
+  `search_resources` reads instead of whole-kind lists. Terminal completion requires the plan to
+  preserve the exact field, operator, and grounded value; otherwise enrichment remains a seed for
+  continued agent investigation. Empty searches report absence only with complete scan coverage.
+- Cited resource lists now carry a general versioned `grouped_resource_list` presentation built
+  from normalized evidence rather than model formatting. Ask renders cluster-grouped collapsible
+  tables for every resource Kind, includes retained search-field values and coverage state, and
+  offers CSV export while preserving Markdown as a backward-compatible fallback.
+- Elliptical resource-list follow-ups now recover a typed prior query from validated evidence.
+  Presentation-only requests can reuse and cluster-narrow the prior snapshot without a provider
+  call, while `current`/`still`/`now` wording preserves the same filters but performs a fresh read.
+  Unique selected-cluster aliases narrow one turn; the locked conversation selection is unchanged.
+- Answer-authored Markdown tables now render through a bounded native dynamic-column table component
+  with collapse and CSV controls while preserving surrounding prose order. They remain explicitly
+  answer-derived and do not inherit the observed-evidence trust level of typed resource cards.
+- Thanos remains the preferred metric trend source. Node rankings and namespace-scoped Pod CPU or
+  memory rankings now fall back to a current `metrics.k8s.io/v1beta1` snapshot when Thanos fails,
+  with the lost history called out explicitly. When every registered read and shell verification
+  fails, normal code reports the exact failures and suppresses unsupported model explanations such
+  as claiming a metrics add-on is absent.
+- Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
+  path. If that authoritative read fails, unrestricted mode renders the collection limitation
+  directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
+- Namespace-scoped Kafka topic-storage wording now discovers exact Strimzi Kafka CRs in the named
+  namespace and fans out one registered storage query per observed CR, grouped by topic. The path
+  bypasses fragile metric classification, renders successful results directly, and preserves empty,
+  denied, or partially unavailable states without entering the unrestricted shell loop.
+- An empty unrestricted model turn now receives one tool-free finalization request. If that request
+  is also empty, PodPilot reports an invalid agent response rather than mislabeling it as provider
+  unavailability.
+- Imperative Kafka deployment inventory wording now routes to the registered Strimzi Kafka reader.
+  “Show/list all deployed Kafka clusters” runs once per selected OpenShift cluster and renders
+  found, empty, and unavailable API states with complete coverage accounting instead of repeatedly
+  guessing resource names through `oc-runner` on the first cluster.
+- Remote Thanos and LokiStack authorization failures now preserve the literal `HTTP 403` status in
+  per-cluster Ask limitations and name the relevant read-only role. Log-volume queries correctly
+  identify `cluster-logging-application-view`; Thanos metrics identify `cluster-monitoring-view`.
+- Successful terminal registered enrichments now render once and suppress a competing unrestricted
+  shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
+  outcome, username, and time range; an all-user Pod deletion query no longer shows an appended
+  `events.audit.k8s.io` RBAC failure or the misleading phrase “the supplied user.”
+- Explicit audit counts and filters are now authoritative after classification. “Last 5” no longer
+  expands to the default 20 when the model omits `result_limit`; delete/mutation scope and
+  successful/failed outcome wording likewise override broader model defaults before Loki access.
+- Unnumbered “recent” audit requests now query only the initial bounded window instead of repeatedly
+  widening toward the audit ceiling to fill a model/default limit. Explicit “last N” requests retain
+  bounded backward expansion until N matches are found.
+- Registered Loki audit reads now fail closed in unrestricted mode. A timeout, denial, or partial
+  multi-cluster result is rendered directly instead of falling through to an invalid
+  `events.audit.k8s.io`/`jq` shell attempt.
+- Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
+  namespace log-volume ranking. The original scope and top-N are retained while only the range is
+  replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting
+  `pods/exec` or `logcli`. The shipped log-analytics range ceiling is now seven days, allowing the
+  requested three-day window while retaining a bounded server-owned LogQL query.
+- Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
+  API logs the anomaly, sends one corrective request using the existing tool results, and then
+  either persists the recovered answer or fails explicitly after a second empty turn. It does not
+  automatically repeat completed shell commands.
 
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
@@ -178,10 +281,15 @@ records remain, but execution now awaits a separate approval-gated action servic
   inventory collection or deterministic multi-cluster rendering. Model-authored cluster-wide LIST and
   search reads also normalize the common `namespace: "*"` shorthand to an omitted namespace before
   broker validation.
-- Simple inventory turns now finish through the deterministic renderer without a general final-model
-  answer/correction pass or unrelated suggested checks. Multi-cluster summaries report matches as
-  “X of Y queried clusters,” and absent Ready conditions display as `Unknown` rather than implying
-  that a discovered custom resource is running.
+- Closed-form inventory turns (explicit identifiers-only, count, existence, or prior-snapshot
+  presentation) finish through the deterministic renderer without a general final-model
+  answer/correction pass or unrelated suggested checks. Bare show/list requests for
+  configuration-bearing resources now retain their normalized observed-resource card and continue
+  into agent interpretation. The classifier records the requested answer goal, and normal code
+  defaults uncertain inventory goals to non-terminal so collection completeness cannot masquerade as
+  answer completeness. Multi-cluster summaries report matches as “X of Y queried clusters,” and
+  absent Ready conditions display as `Unknown` rather than implying that a discovered custom resource
+  is running.
 - Model planning now infers natural-language goals while the server derives collection
   decisions from typed intents. Unsupported
   operational no-read answers receive one structured repair attempt. If both
@@ -250,7 +358,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   OpenShift Logging views.
 - Ask PodPilot conversations are private to their creating OpenShift user. Users
   can start and delete their own conversations; other users receive a not-found
-  response rather than conversation metadata. Questions are unlimited per
+  response rather than conversation metadata. Deletion also removes queued runs and
+  cancels a running in-process investigation so a stuck session never blocks its owner.
+  The content-free deletion audit records only how many active runs were cancelled.
+  Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
   bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
@@ -424,10 +535,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Last Verified State
 
-- Deployed application version: `0.11.0`; current source version: `0.12.0`.
+- Deployed application version: `0.12.0`; current source version: `0.12.0`.
 - OpenShift lab version: `4.22.9` on the documented Hyper-V SNO.
-- Deployment: `ai-ops/podpilot`, last observed `1/1` Available.
-- Local automated suite: 280 tests passing with 84% aggregate coverage.
+- Deployment: `ai-ops/podpilot`, last observed `1/1` Available with the API, OAuth proxy, and
+  `oc-runner` containers ready.
+- Local automated suite: 636 tests passing with 82% aggregate coverage.
 - Live Milestone 6 exercise verified creator cancellation with no workload
   mutation, `remediation.cancel` attribution, automatic cancellation after the
   exact fixture target changed, and automatic cancellation after the source

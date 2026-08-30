@@ -11,6 +11,7 @@ from kubernetes import client, config, watch as kubernetes_watch
 from kubernetes.client.exceptions import ApiException
 from kubernetes.dynamic import DynamicClient
 from kubernetes.dynamic.exceptions import ResourceNotFoundError
+from kubernetes.utils.quantity import parse_quantity
 from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
@@ -1056,15 +1057,28 @@ class KubernetesReadOnlyExplorer:
                     )
                 return self._audit_reader.execute(intent)
             if intent.tool == "query_metrics":
-                if intent.metric == "top_log_volume_by_namespace":
+                if intent.metric in {
+                    "top_log_volume_by_namespace", "application_log_volume",
+                }:
                     if self._log_metric_reader is None:
                         raise ReadOnlyExplorerError(
                             "The authenticated log analytics adapter is unavailable."
                         )
                     return self._log_metric_reader.execute(intent)
                 if self._metric_reader is None:
-                    raise ReadOnlyExplorerError("The authenticated monitoring adapter is unavailable.")
-                return self._metric_reader.execute(intent)
+                    return self._current_metrics_fallback(
+                        intent,
+                        primary_error="The authenticated monitoring adapter is unavailable.",
+                    )
+                try:
+                    return self._metric_reader.execute(intent)
+                except MetricTrendError as exc:
+                    try:
+                        return self._current_metrics_fallback(intent, primary_error=str(exc))
+                    except ReadOnlyExplorerError as fallback_exc:
+                        raise ReadOnlyExplorerError(
+                            f"{exc} Kubernetes Metrics API fallback also failed: {fallback_exc}"
+                        ) from fallback_exc
             self._ensure_clients()
             if intent.tool == "pod_health_summary":
                 return self._pod_health_summary(intent)
@@ -1125,8 +1139,145 @@ class KubernetesReadOnlyExplorer:
             raise ReadOnlyExplorerError(detail) from exc
         except Exception as exc:
             raise ReadOnlyExplorerError(
-                "The requested cluster evidence could not be collected because the Kubernetes API client failed."
+                "The requested cluster evidence could not be collected because the Kubernetes API "
+                f"client failed ({type(exc).__name__})."
             ) from exc
+
+    def _current_metrics_fallback(
+        self, intent: ReadIntent, *, primary_error: str,
+    ) -> ReadResult:
+        """Use metrics.k8s.io for a bounded current snapshot when Thanos is down."""
+
+        supported = {
+            "node_cpu_utilization", "node_memory_utilization",
+            "top_cpu_consumers", "top_memory_consumers",
+        }
+        if intent.metric not in supported:
+            raise ReadOnlyExplorerError(
+                f"No current-snapshot fallback is registered for {intent.metric}."
+            )
+        if intent.metric in {"top_cpu_consumers", "top_memory_consumers"} and not intent.namespace:
+            raise ReadOnlyExplorerError(
+                "The current Pod metrics fallback requires an explicit namespace to remain bounded."
+            )
+        self._ensure_clients()
+        assert self._dynamic is not None and self._core is not None
+        try:
+            if intent.metric.startswith("node_"):
+                metric_resource = self._dynamic.resources.get(
+                    api_version="metrics.k8s.io/v1beta1", kind="NodeMetrics",
+                )
+                metric_items = list(metric_resource.get().items)
+                node_items = list(self._core.list_node().items)
+                node_details = {
+                    item.metadata.name: {
+                        "capacity": item.status.allocatable or item.status.capacity or {},
+                        "labels": item.metadata.labels or {},
+                    }
+                    for item in node_items
+                }
+                ranking: list[dict[str, object]] = []
+                for item in metric_items:
+                    raw = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                    metadata = raw.get("metadata") or {}
+                    usage = raw.get("usage") or {}
+                    name = str(metadata.get("name") or "")
+                    details = node_details.get(name, {})
+                    capacity = details.get("capacity", {})
+                    labels = details.get("labels", {})
+                    if intent.metric_scope == "node" and intent.name != name:
+                        continue
+                    if intent.metric_scope == "node_role" and intent.name and not any(
+                        key in labels for key in {
+                            f"node-role.kubernetes.io/{intent.name}",
+                            f"node.openshift.io/{intent.name}",
+                        }
+                    ):
+                        continue
+                    quantity_key = "cpu" if intent.metric == "node_cpu_utilization" else "memory"
+                    denominator = capacity.get(quantity_key)
+                    if not name or not denominator or not usage.get(quantity_key):
+                        continue
+                    current = float(
+                        parse_quantity(usage[quantity_key]) / parse_quantity(denominator) * 100
+                    )
+                    ranking.append({
+                        "labels": {"nodename": name}, "current": current,
+                        "minimum": current, "average": current, "maximum": current,
+                    })
+                source_kind = "NodeMetrics"
+                scope = intent.metric_scope
+            else:
+                metric_resource = self._dynamic.resources.get(
+                    api_version="metrics.k8s.io/v1beta1", kind="PodMetrics",
+                )
+                metric_items = list(metric_resource.get(namespace=intent.namespace).items)
+                quantity_key = "cpu" if intent.metric == "top_cpu_consumers" else "memory"
+                ranking = []
+                for item in metric_items:
+                    raw = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                    metadata = raw.get("metadata") or {}
+                    name = str(metadata.get("name") or "")
+                    namespace = str(metadata.get("namespace") or intent.namespace or "")
+                    values = [
+                        parse_quantity((container.get("usage") or {}).get(quantity_key, "0"))
+                        for container in (raw.get("containers") or [])
+                    ]
+                    if not name:
+                        continue
+                    total = sum(values)
+                    current = float(total if quantity_key == "cpu" else total / (1024 ** 2))
+                    ranking.append({
+                        "labels": {"namespace": namespace, "pod": name},
+                        "current": current, "minimum": current,
+                        "average": current, "maximum": current,
+                    })
+                source_kind = "PodMetrics"
+                scope = intent.metric_scope
+        except (ApiException, ResourceNotFoundError) as exc:
+            status = f" (HTTP {exc.status})" if isinstance(exc, ApiException) and exc.status else ""
+            raise ReadOnlyExplorerError(
+                f"metrics.k8s.io/v1beta1 is unavailable or denied{status}."
+            ) from exc
+        except Exception as exc:
+            raise ReadOnlyExplorerError(
+                "metrics.k8s.io/v1beta1 returned an unreadable current snapshot."
+            ) from exc
+
+        ranking.sort(key=lambda item: float(item["current"]), reverse=True)
+        ranking = ranking[:intent.limit]
+        now = datetime.now(timezone.utc)
+        unit = "%" if intent.metric.startswith("node_") else (
+            "cores" if intent.metric == "top_cpu_consumers" else "MiB"
+        )
+        return ReadResult(
+            observations=(AdHocObservation(
+                id=f"metric-{uuid4()}", tool="query_metrics",
+                summary=f"Read current {intent.metric} from the Kubernetes Metrics API.",
+                source=f"kubernetes:metrics.k8s.io/v1beta1:{source_kind}",
+                collected_at=now,
+                data={
+                    "metric": intent.metric, "scope": scope,
+                    "namespace": intent.namespace, "name": intent.name,
+                    "unit": unit, "operation": intent.metric_operation,
+                    "statistic": intent.metric_statistic,
+                    "groupBy": intent.metric_group_by,
+                    "rangeSeconds": 0, "stepSeconds": 0,
+                    "start": now.isoformat(), "end": now.isoformat(),
+                    "series": [], "ranking": ranking,
+                    "statistics": {
+                        "current": ranking[0]["current"] if ranking else None,
+                        "minimum": None, "average": None, "maximum": None,
+                    },
+                    "complete": True, "limit": intent.limit,
+                },
+            ),),
+            limitations=(
+                "Thanos was unavailable; PodPilot used the Kubernetes Metrics API current "
+                "snapshot. Average and peak equal current because historical samples were unavailable. "
+                f"Primary monitoring error: {primary_error}",
+            ),
+        )
 
     def preflight(self, intent: ReadIntent) -> None:
         """Validate resource discovery and scope without issuing an evidence read."""
@@ -1262,6 +1413,8 @@ class KubernetesReadOnlyExplorer:
                     "name": name,
                     "watchSeconds": intent.watch_seconds,
                     "eventLimit": event_limit,
+                    "detailProjection": "kind_specific_bounded",
+                    "fullObjectsIncluded": False,
                     "events": events,
                 },
             ),),
@@ -1398,6 +1551,9 @@ class KubernetesReadOnlyExplorer:
                     "resource": intent.resource,
                     "scope": scope,
                     "count": len(bounded_items),
+                    "queryContractVersion": 1,
+                    "limit": intent.limit,
+                    "labelSelector": intent.label_selector,
                     "scannedCount": scanned,
                     "matchField": intent.match_field,
                     "matchValue": intent.match_value,
@@ -1407,6 +1563,8 @@ class KubernetesReadOnlyExplorer:
                     "names": object_names,
                     "objects": object_refs,
                     "items": projections,
+                    "detailProjection": "kind_specific_bounded",
+                    "fullObjectsIncluded": False,
                     "logCandidates": log_candidates,
                     "logCandidatesTruncated": log_candidates_truncated,
                     "objectListComplete": not bool(token),
@@ -1726,6 +1884,8 @@ class KubernetesReadOnlyExplorer:
             kwargs: dict[str, object] = {"limit": min(100, scan_limit - scanned)}
             if namespace:
                 kwargs["namespace"] = namespace
+            if intent.label_selector:
+                kwargs["label_selector"] = intent.label_selector
             if token:
                 kwargs["_continue"] = token
             response = resource.get(**kwargs)
@@ -1789,6 +1949,8 @@ class KubernetesReadOnlyExplorer:
             returned_bytes += encoded_bytes
         anomalies_complete = len(returned) == len(detected)
         scope = namespace or "cluster"
+        if intent.label_selector:
+            scope = f"{scope} matching label selector {intent.label_selector}"
         limitations: list[str] = []
         if not scan_complete:
             limitations.append(
@@ -1816,6 +1978,7 @@ class KubernetesReadOnlyExplorer:
                 "kind": "Pod",
                 "healthSummaryVersion": 1,
                 "scope": scope,
+                "labelSelector": intent.label_selector,
                 "scannedCount": scanned,
                 "scanLimit": scan_limit,
                 "scanComplete": scan_complete,

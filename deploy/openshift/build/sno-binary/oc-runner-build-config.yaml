@@ -1,0 +1,31 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: podpilot-oc-runner
+  namespace: ai-ops
+  labels:
+    app.kubernetes.io/name: podpilot
+    app.kubernetes.io/component: agent-runner-build
+spec:
+  runPolicy: SerialLatestOnly
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile.oc-runner
+  output:
+    to:
+      kind: ImageStreamTag
+      name: podpilot-oc-runner:latest
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  successfulBuildsHistoryLimit: 2
+  failedBuildsHistoryLimit: 2
+  triggers: []

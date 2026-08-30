@@ -45,7 +45,7 @@ class Settings(BaseSettings):
         "/api/logs/v1/application"
     )
     loki_route_name: str = "logging-loki"
-    loki_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
+    loki_timeout_seconds: float = Field(default=90.0, ge=1.0, le=120.0)
     loki_max_series: int = Field(default=50, ge=1, le=100)
     workload_max_events: int = Field(default=30, ge=1, le=100)
     workload_log_tail_lines: int = Field(default=200, ge=10, le=1000)
@@ -61,13 +61,14 @@ class Settings(BaseSettings):
     adhoc_http_probe_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
     adhoc_http_probe_max_bytes: int = Field(default=16_384, ge=1024, le=65_536)
     adhoc_inventory_max_objects: int = Field(default=500, ge=50, le=1000)
+    adhoc_max_payload_bytes: int = Field(default=48_000, ge=16_384, le=1_048_576)
     adhoc_search_max_scan_objects: int = Field(default=2000, ge=250, le=5000)
     adhoc_metrics_max_range_seconds: int = Field(default=2_592_000, ge=3600, le=7_776_000)
     adhoc_metrics_max_points_per_series: int = Field(default=300, ge=50, le=1000)
     adhoc_metrics_max_response_bytes: int = Field(
         default=1_048_576, ge=65_536, le=4_194_304
     )
-    adhoc_logs_max_range_seconds: int = Field(default=86_400, ge=3600, le=2_592_000)
+    adhoc_logs_max_range_seconds: int = Field(default=604_800, ge=3600, le=2_592_000)
     adhoc_audit_initial_range_seconds: int = Field(default=3600, ge=300, le=2_592_000)
     adhoc_audit_max_range_seconds: int = Field(default=86_400, ge=3600, le=7_776_000)
     adhoc_audit_default_limit: int = Field(default=20, ge=1, le=100)
@@ -82,6 +83,10 @@ class Settings(BaseSettings):
     adhoc_worker_concurrency: int = Field(default=3, ge=1, le=8)
     adhoc_max_concurrent_runs_per_user: int = Field(default=2, ge=1, le=8)
     adhoc_run_timeout_seconds: float = Field(default=300.0, ge=1.0, le=900.0)
+    agent_mode: Literal["guarded", "unrestricted"] = "guarded"
+    agent_runner_url: str = "http://127.0.0.1:8090"
+    agent_command_timeout_seconds: float = Field(default=300.0, ge=5.0, le=600.0)
+    agent_heartbeat_seconds: float = Field(default=10.0, ge=2.0, le=60.0)
     model_timeout_max_seconds: float = Field(default=240.0, ge=30.0, le=300.0)
     model_credential_store: Literal["environment", "kubernetes"] = "environment"
     model_secret_namespace: str = "ai-ops"
@@ -90,6 +95,7 @@ class Settings(BaseSettings):
     cluster_credential_store: Literal["environment", "kubernetes"] = "environment"
     cluster_secret_namespace: str = "ai-ops"
     cluster_secret_name: str = "podpilot-cluster-credentials"
+    remote_cluster_tls_verify: bool = True
     poc_mode: bool = False
 
     @field_validator(

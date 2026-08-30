@@ -7,13 +7,13 @@ from podpilot_diagnostics.adhoc import (
     AdHocObservation,
     ReadIntent,
     ReadPlan,
-    automatic_read_followups,
+    suggested_read_followups,
     derive_adhoc_findings,
     derive_evidence_relationship_graph,
     normalize_read_intent,
     plan_catalog_read,
+    plan_kafka_topic_storage_metrics,
     plan_known_read,
-    plan_needs_evidence_repair,
     pod_log_candidates_from_evidence,
 )
 
@@ -261,7 +261,7 @@ def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
         },
     )
 
-    followups = automatic_read_followups(intent, (observation,))
+    followups = suggested_read_followups(intent, (observation,))
 
     assert len(followups) == 1
     assert followups[0].code == "tls_trust_retry"
@@ -270,7 +270,7 @@ def test_verified_tls_trust_failure_plans_one_matching_insecure_retry() -> None:
     assert followups[0].intent.method == "GET"
     assert followups[0].intent.tls_verify is False
     assert followups[0].evidence_ids == ("network-trust-1",)
-    assert automatic_read_followups(followups[0].intent, (observation,)) == ()
+    assert suggested_read_followups(followups[0].intent, (observation,)) == ()
 
 
 def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups() -> None:
@@ -292,7 +292,7 @@ def test_certificate_log_signals_work_for_any_container_and_plan_exact_followups
     )
 
     findings = derive_adhoc_findings([observation.to_dict()])
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="pod_logs", candidate_id="podlog-proxy"), (observation,)
     )
 
@@ -330,7 +330,7 @@ def test_missing_pem_traceback_is_correlated_across_neighboring_log_lines() -> N
     )
 
     findings = derive_adhoc_findings([observation.to_dict()])
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="pod_logs", candidate_id="podlog-gateway"), (observation,)
     )
 
@@ -432,7 +432,7 @@ def test_unhealthy_pod_evidence_automatically_selects_bounded_exact_logs() -> No
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(tool="list_resources", resource="pods", namespace="payments"),
         (observation,),
     )
@@ -461,7 +461,7 @@ def test_route_traffic_evidence_deterministically_follows_service_and_backend_po
         },
     )
 
-    service_reads = automatic_read_followups(
+    service_reads = suggested_read_followups(
         ReadIntent(
             tool="search_resources", resource="routes.route.openshift.io",
             match_field="spec.host", match_value="maas.apps.example.test",
@@ -485,7 +485,7 @@ def test_route_traffic_evidence_deterministically_follows_service_and_backend_po
             "spec": {"selector": {"app": "model-server"}},
         },
     )
-    backend_reads = automatic_read_followups(
+    backend_reads = suggested_read_followups(
         service_reads[0].intent, (service,),
         question="Why does https://maas.apps.example.test return Internal Server Error?",
     )
@@ -512,7 +512,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
         },
     )
 
-    log_reads = automatic_read_followups(
+    log_reads = suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="pods", api_version="v1", kind="Pod",
             namespace="maas", label_selector="app=model-server",
@@ -538,7 +538,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
             }],
         },
     )
-    pod_reads = automatic_read_followups(
+    pod_reads = suggested_read_followups(
         ReadIntent(tool="list_resources", resource="endpointslices"),
         (endpoint_slice,),
         question="The Route returns HTTP 500; inspect its backend.",
@@ -562,7 +562,7 @@ def test_traffic_investigation_reads_healthy_backend_logs_and_endpoint_targets()
             }],
         },
     )
-    legacy_pod_reads = automatic_read_followups(
+    legacy_pod_reads = suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="endpoints", api_version="v1", kind="Endpoints",
             namespace="maas", name="model-server",
@@ -587,7 +587,7 @@ def test_configuration_question_expands_inventory_to_exact_object_reads() -> Non
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="list_resources",
             resource="clusterlogforwarders.observability.openshift.io",
@@ -626,7 +626,7 @@ def test_explicit_config_display_follows_exact_observed_configmap_reference() ->
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -660,7 +660,7 @@ def test_configmap_reference_is_not_automatically_followed_without_display_reque
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -686,7 +686,7 @@ def test_source_cr_display_does_not_automatically_follow_supporting_configmap() 
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="get_resource", resource="kafkas.kafka.strimzi.io",
             api_version="kafka.strimzi.io/v1beta2", kind="Kafka",
@@ -709,7 +709,7 @@ def test_plain_inventory_question_does_not_expand_every_object() -> None:
         },
     )
 
-    assert automatic_read_followups(
+    assert suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="widgets",
             api_version="example.io/v1", kind="Widget",
@@ -731,7 +731,7 @@ def test_non_inventory_health_question_expands_inventory_to_details() -> None:
         },
     )
 
-    followups = automatic_read_followups(
+    followups = suggested_read_followups(
         ReadIntent(
             tool="list_resources", resource="clusteroperators",
             api_version="config.openshift.io/v1", kind="ClusterOperator",
@@ -787,15 +787,20 @@ def test_known_resource_coordinates_are_canonicalized() -> None:
     assert normalized.limit == 3
 
 
-def test_pod_health_summary_accepts_only_scope_and_result_limit() -> None:
-    assert ReadIntent(
-        tool="pod_health_summary", namespace="payments", limit=50
-    ).namespace == "payments"
+def test_pod_health_summary_accepts_scope_selector_and_result_limit() -> None:
+    intent = ReadIntent(
+        tool="pod_health_summary", namespace="payments",
+        label_selector="app.kubernetes.io/name=loki", limit=50,
+    )
+    assert intent.namespace == "payments"
+    assert intent.label_selector == "app.kubernetes.io/name=loki"
 
     with pytest.raises(ValueError, match="accept only their typed scope"):
         ReadIntent(
             tool="pod_health_summary", resource="pods", namespace="payments"
         )
+    with pytest.raises(ValueError, match="accept only their typed scope"):
+        ReadIntent(tool="node_health_summary", label_selector="role=worker")
 
 
 @pytest.mark.parametrize("question", [
@@ -1051,6 +1056,8 @@ def test_pod_log_request_compiles_bounded_name_discovery(question: str) -> None:
     ("previous 2 hours", 7200),
     ("last 7d", 604800),
     ("past hour", 3600),
+    ("last week", 604800),
+    ("previous 2 weeks", 1209600),
     ("last 30 seconds", 300),
     ("last 999 days", 7_776_000),
 ])
@@ -1330,29 +1337,6 @@ def test_inventory_limit_can_be_increased_within_broker_ceiling() -> None:
     assert planned[0].intents[0].limit == 500
 
 
-def test_actionable_model_goal_requires_reads_or_valid_supporting_evidence() -> None:
-    empty_health_plan = ReadPlan(
-        goal_type="health",
-        decision="answer_from_evidence",
-        scope_summary="Assess ClusterOperator health.",
-        supporting_evidence_ids=[],
-    )
-
-    assert plan_needs_evidence_repair(
-        empty_health_plan,
-        known_evidence_ids=set(),
-        has_completed_reads=False,
-    ) is True
-    supported = empty_health_plan.model_copy(update={
-        "supporting_evidence_ids": ["cluster-operators-1"],
-    })
-    assert plan_needs_evidence_repair(
-        supported,
-        known_evidence_ids={"cluster-operators-1"},
-        has_completed_reads=False,
-    ) is False
-
-
 def test_plan_decision_is_derived_from_typed_intents() -> None:
     empty = ReadPlan(
         goal_type="health",
@@ -1517,6 +1501,53 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
         )
 
 
+def test_application_log_volume_supports_exact_targets_and_bounded_rankings() -> None:
+    exact_namespace = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+    )
+    exact_pod = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="pod", namespace="payments", name="api-1",
+    )
+    exact_node = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="node", name="worker-0",
+    )
+    namespace_pods = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", metric_group_by=["pod"],
+    )
+    cluster_pods = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace", "pod"],
+    )
+    cluster_nodes = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank", metric_group_by=["node"],
+    )
+
+    assert exact_namespace.metric_scope == "namespace"
+    assert exact_pod.name == "api-1"
+    assert exact_node.name == "worker-0"
+    assert namespace_pods.metric_group_by == ["pod"]
+    assert cluster_pods.metric_group_by == ["namespace", "pod"]
+    assert cluster_nodes.metric_group_by == ["node"]
+
+    with pytest.raises(ValidationError, match="approved group_by dimension"):
+        ReadIntent(
+            tool="query_metrics", metric="application_log_volume",
+            metric_scope="namespace", namespace="payments", metric_operation="rank",
+        )
+    with pytest.raises(ValidationError, match="grouping is incompatible"):
+        ReadIntent(
+            tool="query_metrics", metric="application_log_volume",
+            metric_scope="cluster", metric_operation="rank", metric_group_by=["pod"],
+        )
+
+
 def test_platform_metric_scopes_require_typed_coordinates() -> None:
     kafka = ReadIntent(
         tool="query_metrics", metric="kafka_consumer_lag",
@@ -1560,12 +1591,16 @@ def test_platform_metric_scopes_require_typed_coordinates() -> None:
         )
 
 
-@pytest.mark.parametrize("question", [
-    "Which namespaces are producing the biggest volume of logs on the cluster?",
-    "Rank namespaces by application log volume",
-    "Show log bytes by namespace",
+@pytest.mark.parametrize(("question", "expected_limit"), [
+    ("Which namespaces are producing the biggest volume of logs on the cluster?", 10),
+    ("Rank namespaces by application log volume", 10),
+    ("Show log bytes by namespace", 10),
+    ("Show me the top 5 namespaces that produce the most amount of logs", 5),
+    ("Show the namespaces that produced the most logs", 10),
 ])
-def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: str) -> None:
+def test_cluster_log_volume_question_compiles_to_typed_metric_query(
+    question: str, expected_limit: int,
+) -> None:
     planned = plan_known_read(question)
 
     assert planned is not None
@@ -1576,8 +1611,102 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(question: st
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         range_seconds=300,
+        limit=expected_limit,
+    )]
+
+
+def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> None:
+    planned = plan_known_read(
+        "which namespaces produce the most amount of logs over the last week?"
+    )
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="top_log_volume_by_namespace",
+        metric_scope="cluster",
+        range_seconds=604_800,
         limit=10,
     )]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "are there Kafka clusters deployed here?",
+        "are there Kafka instances installed on the selected OpenShift clusters?",
+        "are any Kafka deployments running here?",
+        "Show me all the deployed Kafka clusters",
+        "List deployed Kafka clusters on the selected OpenShift clusters",
+    ],
+)
+def test_kafka_existence_question_compiles_terminal_inventory(question: str) -> None:
+    planned = plan_known_read(question, inventory_limit=250)
+
+    assert planned is not None
+    plan, terminal = planned
+    assert terminal is True
+    assert plan.goal_type == "inventory"
+    assert plan.intents == [ReadIntent(
+        tool="list_resources",
+        resource="kafkas.kafka.strimzi.io",
+        kind="Kafka",
+        limit=250,
+    )]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "show Kafka cluster metrics",
+        "why is the Kafka cluster unhealthy?",
+        "show Kafka topics",
+    ],
+)
+def test_kafka_non_inventory_question_does_not_use_inventory_shortcut(
+    question: str,
+) -> None:
+    assert plan_known_read(question) is None
+
+
+def test_namespace_kafka_topic_storage_compiles_discovery_then_metric_reads() -> None:
+    planned = plan_known_read(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        inventory_limit=250,
+    )
+
+    assert planned is not None
+    discovery, terminal = planned
+    assert terminal is True
+    assert discovery.intents == [ReadIntent(
+        tool="list_resources",
+        resource="kafkas.kafka.strimzi.io",
+        kind="Kafka",
+        namespace="kafka-observability",
+        limit=250,
+    )]
+    metric_plan = plan_kafka_topic_storage_metrics(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        [("kafka-observability", "logs-kafka")],
+    )
+    assert metric_plan is not None
+    assert metric_plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="kafka_topic_storage",
+        metric_scope="kafka_cluster",
+        kind="Kafka",
+        namespace="kafka-observability",
+        name="logs-kafka",
+        range_seconds=300,
+        limit=10,
+        metric_group_by=["topic"],
+    )]
+    assert plan_kafka_topic_storage_metrics(
+        "show me the disk usage of kafka topics in kafka-observability namespace",
+        [],
+    ) is None
 
 
 def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:
@@ -1724,6 +1853,26 @@ def test_audit_query_accepts_cluster_wide_filters_without_username() -> None:
 
     assert intent.audit_username is None
     assert intent.audit_operation_scope == "deletes"
+
+
+@pytest.mark.parametrize("metric", ["ingress_bytes_in", "ingress_bytes_out"])
+def test_ingress_bandwidth_accepts_cluster_route_and_namespace_scopes(metric: str) -> None:
+    cluster = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="cluster",
+        metric_operation="trend", range_seconds=259_200,
+    )
+    namespace = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="namespace",
+        namespace="payments", metric_operation="trend",
+    )
+    route = ReadIntent(
+        tool="query_metrics", metric=metric, metric_scope="route", kind="Route",
+        namespace="payments", name="api", metric_operation="trend",
+    )
+
+    assert cluster.range_seconds == 259_200
+    assert namespace.namespace == "payments"
+    assert route.name == "api"
 
 
 @pytest.mark.parametrize(

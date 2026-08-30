@@ -22,6 +22,7 @@ from podpilot_api.model_provider import (
     OpenAIChatCompletionsProvider,
     OpenAIProviderRouter,
     OpenAIResponsesProvider,
+    ResourceFieldFilterSemantics,
     _model_http_request_hook,
     _model_http_response_hook,
     _model_request_context,
@@ -89,6 +90,24 @@ class RecordingResponses:
             recommended_checks=["none"],
             caveats=[],
         ))
+
+
+class ToolCallingCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+            content=None,
+            tool_calls=[SimpleNamespace(
+                id="call-shell-1",
+                function=SimpleNamespace(
+                    name="execute_shell",
+                    arguments=json.dumps({"command": "oc get pods -A"}),
+                ),
+            )],
+        ))])
 
 
 class InlineCitationCompletions(RecordingCompletions):
@@ -347,6 +366,99 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert "structured citations array" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
     assert request["reasoning_effort"] == "high"
+
+
+def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> None:
+    completions = ToolCallingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    step = provider.next_agent_step(
+        profile(
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+        ),
+        "secret-token",
+        [{"role": "user", "content": "Inspect the cluster."}],
+    )
+
+    assert step.content is None
+    assert step.tool_calls[0].name == "execute_shell"
+    assert json.loads(step.tool_calls[0].arguments)["command"] == "oc get pods -A"
+    request = completions.requests[0]
+    assert request["model"] == "openai/gpt-oss-120b"
+    assert request["tool_choice"] == "auto"
+    assert request["parallel_tool_calls"] is False
+    assert request["tools"][0]["function"]["name"] == "execute_shell"
+    assert [item["function"]["name"] for item in request["tools"]] == [
+        "execute_shell", "list_resources", "search_resources",
+        "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
+    ]
+    parameters = request["tools"][0]["function"]["parameters"]
+    assert parameters["required"] == ["command", "cluster_id"]
+    assert "cluster_id" in parameters["properties"]
+    tools_by_name = {
+        item["function"]["name"]: item["function"] for item in request["tools"]
+    }
+    health_tool = tools_by_name["pod_health_summary"]
+    assert health_tool["parameters"]["required"] == ["cluster_id"]
+    assert "label_selector" in health_tool["parameters"]["properties"]
+    assert "complete zero-anomaly result" in health_tool["description"]
+    probe_tool = tools_by_name["http_probe"]
+    assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
+    assert "Host and TLS SNI" in probe_tool["description"]
+    assert "never ends the investigation" in probe_tool["description"]
+    audit_tool = tools_by_name["query_audit_events"]
+    assert "Kubernetes Events" in audit_tool["description"]
+    assert audit_tool["parameters"]["required"] == [
+        "cluster_id", "audit_operation_scope", "audit_outcome",
+    ]
+    metric_tool = tools_by_name["query_metrics"]
+    assert metric_tool["parameters"]["required"] == [
+        "cluster_id", "metric", "metric_scope",
+    ]
+    assert "metric=top_log_volume_by_namespace" in metric_tool["description"]
+    assert "metric=application_log_volume" in metric_tool["description"]
+    assert "rank Pods within one namespace" in metric_tool["description"]
+    assert "default is 300 seconds" in metric_tool["description"]
+
+
+def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_openai(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("podpilot_api.model_provider.OpenAI", fake_openai)
+
+    OpenAIResponsesProvider._client(profile(max_retries=5), "secret-token")
+
+    assert captured["max_retries"] == 5
+
+
+def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:
+    completions = RecordingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+
+    step = provider.finalize_agent_step(
+        profile(
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+        ),
+        "secret-token",
+        [{"role": "user", "content": "Return the final answer now."}],
+    )
+
+    assert step.content
+    assert step.tool_calls == ()
+    request = completions.requests[0]
+    assert "tools" not in request
+    assert "tool_choice" not in request
+    assert "parallel_tool_calls" not in request
 
 
 @pytest.mark.parametrize("api_type", ["chat-completions", "responses"])
@@ -832,15 +944,15 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     request = completions.requests[0]
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {
-        "capability", "cardinality", "resource_query", "object_reference_id",
+        "capability", "cardinality", "answer_goal", "resource_query", "object_reference_id",
         "scope_reference_id", "relationship_reference_id",
         "relationship_selector_key", "object_name",
-        "namespace", "requested_fields", "container", "previous_logs",
+        "namespace", "requested_fields", "resource_filter", "container", "previous_logs",
         "label_selector", "log_range_seconds", "needs_object_details", "evidence_goal",
             "metric_query", "metric_scope", "result_limit", "metric_range_seconds",
             "metric_request",
         "audit_username", "audit_operation_scope", "audit_outcome", "audit_range_seconds",
-        "continues_prior_audit_query",
+        "continues_prior_audit_query", "continues_prior_resource_query",
     }
     assert request["max_tokens"] == 1000
     assert "Do not choose tools or API coordinates" in request["messages"][0]["content"]
@@ -848,6 +960,50 @@ def test_semantic_classifier_returns_a_small_tool_free_contract() -> None:
     classifier_prompt = request["messages"][0]["content"].casefold()
     assert "unknown crds" in classifier_prompt
     assert "never infer promql from the kind" in classifier_prompt
+    assert "resource_filter" in classifier_prompt
+    assert "spec.host" in classifier_prompt
+
+
+def test_resource_inventory_capability_preserves_field_filter() -> None:
+    selected = CapabilitySelection(
+        capability="resource_inventory",
+        cardinality="collection",
+        resource_query="Route",
+        resource_filter=ResourceFieldFilterSemantics(
+            field="spec.host", operator="contains", value=".az.cibc.com",
+        ),
+        evidence_goal="Find Routes whose host contains the supplied suffix.",
+    )
+
+    inquiry = selected.to_inquiry_semantics()
+
+    assert inquiry.resource_filter == ResourceFieldFilterSemantics(
+        field="spec.host", operator="contains", value=".az.cibc.com",
+    )
+
+
+def test_configuration_inventory_goal_requires_object_details() -> None:
+    inquiry = CapabilitySelection(
+        capability="resource_inventory",
+        cardinality="collection",
+        answer_goal="configuration",
+        resource_query="NetworkPolicy",
+        needs_object_details=False,
+        evidence_goal="Show and explain the configured NetworkPolicies.",
+    ).to_inquiry_semantics()
+
+    assert inquiry.answer_goal == "configuration"
+    assert inquiry.needs_object_details is True
+
+
+def test_resource_inventory_capability_preserves_prior_query_continuation() -> None:
+    inquiry = CapabilitySelection(
+        capability="resource_inventory", cardinality="collection",
+        resource_query="Route", continues_prior_resource_query=True,
+        evidence_goal="Present the prior Route search.",
+    ).to_inquiry_semantics()
+
+    assert inquiry.continues_prior_resource_query is True
 
 
 def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:

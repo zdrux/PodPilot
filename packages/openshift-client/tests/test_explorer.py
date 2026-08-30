@@ -14,6 +14,7 @@ from podpilot_openshift.explorer import (
     _list_projection,
     _remote_discovery_error,
 )
+from podpilot_openshift.metric_trends import MetricTrendError
 
 
 class FakeObject:
@@ -593,6 +594,9 @@ def test_bounded_search_finds_route_host_beyond_inventory_ceiling() -> None:
 
     observation = result.observations[0]
     assert observation.tool == "search_resources"
+    assert observation.data["queryContractVersion"] == 1
+    assert observation.data["limit"] == 5
+    assert observation.data["labelSelector"] is None
     assert observation.data["scannedCount"] == 300
     assert observation.data["count"] == 1
     assert observation.data["items"][0]["metadata"]["name"] == "route-275"
@@ -776,6 +780,34 @@ def test_pod_health_summary_finds_crashloop_after_healthy_payload_prefix() -> No
         }],
     }
     assert data["byReason"] == {"CrashLoopBackOff": 1}
+
+
+def test_pod_health_summary_scopes_the_scan_with_a_label_selector() -> None:
+    class SelectedPodResource:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def get(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(items=[], metadata={})
+
+    resource = SelectedPodResource()
+    target, _, _ = explorer(resource)
+
+    result = target.execute(ReadIntent(
+        tool="pod_health_summary", namespace="openshift-logging",
+        label_selector="app.kubernetes.io/name=loki", limit=20,
+    ))
+
+    assert resource.calls == [{
+        "limit": 100,
+        "namespace": "openshift-logging",
+        "label_selector": "app.kubernetes.io/name=loki",
+    }]
+    data = result.observations[0].data
+    assert data["labelSelector"] == "app.kubernetes.io/name=loki"
+    assert data["scanComplete"] is True
+    assert "matching label selector app.kubernetes.io/name=loki" in data["scope"]
 
 
 def test_pod_health_summary_includes_init_failures_and_excludes_completed_pods() -> None:
@@ -1167,3 +1199,68 @@ def test_sensitive_or_invalid_targets_are_denied(intent):
     target, _, _ = explorer()
     with pytest.raises(ReadOnlyExplorerError):
         target.execute(intent)
+
+
+def test_thanos_node_ranking_falls_back_to_current_kubernetes_metrics_snapshot():
+    class FailedThanos:
+        def execute(self, _intent):
+            raise MetricTrendError("Thanos Querier is temporarily unavailable.")
+
+    class MetricsResources:
+        def get(self, **kwargs):
+            assert kwargs == {
+                "api_version": "metrics.k8s.io/v1beta1", "kind": "NodeMetrics",
+            }
+            return SimpleNamespace(get=lambda: SimpleNamespace(items=[{
+                "metadata": {"name": "worker-a"}, "usage": {"cpu": "2"},
+            }]))
+
+    dynamic = SimpleNamespace(resources=MetricsResources())
+    core = SimpleNamespace(list_node=lambda: SimpleNamespace(items=[SimpleNamespace(
+        metadata=SimpleNamespace(name="worker-a", labels={}),
+        status=SimpleNamespace(allocatable={"cpu": "4"}, capacity={"cpu": "4"}),
+    )]))
+    target = KubernetesReadOnlyExplorer(
+        dynamic_client=dynamic, core_api=core, metric_reader=FailedThanos(),
+    )
+
+    result = target.execute(ReadIntent(
+        tool="query_metrics", metric="node_cpu_utilization",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=("node",), limit=5,
+    ))
+
+    observation = result.observations[0]
+    assert observation.source == "kubernetes:metrics.k8s.io/v1beta1:NodeMetrics"
+    assert observation.data["ranking"][0]["labels"] == {"nodename": "worker-a"}
+    assert observation.data["ranking"][0]["current"] == 50.0
+    assert observation.data["rangeSeconds"] == 0
+    assert "current snapshot" in result.limitations[0]
+
+
+def test_application_log_volume_routes_to_registered_loki_reader():
+    class LogReader:
+        def __init__(self) -> None:
+            self.intents: list[ReadIntent] = []
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.intents.append(intent)
+            return ReadResult((AdHocObservation(
+                id="log-volume", tool="query_metrics", summary="Read Pod log volume.",
+                source="loki:application/query/application_log_volume",
+                collected_at=datetime.now(timezone.utc),
+                data={"metric": "application_log_volume", "ranking": []},
+            ),))
+
+    reader = LogReader()
+    target = KubernetesReadOnlyExplorer(log_metric_reader=reader)
+    intent = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="namespace", namespace="payments",
+        metric_operation="rank", metric_group_by=["pod"],
+    )
+
+    result = target.execute(intent)
+
+    assert reader.intents == [intent]
+    assert result.observations[0].source.endswith("application_log_volume")

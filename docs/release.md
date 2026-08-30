@@ -170,6 +170,9 @@ namespace/Deployment/node top-consumer rankings, deterministic namespace ranking
 range/step/series/point/body bounds, label redaction, statistics and trend summaries, and a
 clear distinction between usage versus configured requests/limits. Tests must prove the model
 and browser cannot submit PromQL or receive the ServiceAccount token.
+Ingress metric gates must cover frontend aggregate bandwidth, backend namespace/Route bandwidth,
+the router's `exported_namespace` label normalization, inbound/outbound pairing, three-day bounded
+resolution, and native trend rendering with a peak timestamp.
 Deployment tests must cover ReplicaSet/Pod ownership joins rather than name-prefix matching.
 Log-volume gates must verify authenticated LokiStack application-tenant requests, server-owned
 `bytes_over_time` LogQL, vector validation, namespace/series/body/time bounds, deterministic
@@ -177,7 +180,7 @@ multi-cluster rendering, and the absence of raw log lines. Manifest tests must r
 `cluster-monitoring-view` and bind the investigator only to the read-only OpenShift Logging
 application, infrastructure, and audit ClusterRoles.
 Range-routing tests must prove compact and worded durations preserve the operator request,
-sub-five-minute and over-ceiling values are bounded, `today` is derived from UTC midnight, and
+including week-based periods; sub-five-minute and over-ceiling values are bounded, `today` is derived from UTC midnight, and
 transport deadlines report the configured timeout.
 Node tests must cover bounded top CPU/memory rankings, optional namespace narrowing, retained
 namespace/Pod/container labels, and operator-visible wording that does not misrepresent
@@ -387,6 +390,72 @@ Machine failure and missing-API behavior, and Deployment/StatefulSet/DaemonSet r
 Machine and workload tests must prove namespace propagation; Node and ClusterOperator intents must
 reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
 summary must preserve the complete-coverage rule before confirming absence.
+
+## Unrestricted agent gates
+
+- Guarded mode remains the default in the portable runtime ConfigMap and the standard remote overlay
+  does not contain the runner sidecar.
+- The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
+  `serviceAccountName: podpilot-investigator`.
+- The optional remote agentic overlay composes the guarded remote overlay plus the shared runner
+  component, renders both versioned ImageStreams, forces remote TLS verification off, and contains
+  no cluster-admin binding.
+- No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
+  validation must return `yes` for cluster-wide Pod GET and `no` for cluster-wide Deployment PATCH.
+- The runner image pins its OpenShift CLI source by digest, runs non-root with a read-only root
+  filesystem, drops all capabilities, binds only to `127.0.0.1:8090`, and uses a projected-token
+  `tokenFile` kubeconfig.
+- Provider tests must prove `openai/gpt-oss-120b` is sent through Chat Completions with
+  `tool_choice=auto`, sequential tool calls, assistant tool-call preservation, and correlated
+  `role=tool` results.
+- End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
+  returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
+- Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
+  token reaches the loopback runner, tokens never enter model messages or logs, the temporary
+  kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
+  summary is visible to the operator.
+- Runner watchdog tests must cover silent process polling, periodic API progress,
+  process-group termination at the command deadline, exit code `124`, and a loopback client timeout
+  longer than the runner deadline. They must also prove stdout/stderr are continuously drained,
+  retained within the configured byte ceiling, and visibly marked when truncated. Both containers
+  retain working liveness/readiness probes.
+- Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
+  `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
+  native payload-volume metric card, and never substitutes Kubernetes Event counts.
+- Scoped log-volume tests must prove exact namespace, Pod, and Node totals; Pod rankings within a
+  namespace; cluster-wide Pod and Node rankings; server-owned selectors/groupings; and that no
+  matching log lines or model-authored LogQL cross the evidence boundary.
+- Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
+  catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
+  back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
+- Agent-first completion tests must prove causal Pod and resource questions continue from the
+  registered read into model-selected checks, while explicit show/list/ranking requests may stop
+  on a complete registered result. UI presentation preference must not terminate execution.
+- Multi-cluster follow-up tests must prove opaque object references retain a uniquely attributable
+  source cluster and do not fan an exact namespace/name investigation out to unrelated clusters.
+- Kafka inventory tests must cover imperative and interrogative deployment wording, execute the
+  canonical Strimzi Kafka list once on every selected cluster, distinguish found/empty/failed
+  cluster results, include failures in the coverage denominator, and never enter the shell loop.
+- Failure-authority tests must prove an unavailable registered source plus failed shell verification
+  cannot become an unsupported model claim about a missing metrics server or add-on.
+- Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,
+  suppresses a competing unrestricted shell call, preserves all-user wording, and enforces explicit
+  namespace, delete-operation, and Kubernetes resource filters in both Loki and local projection.
+- Audit-adherence tests must prove an explicit last/top count overrides the configured default and
+  that delete/mutation plus successful/failed wording overrides broader classifier output before
+  the Loki query is compiled.
+- Audit-window tests must prove only an operator-specified count enables backward search expansion;
+  an unnumbered recent query must remain in the initial window even if the classifier supplies a
+  convenience result limit.
+- Audit-failure authority tests must prove a timed-out or denied registered Loki audit read renders
+  its real failure without calling the model shell loop, `oc-runner`, `events.audit.k8s.io`, or
+  optional command-line JSON utilities.
+- Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
+  registered ranking and original top-N while changing only the requested range. The log-volume
+  fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day
+  ceiling, and never attempt `pods/exec` or `logcli`.
+- Agent-loop tests must prove one empty Chat Completions turn triggers exactly one finalization
+  retry, reuses existing tool results, and does not replay a completed runner command.
 
 ## Rollback
 

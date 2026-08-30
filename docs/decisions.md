@@ -163,20 +163,23 @@ Context: Operators need to find namespaces producing the most logs, but Kubernet
 `pods/log` reads cannot provide complete historical cluster-wide volume and arbitrary LogQL
 would expose raw logs, unbounded cost, and a new injection surface.
 
-Decision: Register `top_log_volume_by_namespace` as a typed cluster metric. Normal code sends
-one fixed `bytes_over_time` application-tenant query through the authenticated OpenShift
-LokiStack gateway and retains only namespace, payload bytes, average byte rate, time bounds,
-and completeness. Explicit relative periods are parsed into typed seconds, `today` is elapsed UTC
-day, an omitted period defaults to one hour, and the deployment cap is 24 hours. Bind the
+Decision: Register `top_log_volume_by_namespace` and scoped `application_log_volume` as typed
+metrics. Normal code sends reviewed `bytes_over_time` application-tenant queries through the
+authenticated OpenShift LokiStack gateway. Supported dimensions are namespace, Pod, and Node;
+exact totals and bounded rankings retain only normalized dimensions, payload bytes, average byte
+rate, time bounds, and completeness. Explicit relative periods are parsed into typed seconds,
+`today` is elapsed UTC day, an omitted period defaults to five minutes, and the shipped deployment
+cap is seven days. Bind the
 investigator to OpenShift's read-only application, infrastructure, and audit logging roles;
 retain its existing `cluster-monitoring-view` binding. OpenShift's supported audit role is
 `cluster-logging-audit-view`, not `cluster-monitoring-audit-view`.
 
-Consequences: Ask can render deterministic multi-cluster log-volume tables without returning
-log lines or accepting model-authored LogQL. The values describe observed payload bytes, not
-compressed storage. Cluster-wide gateway authorization still carries broader technical read
+Consequences: Ask can render deterministic multi-cluster namespace, Pod, and Node log-volume
+tables without returning log lines or accepting model-authored LogQL. Pod rankings within a
+namespace stay server-filtered rather than collecting raw logs. The values describe observed
+payload bytes, not compressed storage. Cluster-wide gateway authorization still carries broader technical read
 capacity, so production network and workload isolation must protect the identity.
-The Loki transport defaults to a 30-second deadline and reports deadline expiry distinctly from
+The Loki transport defaults to a 90-second deadline and reports deadline expiry distinctly from
 DNS, TLS, HTTP, and generic availability failures.
 
 ## 2026-08-25 - Typed metric trends use server-owned PromQL
@@ -1056,3 +1059,140 @@ claim. Nodes and ClusterOperators remain cluster-scoped; Machines and workload c
 namespace filters. Combined workload scans apply the scan ceiling per controller kind. A Node
 `Ready=False`, a Machine provisioning condition, and a Pod container waiting reason remain distinct
 health semantics.
+
+## 2026-08-28 - Unrestricted agent simulation uses a read-only oc sidecar
+
+Context: The guarded Ask loop cannot reproduce the behavior of a remote fully agentic deployment
+because every cluster interaction compiles through typed reads and mutations require registered
+approval. The SNO lab needs to exercise native multi-step tool calling with the same OpenRouter
+model as the remote cluster without accidentally granting the lab agent cluster-admin.
+
+Decision: Add an explicit `unrestricted` agent mode enabled by the SNO milestone overlay and an
+optional additive `remote-poc-agentic` overlay. Use OpenRouter Chat Completions with exact model
+`openai/gpt-oss-120b` for the SNO simulation and one
+`execute_shell` function. Execute calls through a localhost-only sidecar built with a pinned Linux
+`oc` binary. Each call names one selected cluster. Runtime-cluster calls use the sidecar's projected
+`podpilot-investigator` identity; registered remote calls receive only that target's API origin and
+stored token from the API over Pod loopback and use a deleted-after-use kubeconfig. Do not compose the `ai-observer`
+cluster-admin overlay. Keep guarded mode as the base and standard remote default. The remote
+agentic overlay inherits remote configuration and RBAC, adds a separately promoted versioned runner
+image, grants no permissions itself, and explicitly forces remote-cluster TLS verification off for
+this environment. Retain an outer durable-run
+deadline, add a shorter per-command process-group timeout with silent polling and live UI
+progress, retain redaction before returning command output to the model and command metadata audit, but
+bypass typed reads, registered remediation, preview, and approval inside the lab mode.
+
+Consequences: The model can choose arbitrary Bash and OpenShift CLI operations, while the actual
+cluster result is constrained only by the runtime service account's read-only RBAC and admission.
+This accurately surfaces forbidden mutations in the agent loop. It is intentionally unsuitable for
+production, does not make model output trustworthy, and must never be combined with the lab
+cluster-admin overlay.
+
+## 2026-08-28 - Unrestricted mode retains additive deterministic enrichment
+
+Context: A shell-only agent can miss product-specific capabilities that normal PodPilot code owns.
+For example, it may count Kubernetes Events as a proxy for log production even though PodPilot has
+an authenticated aggregate-only Loki application-log volume reader and a deterministic ranking
+presentation.
+
+Decision: Before each unrestricted shell loop, apply the existing high-confidence known-read
+compiler to the current question. Execute a matching registered plan across the selected clusters,
+persist its normalized evidence, and include that evidence and its preferred presentation metadata
+in the agent context. For metric rankings, the native evidence card is the sole operator-visible
+table; deterministic Markdown and model-authored copies are not rendered beside it. Instruct the
+model to report only material additions rather than reproducing enriched tables. Keep
+`execute_shell` available without approval or typed
+tool restrictions after enrichment. Do not invoke the model planner merely to find an enrichment;
+unrecognized questions proceed directly to the unrestricted loop.
+
+The native-card preference is evidence-shape based rather than a metric-name allowlist. Any
+normalized `query_metrics` observation with renderable rows uses the card, including CPU, memory,
+node, storage, Kafka, ingress, and newly registered metrics. Empty or unsupported result shapes keep
+the deterministic text fallback so the UI never suppresses the only usable explanation.
+
+Consequences: Common health, resource, metric-ranking, and log-volume questions retain PodPilot's
+fixed API semantics and presentation without reducing agent autonomy. Registered readers remain
+bounded by their own data-handling contracts, while shell actions remain bounded only by the Pod
+identity, admission, and the outer run deadline. Adding a new deterministic enrichment continues to
+require an explicit known-read compiler rule and tests. A single authoritative renderer also avoids
+showing the same ranking as deterministic Markdown, agent Markdown, and a native metric card.
+
+## 2026-08-29 - Causal intent, not presentation, controls agent completion
+
+Context: An exact resource read can completely answer “show this Pod” while only establishing the
+starting state for “why is this Pod Pending?”. Treating a deterministic-primary table as terminal
+caused causal follow-ups to stop at Pod spec fields instead of inspecting events, claims, nodes, or
+controller state. Multi-cluster follow-ups could also repeat an exact coordinate on clusters that
+did not produce the selected result.
+
+Decision: Centralize unrestricted completion around question intent and registered-answer
+completeness. Explicit retrieval requests may terminate on a complete registered result. Causal and
+investigative requests always continue into the unrestricted tool loop after enrichment, except
+for narrow fail-closed capabilities whose contracts prohibit generic shell fallback. Keep native
+cards and deterministic-primary views as presentation metadata only. Persist a uniquely
+attributable source cluster on opaque recent-object references and constrain the follow-up turn to
+that cluster.
+
+Consequences: Deterministic readers become fast, trusted sensors for investigations instead of an
+alternate agent. The agent can correlate further evidence while the UI retains structured cards.
+New registered readers cannot accidentally suppress causal investigation by selecting a preferred
+renderer, and cross-cluster name collisions no longer send a referenced-object follow-up to every
+selected cluster.
+
+## 2026-08-29 - Registered audit collection fails closed
+
+Context: When the authoritative Loki audit query timed out, unrestricted mode entered the generic
+shell loop. The model attempted `events.audit.k8s.io`, which is not how OpenShift audit logs are
+exposed, and assumed an optional `jq` binary existed. These secondary failures obscured the real
+timeout without providing equivalent evidence.
+
+Decision: Treat a compiled `query_audit_events` plan as authoritative for the turn, including
+partial and failed multi-cluster results. Render the registered evidence or exact collection
+failure and do not enter the unrestricted shell loop. Continue to preserve explicit username,
+namespace, resource, operation, outcome, time, and result-limit filters.
+Only an operator-specified result count enables backward audit-window expansion. For unnumbered
+`recent` requests, discard a classifier-invented convenience count, apply the configured display
+limit to one initial-window query, and return fewer rows when fewer matches are present.
+
+Consequences: Audit requests cannot fall back to invented Kubernetes resources or undeclared
+runner utilities. Operators see the actionable Loki timeout or authorization failure directly;
+restoring the registered audit source is the required recovery path.
+
+## 2026-08-29 - Kafka deployment inventory is canonical and cluster-complete
+
+Context: Imperative wording such as “show all deployed Kafka clusters” missed the narrow Kafka
+existence recognizer. The unrestricted model then guessed several resource aliases on the first
+selected cluster and generalized that result across the full multi-cluster selection.
+
+Decision: Recognize both imperative and interrogative Kafka deployment-inventory wording and
+compile it to `list kafkas.kafka.strimzi.io` once per selected cluster. Treat this registered plan
+as authoritative, including empty, partial, API-missing, and denied results. Include failed cluster
+reads in rendered coverage and do not enter the shell loop.
+
+Consequences: Kafka inventory uses one canonical Strimzi contract, reports what happened on every
+selected cluster, and cannot infer fleet-wide absence from one cluster or from unrelated Knative
+Kafka CRDs.
+
+## 2026-08-29 - Collectors never control agent direction or conclusions
+
+Context: Registered collectors and recovery helpers accumulated completion booleans, authoritative
+failure paths, automatic follow-up reads, sufficiency reviews, and deterministic answer composition.
+Although each was intended to improve a narrow request, together they could stop an investigation,
+replace agent prose, or hide evidence such as raw log tails and Markdown beneath a native card.
+
+Decision: Treat every collector, compiler, catalog match, relationship edge, finding, and
+enrichment result as evidence or a non-executable candidate only. The agent alone chooses reads,
+sufficiency, stopping, conclusions, and prose. Ignore legacy terminal hints. Do not automatically
+retry TLS insecurely, follow object references, collect logs, execute answer-authored gaps, recover
+an unselected candidate, or rewrite a schema-valid answer for style. Preserve the agent response;
+use evidence status and limitations for grounding problems. Keep native cards/tables additive.
+Retain schema and target validation, sensitive-resource denial, redaction, RBAC, bounded budgets,
+timeouts, and mutation approval as non-negotiable enforcement boundaries. Deterministic prose is
+permitted only as a provider/structured-contract failure fallback after collection.
+
+Consequences: `list_resources` and similar helpers remain valuable bounded sensors without becoming
+alternate planners. Adding a collector cannot alter the investigation state machine merely by
+returning success, failure, completeness, or a preferred presentation. Tests must provide an agent
+decision when they expect a read and must assert that server-side recovery does not occur after an
+agent stop. Historical decisions describing terminal registered enrichments or automatic
+continuations are superseded by this decision.

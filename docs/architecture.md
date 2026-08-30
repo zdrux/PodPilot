@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-26
+Last reviewed: 2026-08-29
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -16,7 +16,7 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 
 ## Components
 
-- **API/orchestrator**: accepts investigation requests, selects bounded diagnostic tools, enforces budgets and policy, and streams results.
+- **API/orchestrator**: accepts investigation requests, exposes bounded diagnostic candidates, validates agent-selected reads, enforces budgets and policy, and streams results.
 - **Web UI**: Jinja2/HTMX views served by the API show alert context, streamed investigation progress, evidence provenance, uncertainty, and suggested operator actions.
 - **OpenShift client**: reads the Kubernetes API plus Thanos, the OpenShift LokiStack
   gateway, and Alertmanager, validates TLS, and normalizes failures.
@@ -24,9 +24,145 @@ be smuggled in through generic shell or unrestricted Kubernetes tools.
 - **Model adapter**: presents one internal contract over configured OpenAI-compatible endpoints, capability probes each profile, and turns normalized evidence into explanations while preserving citations and redaction rules.
 - **Evaluation harness**: replays sanitized incidents and scores evidence use, diagnosis quality, safety, and abstention.
 
+## Agent-control boundary
+
+The agent owns discovery direction, selection of the next useful read, evidence sufficiency,
+termination, conclusions, and operator-facing prose. Collectors, registered read compilers,
+resource catalogs, relationship graphs, findings, and enrichment packs produce normalized evidence
+or optional grounded candidates only. Their completion, failure, result shape, or legacy
+presentation hint cannot stop, continue, cancel, replace, or redirect an investigation.
+
+The orchestrator retains enforcement authority rather than investigative authority. It validates
+schemas and exact targets, denies sensitive resources and mutations, applies RBAC, redaction,
+read/time/output bounds, and requires approval at the mutation boundary. An invalid target may be
+returned to the agent for correction, but the server does not substitute a different read. A valid
+agent decision to answer is accepted even when other candidates exist. A valid final answer is
+stored after redaction and safe-Markdown normalization without style rewrites, deterministic prose
+injection, or server-directed gap recovery. Citation conflicts change evidence status and visible
+limitations; they do not erase the agent's text. Deterministic answer generation is reserved for a
+model-provider or structured-contract failure after evidence has already been collected.
+
+Native resource tables, metric cards, and parsed dynamic-column Markdown tables are presentation
+views. They are additive and never suppress the complete agent response. `list_resources`,
+`search_resources`, and `watch_resources` return bounded projections with
+`fullObjectsIncluded=false`; the agent decides whether exact object reads are material. Raw bounded
+log tails remain available to the final agent instead of being replaced by a separate server-side
+log interpretation.
+
 ## Current Runtime
 
-The current single Pod contains two containers. The OpenShift OAuth proxy is the
+The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
+agent path. The Chat Completions model can select typed `list_resources`, `search_resources`,
+`http_probe`, `query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
+shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
+normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
+tool observation and control returns to the model; neither success nor a collector-level
+`complete` field ends the investigation. This preserves exact field filtering, Loki audit
+projection, and registered metric backends without making a collector the orchestrator.
+Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
+rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
+unavailable. The fallback is explicitly current-only; average and peak equal current and the
+limitation is persisted. If every registered read and agent verification command fails, normal code
+renders those exact collection failures and discards speculative model explanations of the outage.
+High-confidence router Pod resource-metric requests bypass model classification and compile to CPU
+and memory reads scoped to the `openshift-ingress` namespace and grouped by Pod. Router traffic,
+request, and bandwidth questions remain separate HAProxy metric semantics.
+Explicit retrieval requests may receive exact grounded candidates without losing semantic
+classification or agent control. Causal and non-causal wording follows the same rule: presentation
+metadata never decides whether investigation is complete. A Pod GET can therefore seed an
+investigation without treating `status.phase: Pending` as its explanation. Strimzi Kafka existence
+and inventory questions can expose a bounded `kafkas.kafka.strimzi.io` list candidate across
+namespaces, but the agent still chooses whether to use it and what it means.
+Both interrogative and imperative wording are recognized, including “are there Kafka clusters?”
+and “show/list all deployed Kafka clusters.” The same registered read executes independently on
+every selected OpenShift cluster. Found objects, complete zero-object results, and failed/API-missing
+reads remain cluster-attributed, and coverage counts include failed clusters.
+KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its observed
+namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
+topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
+
+The API then sends OpenAI-compatible Chat Completions requests with bounded typed read helpers and
+one `execute_shell` function. Broad Pod health questions use the anomaly-first
+`pod_health_summary` helper, optionally scoped by namespace and label selector. A universal healthy
+conclusion requires its complete-scan flag; a resource inventory with compacted status detail cannot
+substitute for complete health coverage.
+Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
+use the projected service-account identity. For a registered remote cluster the API resolves that
+cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback
+for that call only. The `oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
+Linux `oc` binary, deletes the kubeconfig, and returns
+exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
+model returns a final assistant message or the durable Ask run reaches its outer execution
+deadline. Typed helpers are validated as `ReadIntent` values, but the model chooses whether and
+when to invoke them, how to interpret their observations, and whether to continue through another
+helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
+approval. The loop retains conversation ownership, provider credentials, redaction before model
+reuse/persistence, progress, command metadata audit, and the run deadline.
+The standing agent instructions require initial Pod and container log reads to use an exact scope
+when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
+The agent may narrow or expand subsequent reads in bounded increments when that sample is
+insufficient, rather than placing an arbitrary full log stream into every later model request.
+If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
+finalization retry using the command results already in context. A second empty turn fails the run;
+successful commands are not automatically repeated and the loop cannot retry indefinitely.
+No retrieval enrichment is authoritative over the agent and no collector suppresses a model-proposed
+read. Collection completeness is evidence about the bounded read, not answer completeness. Native
+resource cards remain additive while the agent can explain selectors, rules, effects, and other
+material object semantics. Collection classification carries an
+optional grounded object-field predicate separately from requested output fields. Exact and
+case-insensitive `contains` predicates compile to bounded `search_resources` reads across every
+selected cluster. A plain resource list cannot satisfy a question containing a material field
+predicate; if classification drops that constraint, the candidate is not treated as satisfying the
+request. Search results distinguish complete absence from an empty result at
+the scan ceiling, which remains explicitly inconclusive.
+Opaque recent-object references retain their source cluster when uniquely attributable. A causal
+follow-up about one result therefore investigates that cluster instead of repeating the same
+namespace/name coordinate across every cluster selected on the conversation.
+Registered top-consumer metric evidence also acts as a typed continuation anchor. An elliptical
+follow-up that asks for the same CPU, memory, or namespace log-volume ranking over a different
+period reuses the prior metric, scope, coordinates, grouping, and limit while changing only the
+bounded time range.
+Audit classification is similarly reconciled with unambiguous operator constraints before query
+compilation. Explicit last/top counts, delete-versus-mutation scope, success/failure outcome, and
+recognized resource kinds override broader model defaults; an omitted model `result_limit` cannot
+turn “last 5 audit entries” into the configured default of 20.
+Backward window expansion is reserved for an explicit requested count. A vague `recent` audit
+request uses the configured initial window once and may return fewer than the default display
+limit; a model-invented convenience count cannot widen that query toward the audit ceiling.
+The registered Loki audit reader and Strimzi Kafka inventory are grounded capabilities, not terminal
+routes. Their success, timeout, denial, or API-missing result is returned to the agent with exact
+cluster attribution. Candidate validation prevents misspelled or invented resource types, while the
+agent remains free to select another safe read or explain the limitation.
+Namespace-scoped Kafka topic-storage requests are a registered two-stage read. PodPilot first lists
+exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
+`kafka_topic_storage` query per observed CR and groups the result by topic. An empty namespace,
+partial metric failure, or denied monitoring read remains visible evidence. This resolves the Kafka
+name from observed API evidence instead of requiring the model or operator to supply it, without
+forcing the agent to stop.
+Each shell process group also has an independent runner-side deadline. While it is active, the
+runner polls the process silently and the API records changing elapsed-time progress events so the
+SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible
+limitation instead of leaving the run indefinitely on `agent_command`.
+Dedicated drain threads consume stdout and stderr as the process runs, retain a bounded prefix of
+each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`
+from buffering arbitrary command output up to the sidecar's memory limit while preserving true byte
+counts and truncation flags in metadata-only runner logs.
+Model calls use the same elapsed-time progress mechanism. Each profile configures a per-attempt
+provider timeout and transient retry count (default three); the SDK retries timeouts, abrupt
+connection failures, rate limits, and transient server responses while the durable Ask deadline
+remains the outer bound.
+
+The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
+agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
+separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
+the standard remote identity and grants no additional RBAC. Consequently the model may ask for
+any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
+portable base and standard remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
+The optional remote agentic overlay also forces registered remote-cluster TLS verification off; the
+secure default remains on everywhere else.
+
+The guarded single Pod contains two containers; either unrestricted overlay adds the runner as a
+third. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
 `127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
 highest matching elevated role from deployment-configured OpenShift Group lists
@@ -181,9 +317,12 @@ server, and etcd scopes. Normal code compiles server-owned PromQL and calls `/ap
 matrix results, caps series/points/body/time, redacts labels, and persists normalized points
 plus minimum, maximum, average, current, trend, unit, and completeness. Requested resolution
 is increased automatically when necessary to keep the series within its point ceiling.
-The registered `top_log_volume_by_namespace` metric is an aggregate-only exception backed by
-the LokiStack application tenant. Normal code owns its fixed `bytes_over_time` LogQL, accepts
-only vector results, and persists namespace, payload bytes, average byte rate, time bounds, and
+Registered application-log-volume metrics are aggregate-only exceptions backed by the LokiStack
+application tenant. Normal code owns their `bytes_over_time` LogQL and permits only reviewed
+namespace, Pod, and Node label selectors/groupings. The broker supports cluster rankings by
+namespace or Node, cluster-wide Pod rankings identified by namespace and Pod, Pod rankings within
+one exact namespace, and totals for one exact namespace, Pod, or Node. It accepts only vector
+results and persists normalized dimensions, payload bytes, average byte rate, time bounds, and
 completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
 Normal code parses common explicit relative periods before deterministic execution, while the
 semantic classifier carries `metric_range_seconds` for other wording. Requested values remain
@@ -241,7 +380,8 @@ resource inventory, resource details, workload logs, Kubernetes Events, cluster 
 cluster audit events, endpoint probe, general investigation, named-object configuration guidance,
 or conceptual explanation.
 The same tool-free contract carries semantic arguments such as resource concept, exact
-namespace/object coordinates, requested fields, time range, outcome, and bounded result count.
+namespace/object coordinates, requested fields, time range, outcome, bounded result count, and an
+answer goal (`identifiers`, `count`, `existence`, `configuration`, `behavior`, or `investigation`).
 Normal code verifies that exact coordinates occur in the operator's question or recent context,
 then compiles the selected capability into one registered query per selected cluster
 and renders the evidence directly as a multi-cluster table. This lets the model handle
@@ -344,12 +484,28 @@ Collected object names are retained separately from detailed projections.
 while `detailsTruncated` reports only status-detail compaction; the latter must
 not be presented as proof that more objects exist.
 The inventory object ceiling is deployment-configurable (500 by default, 1,000
-maximum). Explicit list/inventory requests are rendered by normal server code as
-an evidence-cited Markdown table from the collected `names` array, so model prose
-cannot omit the requested resource list. When the semantic classifier says names are
-sufficient, that deterministic table is the final answer: PodPilot skips the general
+maximum). Explicit list/inventory requests are rendered by normal server code from
+the collected `names` array, so model prose cannot omit the requested resource list.
+Every cited successful `list_resources` or `search_resources` observation also produces a
+versioned `grouped_resource_list` presentation block in the message metadata. The block contains
+bounded cluster groups, normalized Kind/namespace/name/Ready rows, search predicate values when
+retained, scan coverage, and evidence IDs. The web UI renders it as native, auto-escaped,
+collapsible tables with CSV export; it never parses provider Markdown or HTML to recover rows.
+When a structured presentation fully replaces a server-generated inventory answer, Ask suppresses
+only that legacy Markdown inventory table so operators see one canonical result with all retained
+fields, while retaining adjacent prose that reports scope or partial collection failures. It does
+not discard an answer-authored table that adds material interpretation or fields absent from the
+observed-resource card, such as NetworkPolicy selectors and rule effects. Instead, Ask parses
+CommonMark table tokens into bounded `answer_table` blocks with dynamic columns, renders them through
+the native collapsible/CSV table component, and leaves surrounding prose in its original order.
+These blocks are explicitly answer-derived: parsing does not promote interpreted cells to observed
+cluster facts. The complete Markdown answer remains stored as a backward-compatible fallback for
+clients that do not consume presentation metadata. When the semantic classifier says names are
+explicitly sufficient, that deterministic table is the final answer: PodPilot skips the general
 final-writer/correction pass and does not manufacture troubleshooting follow-ups for a
-completed inventory request. Multi-cluster totals distinguish clusters queried from
+completed closed-form inventory request. A successful LIST remains a durable fallback if the
+subsequent agent response fails, but it does not preempt interpretation for configuration, behavior,
+investigation, requested-field, or uncertain goals. Multi-cluster totals distinguish clusters queried from
 clusters with matches. A missing projected Ready condition is displayed as `Unknown`,
 never as proof that the object is running or unhealthy. Inventory planning and malformed-plan
 recovery preserve the classifier's requested resource Kind: generic scope words such as `cluster`
@@ -370,6 +526,17 @@ generally, discovery resolves an unqualified plural with supplied `apiVersion` a
 only when both agree with one advertised resource; mismatches fail closed. Preflight performs
 this resolution before the read budget advances. Same-plural APIs such as OpenShift and
 Knative Routes are not treated as interchangeable fallbacks after ambiguity or RBAC denial.
+
+Resource-collection conversations retain typed continuation state from the latest validated
+`list_resources` or `search_resources` observations: Kind, API/resource coordinates, namespace,
+label selector, exact field predicate, limit, source clusters, evidence IDs, and collection time.
+Elliptical presentation follow-ups such as “show these routes” reuse only that cited snapshot and
+create provenance-bearing synthetic activity; they do not depend on reconstructing the query from
+truncated chat prose or call the model. A unique normalized mention of one already-selected cluster
+(including an environment-suffix-shortened name such as `CMSP Central` for `CMSP Central DEV`)
+narrows only that turn. Ambiguous aliases do not narrow. Freshness terms such as `current`, `still`,
+`now`, or `refresh` inherit the typed query but execute a new bounded read. Prior snapshots are
+never silently represented as current state.
 Projected Route evidence treats `spec.to.name` and `spec.alternateBackends[].name` as
 observed Service references, so exact follow-up Service reads are not rejected as model
 inventions. Route protocol questions also have a deterministic cited interpretation: `edge`
@@ -485,7 +652,9 @@ a replacement diagnostic path.
 
 Ad-hoc conversations are private to the creating OpenShift identity. The creator
 can start, continue, and permanently delete the conversation and its messages and
-evidence; deletion leaves a content-free audit event. There is no per-conversation
+evidence. Deleting a conversation atomically removes queued work and cancels any
+in-process running task before it can persist a late response; deletion leaves a
+content-free audit event with only the cancelled-run count. There is no per-conversation
 question limit. The model receives the ten most recent messages plus a bounded,
 durable digest of older messages. UI rendering is capped independently, evidence
 retains its existing bounded window, and a per-user one-minute request limit
@@ -556,20 +725,17 @@ protocol. When a provider makes that contradictory claim, deterministic code
 replaces it with observed facts, the supported conclusion, and the remaining direct
 probe or application evidence needed.
 
-The read broker also owns two deterministic investigation continuations. A verified
-HTTPS probe that fails only at certificate trust is repeated at most once per target
-with the identical URL, method, connection override, Host, and SNI but
-`tls_verify=false`; both observations remain evidence and the retry is explicitly
-unauthenticated. Pod evidence assigns deterministic investigation priority to
-unready, restarting, or non-running containers, allowing bounded current-log reads
-without model-authored coordinates. Logs from any container are classified into
+The read broker can expose evidence-derived candidates without selecting them. A verified
+HTTPS probe that fails only at certificate trust may expose the identical target with
+`tls_verify=false`; Pod evidence may expose exact current-log candidates for unready, restarting,
+or non-running containers. The agent alone decides whether to select either read. Logs from any
+container can be classified into
 typed operational signals (crash/exception, resource pressure, TLS, DNS, network,
 authorization, storage, dependency, application error, or warning). Each structured
 finding records exact Pod/container provenance, repetition and normalized signature
 counts, observed timestamps, bounded samples, paths, and endpoints. Material signals
-produce exact Pod and namespace Event follow-ups; crash/resource signals may also
-read the same container's previous stream. Automatic continuations share the existing
-per-turn budget, are capped and deduplicated, and cannot read Secrets or expand RBAC.
+produce optional exact Pod, Event, and previous-stream candidates. Candidates are capped and
+deduplicated, cannot read Secrets or expand RBAC, and consume budget only after agent selection.
 Findings are evidence summaries, not executable instructions, and neither pattern
 matches nor log correlation alone establish causality.
 
@@ -595,26 +761,18 @@ correction attempt receives only an error code and instruction. The same check r
 fields or fenced `investigation_gaps` serialized inside the answer
 string. Provider attempts to append a recommendation heading or `recommended_actions` serialization
 are removed before Markdown rendering because suggested controls are composed independently.
-For compatibility with earlier providers, server-side gap state is still reconciled against the final
-capability ledger. Final validation rejects prose that calls a collected capability “not collected,”
-removes stale gaps, and strips provider-facing citation markers after allowlisted citations are
-recovered. Once an HTTPS probe completes TLS and
+Final validation preserves agent-authored gaps and prose while recording citation/evidence conflicts
+as limitations and lowering evidence status when required. Provider-facing citation markers are
+stripped after allowlisted citations are recovered. Once an HTTPS probe completes TLS and
 returns an HTTP status, grounded workload logs and Pod configuration rank ahead of additional topology
 reads because they can distinguish application, authentication, and upstream failures.
-Persistent incompleteness activates deterministic Route/TLS or generic cited-observation fallback
-rendering. Independently, every current-turn inventory/existence answer with successful list evidence
-is augmented by a deterministic table of OpenShift cluster, kind, namespace, object name, and Ready
-condition. This preserves a concise model interpretation while guaranteeing that verified object
-identities are visible. After live API discovery resolves an explicit inventory request, normal code
-executes the same bounded resource LIST independently on each selected cluster instead of asking the
-model to rediscover that syntax per cluster. A readable catalog with no matching resource type becomes
-explicit cited discovery evidence; it is rendered separately from an installed/readable API that returns
-zero objects and never causes an unrelated catalog resource to be read. A truncated LIST or incomplete
-field search cannot support a named-object absence claim; validation replaces that conclusion with an
-unresolved statement requiring an exact GET or complete search. Normal code then composes a bounded **Backend log
-findings** section into either the accepted model answer or deterministic fallback, preserving
-exact Pod/container details, samples, extracted paths/endpoints, correlation status, and all
-supporting evidence citations.
+Provider or structured-contract failure may activate a deterministic cited-observation fallback.
+Independently, cited list evidence can render an additive native table of OpenShift cluster, kind,
+namespace, object name, and Ready condition. This preserves the complete model interpretation while
+making verified object identities visible. A readable catalog with no matching resource type remains
+distinct from an installed/readable API returning zero objects. A truncated LIST or incomplete field
+search cannot support a conclusive absence claim. Normalized log findings remain evidence and optional
+candidates; normal code does not append them to or replace a valid agent answer.
 Route/TLS fallback also composes relevant current-turn Service, endpoint, Pod, and probe observations.
 A completed TLS probe with an HTTP response proves the tested path has a TLS-capable termination point,
 but does not by itself identify that component, exclude later plain-HTTP forwarding, or explain the
@@ -624,23 +782,12 @@ returned application status.
 
 1. An operator selects an alert or describes a symptom.
 2. The API establishes scope, time range, and a bounded tool budget.
-3. Deterministic tools collect only the required cluster evidence.
-4. The diagnostics engine correlates observations and records provenance.
-5. Sensitive values are removed before any external model call. When Pod logs were read,
-   a separate context-isolated structured request semantically analyzes all current bounded
-   excerpts and returns only cited potential issues.
-6. A supported server-owned plan can execute registered read-only follow-up checks.
-7. The model reassesses the expanded evidence and proposes hypotheses or remaining checks.
-8. Investigation chat may collect additional bounded alert-scoped evidence and
-   answers with server-validated citations.
-9. The UI presents the plan, activity, conclusions, provenance, and uncertainty.
-
-Clickable suggested checks are focused evidence extensions rather than new open-ended
-investigations. The server revalidates the opaque candidate, executes exactly that one read,
-and stops collection. The answer model receives a compact task containing the original operator
-question, the selected-check label, and bounded evidence; prior chat prose, summaries, knowledge
-payloads, and another planning cycle are excluded. Already-collected capability classes are not
-offered again as buttons in the same evidence state.
+3. The agent selects bounded read-only tools; normal code validates targets and policy.
+4. Collectors record normalized observations and provenance without selecting the next step.
+5. Sensitive values are removed before any external model call; bounded raw log evidence remains
+   available to the same agent for interpretation.
+6. The agent reassesses the expanded evidence, revises its direction, and decides when to answer.
+7. The UI presents the complete answer, additive evidence views, activity, provenance, and uncertainty.
 
 Natural-language Pod log requests with both an explicit namespace and a Pod-name hint receive a
 generic deterministic discovery anchor. PodPilot performs a bounded `metadata.name contains` Pod

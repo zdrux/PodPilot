@@ -185,7 +185,7 @@ def test_remote_query_discovers_route_and_uses_in_memory_token() -> None:
     ("status_code", "message"),
     [
         (401, "Kubernetes API rejected"),
-        (403, "denied access to the Thanos Route"),
+        (403, r"denied access to the Thanos Route.*HTTP 403"),
         (404, "does not expose a Thanos Querier Route"),
     ],
 )
@@ -208,7 +208,7 @@ def test_remote_route_discovery_errors_are_actionable(
     ("status_code", "message"),
     [
         (401, "rejected the configured bearer token"),
-        (403, "cluster-monitoring-view"),
+        (403, r"HTTP 403.*cluster-monitoring-view"),
         (404, "expected Thanos API"),
     ],
 )

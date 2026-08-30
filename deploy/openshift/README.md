@@ -23,3 +23,10 @@ model- and cluster-credential Secrets out of band. Full ordered instructions are
 
 Directories whose names identify a local lab are intentionally excluded from the
 remote overlay.
+
+Use `overlays/remote-poc-agentic/` only when unrestricted mode is explicitly
+required. It composes `remote-poc`, the shared `components/agentic-runner/`
+sidecar, and a separate versioned `podpilot-oc-runner` ImageStream. It adds no
+RBAC. Runtime-cluster commands use the existing `podpilot-investigator` permissions;
+registered remote-cluster commands receive only the selected cluster's stored token over Pod
+loopback. This overlay also explicitly disables TLS verification for remote-cluster API traffic.

@@ -3,3 +3,5 @@ kind: Kustomization
 resources:
   - image-stream.yaml
   - build-config.yaml
+  - oc-runner-image-stream.yaml
+  - oc-runner-build-config.yaml

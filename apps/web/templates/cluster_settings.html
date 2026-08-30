@@ -46,8 +46,9 @@
         <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
         <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
       </label>
-      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if not selected or selected.tls_verify %}checked{% endif %}><span>Verify the Kubernetes API TLS certificate</span></label>
-      <input type="hidden" name="tls_verify" value="{{ 'true' if not selected or selected.tls_verify else 'false' }}">
+      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or (not selected and remote_cluster_tls_verify) %}checked{% endif %} {% if not remote_cluster_tls_verify %}disabled{% endif %}><span>Verify the Kubernetes API TLS certificate</span></label>
+      <input type="hidden" name="tls_verify" value="{{ 'true' if remote_cluster_tls_verify and ((selected and selected.tls_verify) or not selected) else 'false' }}">
+      {% if not remote_cluster_tls_verify %}<div class="inline-warning">TLS verification is disabled for all remote clusters by this deployment environment.</div>{% endif %}
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
       <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/disable" data-action-kind="disable" data-confirm="Disable this cluster and remove its stored token? Historical conversations will be retained.">Disable</button>{% endif %}</div>
       {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}

@@ -111,6 +111,7 @@ class BoundedAuditEventReader:
             raise ValueError("BoundedAuditEventReader requires a typed audit event intent.")
         username = intent.audit_username.strip() if intent.audit_username else None
         namespace = intent.namespace.strip() if intent.namespace else None
+        resource = intent.audit_resource.strip() if intent.audit_resource else None
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         end = self._clock()
         query = (
@@ -126,6 +127,8 @@ class BoundedAuditEventReader:
             query += f'| audit_username=~{_logql_regex_literal(username)} '
         if namespace:
             query += f'| audit_namespace=~{_logql_regex_literal(namespace)} '
+        if resource:
+            query += f'| audit_resource=~{_logql_regex_literal(resource)} '
         query += '| audit_stage="ResponseComplete"'
         if intent.audit_operation_scope == "mutations":
             query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
@@ -156,6 +159,7 @@ class BoundedAuditEventReader:
                 snapshot,
                 username=username,
                 namespace=namespace,
+                resource=resource,
                 operation_scope=str(intent.audit_operation_scope),
                 outcome=str(intent.audit_outcome),
                 limit=intent.limit,
@@ -203,6 +207,7 @@ class BoundedAuditEventReader:
             data={
                 "username": redact_text(username)[:512] if username else None,
                 "namespace": namespace,
+                "resource": resource,
                 "caseInsensitive": bool(username),
                 "operationScope": intent.audit_operation_scope,
                 "outcomeFilter": intent.audit_outcome,
@@ -226,6 +231,7 @@ class BoundedAuditEventReader:
         *,
         username: str | None,
         namespace: str | None,
+        resource: str | None,
         operation_scope: str,
         outcome: str,
         limit: int,
@@ -264,6 +270,9 @@ class BoundedAuditEventReader:
             observed_namespace = str(object_ref.get("namespace") or "")
             if namespace and observed_namespace.casefold() != namespace.casefold():
                 continue
+            observed_resource = str(object_ref.get("resource") or "")
+            if resource and observed_resource.casefold() != resource.casefold():
+                continue
             audit_id = str(event.get("auditID") or "")[:128]
             identity = audit_id or f"{timestamp_ns}:{verb}:{len(events)}"
             if identity in seen:
@@ -276,7 +285,7 @@ class BoundedAuditEventReader:
                 "verb": verb[:64] or "unknown",
                 "apiGroup": str(object_ref.get("apiGroup") or "")[:128] or None,
                 "apiVersion": str(object_ref.get("apiVersion") or "")[:128] or None,
-                "resource": str(object_ref.get("resource") or "")[:128] or None,
+                "resource": observed_resource[:128] or None,
                 "subresource": str(object_ref.get("subresource") or "")[:128] or None,
                 "namespace": observed_namespace[:253] or None,
                 "name": str(object_ref.get("name") or "")[:253] or None,

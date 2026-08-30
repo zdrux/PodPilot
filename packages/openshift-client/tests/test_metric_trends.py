@@ -513,6 +513,54 @@ def test_namespace_cpu_can_be_grouped_by_pod_and_container() -> None:
     assert 'namespace="payments"' in query
 
 
+def test_cluster_ingress_bandwidth_uses_frontend_counters() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics", metric="ingress_bytes_out", metric_scope="cluster",
+        metric_operation="trend", range_seconds=259_200,
+    ))
+
+    query = source.calls[0]["promql"]
+    assert "haproxy_frontend_bytes_out_total" in query
+    assert 'namespace="openshift-ingress"' in query
+    assert "clamp_min(rate(" in query
+    assert "haproxy_backend" not in query
+
+
+def test_route_ingress_bandwidth_uses_backend_exported_namespace_labels() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics", metric="ingress_bytes_in", metric_scope="route",
+        kind="Route", namespace="payments", name="api", metric_operation="trend",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert "haproxy_backend_bytes_in_total" in query
+    assert 'exported_namespace="payments"' in query
+    assert 'route="api"' in query
+    assert 'label_replace(' in query
+    assert '"namespace", "$1", "exported_namespace"' in query
+
+
+def test_existing_route_request_pack_uses_exported_namespace() -> None:
+    source = FakeRangeSource()
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    reader.execute(ReadIntent(
+        tool="query_metrics", metric="ingress_request_rate", metric_scope="route",
+        kind="Route", namespace="payments", name="api",
+    ))
+
+    query = source.calls[0]["promql"]
+    assert 'exported_namespace="payments"' in query
+    assert 'namespace="openshift-ingress"' in query
+    assert 'label_replace(' in query
+
+
 def test_exact_pod_container_metric_adds_server_owned_container_selector() -> None:
     source = FakeRangeSource()
     reader = BoundedMetricTrendReader(source, clock=lambda: NOW)

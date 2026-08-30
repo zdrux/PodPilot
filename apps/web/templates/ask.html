@@ -7,11 +7,11 @@
     <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
-        <span class="boundary-pill" tabindex="0"
-          data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only."
-          aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. PodPilot remains read-only.">
-          <span class="boundary-pill-icon" aria-hidden="true">i</span>
-          <span>Cluster selection locked</span>
+        <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
+          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
+          aria-label="Session cautions. {% if agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary Linux shell and oc commands without PodPilot approval; OpenShift RBAC still applies. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
+          <span class="boundary-pill-icon" aria-hidden="true">!</span>
+          <span>Session cautions</span>
         </span>
         {% if evidence_by_id %}
         <button class="evidence-toggle" type="button" data-evidence-open
@@ -70,7 +70,88 @@
           </details>
           {% endif %}
         </div>
-        {% if not message.prefer_metric_card %}
+        {% if message.role == 'assistant' and message.resource_presentation %}
+        {% set presentation = message.resource_presentation %}
+        <section class="resource-result" aria-labelledby="resource-result-{{ message.id }}">
+          <div class="resource-result-heading">
+            <div>
+              <span class="evidence-tool">Observed resources</span>
+              <h3 id="resource-result-{{ message.id }}">{{ presentation.title }}</h3>
+              <p>{{ presentation.total_count }} matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster result{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
+            </div>
+          </div>
+          <div class="resource-result-groups">
+          {% for group in presentation.groups %}
+            <details class="resource-result-group" {% if presentation.groups | length == 1 and group.count <= 20 %}open{% endif %}>
+              <summary>
+                <span><strong>{{ group.cluster_name }}</strong><small>{{ group.kind }}{% if group.match_field %} · <code>{{ group.match_field }}</code> {{ group.match_operator }} <code>{{ group.match_value }}</code>{% endif %}</small></span>
+                <span class="resource-result-count">{{ group.count }} match{% if group.count != 1 %}es{% endif %}</span>
+                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Complete{% else %}Incomplete{% endif %}</span>
+              </summary>
+              {% if group.rows %}
+              <div class="resource-result-toolbar">
+                <small>{% if group.scanned_count is not none %}Scanned {{ group.scanned_count }} resource{% if group.scanned_count != 1 %}s{% endif %}. {% endif %}Showing {{ group.displayed_count }} of {{ group.count }} matches.</small>
+                <button class="button secondary compact-button" type="button"
+                  data-csv-table="resource-table-{{ message.id }}-{{ loop.index }}"
+                  data-csv-filename="podpilot-resource-results.csv">Download CSV</button>
+              </div>
+              <div class="resource-table-wrap">
+                <table id="resource-table-{{ message.id }}-{{ loop.index }}" class="resource-result-table">
+                  <thead><tr>{% if presentation.show_kind %}<th>Kind</th>{% endif %}<th>Namespace</th><th>Name</th>{% if group.match_field %}<th>{{ group.match_field }}</th>{% endif %}<th>Ready</th></tr></thead>
+                  <tbody>
+                  {% for row in group.rows %}
+                    <tr>{% if presentation.show_kind %}<td><code>{{ row.kind }}</code></td>{% endif %}<td><code>{{ row.namespace }}</code></td><td><code>{{ row.name }}</code></td>{% if group.match_field %}<td><code>{{ row.matched_value }}</code></td>{% endif %}<td>{{ row.ready }}</td></tr>
+                  {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% if group.omitted_count %}<p class="resource-result-note">{{ group.omitted_count }} additional matching row{% if group.omitted_count != 1 %}s were{% else %} was{% endif %} not retained in this bounded presentation.</p>{% endif %}
+              {% elif group.count %}
+              <p class="resource-result-note">All {{ group.count }} matching row{% if group.count != 1 %}s were{% else %} was{% endif %} omitted from this bounded presentation. Review the cited evidence or CSV-capable groups above.</p>
+              {% else %}
+              <p class="resource-result-empty">{% if group.complete %}No matching resources were observed.{% else %}No match was observed before the scan ceiling; this result is inconclusive.{% endif %}</p>
+              {% endif %}
+            </details>
+          {% endfor %}
+          </div>
+          <small>Rows are rendered from cited, normalized cluster evidence—not parsed from the model response.</small>
+        </section>
+        {% endif %}
+        {% if message.answer_blocks is not none %}
+          {% for block in message.answer_blocks %}
+            {% if block.type == 'markdown' %}
+        <div class="chat-markdown">{{ block.content | safe_markdown }}</div>
+            {% elif block.type == 'answer_table' %}
+            {% set answer_table_index = loop.index %}
+        <section class="answer-table-result" aria-labelledby="answer-table-{{ message.id }}-{{ answer_table_index }}">
+          <details class="resource-result-group answer-table-group" {% if block.row_count <= 20 %}open{% endif %}>
+            <summary>
+              <span><strong id="answer-table-{{ message.id }}-{{ answer_table_index }}">Answer table</strong><small>Dynamic columns parsed from PodPilot’s safe Markdown response</small></span>
+              <span class="resource-result-count">{{ block.row_count }} row{% if block.row_count != 1 %}s{% endif %}</span>
+              <span class="answer-table-origin">Answer-derived</span>
+            </summary>
+            <div class="resource-result-toolbar">
+              <small>Interpreted cells retain the answer’s evidence status; parsing does not promote them to observed cluster facts.</small>
+              <button class="button secondary compact-button" type="button"
+                data-csv-table="answer-table-data-{{ message.id }}-{{ answer_table_index }}"
+                data-csv-filename="podpilot-answer-table.csv">Download CSV</button>
+            </div>
+            <div class="resource-table-wrap">
+              <table id="answer-table-data-{{ message.id }}-{{ answer_table_index }}" class="resource-result-table answer-table-data">
+                <thead><tr>{% for column in block.columns %}<th><div class="answer-table-markdown">{{ column.label | safe_markdown }}</div></th>{% endfor %}</tr></thead>
+                <tbody>
+                {% for row in block.rows %}
+                  <tr>{% for cell in row.cells %}<td><div class="answer-table-markdown">{{ cell | safe_markdown }}</div></td>{% endfor %}</tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% if block.omitted_count %}<p class="resource-result-note">{{ block.omitted_count }} additional row{% if block.omitted_count != 1 %}s were{% else %} was{% endif %} omitted from this bounded presentation.</p>{% endif %}
+          </details>
+        </section>
+            {% endif %}
+          {% endfor %}
+        {% else %}
         <div class="chat-markdown">{{ message.content | safe_markdown }}</div>
         {% endif %}
         {% if message.role == 'assistant' and message.raw_responses %}
@@ -100,6 +181,34 @@
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
                   data-csv-filename="podpilot-{{ cited.data.metric if cited.data else 'metrics' }}.csv">Download CSV</button>
               </div>
+              {% if cited.metric_trend %}
+              <figure class="metric-trend" aria-label="{{ cited.metric_ranking.title }} over time">
+                <svg viewBox="0 0 1000 232" role="img" aria-labelledby="metric-trend-title-{{ message.id }}-{{ id }} metric-trend-desc-{{ message.id }}-{{ id }}">
+                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }} over time</title>
+                  <desc id="metric-trend-desc-{{ message.id }}-{{ id }}">Bounded metric samples from {{ cited.metric_trend.start }} through {{ cited.metric_trend.end }}. Peak {{ cited.metric_trend.peak }} at {{ cited.metric_trend.peak_at }}.</desc>
+                  <g class="metric-trend-grid" aria-hidden="true">
+                    <line x1="42" y1="30" x2="958" y2="30"></line>
+                    <line x1="42" y1="87" x2="958" y2="87"></line>
+                    <line x1="42" y1="144" x2="958" y2="144"></line>
+                    <line x1="42" y1="202" x2="958" y2="202"></line>
+                  </g>
+                  {% for series in cited.metric_trend.series %}
+                  <polyline class="metric-trend-line metric-trend-line-{{ series.class_index }}" points="{{ series.polyline }}"></polyline>
+                  <circle class="metric-trend-peak metric-trend-line-{{ series.class_index }}" cx="{{ series.peak_x }}" cy="{{ series.peak_y }}" r="4"></circle>
+                  {% endfor %}
+                </svg>
+                <figcaption>
+                  <span>{{ cited.metric_trend.start }}</span>
+                  <strong>Peak {{ cited.metric_trend.peak }} · {{ cited.metric_trend.peak_at }}</strong>
+                  <span>{{ cited.metric_trend.end }}</span>
+                </figcaption>
+                {% if cited.metric_trend.series | length > 1 %}
+                <ul class="metric-trend-legend">
+                  {% for series in cited.metric_trend.series %}<li class="metric-trend-key-{{ series.class_index }}"><span aria-hidden="true"></span>{{ series.identity }}</li>{% endfor %}
+                </ul>
+                {% endif %}
+              </figure>
+              {% endif %}
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
                   <thead><tr><th>Rank</th>{% for column in cited.metric_ranking.columns %}<th>{{ column.label }}</th>{% endfor %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if cited.metric_ranking.show_maximum %}<th>Peak</th>{% endif %}</tr></thead>
@@ -270,7 +379,7 @@
       {% elif user.role.value < 20 %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and structured-output capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
+      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
     </div>
   </section>
 

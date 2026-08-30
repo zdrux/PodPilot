@@ -52,11 +52,66 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
+### Explicit unrestricted agent exception
+
+`deploy/openshift/overlays/sno-milestone-one/` and the optional
+`deploy/openshift/overlays/remote-poc-agentic/` deliberately enable
+`PODPILOT_AGENT_MODE=unrestricted` and add a localhost-only `oc-runner` sidecar. In this mode a
+Chat Completions model may execute arbitrary Bash and `oc` commands without PodPilot's read
+schemas, mutation preview, or approval workflow. This is an explicit test fixture, not a production
+security boundary. The base and standard `remote-poc` overlays remain guarded. The remote agentic
+overlay adds no RBAC of its own and therefore exercises every permission already granted to
+`podpilot-investigator` on that target cluster.
+
+The unrestricted loop exposes registered resource-list, object-field-search, HTTP-probe, metric,
+and audit collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
+normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
+bounded presentation. The API never invokes them merely because a classifier or enrichment pack
+recognized a request. Their observations return to the model, which alone chooses the next tool or
+the final answer.
+Registered-source failures are authoritative only as failures: the model may not infer that an
+add-on, API, or resource is absent from an unavailable adapter. If neither a registered reader nor
+a successful shell verification produces evidence, normal code replaces the model prose with the
+exact redacted collection failures.
+Conversely, a successful registered observation is authoritative only for its declared scope.
+Collector completion never disconnects, cancels, or terminates the model loop; the model may
+interpret it, correlate it with another helper, verify it through shell, or answer.
+
+For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
+deployment helper fails before building if that identity can patch Deployments. Remote operators
+must perform the equivalent authorization review before applying the optional agentic overlay. Cluster RBAC and
+admission therefore remain the authoritative execution boundary. For a selected registered remote
+cluster, the API reads only that cluster's token and brokers it over Pod loopback for one command.
+The runner writes a mode-0600 per-command kubeconfig under `/tmp` and deletes it after execution;
+the broker never places the token or kubeconfig in the model tool schema, command, result, or logs.
+This is not container-level credential isolation: the unrestricted sidecar shares the Pod service
+account, whose RBAC can read the two resourceName-restricted credential Secrets, and can inspect its
+projected token. Output redaction is defense in depth, not a guarantee against a model deliberately
+transforming secret bytes. Command text, target cluster, and exit status are
+audited. A bounded redacted stderr summary is retained only for failed commands; full shell output
+is secret-pattern redacted before it is returned to the provider and is not persisted as evidence.
+Normalized deterministic enrichment is persisted as
+evidence under the existing policy. Cluster output remains untrusted data and may contain
+prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root
+filesystem and dropped capabilities. Runner logs contain target identity, TLS mode, exit code,
+duration, timeout state, and byte counts, never tokens, command text, stdout, or stderr. The runner
+also reports whether either stream was truncated. It continuously drains both streams but retains
+only the configured bounded prefix (256 KiB each by default), preventing verbose output from being
+buffered without limit. Periodic idle and in-flight heartbeat log messages are suppressed; health
+probes, command lifecycle events, and deadlines remain authoritative. Every shell process group is terminated at the
+configured command deadline; the API has a slightly longer loopback HTTP deadline and the durable
+Ask job retains its outer deadline.
+
+Even with read-only RBAC, arbitrary shell execution can consume Pod resources, inspect files
+readable by the runner container, and make allowed network requests. Do not enable this overlay on
+a production cluster or compose it with `poc-cluster-admin`.
+
 - The reusable base in `deploy/openshift/` remains a read-only observer policy.
 - The disposable SNO development lab deliberately adds `cluster-admin` through
   `deploy/openshift/overlays/poc-cluster-admin/` so implementation and remediation
   experiments are not blocked by evolving RBAC.
-- The PoC exception does not relax product-level approval requirements: every
+- Outside the explicitly enabled unrestricted SNO fixture above, the PoC exception does not relax
+  product-level approval requirements: every
   proposed mutation must show its target, patch or command, risks, and rollback,
   then require a fresh explicit approval.
 - Production packaging must not install the PoC overlay. It should use separate
@@ -109,13 +164,17 @@ rotation, connection test, and disable operations require Approver-or-higher, CS
 content-free audit metadata. Disabling removes the Secret key but preserves historical
 conversation and evidence attribution.
 
-Remote Kubernetes API TLS verification defaults on. An Approver may explicitly disable
+Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
-stores the exception, connection tests audit it, and every affected Ask run adds an
-operator-visible limitation. The exception never applies implicitly, does not change
-model-provider or ordinary application TLS policy, and should not be used in production.
+stores the exception, connection tests audit it, and every affected Ask session displays one
+compact connection-boundary indicator instead of repeating a limitation under each answer. The
+`remote-poc-agentic` overlay is an explicit broader lab exception:
+it sets `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY=false`, forcing registered remote readers and runner
+commands in that deployment to skip certificate and hostname verification. The management page
+displays the environment override. This does not change model-provider or ordinary application TLS
+policy and should not be used in production.
 
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,

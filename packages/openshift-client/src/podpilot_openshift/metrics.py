@@ -203,7 +203,7 @@ class ThanosQueryClient:
                 message = "The remote monitoring API rejected the configured bearer token."
             elif exc.response.status_code == 403:
                 message = (
-                    "The remote cluster denied monitoring access. Grant the registered "
+                    "The remote cluster denied monitoring access (HTTP 403). Grant the registered "
                     "identity the cluster-monitoring-view role."
                 )
             elif exc.response.status_code == 404:
@@ -240,7 +240,7 @@ class ThanosQueryClient:
             elif exc.response.status_code == 403:
                 message = (
                     "The remote cluster denied access to the Thanos Route in "
-                    "openshift-monitoring."
+                    "openshift-monitoring (HTTP 403)."
                 )
             elif exc.response.status_code == 404:
                 message = "The remote cluster does not expose a Thanos Querier Route."

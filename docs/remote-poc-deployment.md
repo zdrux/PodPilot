@@ -7,6 +7,11 @@ cluster with real workloads. It uses the cluster's existing OAuth identities,
 default dynamic storage, Cluster Monitoring stack, and an externally pushed
 PodPilot image. It does not grant PodPilot mutation rights.
 
+The guarded `remote-poc` overlay is the default. The optional
+`remote-poc-agentic` overlay inherits that configuration and adds the unrestricted
+localhost `oc-runner` sidecar. It does not add RBAC; every command still runs as
+`ai-ops/podpilot-investigator` with the permissions already granted by the base.
+
 ## 1. Understand the authorization boundaries
 
 There are two separate authorization paths:
@@ -29,9 +34,9 @@ built-in `cluster-reader`, `cluster-monitoring-view`,
 Platform Alertmanager runs in `openshift-monitoring`, not `openshift-logging`.
 No logging-namespace Role is required for Alertmanager. Ordinary container logs
 are read through the Kubernetes `pods/log` subresource under `cluster-reader`.
-Aggregate Loki application-log analytics are implemented for the registered
-`top_log_volume_by_namespace` metric. They use only server-owned LogQL and retain no log
-lines. The installation must expose a standard `openshift-logging/logging-loki` Route and
+Aggregate Loki application-log analytics are implemented for registered namespace, Pod, and Node
+volume queries. They use only server-owned LogQL and retain no log lines. The installation must
+expose a standard `openshift-logging/logging-loki` Route and
 grant the registered identity `cluster-logging-application-view` plus cluster-wide LokiStack
 OpenShift authorization. The base runtime identity also receives the read-only infrastructure
 and audit logging views. Arbitrary LogQL and raw Log Store queries remain unavailable.
@@ -89,6 +94,22 @@ podman push "${PUSH_IMAGE}"
 oc get imagestreamtag "podpilot:${PODPILOT_VERSION}" -n ai-ops
 ```
 
+For unrestricted mode, create the runner ImageStream and build and push the
+second image with the same immutable version:
+
+```bash
+oc apply -f deploy/openshift/overlays/remote-poc-agentic/image-stream.yaml
+export RUNNER_IMAGE="${REGISTRY_HOST}/ai-ops/podpilot-oc-runner:${PODPILOT_VERSION}"
+podman build --pull -f Dockerfile.oc-runner -t "${RUNNER_IMAGE}" .
+podman push "${RUNNER_IMAGE}"
+oc get imagestreamtag "podpilot-oc-runner:${PODPILOT_VERSION}" -n ai-ops
+```
+
+The runner Dockerfile copies Linux `oc` from its digest-pinned CLI build stage.
+For an air-gapped target, mirror both pinned `FROM` images into an approved
+internal registry and update the Dockerfile references before building; do not
+copy a workstation `oc.exe` into the Linux image.
+
 Docker can replace Podman in the build and push commands. If `default-route` does
 not exist, a cluster administrator must enable the integrated registry's default
 Route. Never commit the login token or generated registry configuration.
@@ -108,6 +129,8 @@ The push uses the external Route, while Pods use the stable internal Service
 hostname above. A Kubernetes Deployment still needs an OCI image pull spec;
 Kustomize renders that pull spec from the `ai-ops/podpilot:0.12.0` ImageStreamTag.
 Use a new versioned tag for each promotion instead of overwriting an existing tag.
+When using unrestricted mode, set the matching immutable runner `newTag` in
+`deploy/openshift/overlays/remote-poc-agentic/kustomization.yaml` as well.
 
 Edit `deploy/openshift/overlays/remote-poc/runtime-config-patch.yaml` and replace
 `replace-with-target-cluster-name` with a recognizable non-secret cluster name.
@@ -227,6 +250,19 @@ oc apply -k deploy/openshift/overlays/remote-poc
 oc -n ai-ops rollout status deployment/podpilot --timeout=300s
 ```
 
+To install the optional unrestricted variant, substitute the additive overlay
+in all three commands:
+
+```bash
+oc apply --dry-run=server -k deploy/openshift/overlays/remote-poc-agentic
+oc diff -k deploy/openshift/overlays/remote-poc-agentic
+oc apply -k deploy/openshift/overlays/remote-poc-agentic
+oc -n ai-ops rollout status deployment/podpilot --timeout=300s
+```
+
+Do not set `agent_mode=unrestricted` on the guarded overlay by itself; without
+the sidecar, no runner listens on `127.0.0.1:8090`.
+
 For a later role-mapping ConfigMap change, explicitly restart after applying:
 
 ```bash
@@ -275,6 +311,43 @@ only on its exact model- and cluster-credential Secrets in `ai-ops`.
 The PVC must be `Bound`, the Deployment `1/1 Available`, and the migration log
 must end at the repository's current Alembic head.
 
+For the agentic overlay, verify the runner is a third container in the same Pod
+and that the runtime identity has not gained mutation access:
+
+```bash
+oc -n ai-ops get deployment podpilot \
+  -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'
+oc -n ai-ops get configmap podpilot-runtime \
+  -o jsonpath='{.data.agent_mode}{"\n"}'
+oc -n ai-ops get configmap podpilot-runtime \
+  -o jsonpath='{.data.remote_cluster_tls_verify}{"\n"}'
+oc -n ai-ops get configmap podpilot-runtime \
+  -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_command_max_output_bytes}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
+oc -n ai-ops exec deployment/podpilot -c oc-runner -- oc version --client
+oc auth can-i patch deployments --all-namespaces --as="$SA"
+```
+
+Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `false`, `300 262144 10`, a Linux
+OpenShift CLI client version, and the RBAC result appropriate to the remote
+identity. Review any `yes` result before exposing agentic mode; the sidecar will
+be able to exercise every permission granted to that service account.
+
+In a multi-cluster Ask session, the API resolves the token for each model-selected registered
+cluster from `podpilot-cluster-credentials` and passes it only over Pod loopback for that command.
+The runner uses `insecure-skip-tls-verify: true` because this overlay forces remote TLS verification
+off, deletes the per-command kubeconfig, and logs only cluster identity, TLS mode, exit code,
+duration, and output byte counts:
+
+```bash
+oc logs -n ai-ops deployment/podpilot -c oc-runner --since=10m
+oc logs -n ai-ops deployment/podpilot -c api --since=10m | grep podpilot.agentic.command
+```
+
+The runner and API suppress periodic idle, command, runtime, and model-wait heartbeat log entries.
+The API still pushes changing elapsed-time messages into the live Ask timeline. At 300 seconds the
+runner terminates the shell process group and returns exit code `124`; the complete Ask run still
+expires at 900 seconds, and model waits still use the model profile's provider timeout.
+
 Verify admission independently with any existing authenticated username:
 
 ```bash
@@ -292,6 +365,10 @@ Sign in as a `podpilot-approvers` user. In **Model settings**, add the endpoint,
 API type, model ID, token, TLS mode, and limits. Test the endpoint before
 activation. Prefer system trust or a custom CA. Insecure TLS disables certificate
 and hostname verification and is inappropriate for a real-workload cluster.
+
+Unrestricted mode requires a Chat Completions profile that passes the tool-call
+capability probe. Responses API profiles remain valid for guarded mode but cannot
+drive the unrestricted `execute_shell` loop.
 
 Start with read-only questions against a designated test namespace. Confirm
 evidence scope, redaction, Pod-log access, Alertmanager freshness, and audit

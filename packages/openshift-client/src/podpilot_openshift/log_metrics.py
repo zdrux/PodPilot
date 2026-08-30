@@ -21,8 +21,10 @@ class LogMetricsQueryError(RuntimeError):
 
 @dataclass(frozen=True)
 class LogVolumeSample:
-    namespace: str
     bytes: float
+    namespace: str | None = None
+    pod: str | None = None
+    node: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,7 @@ class LogVolumeSnapshot:
 
 
 class LogVolumeQuerySource(Protocol):
-    def query_namespace_volume(self, logql: str) -> LogVolumeSnapshot: ...
+    def query_log_volume(self, logql: str) -> LogVolumeSnapshot: ...
 
 
 class LokiQueryClient:
@@ -49,7 +51,7 @@ class LokiQueryClient:
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
         route_discovery_tls_verify: bool = True,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 90.0,
         max_series: int = 50,
         max_response_bytes: int = 65_536,
         tenant: str = "application",
@@ -105,7 +107,7 @@ class LokiQueryClient:
             **kwargs,
         )
 
-    def query_namespace_volume(self, logql: str) -> LogVolumeSnapshot:
+    def query_log_volume(self, logql: str) -> LogVolumeSnapshot:
         payload = self._request("/loki/api/v1/query", {"query": logql})
         if not isinstance(payload, dict) or payload.get("status") != "success":
             raise LogMetricsQueryError("Loki returned an unsuccessful query result.")
@@ -127,21 +129,40 @@ class LokiQueryClient:
                 labels.get("kubernetes_namespace_name")
                 or labels.get("namespace")
                 or ""
-            ).strip()
+            ).strip() or None
+            pod = str(
+                labels.get("kubernetes_pod_name")
+                or labels.get("pod")
+                or ""
+            ).strip() or None
+            node = str(
+                labels.get("kubernetes_host")
+                or labels.get("kubernetes_node_name")
+                or labels.get("node")
+                or labels.get("nodename")
+                or ""
+            ).strip() or None
             raw_value = item.get("value")
-            if not namespace or not isinstance(raw_value, list) or len(raw_value) != 2:
+            if not isinstance(raw_value, list) or len(raw_value) != 2:
                 continue
             try:
                 value = float(raw_value[1])
             except (TypeError, ValueError):
                 continue
             if math.isfinite(value) and value >= 0:
-                samples.append(LogVolumeSample(namespace=namespace, bytes=value))
+                samples.append(LogVolumeSample(
+                    bytes=value, namespace=namespace, pod=pod, node=node,
+                ))
         return LogVolumeSnapshot(
             samples=tuple(samples),
             collected_at=datetime.now(timezone.utc),
             is_complete=len(result) <= self._max_series,
         )
+
+    def query_namespace_volume(self, logql: str) -> LogVolumeSnapshot:
+        """Compatibility wrapper for callers predating scoped log-volume metrics."""
+
+        return self.query_log_volume(logql)
 
     def query_audit_entries(
         self,
@@ -240,7 +261,7 @@ class LokiQueryClient:
                     if self._tenant == "audit" else "cluster-logging-application-view"
                 )
                 message = (
-                    f"The cluster denied {tenant_label} access. Grant the PodPilot identity "
+                    f"The cluster denied {tenant_label} access (HTTP 403). Grant the PodPilot identity "
                     f"{role} and verify LokiStack tenant authorization."
                 )
             elif exc.response.status_code == 404:
@@ -273,7 +294,7 @@ class LokiQueryClient:
             if exc.response.status_code == 401:
                 message = "The remote Kubernetes API rejected the configured bearer token."
             elif exc.response.status_code == 403:
-                message = "The remote cluster denied access to the LokiStack Route."
+                message = "The remote cluster denied access to the LokiStack Route (HTTP 403)."
             elif exc.response.status_code == 404:
                 message = "The remote cluster does not expose the logging-loki Route."
             else:
@@ -300,13 +321,13 @@ class LokiQueryClient:
 
 
 class BoundedLogVolumeReader:
-    """Compile the registered namespace-volume intent into server-owned LogQL."""
+    """Compile registered application-log volume intents into server-owned LogQL."""
 
     def __init__(
         self,
         source: LogVolumeQuerySource,
         *,
-        max_range_seconds: int = 86_400,
+        max_range_seconds: int = 604_800,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._source = source
@@ -314,29 +335,69 @@ class BoundedLogVolumeReader:
         self._clock = clock
 
     def execute(self, intent: ReadIntent) -> ReadResult:
-        if (
-            intent.tool != "query_metrics"
-            or intent.metric != "top_log_volume_by_namespace"
-            or intent.metric_scope != "cluster"
+        legacy_namespace_ranking = (
+            intent.metric == "top_log_volume_by_namespace"
+            and intent.metric_scope == "cluster"
+        )
+        if intent.tool != "query_metrics" or not (
+            legacy_namespace_ranking or intent.metric == "application_log_volume"
         ):
             raise ValueError(
-                "BoundedLogVolumeReader requires a cluster top_log_volume_by_namespace intent."
+                "BoundedLogVolumeReader requires a registered application-log volume intent."
             )
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
-        query = (
-            f"topk({intent.limit}, sum by (kubernetes_namespace_name) "
-            f"(bytes_over_time({{log_type=\"application\"}}[{range_seconds}s])))"
+        dimensions = (
+            ("namespace",) if legacy_namespace_ranking else tuple(intent.metric_group_by)
         )
-        snapshot = self._source.query_namespace_volume(query)
+        loki_dimensions = {
+            "namespace": "kubernetes_namespace_name",
+            "pod": "kubernetes_pod_name",
+            "node": "kubernetes_host",
+        }
+        selectors = ['log_type="application"']
+        if intent.namespace:
+            selectors.append(
+                f'kubernetes_namespace_name={json.dumps(intent.namespace)}'
+            )
+        if intent.metric_scope == "pod" and intent.name:
+            selectors.append(f'kubernetes_pod_name={json.dumps(intent.name)}')
+        if intent.metric_scope == "node" and intent.name:
+            selectors.append(f'kubernetes_host={json.dumps(intent.name)}')
+        selector = "{" + ",".join(selectors) + "}"
+        volume = f"bytes_over_time({selector}[{range_seconds}s])"
+        if dimensions:
+            group_labels = ", ".join(loki_dimensions[item] for item in dimensions)
+            query = f"topk({intent.limit}, sum by ({group_labels}) ({volume}))"
+        else:
+            query = f"sum({volume})"
+        snapshot = self._source.query_log_volume(query)
         ranked = sorted(snapshot.samples, key=lambda item: item.bytes, reverse=True)[: intent.limit]
         end = self._clock()
         start = end - timedelta(seconds=range_seconds)
-        ranking = [{
-            "labels": {"namespace": item.namespace},
-            "current": item.bytes,
-            "average": item.bytes / range_seconds,
-            "maximum": None,
-        } for item in ranked]
+        ranking: list[dict[str, object]] = []
+        for item in ranked:
+            labels = {
+                key: value for key, value in {
+                    "namespace": item.namespace,
+                    "pod": item.pod,
+                    "node": item.node,
+                }.items() if value
+            }
+            if not dimensions:
+                if intent.namespace:
+                    labels.setdefault("namespace", intent.namespace)
+                if intent.metric_scope == "pod" and intent.name:
+                    labels.setdefault("pod", intent.name)
+                if intent.metric_scope == "node" and intent.name:
+                    labels.setdefault("node", intent.name)
+            if dimensions and any(not labels.get(item) for item in dimensions):
+                continue
+            ranking.append({
+                "labels": labels,
+                "current": item.bytes,
+                "average": item.bytes / range_seconds,
+                "maximum": None,
+            })
         limitations: list[str] = []
         if range_seconds != intent.range_seconds:
             limitations.append(
@@ -344,21 +405,26 @@ class BoundedLogVolumeReader:
             )
         if not snapshot.is_complete:
             limitations.append(
-                "The Loki result reached its configured namespace ceiling; the ranking may be incomplete."
+                "The Loki result reached its configured series ceiling; the result may be incomplete."
             )
         if not ranking:
             limitations.append(
                 "Loki returned no application-log volume samples for the requested period."
             )
+        metric = str(intent.metric)
+        scope_label = str(intent.metric_scope).replace("_", " ")
+        action = "Ranked" if dimensions else "Read"
         return ReadResult(observations=(AdHocObservation(
             id=f"log-metric-{uuid4()}",
             tool="query_metrics",
-            summary="Ranked namespaces by application-log payload volume.",
-            source="loki:application/query/top_log_volume_by_namespace",
+            summary=f"{action} application-log payload volume for the requested {scope_label} scope.",
+            source=f"loki:application/query/{metric}",
             collected_at=snapshot.collected_at,
             data={
-                "metric": "top_log_volume_by_namespace",
-                "scope": "cluster",
+                "metric": metric,
+                "scope": intent.metric_scope,
+                "namespace": intent.namespace,
+                "name": intent.name,
                 "logType": "application",
                 "unit": "bytes",
                 "averageUnit": "bytes_per_second",
@@ -366,7 +432,9 @@ class BoundedLogVolumeReader:
                 "start": start.isoformat(),
                 "end": end.isoformat(),
                 "ranking": ranking,
+                "operation": "rank" if dimensions else "show",
+                "groupBy": list(dimensions),
                 "complete": snapshot.is_complete,
-                "limit": intent.limit,
+                "limit": intent.limit if dimensions else 1,
             },
         ),), limitations=tuple(limitations))

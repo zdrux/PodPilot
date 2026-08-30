@@ -54,6 +54,18 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
         Settings(adhoc_inventory_max_objects=1001)
 
 
+def test_evidence_payload_ceiling_is_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_MAX_PAYLOAD_BYTES", "96000")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_max_payload_bytes == 96_000
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_payload_bytes=16_383)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_payload_bytes=1_048_577)
+
+
 def test_resource_search_scan_ceiling_is_configurable(monkeypatch) -> None:
     monkeypatch.setenv("PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS", "3000")
 
@@ -79,10 +91,10 @@ def test_metric_trend_bounds_are_configurable(monkeypatch) -> None:
 
 
 def test_loki_timeout_defaults_to_scan_safe_value_and_is_bounded() -> None:
-    assert Settings(_env_file=None).loki_timeout_seconds == 30
-    assert Settings(loki_timeout_seconds=60).loki_timeout_seconds == 60
+    assert Settings(_env_file=None).loki_timeout_seconds == 90
+    assert Settings(loki_timeout_seconds=120).loki_timeout_seconds == 120
     with pytest.raises(ValidationError):
-        Settings(loki_timeout_seconds=61)
+        Settings(loki_timeout_seconds=121)
 
 
 def test_audit_query_defaults_and_bounds_are_configurable() -> None:
@@ -122,3 +134,27 @@ def test_model_timeout_ceiling_is_bounded() -> None:
         Settings(model_timeout_max_seconds=29)
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=301)
+
+
+def test_agent_mode_defaults_guarded_and_rejects_unknown_values() -> None:
+    assert Settings(_env_file=None).agent_mode == "guarded"
+    assert Settings(agent_mode="unrestricted").agent_mode == "unrestricted"
+    with pytest.raises(ValidationError):
+        Settings(agent_mode="unbounded")
+
+
+def test_remote_cluster_tls_verification_defaults_secure_and_can_be_disabled() -> None:
+    assert Settings(_env_file=None).remote_cluster_tls_verify is True
+    assert Settings(remote_cluster_tls_verify=False).remote_cluster_tls_verify is False
+
+
+def test_agent_command_timeout_and_heartbeat_are_bounded() -> None:
+    settings = Settings(agent_command_timeout_seconds=120, agent_heartbeat_seconds=5)
+    assert settings.agent_command_timeout_seconds == 120
+    assert settings.agent_heartbeat_seconds == 5
+    with pytest.raises(ValidationError):
+        Settings(agent_command_timeout_seconds=4)
+    with pytest.raises(ValidationError):
+        Settings(agent_command_timeout_seconds=601)
+    with pytest.raises(ValidationError):
+        Settings(agent_heartbeat_seconds=1)

@@ -163,10 +163,12 @@ class ReadIntent(BaseModel):
         "network_receive", "network_transmit", "container_restarts",
         "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
         "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
         "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
         "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
         "ingress_request_rate", "ingress_error_rate",
+        "ingress_bytes_in", "ingress_bytes_out",
         "machineconfigpool_updated", "machineconfigpool_degraded",
         "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
         "workload_availability", "persistent_volume_inode_usage",
@@ -197,6 +199,7 @@ class ReadIntent(BaseModel):
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
     threshold_value: float | None = None
     audit_username: str | None = Field(default=None, max_length=512)
+    audit_resource: str | None = Field(default=None, max_length=253)
     audit_operation_scope: Literal["all", "mutations", "deletes"] | None = None
     audit_outcome: Literal["all", "successful", "failed"] | None = None
     audit_search_until_limit: bool = False
@@ -302,6 +305,12 @@ class ReadIntent(BaseModel):
                 "kafka_under_replicated_partitions": {"kafka_cluster"},
                 "ingress_request_rate": {"route", "ingress_controller"},
                 "ingress_error_rate": {"route", "ingress_controller"},
+                "ingress_bytes_in": {
+                    "cluster", "namespace", "route", "ingress_controller",
+                },
+                "ingress_bytes_out": {
+                    "cluster", "namespace", "route", "ingress_controller",
+                },
                 "machineconfigpool_updated": {"machine_config_pool"},
                 "machineconfigpool_degraded": {"machine_config_pool"},
                 "hpa_current_replicas": {"horizontal_pod_autoscaler"},
@@ -354,6 +363,28 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "top_log_volume_by_namespace requires cluster scope"
                 )
+            if self.metric == "application_log_volume":
+                if self.metric_scope not in {"cluster", "namespace", "pod", "node"}:
+                    raise ValueError(
+                        "application_log_volume requires cluster, namespace, pod, or node scope"
+                    )
+                grouping = tuple(self.metric_group_by)
+                valid_groupings = {
+                    "cluster": {("namespace",), ("node",), ("namespace", "pod")},
+                    "namespace": {(), ("pod",)},
+                    "pod": {()},
+                    "node": {()},
+                }
+                if grouping not in valid_groupings[self.metric_scope]:
+                    raise ValueError(
+                        "application_log_volume grouping is incompatible with the selected scope"
+                    )
+                is_ranking = bool(grouping)
+                if is_ranking != (self.metric_operation == "rank"):
+                    raise ValueError(
+                        "application_log_volume rankings require an approved group_by dimension; "
+                        "exact targets use the show operation without grouping"
+                    )
             cluster_node_ranking = (
                 self.metric in {"node_cpu_utilization", "node_memory_utilization"}
                 and self.metric_scope == "cluster"
@@ -385,14 +416,19 @@ class ReadIntent(BaseModel):
                 raise ValueError(
                     "persistent_volume_claim scope supports only volume utilization metrics"
                 )
-            if self.metric_scope in {"node", "node_role"} and any(
+            if (
+                self.metric != "application_log_volume"
+                and self.metric_scope in {"node", "node_role"}
+                and any(
                 grouping not in {"cluster", "node"} for grouping in self.metric_group_by
+                )
             ):
                 raise ValueError("node metrics can group only by node")
             if (
                 "node" in self.metric_group_by
                 and self.metric_scope not in {"node", "node_role"}
                 and not cluster_node_ranking
+                and self.metric != "application_log_volume"
             ):
                 raise ValueError(
                     "node grouping requires node or node-role scope, or a cluster Node ranking"
@@ -426,12 +462,15 @@ class ReadIntent(BaseModel):
                 for character in self.audit_username
             ):
                 raise ValueError("audit username must not contain control characters")
+            if self.audit_resource and not _METRIC_IDENTIFIER.fullmatch(self.audit_resource):
+                raise ValueError("audit resource must be an exact Kubernetes resource name")
             if self.audit_operation_scope is None or self.audit_outcome is None:
                 raise ValueError(
                     "query_audit_events requires operation scope and outcome semantics"
                 )
         elif any((
             self.audit_username,
+            self.audit_resource,
             self.audit_operation_scope,
             self.audit_outcome,
             self.audit_search_until_limit,
@@ -449,12 +488,16 @@ class ReadIntent(BaseModel):
             "cluster_operator_health_summary", "machine_health_summary",
             "workload_health_summary",
         }
+        unsupported_health_selector = (
+            self.label_selector if self.tool != "pod_health_summary" else None
+        )
         if self.tool in health_summary_tools and any((
             self.resource, self.api_version, self.name,
-            self.label_selector, self.container, self.previous,
+            unsupported_health_selector, self.container, self.previous,
         )):
             raise ValueError(
-                "health summary reads accept only their typed scope and result limit"
+                "health summary reads accept only their typed scope, optional Pod label selector, "
+                "and result limit"
             )
         if self.tool != "workload_health_summary" and self.tool in health_summary_tools and self.kind:
             raise ValueError("kind is valid only for workload_health_summary")
@@ -1265,24 +1308,6 @@ def derive_evidence_relationship_graph(
     }
 
 
-def plan_needs_evidence_repair(
-    plan: ReadPlan,
-    *,
-    known_evidence_ids: set[str],
-    has_completed_reads: bool,
-) -> bool:
-    """Reject an unsupported no-read answer for a model-classified operational goal."""
-
-    actionable = {"inventory", "health", "diagnose", "logs", "compare", "explain"}
-    has_valid_support = bool(known_evidence_ids.intersection(plan.supporting_evidence_ids))
-    return (
-        plan.goal_type in actionable
-        and plan.decision == "answer_from_evidence"
-        and not has_valid_support
-        and not has_completed_reads
-    )
-
-
 _BUILTIN_RESOURCE_TYPES: dict[str, tuple[str, str]] = {
     "configmap": ("v1", "ConfigMap"), "configmaps": ("v1", "ConfigMap"),
     "daemonset": ("apps/v1", "DaemonSet"), "daemonsets": ("apps/v1", "DaemonSet"),
@@ -1367,11 +1392,42 @@ _NAMESPACE_TOP_CONSUMERS_QUERY = re.compile(
 )
 _CLUSTER_LOG_VOLUME_QUERY = re.compile(
     r"\b(?:which|what)\s+(?:namespaces?|projects?)\b.*?"
-    r"\b(?:producing|generating|writing)\b.*?\b(?:logs?|logging)\b|"
+    r"\b(?:produce|produces|produced|producing|generate|generates|generated|generating|"
+    r"write|writes|wrote|written|writing)\b.*?\b(?:logs?|logging)\b|"
+    r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
+    r"\b(?:produce|produces|produced|producing|generate|generates|generated|generating|"
+    r"write|writes|wrote|written|writing)\b.*?"
+    r"\b(?:most|highest|largest|biggest|greatest)\b.*?\b(?:logs?|logging)\b|"
     r"\b(?:top|rank|show|list)\b.*?\b(?:namespaces?|projects?)\b.*?"
     r"\bby\s+(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b|"
     r"\b(?:application[- ]?)?(?:log|logging)\s+(?:volume|bytes?|traffic)\b.*?"
     r"\bby\s+(?:namespaces?|projects?)\b",
+    re.IGNORECASE,
+)
+_KAFKA_INVENTORY_QUERY = re.compile(
+    r"(?=.*\bkafka\b)"
+    r"(?=.*\b(?:clusters?|instances?|installations?|deployments?)\b)"
+    r"(?=.*(?:\bare\s+there\b|\bare\s+any\b|"
+    r"\b(?:show|list|find|inventory|what|which)\b))"
+    r"(?=.*\b(?:deployed|installed|running|exists?)\b)",
+    re.IGNORECASE,
+)
+_KAFKA_TOPIC_STORAGE_QUERY = re.compile(
+    r"(?=.*\bkafka\b)"
+    r"(?=.*\btopics?\b)"
+    r"(?=.*\b(?:disk|storage|space|size|bytes?|usage|utili[sz]ation)\b)",
+    re.IGNORECASE,
+)
+_EXACT_KAFKA_CLUSTER_QUERY = re.compile(
+    r"\b(?:on|for)\s+(?:the\s+)?[`'\"]?"
+    r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\s+Kafka\b|"
+    r"\bKafka\s+(?:cluster\s+(?:named\s+|called\s+)?|named\s+|called\s+)[`'\"]?"
+    r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\b",
+    re.IGNORECASE,
+)
+_NON_INVENTORY_KAFKA_QUERY = re.compile(
+    r"\b(?:metrics?|utili[sz]ation|usage|throughput|rates?|lag|storage|health|healthy|"
+    r"status|configuration|configure|configured|why|how|topics?|users?|connectors?)\b",
     re.IGNORECASE,
 )
 _WORKER_NODE_UTILIZATION_QUERY = re.compile(
@@ -1389,7 +1445,7 @@ _NODE_UTILIZATION_RANKING_QUERY = re.compile(
 _METRIC_DURATION_QUERY = re.compile(
     r"\b(?:last|past|previous)\s+"
     r"(?:(?P<count>\d{1,3}|one|a|an)\s*)?"
-    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d)\b",
+    r"(?P<unit>seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)\b",
     re.IGNORECASE,
 )
 _METRIC_TOP_LIMIT_QUERY = re.compile(
@@ -1525,6 +1581,7 @@ def _requested_metric_range_seconds(
         1 if unit in {"s", "sec", "secs", "second", "seconds"} else
         60 if unit in {"m", "min", "mins", "minute", "minutes"} else
         3600 if unit in {"h", "hr", "hrs", "hour", "hours"} else
+        604_800 if unit in {"w", "week", "weeks"} else
         86_400
     )
     return min(
@@ -1637,6 +1694,74 @@ def _cross_namespace_network_policy_plan(question: str) -> ReadPlan | None:
     )
 
 
+def is_kafka_topic_storage_discovery_plan(plan: ReadPlan | None) -> bool:
+    """Return whether a registered plan is the namespace-to-Kafka storage first stage."""
+
+    return bool(
+        plan is not None
+        and plan.goal_type == "compare"
+        and len(plan.intents) == 1
+        and plan.intents[0].tool == "list_resources"
+        and plan.intents[0].resource == "kafkas.kafka.strimzi.io"
+        and plan.intents[0].kind == "Kafka"
+        and plan.intents[0].namespace
+        and plan.next_step_summary
+    )
+
+
+def plan_kafka_topic_storage_metrics(
+    question: str,
+    kafka_clusters: list[tuple[str, str]],
+    *,
+    now: datetime | None = None,
+) -> ReadPlan | None:
+    """Compile bounded per-Kafka topic-storage reads from observed CR coordinates."""
+
+    coordinates = list(dict.fromkeys(
+        (namespace.lower(), name.lower())
+        for namespace, name in kafka_clusters
+        if _METRIC_IDENTIFIER.fullmatch(namespace)
+        and _METRIC_IDENTIFIER.fullmatch(name)
+    ))
+    if not coordinates:
+        return None
+    selected = coordinates[:6]
+    range_seconds = _requested_metric_range_seconds(question, now=now)
+    result_limit = _requested_metric_result_limit(
+        question, default=_DEFAULT_METRIC_RESULT_LIMIT,
+    )
+    limitations = []
+    if len(coordinates) > len(selected):
+        limitations.append(
+            "Topic storage was queried for the first 6 observed Kafka clusters; "
+            f"{len(coordinates) - len(selected)} additional cluster(s) were omitted by the read ceiling."
+        )
+    return ReadPlan(
+        goal_type="compare",
+        scope_summary=(
+            "Read topic storage for observed Strimzi Kafka clusters over "
+            f"{range_seconds} seconds."
+        ),
+        intents=[
+            ReadIntent(
+                tool="query_metrics",
+                metric="kafka_topic_storage",
+                metric_scope="kafka_cluster",
+                kind="Kafka",
+                namespace=namespace,
+                name=name,
+                range_seconds=range_seconds,
+                limit=result_limit,
+                metric_operation="show",
+                metric_statistic="current",
+                metric_group_by=["topic"],
+            )
+            for namespace, name in selected
+        ],
+        limitations=limitations,
+    )
+
+
 def plan_known_read(
     question: str,
     *,
@@ -1645,13 +1770,50 @@ def plan_known_read(
     alert_labels: dict[str, object] | None = None,
     now: datetime | None = None,
 ) -> tuple[ReadPlan, bool] | None:
-    """Compile unambiguous inventory and alert-scoped reads without model syntax."""
+    """Suggest bounded evidence reads without directing orchestration.
+
+    The compatibility boolean is a presentation hint for callers that still consume
+    the legacy tuple. It must never be used to stop, cancel, replace, or otherwise
+    steer an agent investigation.
+    """
 
     lowered = question.lower()
     metric_range_seconds = _requested_metric_range_seconds(question, now=now)
     metric_result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    kafka_storage_match = _KAFKA_TOPIC_STORAGE_QUERY.search(question)
+    explicit_namespace = _EXPLICIT_NAMESPACE_QUERY.search(question)
+    if (
+        kafka_storage_match
+        and explicit_namespace
+        and not _EXACT_KAFKA_CLUSTER_QUERY.search(question)
+    ):
+        namespace = (
+            explicit_namespace.group("prefix")
+            or explicit_namespace.group("suffix")
+        ).lower()
+        return (
+            ReadPlan(
+                goal_type="compare",
+                scope_summary=(
+                    "Discover Strimzi Kafka clusters in namespace "
+                    f"{namespace} before reading topic storage."
+                ),
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="kafkas.kafka.strimzi.io",
+                    kind="Kafka",
+                    namespace=namespace,
+                    limit=inventory_limit,
+                )],
+                next_step_summary=(
+                    f"Query Kafka topic storage for each observed Kafka cluster over "
+                    f"{metric_range_seconds} seconds."
+                ),
+            ),
+            True,
+        )
     if _POD_HEALTH_QUERY.search(question) and not _POD_LOG_WORD_QUERY.search(question):
         namespace = _health_namespace_from_question(question)
         return (
@@ -1804,6 +1966,23 @@ def plan_known_read(
             ),
             True,
         )
+    if (
+        _KAFKA_INVENTORY_QUERY.search(question)
+        and not _NON_INVENTORY_KAFKA_QUERY.search(question)
+    ):
+        return (
+            ReadPlan(
+                goal_type="inventory",
+                scope_summary="List Strimzi Kafka resources across all namespaces.",
+                intents=[ReadIntent(
+                    tool="list_resources",
+                    resource="kafkas.kafka.strimzi.io",
+                    kind="Kafka",
+                    limit=inventory_limit,
+                )],
+            ),
+            True,
+        )
     for pattern in _NODE_LABEL_TARGET_QUERIES:
         node_match = pattern.search(question)
         if node_match is None:
@@ -1905,14 +2084,14 @@ def plan_known_read(
             limit=inventory_limit,
         )
         intent = normalize_read_intent(proposed)
-        terminal_inventory = match.group("kind").lower().endswith("s")
+        inventory_presentation_hint = match.group("kind").lower().endswith("s")
         return (
             ReadPlan(
-                goal_type="inventory" if terminal_inventory else "diagnose",
+                goal_type="inventory" if inventory_presentation_hint else "diagnose",
                 scope_summary=f"List {intent.kind} resources in {intent.namespace}.",
                 intents=[intent],
             ),
-            terminal_inventory,
+            inventory_presentation_hint,
         )
 
     labels = alert_labels or {}
@@ -2049,8 +2228,8 @@ class ReadResult:
 
 
 @dataclass(frozen=True)
-class AutomaticReadFollowup:
-    """A deterministic, evidence-derived continuation within the existing read budget."""
+class SuggestedReadFollowup:
+    """An optional evidence-derived candidate that only an agent may select."""
 
     code: Literal[
         "tls_trust_retry", "traffic_path_investigation", "pod_log_investigation",
@@ -2281,15 +2460,20 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
     return findings[:20]
 
 
-def automatic_read_followups(
+def suggested_read_followups(
     intent: ReadIntent,
     observations: tuple[AdHocObservation, ...],
     *,
     question: str = "",
     goal_type: str | None = None,
     primary_kind: str | None = None,
-) -> tuple[AutomaticReadFollowup, ...]:
-    """Plan narrow retries and evidence expansion from normalized observations."""
+) -> tuple[SuggestedReadFollowup, ...]:
+    """Derive optional read candidates from normalized observations.
+
+    These values are suggestions for an agent-visible candidate catalog only. An
+    orchestrator must never execute them automatically or use their presence to
+    continue, stop, cancel, or replace the agent's investigation.
+    """
 
     traffic_question = bool(re.search(
         r"(?i)(?:https?://|\broute\b|\btraffic\b|\b(?:http|tls|ssl)\b|"
@@ -2330,7 +2514,7 @@ def automatic_read_followups(
         )
     )
     if explicit_config_display and not source_object_display and intent.tool == "get_resource":
-        referenced_configmaps: list[AutomaticReadFollowup] = []
+        referenced_configmaps: list[SuggestedReadFollowup] = []
         seen_configmaps: set[tuple[str, str]] = set()
         for observation in observations:
             data = observation.data
@@ -2346,7 +2530,7 @@ def automatic_read_followups(
                 if target in seen_configmaps:
                     continue
                 seen_configmaps.add(target)
-                referenced_configmaps.append(AutomaticReadFollowup(
+                referenced_configmaps.append(SuggestedReadFollowup(
                     code="referenced_configmap",
                     reason=(
                         f"Read the exact ConfigMap {namespace}/{name} referenced by the "
@@ -2366,7 +2550,7 @@ def automatic_read_followups(
     if traffic_question and intent.tool in {
         "get_resource", "list_resources", "search_resources",
     }:
-        traffic_followups: list[AutomaticReadFollowup] = []
+        traffic_followups: list[SuggestedReadFollowup] = []
         for route, evidence_id in observed_objects("Route")[:2]:
             metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
             spec = route.get("spec") if isinstance(route.get("spec"), dict) else {}
@@ -2374,7 +2558,7 @@ def automatic_read_followups(
             namespace = str(metadata.get("namespace") or "")
             service = str(target.get("name") or "")
             if namespace and service and str(target.get("kind") or "Service") == "Service":
-                traffic_followups.append(AutomaticReadFollowup(
+                traffic_followups.append(SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=(
                         f"Read the exact backend Service {namespace}/{service} referenced by the "
@@ -2403,7 +2587,7 @@ def automatic_read_followups(
                     if key and value is not None
                 )
                 if label_selector and len(label_selector) <= 512:
-                    traffic_followups.append(AutomaticReadFollowup(
+                    traffic_followups.append(SuggestedReadFollowup(
                         code="traffic_path_investigation",
                         reason=(
                             f"List the bounded Pods selected by backend Service {namespace}/{name}."
@@ -2416,7 +2600,7 @@ def automatic_read_followups(
                         evidence_ids=(evidence_id,),
                     ))
             traffic_followups.extend((
-                AutomaticReadFollowup(
+                SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=f"Inspect EndpointSlices for backend Service {namespace}/{name}.",
                     intent=ReadIntent(
@@ -2427,7 +2611,7 @@ def automatic_read_followups(
                     ),
                     evidence_ids=(evidence_id,),
                 ),
-                AutomaticReadFollowup(
+                SuggestedReadFollowup(
                     code="traffic_path_investigation",
                     reason=f"Inspect the legacy Endpoints object for backend Service {namespace}/{name}.",
                     intent=ReadIntent(
@@ -2440,7 +2624,7 @@ def automatic_read_followups(
         if traffic_followups:
             return tuple(traffic_followups[:6])
 
-        endpoint_pods: list[AutomaticReadFollowup] = []
+        endpoint_pods: list[SuggestedReadFollowup] = []
 
         def endpoint_targets(endpoint_object: dict[str, object]) -> list[dict[str, object]]:
             targets = endpoint_object.get("podTargets")
@@ -2485,7 +2669,7 @@ def automatic_read_followups(
                     namespace = str(target.get("namespace") or default_namespace)
                     name = str(target.get("name") or "")
                     if namespace and name:
-                        endpoint_pods.append(AutomaticReadFollowup(
+                        endpoint_pods.append(SuggestedReadFollowup(
                             code="traffic_path_investigation",
                             reason=(
                                 f"Read backend Pod {namespace}/{name} referenced by {kind} evidence."
@@ -2509,7 +2693,7 @@ def automatic_read_followups(
             )
         ]
         if trust_failures:
-            return (AutomaticReadFollowup(
+            return (SuggestedReadFollowup(
                 code="tls_trust_retry",
                 reason=(
                     "The verified HTTPS probe reached certificate validation but could not trust "
@@ -2527,7 +2711,7 @@ def automatic_read_followups(
         question,
     ))
     if detail_question and intent.tool in {"list_resources", "search_resources"}:
-        detail_reads: list[AutomaticReadFollowup] = []
+        detail_reads: list[SuggestedReadFollowup] = []
         seen_targets: set[tuple[str, str]] = set()
         for observation in observations:
             data = observation.data
@@ -2543,7 +2727,7 @@ def automatic_read_followups(
                 if not name or (namespace or "", name) in seen_targets:
                     continue
                 seen_targets.add((namespace or "", name))
-                detail_reads.append(AutomaticReadFollowup(
+                detail_reads.append(SuggestedReadFollowup(
                     code="configuration_detail",
                     reason=(
                         f"Read the exact {kind or 'resource'} {namespace + '/' if namespace else ''}"
@@ -2582,7 +2766,7 @@ def automatic_read_followups(
             ),
         )[:3]
         if prioritized:
-            return tuple(AutomaticReadFollowup(
+            return tuple(SuggestedReadFollowup(
                 code="pod_log_investigation",
                 reason=(
                     f"Inspect {candidate.namespace}/{candidate.pod} container "
@@ -2604,7 +2788,7 @@ def automatic_read_followups(
     if intent.tool != "pod_logs":
         return ()
     findings = derive_adhoc_findings([item.to_dict() for item in observations])
-    followups: list[AutomaticReadFollowup] = []
+    followups: list[SuggestedReadFollowup] = []
     for finding in findings:
         if (
             finding.get("severity") == "warning"
@@ -2623,14 +2807,14 @@ def automatic_read_followups(
             and intent.candidate_id
             and not intent.previous
         ):
-            followups.append(AutomaticReadFollowup(
+            followups.append(SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=intent.model_copy(update={"previous": True}),
                 evidence_ids=evidence_ids,
             ))
         followups.extend((
-            AutomaticReadFollowup(
+            SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=ReadIntent(
@@ -2639,7 +2823,7 @@ def automatic_read_followups(
                 ),
                 evidence_ids=evidence_ids,
             ),
-            AutomaticReadFollowup(
+            SuggestedReadFollowup(
                 code="log_signal_investigation",
                 reason=reason,
                 intent=ReadIntent(

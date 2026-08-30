@@ -21,6 +21,9 @@ Treat them as a snapshot and re-verify live state before relying on them.
   OpenShift `cluster-reader`.
 - Development/break-glass identity: `ai-ops/ai-observer`, with `cluster-admin`
   through the explicitly labeled `podpilot-poc-cluster-admin` binding.
+- The unrestricted-agent simulation does not use that identity. Its `oc-runner` sidecar shares
+  `ai-ops/podpilot-investigator`, which remains `cluster-reader` plus monitoring/logging views;
+  `scripts/deploy-agentic-sno.ps1` refuses to deploy if it can patch Deployments.
 
 The MAC address, installer files, kubeconfig, administrator credentials, and pull
 secret are intentionally omitted. They do not belong in this repository.
