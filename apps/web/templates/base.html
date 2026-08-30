@@ -66,7 +66,7 @@
           <div class="nav-subtree" aria-label="Available clusters">
             <div class="nav-subtree-heading">
               <span>Available</span>
-              {% if user is defined and user.role.value >= 15 %}<a href="/settings/clusters?new=1" title="Add an ad hoc cluster" aria-label="Add an ad hoc cluster">+</a>{% endif %}
+              {% if user is defined and user.role.value >= 15 %}<a href="/clusters/personal?new=1" title="Add a personal cluster" aria-label="Add a personal cluster">+</a>{% endif %}
             </div>
             <ul class="nav-session-list nav-cluster-list">
               {% for cluster in workspace_clusters %}

@@ -12701,19 +12701,16 @@ def create_app(
     async def cluster_settings(
         request: Request, user: AuthContext = Depends(current_user)
     ):
-        if not (
-            _can_ask(user) if app_settings.delegated_access_enabled
-            else _can_manage_configuration(user)
-        ):
-            raise HTTPException(status_code=403, detail="Cluster registration requires a PodPilot role.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Cluster Management requires configuration-administrator access.",
+            )
         csrf_token, csrf_is_new = _csrf_token(request)
         edit_id = request.query_params.get("edit", "").strip()
         with Session(request.app.state.engine) as db_session:
-            registry_query = select(Cluster)
-            if not _can_manage_configuration(user):
-                registry_query = registry_query.where(_visible_clusters(user.username))
             rows = list(db_session.scalars(
-                registry_query.order_by(Cluster.environment, Cluster.name)
+                select(Cluster).order_by(Cluster.environment, Cluster.name)
             ))
             recent_conversations = recent_conversations_for(db_session, user.username)
         clusters_view = [_cluster_summary(item) for item in rows]
@@ -12725,18 +12722,50 @@ def create_app(
                 "user": user,
                 "clusters": clusters_view,
                 "selected": selected,
-                "selected_editable": bool(
-                    selected is None
-                    or _can_manage_configuration(user)
-                    or (
-                        selected["visibility"] == "private"
-                        and selected["owner"] == user.username
-                        and not selected["is_system"]
-                    )
-                ),
+                "selected_editable": True,
                 "recent_conversations": recent_conversations,
                 "csrf_token": csrf_token,
                 "can_manage_shared_clusters": _can_manage_configuration(user),
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(
+                CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                httponly=True, samesite="strict", max_age=28_800,
+            )
+        return response
+
+    @app.get("/clusters/personal", response_class=HTMLResponse)
+    async def personal_cluster_settings(
+        request: Request, user: AuthContext = Depends(current_user)
+    ):
+        if not _can_ask(user) or not app_settings.delegated_access_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal cluster management requires an authorized PodPilot role.",
+            )
+        csrf_token, csrf_is_new = _csrf_token(request)
+        edit_id = request.query_params.get("edit", "").strip()
+        with Session(request.app.state.engine) as db_session:
+            rows = list(db_session.scalars(
+                select(Cluster).where(
+                    Cluster.visibility == "private",
+                    Cluster.owner == user.username,
+                    Cluster.is_system.is_(False),
+                ).order_by(Cluster.environment, Cluster.name)
+            ))
+            recent_conversations = recent_conversations_for(db_session, user.username)
+        clusters_view = [_cluster_summary(item) for item in rows]
+        selected = next((item for item in clusters_view if item["id"] == edit_id), None)
+        response = templates.TemplateResponse(
+            request=request,
+            name="personal_clusters.html",
+            context={
+                "user": user,
+                "clusters": clusters_view,
+                "selected": selected,
+                "recent_conversations": recent_conversations,
+                "csrf_token": csrf_token,
             },
         )
         if csrf_is_new:
@@ -13062,6 +13091,62 @@ def create_app(
             request.app.state.delegated_vault.pop_cluster(cluster_id),
         )
         return JSONResponse({"status": "disabled", "cluster_id": cluster_id})
+
+    @app.post("/api/v1/clusters/{cluster_id}/delete")
+    async def delete_personal_cluster(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if not _can_ask(user) or not app_settings.delegated_access_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Personal cluster removal requires an authorized PodPilot role.",
+            )
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if (
+                cluster.is_system
+                or cluster.visibility != "private"
+                or cluster.owner != user.username
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only your own personal cluster entries can be removed here.",
+                )
+            cluster_name = cluster.name
+
+        await _revoke_delegated_connections(
+            request.app,
+            request.app.state.delegated_vault.pop_cluster(cluster_id),
+        )
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            if cluster is None:
+                raise HTTPException(status_code=404, detail="Cluster entry not found.")
+            if cluster.visibility != "private" or cluster.owner != user.username:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only your own personal cluster entries can be removed here.",
+                )
+            db_session.delete(cluster)
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="cluster.delete",
+                outcome="deleted",
+                details_json=json.dumps({
+                    "cluster_id": cluster_id,
+                    "name": cluster_name,
+                    "visibility": "private",
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({
+            "status": "deleted",
+            "cluster_id": cluster_id,
+            "detail": "Personal cluster removed. Historical conversations were retained.",
+        })
 
     @app.get("/settings/model", response_class=HTMLResponse)
     async def model_settings(

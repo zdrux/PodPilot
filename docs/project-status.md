@@ -21,8 +21,9 @@ conversation can resume after its required clusters are reconnected. The deploye
 two-hour session bound and verified remote TLS.
 The pending Workspace navigation also exposes visible clusters as a sidebar tree with connected and
 sign-in-required indicators. A cluster click starts a fresh preselected conversation or routes
-through the existing credential form first; the tree's add control opens private ad hoc registration.
-Shared registry administration now appears as **Cluster Management** in the Manage section.
+through the existing credential form first; the tree's add control opens a dedicated **My clusters**
+page for owner-scoped ad hoc entries. Shared registry administration now appears only to
+configuration administrators as **Cluster Management** in the Manage section.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster

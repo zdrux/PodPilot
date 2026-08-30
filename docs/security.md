@@ -92,6 +92,9 @@ administrators. Entries carry an environment, HTTPS API origin, tags, optional p
 and a per-entry TLS verification choice. Users may disable certificate and hostname verification;
 the UI and conversation mark that interception risk and saves/tests are audited. There is no
 deployment-wide TLS policy override and no stored remote bearer token.
+The administrative Cluster Management route is configuration-admin only. Personal cluster routes
+query and mutate only `visibility=private` entries owned by the authenticated user; removing one
+revokes its in-memory delegated connection before deleting its metadata and retains an audit record.
 
 The runtime system cluster follows the same delegated-user path. PodPilot uses the internal API and
 OAuth service origins plus projected public CA bundles, but never substitutes the Pod service

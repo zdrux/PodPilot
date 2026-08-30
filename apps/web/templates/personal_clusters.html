@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}My clusters · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Workspace</p><h1>My clusters</h1><p class="subtitle">Add and manage private ad hoc clusters that are visible only to you and PodPilot configuration administrators.</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/clusters/personal?new=1">Add cluster</a></div>{% endif %}</header>
+<section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Tokens remain session-only</strong><p>This page stores cluster metadata, not Kubernetes credentials. You will sign in when you select the cluster for a conversation.</p></div></section>
+<div class="settings-grid cluster-settings-grid">
+  <aside class="panel side-list-panel">
+    <div class="panel-header"><div><p class="eyebrow">Personal workspace</p><h2>My configured clusters</h2></div><span class="tag">{{ clusters | length }}</span></div>
+    <ul class="model-profile-list cluster-registry-list">
+    {% for cluster in clusters %}
+      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/clusters/personal?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if not cluster.is_enabled %}<em>Removed</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{{ cluster.api_url }}</small></a></li>
+    {% else %}<li class="side-empty">You have not added any personal clusters.</li>{% endfor %}
+    </ul>
+  </aside>
+  <section class="panel settings-panel">
+    <div class="panel-header"><div><p class="eyebrow">{{ 'Personal connection' if selected else 'New personal connection' }}</p><h2>{{ selected.name if selected else 'Add cluster' }}</h2></div>{% if selected %}<span class="tag">{{ selected.status }}</span>{% endif %}</div>
+    <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/clusters/personal">
+      <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
+      <input type="hidden" name="visibility" value="private">
+      <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="my-dev-cluster"></label>
+      <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment if selected else 'dev' }}" placeholder="dev"><small>Credentials can be submitted to clusters from one environment at a time.</small></label>
+      <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
+      <label>Custom Kubernetes API CA bundle
+        <textarea name="custom_ca_pem" rows="8" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----">{{ selected.custom_ca_pem if selected else '' }}</textarea>
+        <small>Optional PEM certificate bundle used for OAuth login, identity verification, API proxying, and connection tests. Private keys are rejected.</small>
+      </label>
+      <label>Tags
+        <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson if selected else '{}' }}'>
+          <div class="tag-chip-list" data-tag-list aria-live="polite"></div>
+          <input type="text" data-tag-input autocomplete="off" aria-describedby="cluster-tags-help cluster-tags-error" placeholder="Add a tag and press Enter">
+        </div>
+        <input type="hidden" name="tags_json" data-tags-value value='{{ selected.tags | tojson if selected else '{}' }}'>
+        <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
+        <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
+      </label>
+      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify the Kubernetes API TLS certificate and hostname</span></label>
+      <input type="hidden" name="tls_verify" value="{{ 'true' if (selected and selected.tls_verify) or not selected else 'false' }}">
+      {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
+      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test OAuth discovery</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/clusters/personal" data-confirm="Remove this personal cluster from your workspace? Historical conversations will be retained.">Remove</button>{% endif %}</div>
+      {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}
+      {% if selected and selected.last_tested_at %}<p class="muted-copy">Last tested {{ selected.last_tested_at | est_time('%Y-%m-%d %H:%M:%S') }}.</p>{% endif %}
+    </form>
+  </section>
+</div>
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+{% endblock %}

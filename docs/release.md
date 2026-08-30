@@ -11,7 +11,9 @@ Verify the Workspace cluster tree is owner-filtered, reflects current in-memory 
 preselects exactly one connected cluster in a fresh composer, and sends an unconnected selection
 through login before returning to that composer. Configuration administrators must receive a
 separate **Cluster Management** navigation entry, while authorized users retain the ad hoc cluster
-add control.
+add control. The add control must open the separate **My clusters** route; non-admin users must be
+denied from Cluster Management and must be unable to view, edit, test, or delete another user's
+private entries.
 Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
 selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
 the same result shape across repeated runs.

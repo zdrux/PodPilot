@@ -18,9 +18,9 @@ more clusters later, remove one sign-in, or remove all sign-ins without deleting
 The Workspace sidebar lists every enabled cluster visible to the user and marks its current
 browser-session login state. Selecting a connected cluster opens a fresh composer preselected for
 that cluster; selecting a disconnected cluster first opens the existing username/password login
-flow and then returns to that preselection. The cluster-tree add control opens private ad hoc
-cluster registration. Shared registry administration is separately labeled **Cluster Management**
-under the administrative section.
+flow and then returns to that preselection. The cluster-tree add control opens a dedicated **My
+clusters** page where users manage only their private ad hoc entries. Shared registry administration
+is a separate administrator-only **Cluster Management** page under the Manage section.
 Cluster Health is not part of the active navigation or remote access model.
 The **Show my access** starter runs deterministic cluster-wide Kubernetes
 SelfSubjectAccessReview checks for common workload resources and renders exactly one permission

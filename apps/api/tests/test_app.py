@@ -12915,7 +12915,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert connected_checkbox is not None
         assert 'data-connected="true"' in connected_checkbox.group(0)
         assert "disabled" in connected_checkbox.group(0)
-        assert "Start new conversation" in connect_page.text
+        assert "Start new conversation" not in connect_page.text
         assert "Remove all sign-ins" in connect_page.text
         disconnected = client.post(
             "/api/v1/delegated-sessions/disconnect",
@@ -13047,7 +13047,8 @@ def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
         assert 'class="cluster-session-status connected"' in ask_page.text
         assert 'class="cluster-session-status disconnected"' in ask_page.text
         assert 'aria-label="Available clusters"' in ask_page.text
-        assert 'aria-label="Add an ad hoc cluster"' in ask_page.text
+        assert 'aria-label="Add a personal cluster"' in ask_page.text
+        assert 'href="/clusters/personal?new=1"' in ask_page.text
 
         east_start = client.get(
             f"/clusters/{east_id}/ask",
@@ -15513,9 +15514,15 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
         settings_overrides={"delegated_access_enabled": True},
     )
     with TestClient(app) as client:
-        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
+        admin_page = client.get(
+            "/settings/clusters", headers={"x-forwarded-user": "ivy"}
+        )
+        assert admin_page.status_code == 403
+        page = client.get("/clusters/personal", headers={"x-forwarded-user": "ivy"})
         assert page.status_code == 200
-        assert "<h1>Add cluster</h1>" in page.text
+        assert "<h1>My clusters</h1>" in page.text
+        assert "Cluster Management" not in page.text
+        assert 'data-redirect-base="/clusters/personal"' in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
         created = client.post(
@@ -15533,8 +15540,8 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
         assert created.status_code == 200
         cluster_id = created.json()["cluster_id"]
 
-        own_page = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
-        other_page = client.get("/settings/clusters", headers={"x-forwarded-user": "grace"})
+        own_page = client.get("/clusters/personal", headers={"x-forwarded-user": "ivy"})
+        other_page = client.get("/clusters/personal", headers={"x-forwarded-user": "grace"})
         assert "Ivy ad-hoc DEV" in own_page.text
         assert "Ivy ad-hoc DEV" not in other_page.text
         denied = client.post(
@@ -15543,15 +15550,25 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
         )
         assert denied.status_code == 403
 
+        removed = client.post(
+            f"/api/v1/clusters/{cluster_id}/delete",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert removed.status_code == 200
+        assert removed.json()["status"] == "deleted"
+        assert "Ivy ad-hoc DEV" not in client.get(
+            "/clusters/personal", headers={"x-forwarded-user": "ivy"}
+        ).text
+
     engine = build_engine(settings)
     with Session(engine) as db_session:
         cluster = db_session.get(Cluster, cluster_id)
-        assert cluster is not None
-        assert cluster.owner == "ivy"
-        assert cluster.visibility == "private"
-        assert cluster.environment == "dev"
-        assert cluster.tls_verify is False
-        assert cluster.credential_key is None
+        assert cluster is None
+        event = db_session.scalar(select(AuditEvent).where(
+            AuditEvent.action == "cluster.delete"
+        ))
+        assert event is not None
+        assert json.loads(event.details_json)["cluster_id"] == cluster_id
     engine.dispose()
 
 

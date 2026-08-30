@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Cluster management · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">{{ 'Administration' if can_manage_shared_clusters else 'Workspace' }}</p><h1>{{ 'Cluster Management' if can_manage_shared_clusters else 'Add cluster' }}</h1><p class="subtitle">{% if can_manage_shared_clusters %}Configure the shared cluster registry and manage availability for PodPilot users.{% else %}Add a private ad hoc cluster to your PodPilot workspace. PodPilot stores no Kubernetes bearer tokens.{% endif %}</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/settings/clusters?new=1">Add cluster</a></div>{% endif %}</header>
+<header class="topbar"><div><p class="eyebrow">Administration</p><h1>Cluster Management</h1><p class="subtitle">Configure the shared cluster registry and manage availability for PodPilot users.</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/settings/clusters?new=1">Add cluster</a></div>{% endif %}</header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>TLS verification exceptions carry credentials</strong><p>Disabling verification sends the cluster bearer token and receives evidence without authenticating the API server. Use only for explicitly accepted internal environments.</p></div></section>
 <div class="settings-grid cluster-settings-grid">
   <aside class="panel side-list-panel">
@@ -38,12 +38,12 @@
         <div class="form-actions"><a class="button primary" href="/delegated/connect">Connect clusters</a></div>
       </div>
     {% else %}
-    <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters">
+    <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/settings/clusters">
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>
       <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment if selected else 'dev' }}" placeholder="dev"><small>Credentials are submitted once per selected environment.</small></label>
       {% if can_manage_shared_clusters %}
-      <label>Visibility<select name="visibility"><option value="private" {% if not selected or selected.visibility == 'private' %}selected{% endif %}>Private · only me</option><option value="shared" {% if selected and selected.visibility == 'shared' %}selected{% endif %}>Shared · all PodPilot users</option></select></label>
+      <label>Visibility<select name="visibility"><option value="shared" {% if not selected or selected.visibility == 'shared' %}selected{% endif %}>Shared · all PodPilot users</option><option value="private" {% if selected and selected.visibility == 'private' %}selected{% endif %}>Private · only me</option></select></label>
       {% else %}<input type="hidden" name="visibility" value="private">{% endif %}
       <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
       <label>Custom Kubernetes API CA bundle

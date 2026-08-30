@@ -376,7 +376,8 @@
           tone: "success",
           message: payload.detail || clusterSettingsForm.dataset.successMessage || "Cluster connection saved. Test it before using it for Ask PodPilot.",
         }));
-        window.location.assign(`/settings/clusters?edit=${encodeURIComponent(payload.cluster_id)}`);
+        const redirectBase = clusterSettingsForm.dataset.redirectBase || "/settings/clusters";
+        window.location.assign(`${redirectBase}?edit=${encodeURIComponent(payload.cluster_id)}`);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = priorSubmitText; }
@@ -389,15 +390,25 @@
       if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
       button.disabled = true;
       const prior = button.textContent;
-      button.textContent = button.dataset.actionKind === "test" ? "Testing…" : "Disabling…";
+      button.textContent = button.dataset.actionKind === "test"
+        ? "Testing…"
+        : button.dataset.actionKind === "delete" ? "Removing…" : "Disabling…";
       try {
         const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
         const passed = payload.status === "ready";
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
-          tone: passed ? "success" : payload.status === "disabled" ? "success" : "error",
-          message: payload.detail || (payload.status === "disabled" ? "Cluster disabled and token removed." : "Cluster connection tested."),
+          tone: passed || ["disabled", "deleted"].includes(payload.status) ? "success" : "error",
+          message: payload.detail || (
+            payload.status === "deleted" ? "Personal cluster removed."
+              : payload.status === "disabled" ? "Cluster disabled and token removed."
+                : "Cluster connection tested."
+          ),
         }));
-        window.location.reload();
+        if (button.dataset.redirectUrl) {
+          window.location.assign(button.dataset.redirectUrl);
+        } else {
+          window.location.reload();
+        }
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         button.disabled = false;
