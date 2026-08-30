@@ -7,6 +7,9 @@ Current releases must verify that no active manifest grants access to a remote c
 Secret, every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
 select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
 and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
+Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
+selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
+the same result shape across repeated runs.
 
 ## Release Surfaces
 

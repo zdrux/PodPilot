@@ -1094,6 +1094,8 @@ class KubernetesReadOnlyExplorer:
                 return self._machine_health_summary(intent)
             if intent.tool == "workload_health_summary":
                 return self._workload_health_summary(intent)
+            if intent.tool == "access_review_summary":
+                return self._access_review_summary()
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)
             if intent.tool == "watch_resources":
@@ -1146,6 +1148,87 @@ class KubernetesReadOnlyExplorer:
                 "The requested cluster evidence could not be collected because the Kubernetes API "
                 f"client failed ({type(exc).__name__})."
             ) from exc
+
+    def _access_review_summary(self) -> ReadResult:
+        """Review the delegated identity's cluster-wide workload permissions."""
+
+        assert self._core is not None
+        authorization = client.AuthorizationV1Api(self._core.api_client)
+        resources = (
+            ("Pods", "", "pods"),
+            ("Services", "", "services"),
+            ("Deployments", "apps", "deployments"),
+            ("StatefulSets", "apps", "statefulsets"),
+            ("DaemonSets", "apps", "daemonsets"),
+            ("Jobs", "batch", "jobs"),
+            ("CronJobs", "batch", "cronjobs"),
+        )
+        verbs = ("get", "list", "create", "patch", "delete")
+        rows: list[dict[str, object]] = []
+        evaluation_errors: list[str] = []
+        for label, api_group, resource in resources:
+            permissions: dict[str, bool] = {}
+            for verb in verbs:
+                review = authorization.create_self_subject_access_review(body={
+                    "apiVersion": "authorization.k8s.io/v1",
+                    "kind": "SelfSubjectAccessReview",
+                    "spec": {
+                        "resourceAttributes": {
+                            "group": api_group,
+                            "resource": resource,
+                            "verb": verb,
+                        }
+                    },
+                })
+                status = review.status
+                permissions[verb] = bool(status and status.allowed)
+                evaluation_error = str(
+                    getattr(status, "evaluation_error", "") or ""
+                ).strip()
+                if evaluation_error:
+                    evaluation_errors.append(f"{label}/{verb}: {evaluation_error}")
+            rows.append({
+                "kind": label,
+                "apiGroup": api_group or "core",
+                "resource": resource,
+                "verbs": permissions,
+            })
+
+        allowed_count = sum(
+            1 for row in rows for allowed in row["verbs"].values() if allowed
+        )
+        total_count = len(rows) * len(verbs)
+        all_allowed = allowed_count == total_count
+        return ReadResult(
+            observations=(AdHocObservation(
+                id=f"access-review-{uuid4()}",
+                tool="access_review_summary",
+                summary=(
+                    f"Reviewed {total_count} cluster-wide workload permissions; "
+                    f"{allowed_count} are allowed."
+                ),
+                source=(
+                    "kubernetes:authorization.k8s.io/v1:"
+                    "SelfSubjectAccessReview"
+                ),
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "scope": (
+                        "all_namespaces" if allowed_count else "no_cluster_wide_access"
+                    ),
+                    "allPermissionsAllowed": all_allowed,
+                    "allowedCount": allowed_count,
+                    "checkCount": total_count,
+                    "verbs": list(verbs),
+                    "resources": rows,
+                    "complete": not evaluation_errors,
+                },
+            ),),
+            limitations=tuple(
+                f"Authorization review evaluation error: {item}"
+                for item in evaluation_errors[:5]
+            ),
+        )
 
     def _current_metrics_fallback(
         self, intent: ReadIntent, *, primary_error: str,

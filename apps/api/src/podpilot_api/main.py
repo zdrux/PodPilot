@@ -2950,6 +2950,89 @@ def _resource_list_presentation(
     }
 
 
+def _deterministic_access_review_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """Render exactly one authorization matrix for each reviewed cluster."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        and entry.get("tool") == "access_review_summary"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    observations = [
+        item for item in evidence
+        if str(item.get("id") or "") in current_ids
+        and item.get("tool") == "access_review_summary"
+        and isinstance(item.get("data"), dict)
+    ]
+    if not observations:
+        return None
+
+    lines = [
+        "## Delegated OpenShift access",
+        "",
+        (
+            "These results come from Kubernetes SelfSubjectAccessReview requests made "
+            "with your delegated token. PodPilot did not infer access by listing objects."
+        ),
+    ]
+    citations: list[str] = []
+    incomplete = False
+    for observation in observations:
+        data = observation["data"]
+        cluster_name = redact_text(str(
+            observation.get("cluster_name")
+            or observation.get("cluster_id")
+            or "OpenShift cluster"
+        ))[:253]
+        resources = data.get("resources") if isinstance(data.get("resources"), list) else []
+        citations.append(str(observation["id"]))
+        incomplete = incomplete or data.get("complete") is not True
+        lines.extend(["", f"### {cluster_name}", ""])
+        if data.get("allPermissionsAllowed") is True:
+            lines.append(
+                "**Namespace scope: all namespaces.** Every reviewed workload permission is allowed."
+            )
+        elif data.get("scope") == "all_namespaces":
+            lines.append(
+                "**Namespace scope: all namespaces for each permission marked Allowed below.**"
+            )
+        else:
+            lines.append(
+                "**Namespace scope: no cluster-wide workload permission was confirmed.** "
+                "Namespace-specific grants require a separate scoped review."
+            )
+        lines.extend([
+            "",
+            "| Resource | Get | List | Create | Patch | Delete |",
+            "|---|---:|---:|---:|---:|---:|",
+        ])
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            verbs = resource.get("verbs") if isinstance(resource.get("verbs"), dict) else {}
+            values = [
+                "Allowed" if verbs.get(verb) is True else "Denied"
+                for verb in ("get", "list", "create", "patch", "delete")
+            ]
+            label = redact_text(str(resource.get("kind") or resource.get("resource") or "Resource"))[:128]
+            lines.append(f"| {label} | {' | '.join(values)} |")
+
+    return {
+        "answer_mode": "evidence_based",
+        "content": "\n".join(lines),
+        "citations": citations,
+        "limitations": (
+            ["One or more authorization reviews reported an evaluation error."]
+            if incomplete else []
+        ),
+        "conclusion_status": "probable" if incomplete else "confirmed",
+    }
+
+
 def _deterministic_pod_health_answer(
     *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
 ) -> dict[str, object] | None:
@@ -4946,6 +5029,8 @@ def _inventory_plan_scope_errors(
 
 
 def _read_progress_message(intent) -> str:
+    if intent.tool == "access_review_summary":
+        return "Reviewing delegated workload permissions across all namespaces."
     if intent.tool == "discover_resources":
         return f"Looking for readable OpenShift APIs related to {intent.discovery_query}."
     if intent.tool == "http_probe":
@@ -5000,10 +5085,21 @@ def _investigation_unit_cost(intent: ReadIntent) -> int:
         "pod_logs", "http_probe", "query_metrics", "query_audit_events",
         "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
-        "workload_health_summary",
+        "workload_health_summary", "access_review_summary",
     }:
         return 2
     return 1
+
+
+def _is_access_review_question(question: str) -> bool:
+    normalized = " ".join(question.casefold().split())
+    return (
+        "show my access" in normalized
+        or (
+            "delegated openshift identity" in normalized
+            and any(word in normalized for word in ("access", "permission", "verbs"))
+        )
+    )
 
 
 def _investigation_capability_ledger(
@@ -7756,6 +7852,7 @@ async def _collect_bounded_cluster_reads(
     seen_intents: set[str] = set(existing_read_signatures or [])
     units_used = 0
     scope_summary = "Bounded read-only cluster investigation."
+    access_review_request = _is_access_review_question(question)
     semantic_metric_plan = _semantic_metric_read_plan(inquiry)
     semantic_audit_plan = _semantic_audit_read_plan(
         inquiry,
@@ -7789,7 +7886,11 @@ async def _collect_bounded_cluster_reads(
     catalog_entries: list[dict[str, object]] = []
     catalog_available = False
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
-    if callable(catalog_reader) and semantic_audit_plan is None:
+    if (
+        callable(catalog_reader)
+        and semantic_audit_plan is None
+        and not access_review_request
+    ):
         if progress:
             await progress("discovering", "Discovering available cluster resources.")
         try:
@@ -8015,7 +8116,21 @@ async def _collect_bounded_cluster_reads(
         )
         if units_used >= regular_unit_ceiling:
             break
-        if round_number == 1 and requested_candidate_id:
+        if access_review_request:
+            if round_number > 1:
+                break
+            plan = ReadPlan(
+                goal_type="inventory",
+                scope_summary=(
+                    "Review the delegated identity's cluster-wide workload permissions."
+                ),
+                intents=[ReadIntent(tool="access_review_summary")],
+            )
+            if progress:
+                await progress(
+                    "planning", "Prepared deterministic delegated access reviews."
+                )
+        elif round_number == 1 and requested_candidate_id:
             requested_candidates = _grounded_read_candidates(
                 question=question,
                 evidence=evidence,
@@ -8286,6 +8401,8 @@ async def _collect_bounded_cluster_reads(
                     if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"
                     if intent.tool == "discover_resources" else
+                    "delegated cluster-wide workload authorization matrix"
+                    if intent.tool == "access_review_summary" else
                     f"{intent.tool} scope={intent.namespace or 'cluster'} "
                     f"kind={intent.kind or '*'} result_limit={intent.limit}"
                     if intent.tool in health_summary_tools else
@@ -10185,6 +10302,10 @@ def create_app(
                     evidence=evidence,
                     activity=activity,
                 )
+                access_review_candidate = _deterministic_access_review_answer(
+                    evidence=evidence,
+                    activity=activity,
+                )
                 metric_candidate = metric_ranking_candidate or metric_summary_candidate
                 prefer_metric_card = bool(
                     metric_candidate is not None
@@ -10193,33 +10314,41 @@ def create_app(
                         or _current_reads_are_metric_rankings(activity)
                     )
                 )
-                with capture_raw_model_responses(include_raw_response) as captured:
-                    try:
-                        answer = await run_in_threadpool(
-                            provider.answer_ad_hoc,
-                            profile_snapshot,
-                            api_key,
-                            answer_context,
-                        )
-                    finally:
+                if access_review_candidate is not None:
+                    # Authorization matrices are complete typed API evidence. Rendering
+                    # them through the model can drop clusters, repeat arbitrary resource
+                    # lists, or relabel evidence, so this path is deterministic end to end.
+                    validated = access_review_candidate
+                else:
+                    with capture_raw_model_responses(include_raw_response) as captured:
+                        try:
+                            answer = await run_in_threadpool(
+                                provider.answer_ad_hoc,
+                                profile_snapshot,
+                                api_key,
+                                answer_context,
+                            )
+                        finally:
+                            _bounded_raw_response_attempts(
+                                raw_responses, captured, stage="initial answer"
+                            )
+                    if include_raw_response and not captured:
                         _bounded_raw_response_attempts(
-                            raw_responses, captured, stage="initial answer"
+                            raw_responses,
+                            [
+                                answer.model_dump_json()
+                                if hasattr(answer, "model_dump_json") else str(answer)
+                            ],
+                            stage="initial answer",
                         )
-                if include_raw_response and not captured:
-                    _bounded_raw_response_attempts(
-                        raw_responses,
-                        [
-                            answer.model_dump_json()
-                            if hasattr(answer, "model_dump_json") else str(answer)
-                        ],
-                        stage="initial answer",
+                    validated = _validated_adhoc_answer(
+                        answer,
+                        known_evidence_ids={
+                            str(item.get("id")) for item in answer_evidence
+                        },
+                        collection_limitations=limitations,
+                        observations=answer_evidence,
                     )
-                validated = _validated_adhoc_answer(
-                    answer,
-                    known_evidence_ids={str(item.get("id")) for item in answer_evidence},
-                    collection_limitations=limitations,
-                    observations=answer_evidence,
-                )
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
                     answer_mode=str(validated["answer_mode"]),
@@ -10274,16 +10403,21 @@ def create_app(
                 )
                 provider_status = "invalid_response" if contract_failure else "unavailable"
                 if evidence:
-                    validated = _deterministic_provider_failure_answer(
-                        question=message_text,
-                        evidence=evidence,
-                        activity=activity,
-                        inventory_only=(
-                            inquiry.mode == "inventory" if inquiry is not None else None
-                        ),
-                        preferred_kind=(
-                            inquiry.resource_query if inquiry is not None else None
-                        ),
+                    validated = (
+                        _deterministic_access_review_answer(
+                            evidence=evidence, activity=activity,
+                        )
+                        or _deterministic_provider_failure_answer(
+                            question=message_text,
+                            evidence=evidence,
+                            activity=activity,
+                            inventory_only=(
+                                inquiry.mode == "inventory" if inquiry is not None else None
+                            ),
+                            preferred_kind=(
+                                inquiry.resource_query if inquiry is not None else None
+                            ),
+                        )
                     )
                     failure_kind = (
                         "invalid structured response" if contract_failure

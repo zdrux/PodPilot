@@ -139,7 +139,7 @@ class ReadIntent(BaseModel):
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
         "query_audit_events", "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
-        "workload_health_summary",
+        "workload_health_summary", "access_review_summary",
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)

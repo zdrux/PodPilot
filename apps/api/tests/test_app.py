@@ -32,6 +32,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_audit_answer,
+    _deterministic_access_review_answer,
     _deterministic_inventory_answer,
     _deterministic_metric_ranking_answer,
     _deterministic_metric_summary_answer,
@@ -48,6 +49,7 @@ from podpilot_api.main import (
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _inventory_plan_scope_errors,
+    _is_access_review_question,
     _is_broad_pod_health_question,
     _latest_audit_query_semantics,
     _latest_metric_query_semantics,
@@ -212,6 +214,111 @@ def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
 
     assert explorer is not None
     assert constructor_thread and constructor_thread[0] != event_loop_thread
+
+
+def test_delegated_access_question_routes_to_authorization_reviews() -> None:
+    assert _is_access_review_question("Show my access") is True
+    assert _is_access_review_question(
+        "Summarize what my delegated OpenShift identity can access and report verbs."
+    ) is True
+    assert _is_access_review_question("List Namespace resources") is False
+
+
+def test_access_review_answer_renders_one_matrix_per_cluster() -> None:
+    resources = [{
+        "kind": "Pods",
+        "apiGroup": "core",
+        "resource": "pods",
+        "verbs": {
+            "get": True, "list": True, "create": True, "patch": True, "delete": True,
+        },
+    }]
+    evidence = [
+        {
+            "id": "access-central", "tool": "access_review_summary",
+            "cluster_id": "central", "cluster_name": "CMSP Central DEV",
+            "data": {
+                "scope": "all_namespaces", "allPermissionsAllowed": True,
+                "complete": True, "resources": resources,
+            },
+        },
+        {
+            "id": "access-east", "tool": "access_review_summary",
+            "cluster_id": "east", "cluster_name": "CMSP East DEV",
+            "data": {
+                "scope": "all_namespaces", "allPermissionsAllowed": True,
+                "complete": True, "resources": resources,
+            },
+        },
+    ]
+    activity = [{
+        "tool": "access_review_summary", "status": "succeeded",
+        "evidence_ids": ["access-central"],
+    }, {
+        "tool": "access_review_summary", "status": "succeeded",
+        "evidence_ids": ["access-east"],
+    }]
+
+    answer = _deterministic_access_review_answer(
+        evidence=evidence, activity=activity,
+    )
+
+    assert answer is not None
+    assert answer["citations"] == ["access-central", "access-east"]
+    assert answer["content"].count("### CMSP Central DEV") == 1
+    assert answer["content"].count("### CMSP East DEV") == 1
+    assert answer["content"].count("Namespace scope: all namespaces") == 2
+    assert answer["content"].count("| Pods | Allowed | Allowed |") == 2
+
+
+def test_access_question_bypasses_generic_resource_planner() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            raise AssertionError("authorization summaries must not use the model planner")
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            return ReadResult((AdHocObservation(
+                id="access-review-one",
+                tool="access_review_summary",
+                summary="Reviewed delegated permissions.",
+                source="kubernetes:authorization.k8s.io/v1:SelfSubjectAccessReview",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "scope": "all_namespaces",
+                    "allPermissionsAllowed": True,
+                    "complete": True,
+                    "resources": [],
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(),
+        cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[],
+            role_approver_groups=[], role_breakglass_groups=[],
+        ),
+        actor="ivy", workflow_id="access-review",
+        question="Show my access",
+        conversation=[], existing_evidence=[],
+    ))
+
+    assert [intent.tool for intent in explorer.calls] == ["access_review_summary"]
+    assert result.units_used == 2
+    assert result.activity[0]["status"] == "succeeded"
+    assert result.evidence[0]["id"] == "access-review-one"
 
 
 def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:

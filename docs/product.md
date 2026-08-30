@@ -11,6 +11,10 @@ bearer tokens. Investigator conversations are always read-only. Read-Write users
 or Action mode before the first message, and that mode plus the selected clusters remains locked.
 Users may maintain private cluster metadata alongside administrator-managed shared entries.
 Cluster Health is not part of the active navigation or remote access model.
+The **Show my access** starter runs deterministic cluster-wide Kubernetes
+SelfSubjectAccessReview checks for common workload resources and renders exactly one permission
+matrix per selected cluster. It does not infer authorization by listing objects or ask the model
+to select, label, or summarize those results.
 
 ## Problem
 

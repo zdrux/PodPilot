@@ -108,6 +108,41 @@ def test_loopback_broker_client_omits_https_only_hostname_option(monkeypatch):
     assert suppressed == []
 
 
+def test_access_review_summary_checks_cluster_wide_workload_verbs(monkeypatch):
+    requested = []
+
+    class AuthorizationApi:
+        def __init__(self, _api_client):
+            pass
+
+        def create_self_subject_access_review(self, body):
+            requested.append(body["spec"]["resourceAttributes"])
+            return SimpleNamespace(status=SimpleNamespace(
+                allowed=True, evaluation_error=None,
+            ))
+
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.client.AuthorizationV1Api", AuthorizationApi,
+    )
+    explorer = KubernetesReadOnlyExplorer(
+        dynamic_client=SimpleNamespace(),
+        core_api=SimpleNamespace(api_client=object()),
+    )
+
+    result = explorer.execute(ReadIntent(tool="access_review_summary"))
+
+    assert len(requested) == 35
+    assert all("namespace" not in attributes for attributes in requested)
+    assert {item["verb"] for item in requested} == {
+        "get", "list", "create", "patch", "delete",
+    }
+    observation = result.observations[0]
+    assert observation.tool == "access_review_summary"
+    assert observation.data["allPermissionsAllowed"] is True
+    assert observation.data["scope"] == "all_namespaces"
+    assert len(observation.data["resources"]) == 7
+
+
 def test_audit_query_routes_to_dedicated_reader_without_kubernetes_discovery() -> None:
     class AuditReader:
         def __init__(self) -> None:
