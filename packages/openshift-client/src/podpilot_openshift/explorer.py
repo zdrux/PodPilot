@@ -988,8 +988,12 @@ class KubernetesReadOnlyExplorer:
         configuration.api_key = {"BearerToken": token}
         configuration.api_key_prefix = {"BearerToken": "Bearer"}
         configuration.verify_ssl = tls_verify
-        configuration.assert_hostname = tls_verify
-        if not tls_verify:
+        is_https = api_url.casefold().startswith("https://")
+        # urllib3 forwards assert_hostname to its connection constructor. That
+        # option is valid for HTTPSConnection but raises TypeError for the
+        # plain-HTTP loopback broker used by delegated read-only sessions.
+        configuration.assert_hostname = tls_verify if is_https else None
+        if is_https and not tls_verify:
             # The accepted risk remains visible in settings, Ask limitations, and audit
             # events. Repeating urllib3's identical warning for every request only obscures
             # actionable logs.

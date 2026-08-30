@@ -82,6 +82,32 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     assert suppressed == ([] if tls_verify else [InsecureRequestWarning])
 
 
+def test_loopback_broker_client_omits_https_only_hostname_option(monkeypatch):
+    captured = {}
+    suppressed = []
+
+    class FakeDynamicClient:
+        def __init__(self, api_client):
+            captured["configuration"] = api_client.configuration
+            self.resources = SimpleNamespace(search=lambda **_kwargs: [])
+
+    monkeypatch.setattr("podpilot_openshift.explorer.DynamicClient", FakeDynamicClient)
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.urllib3.disable_warnings", suppressed.append,
+    )
+
+    KubernetesReadOnlyExplorer.for_remote_cluster(
+        api_url="http://127.0.0.1:8080/internal/delegated-proxy/capability",
+        token="broker-injected",
+        tls_verify=False,
+    )
+
+    configuration = captured["configuration"]
+    assert configuration.verify_ssl is False
+    assert configuration.assert_hostname is None
+    assert suppressed == []
+
+
 def test_audit_query_routes_to_dedicated_reader_without_kubernetes_discovery() -> None:
     class AuditReader:
         def __init__(self) -> None:

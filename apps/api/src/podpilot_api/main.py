@@ -10003,8 +10003,23 @@ def create_app(
                                 settings=app_settings,
                             )
                         except Exception as exc:
+                            diagnostic_ref = uuid4().hex[:12]
+                            safe_detail = _agent_collector_error_detail(exc)
                             limitations.append(
-                                f"Cluster {cluster_label}: the delegated read-only client could not be initialized ({type(exc).__name__})."
+                                f"Cluster {cluster_label}: the delegated read-only client could "
+                                f"not be initialized: {safe_detail} "
+                                f"(diagnostic ref {diagnostic_ref})."
+                            )
+                            LOGGER.warning(
+                                "podpilot.delegated.reader_initialization_failed actor=%s "
+                                "conversation_id=%s cluster_id=%s cluster=%r "
+                                "diagnostic_ref=%s exception_chain=%s",
+                                username,
+                                conversation_id,
+                                selected_cluster.id,
+                                cluster_label,
+                                diagnostic_ref,
+                                _safe_exception_diagnostics(exc),
                             )
                             continue
                     elif not selected_cluster.is_system:
