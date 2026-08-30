@@ -65,37 +65,6 @@ class _BoundedStreamCollector:
         return rendered.rstrip() + marker
 
 
-def _write_incluster_kubeconfig() -> None:
-    host = os.environ["KUBERNETES_SERVICE_HOST"]
-    port = os.environ.get("KUBERNETES_SERVICE_PORT_HTTPS", "443")
-    KUBECONFIG_PATH.write_text(
-        "\n".join(
-            (
-                "apiVersion: v1",
-                "kind: Config",
-                "clusters:",
-                "- name: in-cluster",
-                "  cluster:",
-                f"    server: https://{host}:{port}",
-                "    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-                "users:",
-                "- name: pod-service-account",
-                "  user:",
-                "    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token",
-                "contexts:",
-                "- name: in-cluster",
-                "  context:",
-                "    cluster: in-cluster",
-                "    user: pod-service-account",
-                "current-context: in-cluster",
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    os.chmod(KUBECONFIG_PATH, 0o600)
-
-
 def _remote_kubeconfig(cluster: object) -> tuple[Path, str, str, bool]:
     if not isinstance(cluster, dict):
         raise ValueError("cluster must be an object")
@@ -103,13 +72,23 @@ def _remote_kubeconfig(cluster: object) -> tuple[Path, str, str, bool]:
     cluster_name = str(cluster.get("name") or "").strip()
     api_url = str(cluster.get("api_url") or "").strip()
     token = str(cluster.get("token") or "").strip()
+    proxy_url = str(cluster.get("proxy_url") or "").strip()
     tls_verify = cluster.get("tls_verify")
     parsed = urlsplit(api_url)
     if (
-        not cluster_id or not cluster_name or not token
-        or parsed.scheme != "https" or not parsed.hostname
-        or parsed.username or parsed.password or parsed.query or parsed.fragment
-        or parsed.path not in {"", "/"}
+        not cluster_id or not cluster_name
+        or (
+            proxy_url
+            and not proxy_url.startswith("http://127.0.0.1:8080/internal/delegated-proxy/")
+        )
+        or (
+            not proxy_url
+            and (
+                not token or parsed.scheme != "https" or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in {"", "/"}
+            )
+        )
     ):
         raise ValueError("cluster connection is incomplete or invalid")
     if not isinstance(tls_verify, bool):
@@ -124,11 +103,15 @@ def _remote_kubeconfig(cluster: object) -> tuple[Path, str, str, bool]:
             "clusters": [{
                 "name": "target",
                 "cluster": {
-                    "server": api_url.rstrip("/"),
-                    "insecure-skip-tls-verify": not tls_verify,
+                    "server": proxy_url.rstrip("/") if proxy_url else api_url.rstrip("/"),
+                    **({"insecure-skip-tls-verify": True} if proxy_url else {
+                        "insecure-skip-tls-verify": not tls_verify,
+                    }),
                 },
             }],
-            "users": [{"name": "target", "user": {"token": token}}],
+            "users": [{"name": "target", "user": {}}] if proxy_url else [
+                {"name": "target", "user": {"token": token}}
+            ],
             "contexts": [{
                 "name": "target",
                 "context": {"cluster": "target", "user": "target"},
@@ -261,23 +244,24 @@ class RunnerHandler(BaseHTTPRequestHandler):
             command = payload["command"]
             if not isinstance(command, str) or not command.strip():
                 raise ValueError("command must be a non-empty string")
-            cluster_payload = payload.get("cluster")
+            cluster_payload = payload["cluster"]
+            if cluster_payload is None:
+                raise ValueError("a brokered remote cluster connection is required")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._send_json(400, {"error": str(exc)})
             return
 
         env = dict(os.environ)
         kubeconfig_path = KUBECONFIG_PATH
-        cluster_id = "runtime"
-        cluster_name = "Runtime cluster"
+        cluster_id = ""
+        cluster_name = ""
         tls_verify = True
         temporary_kubeconfig = False
         try:
-            if cluster_payload is not None:
-                kubeconfig_path, cluster_id, cluster_name, tls_verify = _remote_kubeconfig(
-                    cluster_payload
-                )
-                temporary_kubeconfig = True
+            kubeconfig_path, cluster_id, cluster_name, tls_verify = _remote_kubeconfig(
+                cluster_payload
+            )
+            temporary_kubeconfig = True
         except ValueError as exc:
             self._send_json(400, {"error": str(exc)})
             return
@@ -358,12 +342,11 @@ class RunnerHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    _write_incluster_kubeconfig()
     _event(
         "runner_ready",
         bind="127.0.0.1:8090",
-        runtime_cluster_tls_verify=True,
-        remote_connections="api-brokered-per-command",
+        service_account_access=False,
+        remote_connections="api-brokered-per-command-only",
         command_timeout_seconds=COMMAND_TIMEOUT_SECONDS,
         command_max_output_bytes=MAX_OUTPUT_BYTES,
         command_poll_seconds=HEARTBEAT_SECONDS,

@@ -8,8 +8,8 @@
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
         <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
-          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
-          aria-label="Session cautions. {% if agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary Linux shell and oc commands without PodPilot approval; OpenShift RBAC still applies. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
+          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' and is_delegated_mode %}• Delegated unrestricted mode — The agent may create, patch, apply, or delete objects without PodPilot approval. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC applies as you.&#10;{% elif agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode != 'unrestricted' %} PodPilot remains read-only.{% endif %}"
+          aria-label="Session cautions. {% if agent_mode == 'unrestricted' and is_delegated_mode %}Delegated unrestricted mode: the model can change selected clusters using your OpenShift identity and RBAC. {% elif agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary shell and oc commands. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
           <span class="boundary-pill-icon" aria-hidden="true">!</span>
           <span>Session cautions</span>
         </span>
@@ -325,7 +325,10 @@
     {% endif %}
 
     <div class="ask-composer">
-      {% if user.role.value >= 20 %}
+      {% if agent_mode == 'unrestricted' and not delegated_session_active %}
+      <div class="chat-budget"><strong>Delegated session ended</strong><p>The in-memory cluster credentials for this conversation are no longer available. <a href="/delegated/connect">Sign in again</a> and start a new conversation.</p></div>
+      {% endif %}
+      {% if can_ask %}
       <form class="chat-form adhoc-chat-form" method="post"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
         <div class="composer-meta-row">
@@ -372,11 +375,11 @@
           </div>
         </div>
         <div class="composer-input-wrap">
-          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
-          <button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
+          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run or (agent_mode == 'unrestricted' and not delegated_session_active) %}disabled{% endif %}></textarea>
+          <button class="button primary" type="submit" {% if not model_ready or active_run or (agent_mode == 'unrestricted' and not delegated_session_active) %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
         </div>
       </form>
-      {% elif user.role.value < 20 %}
+      {% else %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
       {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}

@@ -21,7 +21,9 @@ spec:
         app.kubernetes.io/component: application
     spec:
       serviceAccountName: podpilot-investigator
-      automountServiceAccountToken: true
+      # The runner must not inherit the Pod service-account credential. Only the
+      # API broker and OAuth proxy receive an explicit projected token mount.
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -162,6 +164,21 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: agent_mode
+            - name: PODPILOT_DELEGATED_ACCESS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: delegated_access_enabled
+            - name: PODPILOT_DELEGATED_SESSION_LIFETIME_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: delegated_session_lifetime_seconds
+            - name: PODPILOT_DELEGATED_LOGIN_ATTEMPTS_PER_MINUTE
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: delegated_login_attempts_per_minute
             - name: PODPILOT_AGENT_RUNNER_URL
               valueFrom:
                 configMapKeyRef:
@@ -271,6 +288,9 @@ spec:
               mountPath: /var/lib/podpilot
             - name: tmp
               mountPath: /tmp
+            - name: podpilot-service-account
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
         - name: oauth-proxy
           image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:22fe71990d4e40d2a353116767ce543d0a2e40acd4f068043ae83bc1c2e04f0d
           imagePullPolicy: IfNotPresent
@@ -324,6 +344,9 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: podpilot-service-account
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -335,3 +358,25 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        - name: podpilot-service-account
+          projected:
+            defaultMode: 0400
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - configMap:
+                  name: openshift-service-ca.crt
+                  items:
+                    - key: service-ca.crt
+                      path: service-ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

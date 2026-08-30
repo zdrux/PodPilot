@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from uuid import uuid4
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,9 +23,11 @@ from pydantic import ValidationError
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
+from starlette.background import BackgroundTask
 
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.database import build_engine, database_is_ready
+from podpilot_api.delegated_sessions import DelegatedConnection, DelegatedSessionVault
 from podpilot_api.knowledge import (
     ensure_knowledge_fts,
     index_document,
@@ -113,6 +116,12 @@ from podpilot_openshift.credentials import (
     EnvironmentCredentialStore,
     KubernetesSecretCredentialStore,
 )
+from podpilot_openshift.delegated import (
+    DelegatedLoginError,
+    OpenShiftDelegatedLoginClient,
+    tls_context,
+    validate_custom_ca,
+)
 from podpilot_openshift.audit_logs import BoundedAuditEventReader
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.http_probe import BoundedHttpProbe
@@ -129,6 +138,7 @@ from podpilot_openshift.workloads import (
 )
 
 CSRF_COOKIE = "podpilot_csrf"
+DELEGATED_SESSION_COOKIE = "podpilot_delegated_session"
 LOGGER = logging.getLogger("uvicorn.error")
 SYSTEM_CLUSTER_ID = "00000000-0000-0000-0000-000000000001"
 _TAG_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
@@ -250,6 +260,8 @@ def _cluster_summary(cluster: Cluster) -> dict[str, object]:
         "api_url": cluster.api_url,
         "tags": json.loads(cluster.tags_json or "{}"),
         "tls_verify": cluster.tls_verify,
+        "custom_ca_pem": cluster.custom_ca_pem or "",
+        "has_custom_ca": bool(cluster.custom_ca_pem),
         "is_enabled": cluster.is_enabled,
         "is_system": cluster.is_system,
         "status": cluster.status,
@@ -410,6 +422,26 @@ def _verify_csrf(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The request could not be verified. Refresh the page and try again.",
         )
+
+
+def _can_ask(user: AuthContext) -> bool:
+    return user.role == Role.DELEGATED_OPERATOR or user.role >= Role.INVESTIGATOR
+
+
+def _delegated_session_id(request: Request) -> str:
+    value = request.cookies.get(DELEGATED_SESSION_COOKIE, "").strip()
+    return value if 32 <= len(value) <= 128 else ""
+
+
+def _set_delegated_session_cookie(response: RedirectResponse, session_id: str, settings: Settings) -> None:
+    response.set_cookie(
+        DELEGATED_SESSION_COOKIE,
+        session_id,
+        secure=settings.auth_mode == "proxy",
+        httponly=True,
+        samesite="strict",
+        max_age=settings.delegated_session_lifetime_seconds,
+    )
 
 
 def _to_evidence(alert: AlertRecord) -> AlertEvidence:
@@ -8437,6 +8469,11 @@ def create_app(
             (Role.APPROVER, tuple(app_settings.role_approver_groups)),
             (Role.INVESTIGATOR, tuple(app_settings.role_investigator_groups)),
         ),
+        default_role=(
+            Role.DELEGATED_OPERATOR
+            if app_settings.delegated_access_enabled
+            else Role.VIEWER
+        ),
     )
     alerts = alert_source or _make_alert_source(app_settings)
     workloads = workload_source or _make_workload_source(app_settings)
@@ -8571,10 +8608,32 @@ def create_app(
             ),
         )
 
+    def test_remote_cluster_token(cluster: Cluster, token: str) -> None:
+        with httpx.Client(
+            verify=tls_context(cluster.custom_ca_pem),
+            timeout=app_settings.delegated_login_timeout_seconds,
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        ) as client:
+            response = client.post(
+                f"{cluster.api_url.rstrip('/')}/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
+                json={
+                    "apiVersion": "authorization.k8s.io/v1",
+                    "kind": "SelfSubjectAccessReview",
+                    "spec": {"resourceAttributes": {"verb": "get", "resource": "namespaces"}},
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("kind") != "SelfSubjectAccessReview":
+                raise DelegatedLoginError("The cluster returned an invalid access-review response.")
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
         application.state.engine = build_engine(app_settings)
+        application.state.delegated_vault = DelegatedSessionVault(
+            lifetime_seconds=app_settings.delegated_session_lifetime_seconds
+        )
         ensure_knowledge_fts(application.state.engine)
         with Session(application.state.engine) as db_session:
             system_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
@@ -8642,14 +8701,24 @@ def create_app(
                 app_settings.adhoc_worker_concurrency,
                 app_settings.adhoc_max_concurrent_runs_per_user,
             )
+        delegated_reaper_task = asyncio.create_task(
+            _delegated_session_reaper(application),
+            name="podpilot-delegated-session-reaper",
+        )
         try:
             yield
         finally:
+            delegated_reaper_task.cancel()
             for worker_task in worker_tasks:
                 worker_task.cancel()
             await asyncio.gather(
+                delegated_reaper_task,
                 *worker_tasks,
                 return_exceptions=True,
+            )
+            await _revoke_delegated_connections(
+                application,
+                application.state.delegated_vault.pop_all(),
             )
             application.state.engine.dispose()
 
@@ -8666,6 +8735,76 @@ def create_app(
         StaticFiles(directory=app_settings.web_dir / "static"),
         name="static",
     )
+
+    @app.api_route(
+        "/internal/delegated-proxy/{capability}/{remote_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def delegated_kubernetes_proxy(
+        capability: str, remote_path: str, request: Request
+    ):
+        connection = request.app.state.delegated_vault.by_capability(capability)
+        if connection is None:
+            raise HTTPException(status_code=401, detail="The delegated cluster session has expired.")
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, connection.cluster_id)
+            if cluster is None or not cluster.is_enabled or cluster.is_system:
+                raise HTTPException(status_code=404, detail="The delegated cluster is unavailable.")
+            api_url = cluster.api_url.rstrip("/")
+            custom_ca_pem = cluster.custom_ca_pem
+        body = await request.body()
+        if len(body) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="The delegated Kubernetes request is too large.")
+        blocked_headers = {
+            "authorization", "cookie", "host", "connection", "content-length",
+            "transfer-encoding", "upgrade", "forwarded", "x-forwarded-for",
+            "x-forwarded-host", "x-forwarded-proto",
+        }
+        forwarded_headers = {
+            name: value for name, value in request.headers.items()
+            if name.casefold() not in blocked_headers
+            and not name.casefold().startswith("impersonate-")
+        }
+        forwarded_headers["Authorization"] = f"Bearer {connection.token}"
+        forwarded_headers["User-Agent"] = (
+            f"podpilot-delegated/{connection.owner} "
+            + request.headers.get("user-agent", "oc")[:256]
+        )
+        target = f"{api_url}/{remote_path.lstrip('/')}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        client = httpx.AsyncClient(
+            verify=tls_context(custom_ca_pem),
+            timeout=app_settings.delegated_proxy_timeout_seconds,
+            follow_redirects=False,
+        )
+        try:
+            upstream_request = client.build_request(
+                request.method, target, headers=forwarded_headers, content=body
+            )
+            upstream = await client.send(upstream_request, stream=True)
+        except httpx.HTTPError as exc:
+            await client.aclose()
+            raise HTTPException(
+                status_code=502,
+                detail=f"The delegated Kubernetes API request failed ({type(exc).__name__}).",
+            ) from exc
+
+        async def close_upstream() -> None:
+            await upstream.aclose()
+            await client.aclose()
+
+        response_headers = {
+            name: value for name, value in upstream.headers.items()
+            if name.casefold() not in {"connection", "content-length", "transfer-encoding", "content-encoding"}
+        }
+        return StreamingResponse(
+            upstream.aiter_bytes(),
+            status_code=upstream.status_code,
+            headers=response_headers,
+            background=BackgroundTask(close_upstream),
+        )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -8710,7 +8849,7 @@ def create_app(
             {
                 "cluster_id": cluster_id,
                 "cluster_name": cluster_name,
-                "connection": "in-cluster" if connection is None else "registered-remote",
+                "connection": "delegated-user" if connection is not None else "unavailable",
                 "tls_verify": True if connection is None else connection.tls_verify,
             }
             for cluster_id, (cluster_name, connection) in agent_targets.items()
@@ -8718,10 +8857,11 @@ def create_app(
         messages: list[dict[str, object]] = [{
             "role": "system",
             "content": (
-                "You are PodPilot running in an explicitly enabled lab-only unrestricted agent mode. "
+                "You are PodPilot running in an explicitly accepted delegated unrestricted mode. "
                 "You have typed read-only collector tools plus an execute_shell escape hatch in a Linux "
-                "sidecar with the OpenShift oc CLI already authenticated to the current cluster as the "
-                "Pod's service account. Work autonomously: "
+                "sidecar with the OpenShift oc CLI connected through an API broker. The broker injects "
+                "the signed-in operator's in-memory token; the credential is never available to your "
+                "shell. Work autonomously: "
                 "run whatever oc commands or shell scripts are useful, inspect their results, revise your "
                 "approach, and continue until the operator's request is complete. Do not ask for approval "
                 "before a command. Kubernetes RBAC and admission responses are authoritative; if an operation "
@@ -9364,6 +9504,7 @@ def create_app(
         reasoning_effort: str | None = None,
         followup_action: dict[str, object] | None = None,
         progress: ProgressReporter | None = None,
+        delegated_vault: DelegatedSessionVault | None = None,
     ) -> str:
         source_question = redact_text(str(
             (followup_action or {}).get("source_question") or message_text
@@ -9379,18 +9520,21 @@ def create_app(
                 "Explain only what this new evidence adds, how it affects the original question, "
                 "and what remains uncertain."
             )[:app_settings.chat_max_chars]
-        if progress:
-            await progress(
-                "starting",
-                (
-                    "Starting the unrestricted agent run."
-                    if app_settings.agent_mode == "unrestricted"
-                    else "Starting the read-only investigation."
-                ),
-            )
         with Session(engine, expire_on_commit=False) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
+            turn_agent_mode = (
+                "unrestricted"
+                if (
+                    conversation.execution_mode == "delegated_unrestricted"
+                    or (
+                        not app_settings.delegated_access_enabled
+                        and app_settings.agent_mode == "unrestricted"
+                    )
+                )
+                else "guarded"
+            )
+            delegated_session_id = conversation.delegated_session_id
             evidence = list(json.loads(conversation.evidence_json))
             selected_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
             if not selected_cluster_ids:
@@ -9447,7 +9591,7 @@ def create_app(
             profile_status = str(profile.status) if profile is not None else None
             profile_snapshot = (
                 _profile_config(profile)
-                if _profile_is_usable(profile, app_settings.agent_mode)
+                if _profile_is_usable(profile, turn_agent_mode)
                 else None
             )
             if profile_snapshot is not None:
@@ -9462,6 +9606,16 @@ def create_app(
             profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
+
+        if progress:
+            await progress(
+                "starting",
+                (
+                    "Starting the unrestricted delegated agent run."
+                    if turn_agent_mode == "unrestricted"
+                    else "Starting the read-only investigation."
+                ),
+            )
 
         activity: list[dict[str, object]] = []
         limitations: list[str] = []
@@ -9489,7 +9643,7 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
-                if app_settings.agent_mode == "unrestricted":
+                if turn_agent_mode == "unrestricted":
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
                     enrichment_limitations: list[str] = []
@@ -9506,27 +9660,66 @@ def create_app(
                                 f"Cluster {cluster_label} is disabled; unrestricted commands were skipped."
                             )
                             continue
+                        if selected_cluster.is_system and delegated_session_id:
+                            enrichment_limitations.append(
+                                "The PodPilot system cluster cannot be used in a delegated session."
+                            )
+                            continue
                         if selected_cluster.is_system:
                             agent_targets[selected_cluster.id] = (cluster_label, None)
                             agent_readers[selected_cluster.id] = cluster_reader
                             continue
-                        try:
-                            cluster_token = await run_in_threadpool(
-                                cluster_credentials.get,
-                                selected_cluster.credential_key,
+                        if not delegated_session_id:
+                            try:
+                                cluster_token = await run_in_threadpool(
+                                    cluster_credentials.get,
+                                    selected_cluster.credential_key,
+                                )
+                            except CredentialStoreError as exc:
+                                enrichment_limitations.append(f"Cluster {cluster_label}: {exc}")
+                                continue
+                            if not cluster_token:
+                                enrichment_limitations.append(
+                                    f"Cluster {cluster_label} has no usable shared token."
+                                )
+                                continue
+                            effective_tls_verify = (
+                                selected_cluster.tls_verify
+                                and app_settings.remote_cluster_tls_verify
                             )
-                        except CredentialStoreError as exc:
-                            enrichment_limitations.append(f"Cluster {cluster_label}: {exc}")
+                            agent_targets[selected_cluster.id] = (
+                                cluster_label,
+                                AgentClusterConnection(
+                                    cluster_id=selected_cluster.id,
+                                    cluster_name=cluster_label,
+                                    api_url=selected_cluster.api_url,
+                                    token=cluster_token,
+                                    tls_verify=effective_tls_verify,
+                                ),
+                            )
+                            agent_readers[selected_cluster.id] = (
+                                lambda cluster=selected_cluster, token=cluster_token:
+                                remote_cluster_reader(cluster, token)
+                            )
                             continue
-                        if not cluster_token:
+                        connection = (
+                            delegated_vault.get(
+                                session_id=delegated_session_id or "",
+                                owner=username,
+                                cluster_id=selected_cluster.id,
+                            )
+                            if delegated_vault is not None and delegated_session_id
+                            else None
+                        )
+                        if connection is None:
                             enrichment_limitations.append(
-                                f"Cluster {cluster_label} has no usable API token; unrestricted "
-                                "commands and deterministic enrichment were skipped."
+                                f"Cluster {cluster_label} is no longer connected to this delegated "
+                                "session; sign in again and start a new conversation."
                             )
                             continue
-                        effective_tls_verify = (
-                            selected_cluster.tls_verify
-                            and app_settings.remote_cluster_tls_verify
+                        proxy_url = (
+                            "http://127.0.0.1:8080/internal/delegated-proxy/"
+                            f"{connection.proxy_capability}"
                         )
                         agent_targets[selected_cluster.id] = (
                             cluster_label,
@@ -9534,13 +9727,25 @@ def create_app(
                                 cluster_id=selected_cluster.id,
                                 cluster_name=cluster_label,
                                 api_url=selected_cluster.api_url,
-                                token=cluster_token,
-                                tls_verify=effective_tls_verify,
+                                token=None,
+                                tls_verify=True,
+                                proxy_url=proxy_url,
                             ),
                         )
                         agent_readers[selected_cluster.id] = (
-                            lambda cluster=selected_cluster, token=cluster_token:
-                            remote_cluster_reader(cluster, token)
+                            lambda url=proxy_url: KubernetesReadOnlyExplorer.for_remote_cluster(
+                                api_url=url,
+                                token="broker-injected",
+                                tls_verify=False,
+                                max_payload_bytes=app_settings.adhoc_max_payload_bytes,
+                                log_tail_lines=app_settings.workload_log_tail_lines,
+                                max_log_bytes=app_settings.workload_max_log_bytes,
+                                max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
+                                http_probe=BoundedHttpProbe(
+                                    timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
+                                    max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
+                                ),
+                            )
                         )
                     # In unrestricted mode the agent owns discovery from the first action.
                     # Registered collectors, semantic compilers, prior snapshots, and enrichment
@@ -10236,6 +10441,7 @@ def create_app(
                         reasoning_effort=reasoning_effort,
                         followup_action=followup_action or None,
                         progress=report,
+                        delegated_vault=application.state.delegated_vault,
                     ),
                     timeout=app_settings.adhoc_run_timeout_seconds,
                 )
@@ -10323,6 +10529,45 @@ def create_app(
             except TimeoutError:
                 pass
 
+    async def _revoke_delegated_connections(
+        application: FastAPI, connections: list[DelegatedConnection]
+    ) -> None:
+        if not connections:
+            return
+        cluster_ids = [str(item.cluster_id) for item in connections]
+        with Session(application.state.engine) as db_session:
+            clusters = {
+                item.id: item for item in db_session.scalars(
+                    select(Cluster).where(Cluster.id.in_(cluster_ids))
+                )
+            }
+        for connection in connections:
+            cluster = clusters.get(connection.cluster_id)
+            if cluster is None:
+                continue
+            revoked = await run_in_threadpool(
+                OpenShiftDelegatedLoginClient(
+                    api_url=cluster.api_url,
+                    custom_ca_pem=cluster.custom_ca_pem,
+                    timeout_seconds=app_settings.delegated_login_timeout_seconds,
+                ).revoke,
+                connection.token,
+            )
+            LOGGER.info(
+                "podpilot.delegated.token_revoke cluster_id=%s owner=%s revoked=%s",
+                connection.cluster_id,
+                connection.owner,
+                revoked,
+            )
+
+    async def _delegated_session_reaper(application: FastAPI) -> None:
+        while True:
+            await asyncio.sleep(60)
+            await _revoke_delegated_connections(
+                application,
+                application.state.delegated_vault.pop_expired(),
+            )
+
     def _queue_adhoc_run(
         db_session: Session,
         *,
@@ -10409,10 +10654,228 @@ def create_app(
         if claimed:
             await _run_persisted_adhoc_job(request.app, claimed)
 
+    @app.get("/delegated/connect", response_class=HTMLResponse)
+    async def delegated_connect_page(
+        request: Request, user: AuthContext = Depends(current_user)
+    ):
+        if user.role != Role.DELEGATED_OPERATOR or not app_settings.delegated_access_enabled:
+            raise HTTPException(status_code=403, detail="Delegated cluster login is unavailable for this role.")
+        csrf_token, csrf_is_new = _csrf_token(request)
+        session_id = _delegated_session_id(request)
+        connections = (
+            request.app.state.delegated_vault.list_for(
+                session_id=session_id, owner=user.username
+            )
+            if session_id else []
+        )
+        with Session(request.app.state.engine) as db_session:
+            clusters = list(db_session.scalars(
+                select(Cluster).where(
+                    Cluster.is_enabled.is_(True), Cluster.is_system.is_(False)
+                ).order_by(Cluster.name)
+            ))
+            cluster_names = {item.id: item.name for item in clusters}
+            recent = recent_conversations_for(db_session, user.username)
+        response = templates.TemplateResponse(
+            request=request,
+            name="delegated_connect.html",
+            context={
+                "user": user,
+                "csrf_token": csrf_token,
+                "recent_conversations": recent,
+                "clusters": [_cluster_summary(item) for item in clusters],
+                "connections": [{
+                    "cluster_id": item.cluster_id,
+                    "cluster_name": cluster_names.get(item.cluster_id, item.cluster_id),
+                    "remote_username": item.remote_username,
+                    "expires_at": item.expires_at,
+                } for item in connections],
+                "connected_cluster_ids": [item.cluster_id for item in connections],
+                "session_hours": round(app_settings.delegated_session_lifetime_seconds / 3600, 1),
+                "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
+            },
+        )
+        if csrf_is_new:
+            response.set_cookie(
+                CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
+                httponly=True, samesite="strict", max_age=28_800,
+            )
+        return response
+
+    @app.post("/api/v1/delegated-sessions/connect")
+    async def connect_delegated_clusters(
+        request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if user.role != Role.DELEGATED_OPERATOR or not app_settings.delegated_access_enabled:
+            raise HTTPException(status_code=403, detail="Delegated cluster login is unavailable for this role.")
+        if not request.app.state.delegated_vault.allow_login(
+            owner=user.username,
+            attempts_per_minute=app_settings.delegated_login_attempts_per_minute,
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many delegated login attempts. Wait one minute and try again.",
+            )
+        form = await _urlencoded(request)
+        if form.get("consent", "").casefold() not in {"on", "true", "yes", "1"}:
+            raise HTTPException(status_code=422, detail="Accept the unrestricted delegated-session warning.")
+        try:
+            cluster_ids = list(dict.fromkeys(str(item) for item in json.loads(form.get("cluster_ids", "[]"))))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="Select one or more valid clusters.") from exc
+        if not cluster_ids or len(cluster_ids) > app_settings.adhoc_max_clusters_per_conversation:
+            raise HTTPException(status_code=422, detail="Select one or more bounded clusters.")
+        username = form.get("username", "").strip()
+        password = form.get("password", "")
+        if not username or not password or len(password) > 4096:
+            raise HTTPException(status_code=422, detail="Enter a valid remote username and password.")
+        with Session(request.app.state.engine, expire_on_commit=False) as db_session:
+            clusters = list(db_session.scalars(select(Cluster).where(
+                Cluster.id.in_(cluster_ids), Cluster.is_enabled.is_(True),
+                Cluster.is_system.is_(False),
+            )))
+        by_id = {item.id: item for item in clusters}
+        if len(by_id) != len(cluster_ids):
+            raise HTTPException(status_code=422, detail="One or more selected clusters are unavailable.")
+        session_id = _delegated_session_id(request) or DelegatedSessionVault.new_session_id()
+        connected: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+        for cluster_id in cluster_ids:
+            cluster = by_id[cluster_id]
+            try:
+                identity = await run_in_threadpool(
+                    OpenShiftDelegatedLoginClient(
+                        api_url=cluster.api_url,
+                        custom_ca_pem=cluster.custom_ca_pem,
+                        timeout_seconds=app_settings.delegated_login_timeout_seconds,
+                    ).login,
+                    username,
+                    password,
+                )
+                prior = request.app.state.delegated_vault.pop_connection(
+                    session_id=session_id, owner=user.username, cluster_id=cluster.id
+                )
+                if prior is not None:
+                    await run_in_threadpool(
+                        OpenShiftDelegatedLoginClient(
+                            api_url=cluster.api_url,
+                            custom_ca_pem=cluster.custom_ca_pem,
+                            timeout_seconds=app_settings.delegated_login_timeout_seconds,
+                        ).revoke,
+                        prior.token,
+                    )
+                connection = request.app.state.delegated_vault.put(
+                    session_id=session_id,
+                    owner=user.username,
+                    cluster_id=cluster.id,
+                    remote_username=identity.username,
+                    remote_uid=identity.uid,
+                    token=identity.token,
+                )
+                connected.append({
+                    "cluster_id": cluster.id,
+                    "cluster_name": cluster.name,
+                    "remote_username": identity.username,
+                    "expires_at": connection.expires_at.isoformat(),
+                })
+                outcome, error_type = "connected", None
+            except DelegatedLoginError as exc:
+                failed.append({"cluster_id": cluster.id, "cluster_name": cluster.name, "detail": str(exc)})
+                outcome, error_type = "failed", type(exc).__name__
+            with Session(request.app.state.engine) as db_session:
+                db_session.add(AuditEvent(
+                    actor=user.username,
+                    action="delegated.cluster.login",
+                    outcome=outcome,
+                    details_json=json.dumps({
+                        "cluster_id": cluster.id,
+                        "cluster_name": cluster.name,
+                        "error_type": error_type,
+                        "custom_ca": bool(cluster.custom_ca_pem),
+                    }, sort_keys=True),
+                ))
+                db_session.commit()
+        password = ""
+        if not connected:
+            raise HTTPException(status_code=401, detail="None of the selected cluster logins succeeded.")
+        response = JSONResponse({"status": "connected", "connected": connected, "failed": failed})
+        _set_delegated_session_cookie(response, session_id, app_settings)
+        return response
+
+    @app.get("/session/logout")
+    async def logout_session(
+        request: Request, user: AuthContext = Depends(current_user)
+    ) -> RedirectResponse:
+        session_id = _delegated_session_id(request)
+        connections = request.app.state.delegated_vault.pop_session(
+            session_id=session_id, owner=user.username
+        ) if session_id else []
+        with Session(request.app.state.engine) as db_session:
+            cluster_by_id = {
+                item.id: item for item in db_session.scalars(
+                    select(Cluster).where(Cluster.id.in_([item.cluster_id for item in connections]))
+                )
+            }
+            active_run_ids = list(db_session.scalars(
+                select(AdHocRun.id).join(
+                    AdHocConversation, AdHocConversation.id == AdHocRun.conversation_id
+                ).where(
+                    AdHocConversation.delegated_session_id == session_id,
+                    AdHocRun.status.in_(("queued", "running")),
+                )
+            )) if session_id else []
+            if active_run_ids:
+                db_session.execute(
+                    update(AdHocRun).where(AdHocRun.id.in_(active_run_ids)).values(
+                        status="failed",
+                        phase="failed",
+                        error_type="DelegatedSessionEnded",
+                        error_detail="The delegated cluster session ended during this run.",
+                        finished_at=datetime.now(timezone.utc),
+                    )
+                )
+                db_session.commit()
+        for run_id in active_run_ids:
+            run_task = request.app.state.adhoc_run_tasks.get(run_id)
+            if run_task is not None and not run_task.done():
+                run_task.cancel()
+        for connection in connections:
+            cluster = cluster_by_id.get(connection.cluster_id)
+            if cluster is not None:
+                await run_in_threadpool(
+                    OpenShiftDelegatedLoginClient(
+                        api_url=cluster.api_url,
+                        custom_ca_pem=cluster.custom_ca_pem,
+                        timeout_seconds=app_settings.delegated_login_timeout_seconds,
+                    ).revoke,
+                    connection.token,
+                )
+        response = RedirectResponse("/oauth/sign_out", status_code=303)
+        response.delete_cookie(DELEGATED_SESSION_COOKIE)
+        return response
+
     @app.get("/ask", response_class=HTMLResponse)
     async def ask_podpilot(
         request: Request, user: AuthContext = Depends(current_user)
     ):
+        delegated_connections = []
+        if user.role == Role.DELEGATED_OPERATOR:
+            session_id = _delegated_session_id(request)
+            delegated_connections = request.app.state.delegated_vault.list_for(
+                session_id=session_id, owner=user.username
+            ) if session_id else []
+            if not delegated_connections:
+                return RedirectResponse("/delegated/connect", status_code=303)
+        delegated_cluster_ids = [item.cluster_id for item in delegated_connections]
+        turn_agent_mode = (
+            "unrestricted"
+            if delegated_connections or (
+                not app_settings.delegated_access_enabled
+                and app_settings.agent_mode == "unrestricted"
+            )
+            else "guarded"
+        )
         csrf_token, csrf_is_new = _csrf_token(request)
         with Session(request.app.state.engine) as db_session:
             recent = recent_conversations_for(db_session, user.username)
@@ -10421,25 +10884,32 @@ def create_app(
             selected_reasoning_effort = _preferred_reasoning_effort(
                 db_session, user.username, profile
             )
-            available_clusters = list(db_session.scalars(
-                select(Cluster).where(Cluster.is_enabled.is_(True)).order_by(Cluster.name)
-            ))
+            cluster_query = select(Cluster).where(Cluster.is_enabled.is_(True))
+            if delegated_connections:
+                cluster_query = cluster_query.where(Cluster.id.in_(delegated_cluster_ids))
+            available_clusters = list(db_session.scalars(cluster_query.order_by(Cluster.name)))
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile, app_settings.agent_mode),
+                "model_ready": _profile_is_usable(profile, turn_agent_mode),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
                 "reasoning_efforts": reasoning_efforts,
                 "selected_reasoning_effort": selected_reasoning_effort,
                 "active_run": None,
                 "clusters": [_cluster_summary(item) for item in available_clusters],
-                "selected_cluster_ids": [SYSTEM_CLUSTER_ID],
+                "selected_cluster_ids": (
+                    delegated_cluster_ids[:app_settings.adhoc_max_clusters_per_conversation]
+                    if delegated_connections else [SYSTEM_CLUSTER_ID]
+                ),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
-                "agent_mode": app_settings.agent_mode,
+                "agent_mode": turn_agent_mode,
+                "delegated_session_active": bool(delegated_connections),
+                "is_delegated_mode": bool(delegated_connections),
+                "can_ask": _can_ask(user),
                 "has_unverified_cluster_tls": False,
             },
         )
@@ -10457,6 +10927,28 @@ def create_app(
             conversation = db_session.get(AdHocConversation, conversation_id)
             if conversation is None or conversation.created_by != user.username:
                 raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            turn_agent_mode = (
+                "unrestricted"
+                if (
+                    conversation.execution_mode == "delegated_unrestricted"
+                    or (
+                        not app_settings.delegated_access_enabled
+                        and app_settings.agent_mode == "unrestricted"
+                    )
+                )
+                else "guarded"
+            )
+            delegated_session_active = False
+            if turn_agent_mode == "unrestricted":
+                current_session_id = _delegated_session_id(request)
+                connected_ids = {
+                    item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                        session_id=current_session_id, owner=user.username
+                    )
+                } if current_session_id == conversation.delegated_session_id else set()
+                delegated_session_active = set(
+                    json.loads(conversation.cluster_ids_json or "[]")
+                ).issubset(connected_ids)
             rows = list(db_session.scalars(
                 select(AdHocMessage).where(AdHocMessage.conversation_id == conversation_id)
                 .order_by(AdHocMessage.created_at.desc(), AdHocMessage.id.desc())
@@ -10542,7 +11034,7 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile, app_settings.agent_mode),
+                "model_ready": _profile_is_usable(profile, turn_agent_mode),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
                 "reasoning_efforts": reasoning_efforts,
@@ -10559,7 +11051,10 @@ def create_app(
                 "clusters": [_cluster_summary(item) for item in available_clusters],
                 "selected_cluster_ids": conversation_cluster_ids,
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
-                "agent_mode": app_settings.agent_mode,
+                "agent_mode": turn_agent_mode,
+                "delegated_session_active": delegated_session_active,
+                "is_delegated_mode": conversation.execution_mode == "delegated_unrestricted",
+                "can_ask": _can_ask(user),
                 "has_unverified_cluster_tls": any(
                     item.id in conversation_cluster_ids
                     and not item.is_system
@@ -10581,8 +11076,8 @@ def create_app(
         request: Request, user: AuthContext = Depends(current_user)
     ) -> RedirectResponse:
         _verify_csrf(request)
-        if user.role < Role.INVESTIGATOR:
-            raise HTTPException(status_code=403, detail="Ask PodPilot requires the Investigator role or higher.")
+        if not _can_ask(user):
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires an authorized role.")
         form = await _urlencoded(request)
         raw_message = form.get("message", "").strip()
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
@@ -10606,6 +11101,21 @@ def create_app(
                 detail=f"Select between 1 and {app_settings.adhoc_max_clusters_per_conversation} clusters.",
             )
         conversation_id = str(uuid4())
+        delegated_session_id: str | None = None
+        execution_mode = "managed_guarded"
+        if user.role == Role.DELEGATED_OPERATOR:
+            delegated_session_id = _delegated_session_id(request)
+            connected_ids = {
+                item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                    session_id=delegated_session_id, owner=user.username
+                )
+            } if delegated_session_id else set()
+            if not set(requested_cluster_ids).issubset(connected_ids):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Sign in to every selected cluster before starting this conversation.",
+                )
+            execution_mode = "delegated_unrestricted"
         with Session(request.app.state.engine) as db_session:
             profile = _active_profile(db_session)
             if "reasoning_effort" in form:
@@ -10626,6 +11136,8 @@ def create_app(
                 id=conversation_id, created_by=user.username,
                 title=message.replace("\n", " ")[:100], status="active", evidence_json="[]",
                 cluster_ids_json=json.dumps(requested_cluster_ids),
+                execution_mode=execution_mode,
+                delegated_session_id=delegated_session_id,
             )
             db_session.add(conversation)
             run_id = _queue_adhoc_run(
@@ -10644,8 +11156,8 @@ def create_app(
         conversation_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> RedirectResponse:
         _verify_csrf(request)
-        if user.role < Role.INVESTIGATOR:
-            raise HTTPException(status_code=403, detail="Ask PodPilot requires the Investigator role or higher.")
+        if not _can_ask(user):
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires an authorized role.")
         form = await _urlencoded(request)
         raw_message = form.get("message", "").strip()
         if not raw_message or len(raw_message) > app_settings.chat_max_chars:
@@ -10661,6 +11173,21 @@ def create_app(
                     status_code=404,
                     detail="That PodPilot conversation does not exist.",
                 )
+            if conversation.execution_mode == "delegated_unrestricted":
+                session_id = _delegated_session_id(request)
+                connected_ids = {
+                    item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                        session_id=session_id, owner=user.username
+                    )
+                } if session_id == conversation.delegated_session_id else set()
+                if not set(json.loads(conversation.cluster_ids_json or "[]")).issubset(connected_ids):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This conversation's delegated cluster session has ended. "
+                            "Sign in again and start a new conversation."
+                        ),
+                    )
             if "reasoning_effort" in form:
                 _save_reasoning_preference(
                     db_session,
@@ -10691,7 +11218,7 @@ def create_app(
         user: AuthContext = Depends(current_user),
     ) -> RedirectResponse:
         _verify_csrf(request)
-        if user.role < Role.INVESTIGATOR:
+        if not _can_ask(user):
             raise HTTPException(
                 status_code=403,
                 detail="Suggested checks require the Investigator role or higher.",
@@ -10710,6 +11237,18 @@ def create_app(
                     status_code=404,
                     detail="That suggested check does not exist.",
                 )
+            if conversation.execution_mode == "delegated_unrestricted":
+                session_id = _delegated_session_id(request)
+                connected_ids = {
+                    item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                        session_id=session_id, owner=user.username
+                    )
+                } if session_id == conversation.delegated_session_id else set()
+                if not set(json.loads(conversation.cluster_ids_json or "[]")).issubset(connected_ids):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This conversation's delegated cluster session has ended.",
+                    )
             activity = json.loads(message.tool_activity_json or "{}")
             actions = activity.get("suggested_followup_actions") or []
             action = next((
@@ -10948,6 +11487,10 @@ def create_app(
         name = redact_text(form.get("name", "").strip())[:253]
         api_url = _validated_cluster_api_url(form.get("api_url", ""))
         token = form.get("token", "").strip()
+        try:
+            custom_ca_pem = validate_custom_ca(form.get("custom_ca_pem", ""))
+        except DelegatedLoginError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         tags = _parse_tags(form.get("tags_json", "{}"), field_name="Cluster tags")
         tls_verify = form.get(
             "tls_verify",
@@ -10964,7 +11507,10 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Cluster entry not found.")
             if cluster is not None and cluster.is_system:
                 raise HTTPException(status_code=409, detail="The runtime system cluster cannot be modified here.")
-            if cluster is not None and not cluster.is_enabled and not token:
+            if (
+                cluster is not None and not cluster.is_enabled and not token
+                and not app_settings.delegated_access_enabled
+            ):
                 raise HTTPException(
                     status_code=422,
                     detail="A new bearer token is required when re-enabling a disabled cluster.",
@@ -10973,10 +11519,12 @@ def create_app(
             if duplicate is not None and (cluster is None or duplicate.id != cluster.id):
                 raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
             if cluster is None:
-                if not token:
+                if not token and not app_settings.delegated_access_enabled:
                     raise HTTPException(status_code=422, detail="A bearer token is required for a new cluster.")
                 cluster_id = str(uuid4())
-                credential_key = f"cluster_{cluster_id.replace('-', '')}"
+                credential_key = (
+                    f"cluster_{cluster_id.replace('-', '')}" if token else None
+                )
                 cluster = Cluster(
                     id=cluster_id,
                     name=name,
@@ -10984,6 +11532,7 @@ def create_app(
                     credential_key=credential_key,
                     tags_json=json.dumps(tags, sort_keys=True),
                     tls_verify=tls_verify,
+                    custom_ca_pem=custom_ca_pem,
                     is_enabled=True,
                     is_system=False,
                     status="not_tested",
@@ -11000,14 +11549,17 @@ def create_app(
                 cluster.api_url = api_url
                 cluster.tags_json = json.dumps(tags, sort_keys=True)
                 cluster.tls_verify = tls_verify
+                cluster.custom_ca_pem = custom_ca_pem
                 cluster.is_enabled = True
                 cluster.status = "not_tested"
                 cluster.last_error = None
                 cluster.updated_by = user.username
                 cluster.updated_at = now
                 action = "cluster.update"
-            assert credential_key
             if token:
+                if not credential_key:
+                    credential_key = f"cluster_{cluster.id.replace('-', '')}"
+                    cluster.credential_key = credential_key
                 try:
                     await run_in_threadpool(cluster_credentials.set, token, credential_key)
                 except CredentialStoreError as exc:
@@ -11028,6 +11580,7 @@ def create_app(
                     "name": name,
                     "tag_keys": sorted(tags),
                     "tls_verify": tls_verify,
+                    "custom_ca_configured": bool(custom_ca_pem),
                     "token_rotated": bool(token),
                 }, sort_keys=True),
             ))
@@ -11111,14 +11664,31 @@ def create_app(
         try:
             reader: ReadOnlyExplorer = cluster_reader
             if not is_system:
-                token = await run_in_threadpool(cluster_credentials.get, credential_key)
-                if not token:
+                token = (
+                    await run_in_threadpool(cluster_credentials.get, credential_key)
+                    if credential_key else None
+                )
+                if token:
+                    if cluster.custom_ca_pem:
+                        await run_in_threadpool(test_remote_cluster_token, cluster, token)
+                    else:
+                        reader = remote_cluster_reader(cluster, token)
+                        await run_in_threadpool(reader.resource_catalog, query="namespaces", limit=1)
+                elif app_settings.delegated_access_enabled:
+                    await run_in_threadpool(
+                        OpenShiftDelegatedLoginClient(
+                            api_url=cluster.api_url,
+                            custom_ca_pem=cluster.custom_ca_pem,
+                            timeout_seconds=app_settings.delegated_login_timeout_seconds,
+                        ).probe
+                    )
+                else:
                     raise ReadOnlyExplorerError("The cluster token is unavailable.")
-                reader = remote_cluster_reader(cluster, token)
-            await run_in_threadpool(reader.resource_catalog, query="namespaces", limit=1)
+            else:
+                await run_in_threadpool(reader.resource_catalog, query="namespaces", limit=1)
         except Exception as exc:
             status_value = "unavailable"
-            if isinstance(exc, (ReadOnlyExplorerError, CredentialStoreError)):
+            if isinstance(exc, (ReadOnlyExplorerError, CredentialStoreError, DelegatedLoginError)):
                 error_detail = redact_text(str(exc))[:500] or type(exc).__name__
             else:
                 error_detail = (
@@ -11153,7 +11723,11 @@ def create_app(
             db_session.commit()
         return JSONResponse({
             "status": status_value,
-            "detail": error_detail or "Authenticated Kubernetes API discovery succeeded.",
+            "detail": error_detail or (
+                "Authenticated Kubernetes API discovery succeeded."
+                if is_system or credential_key else
+                "TLS and OpenShift OAuth discovery succeeded; no user credentials were requested."
+            ),
         })
 
     @app.post("/api/v1/clusters/{cluster_id}/disable")
@@ -11187,6 +11761,10 @@ def create_app(
                 details_json=json.dumps({"cluster_id": cluster_id}, sort_keys=True),
             ))
             db_session.commit()
+        await _revoke_delegated_connections(
+            request.app,
+            request.app.state.delegated_vault.pop_cluster(cluster_id),
+        )
         return JSONResponse({"status": "disabled", "cluster_id": cluster_id})
 
     @app.get("/settings/model", response_class=HTMLResponse)

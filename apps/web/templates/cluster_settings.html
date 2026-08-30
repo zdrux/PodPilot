@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Cluster management · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Manage</p><h1>Clusters</h1><p class="subtitle">Manage the OpenShift API connections available to Ask PodPilot. Tokens are stored only in the dedicated credential Secret.</p></div><div class="topbar-actions"><a class="button primary" href="/settings/clusters">Add cluster</a></div></header>
+<header class="topbar"><div><p class="eyebrow">Manage</p><h1>Clusters</h1><p class="subtitle">Manage the OpenShift API connections available to Ask PodPilot. Shared tokens use the credential Secret; delegated user tokens remain only in API memory.</p></div><div class="topbar-actions"><a class="button primary" href="/settings/clusters">Add cluster</a></div></header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>TLS verification exceptions carry credentials</strong><p>Disabling verification sends the cluster bearer token and receives evidence without authenticating the API server. Use only for explicitly accepted internal environments.</p></div></section>
 <div class="settings-grid cluster-settings-grid">
   <aside class="panel side-list-panel">
@@ -36,7 +36,11 @@
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>
       <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
-      <label>Bearer token<input name="token" type="password" autocomplete="new-password" placeholder="{% if selected %}Leave blank to keep the current token{% else %}sha256~…{% endif %}"><small>The token is sent once to the credential Secret and is never returned.</small></label>
+      <label>Shared bearer token <span class="muted-copy">(optional for delegated clusters)</span><input name="token" type="password" autocomplete="new-password" placeholder="{% if selected %}Leave blank to keep the current token{% else %}sha256~…{% endif %}"><small>Shared managed sessions use this token. Delegated users authenticate with their own credentials instead.</small></label>
+      <label>Custom Kubernetes API CA bundle
+        <textarea name="custom_ca_pem" rows="8" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----">{{ selected.custom_ca_pem if selected else '' }}</textarea>
+        <small>Optional PEM certificate bundle appended to system trust for OAuth login, identity verification, API proxying, and connection tests. Private keys are rejected.</small>
+      </label>
       <label>Tags
         <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson if selected else '{}' }}'>
           <div class="tag-chip-list" data-tag-list aria-live="polite"></div>

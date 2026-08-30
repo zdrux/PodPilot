@@ -152,7 +152,14 @@ provider timeout and transient retry count (default three); the SDK retries time
 connection failures, rate limits, and transient server responses while the durable Ask deadline
 remains the outer bound.
 
-The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
+In delegated mode the sidecar has no projected service-account credential. FastAPI passes it only
+a random, cluster-specific loopback proxy capability; the proxy injects the user-owned in-memory
+OAuth token for each Kubernetes request and applies the registered cluster's system-plus-custom-CA
+trust. Conversation rows retain only the execution mode, owning PodPilot session ID, and immutable
+cluster IDs—never the token. The sidecar can therefore issue CREATE, PATCH, APPLY, and DELETE
+requests when the remote user's RBAC permits them, without receiving the bearer token itself.
+
+In the legacy feature-flag-off lab mode, the sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
 separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
 the standard remote identity and grants no additional RBAC. Consequently the model may ask for
@@ -166,7 +173,8 @@ third. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
 `127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
 highest matching elevated role from deployment-configured OpenShift Group lists
-or defaults the authenticated user to Viewer, renders the dashboard,
+or, when delegated access is enabled, defaults an otherwise unmatched authenticated user to
+Delegated Operator (Viewer when disabled), renders the dashboard,
 and persists schema state in SQLite on the `podpilot-data` PVC. An init container
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.

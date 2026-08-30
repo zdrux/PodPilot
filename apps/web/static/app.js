@@ -554,6 +554,34 @@
     });
     updatePicker();
   }
+  const delegatedConnectForm = document.querySelector("[data-delegated-connect-form]");
+  if (delegatedConnectForm?.dataset.connectUrl) {
+    delegatedConnectForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const submit = delegatedConnectForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Connecting…"; }
+      try {
+        const response = await fetch(delegatedConnectForm.dataset.connectUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
+          credentials: "same-origin",
+          body: new URLSearchParams(new FormData(delegatedConnectForm)),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "PodPilot could not connect the selected clusters.");
+        const failed = Array.isArray(payload.failed) ? payload.failed.length : 0;
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: failed ? "warning" : "success",
+          message: failed ? `${payload.connected.length} cluster(s) connected; ${failed} failed.` : `${payload.connected.length} cluster(s) connected.`,
+        }));
+        window.location.assign("/ask");
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        if (submit) { submit.disabled = false; submit.textContent = "Connect selected clusters"; }
+      }
+    });
+  }
   const appendOptimisticTurn = (question) => {
     const panel = document.querySelector(".ask-panel");
     if (!panel) return null;

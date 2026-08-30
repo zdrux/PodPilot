@@ -25,11 +25,13 @@ if ($LASTEXITCODE -ne 0 -or $canRead.Trim() -ne 'yes') {
 $canMutate = oc auth can-i patch deployments.apps --all-namespaces --as=$runtimeIdentity
 $canMutateResult = $canMutate.Trim()
 # `oc auth can-i` deliberately exits 1 when authorization is denied. Treat the
-# explicit `no` response as the successful least-privilege outcome.
-if ($canMutateResult -notin @('yes', 'no')) {
+# explicit `no` response as the successful least-privilege outcome. OpenShift
+# may append reconciliation diagnostics for referenced roles that are not installed.
+$canMutateDecision = ($canMutateResult -split '\s+', 2)[0]
+if ($canMutateDecision -notin @('yes', 'no')) {
     throw 'Unable to verify mutation access for the PodPilot runtime identity.'
 }
-if ($canMutateResult -eq 'yes') {
+if ($canMutateDecision -eq 'yes') {
     throw 'Refusing the agentic lab deployment because podpilot-investigator can patch Deployments.'
 }
 

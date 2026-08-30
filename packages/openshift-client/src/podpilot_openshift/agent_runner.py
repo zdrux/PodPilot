@@ -17,17 +17,22 @@ class AgentClusterConnection:
     cluster_id: str
     cluster_name: str
     api_url: str
-    token: str = field(repr=False)
     tls_verify: bool
+    token: str | None = field(default=None, repr=False)
+    proxy_url: str | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.cluster_id,
             "name": self.cluster_name,
-            "api_url": self.api_url,
-            "token": self.token,
             "tls_verify": self.tls_verify,
         }
+        if self.proxy_url:
+            payload["proxy_url"] = self.proxy_url
+        else:
+            payload["api_url"] = self.api_url
+            payload["token"] = self.token or ""
+        return payload
 
 
 @dataclass(frozen=True)

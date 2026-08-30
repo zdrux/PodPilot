@@ -266,8 +266,9 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
     assert kustomization["components"] == ["../../components/agentic-runner"]
     assert runtime["data"] == {
         "agent_mode": "unrestricted",
+        "delegated_access_enabled": "true",
         "adhoc_run_timeout_seconds": "900",
-        "remote_cluster_tls_verify": "false",
+        "remote_cluster_tls_verify": "true",
     }
     assert image_stream["metadata"]["name"] == "podpilot-oc-runner"
     runner = runner_patch["spec"]["template"]["spec"]["containers"][0]

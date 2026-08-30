@@ -1,16 +1,19 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.12.0 from feature branch `codex/unrestricted-agentic-mode` is deployed on the
-disposable SNO lab at schema head `0013_raw_model_responses`. The lab deployment has
-unrestricted agent mode enabled with OpenRouter Chat Completions, exact model
-`openai/gpt-oss-120b`, and the localhost `oc-runner` sidecar. It also adds Ask-only
+PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
+disposable SNO lab at schema head `0020_delegated_sessions`. The 2026-08-30 rollout uses
+application image digest `sha256:1bf9a751e24d0c6d2d3d83b48f1e5c8a84ae4275bfd0ad3981124e7ec9fcc4e7`
+and runner digest `sha256:f144e58f0cc8b26acfa89a31c8353970d58473df5a165f2231e339963ad6040a`.
+The lab has delegated access enabled, a two-hour in-memory session bound, verified remote TLS,
+OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
+`oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
 management, immutable one-to-ten-cluster conversation selections, cluster-attributed
 evidence, and curated-memory prompt integration governed by explicit cluster targets,
@@ -24,6 +27,15 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- Branch `codex/delegated-unrestricted-sessions` adds explicit Delegated Operator sessions for users
+  outside every configured PodPilot role group. Approvers register DEV cluster API origins and
+  optional custom CA bundles; users multi-select clusters, complete one-time username/password
+  challenge logins, and receive two-hour memory-only delegated sessions. New conversations lock
+  their cluster set and execution mode. Unrestricted `oc` requests traverse a random loopback API
+  capability whose broker injects the user's token; the runner receives neither that token nor the
+  Pod service-account token. Logout, expiry, replacement, disable, and graceful shutdown attempt
+  OAuth revocation. Managed role sessions remain guarded and use the read-only broker.
 
 - The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
   `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and

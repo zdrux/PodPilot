@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-30
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -52,8 +52,51 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
+### Delegated unrestricted sessions
+
+When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
+configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
+Operator application role. This is not inferred inside a conversation. The user must select only
+Approver-registered, enabled remote clusters, enter one username/password pair, and accept the
+unrestricted-agent warning. PodPilot performs the OpenShift challenging-client OAuth exchange,
+validates `/users/~`, and immediately discards the password.
+The API sends Basic credentials only after a Basic challenge from the exact HTTPS origin advertised
+by that cluster's verified OAuth discovery document and refuses later cross-origin redirects.
+Because all selected DEV clusters receive the same credentials, Approvers and users must trust every
+selected cluster registration and its CA; a malicious but trusted API registration can advertise a
+credential-capturing OAuth endpoint.
+
+The returned OAuth token is retained only in API-process memory, keyed by a random HttpOnly
+PodPilot session cookie, the authenticated PodPilot username, and the registered cluster ID. It is
+never persisted in SQLite, a Kubernetes Secret, browser storage, a model prompt, a shell command,
+or runner JSON. The API gives `oc-runner` a random loopback capability URL; the API proxy resolves
+that capability and injects the bearer token on each Kubernetes request. The runner container has
+no projected Pod service-account token. Kubernetes/OpenShift RBAC, admission, quotas, and policy
+therefore evaluate writes as the signed-in remote user.
+
+Delegated conversations persist `delegated_unrestricted` plus the originating session ID and an
+immutable cluster list. They cannot be continued after that exact in-memory session expires, is
+lost, or signs out; the user must reconnect and start a new conversation. Investigator, Approver,
+and Breakglass sessions remain `managed_guarded` even if their separate OpenShift account has
+cluster-admin rights. The API service account retains its read roles for guarded collection and
+group resolution, but its projected credential is mounted only into the API and OAuth-proxy
+containers—not the unrestricted runner.
+
+PodPilot removes delegated tokens after two hours by default and attempts remote OAuth token
+revocation on expiry, replacement, cluster disable, logout, and graceful shutdown. The remote
+cluster's standard OAuth token TTL remains authoritative (normally 24 hours). Because no token is
+persisted, an API-process or node crash destroys PodPilot's only copy before it can revoke it; the
+remote token can then remain valid until the cluster TTL or administrator revocation. This is an
+explicit availability-versus-recoverability consequence of memory-only storage.
+
+Each registered remote cluster may carry an Approver-managed PEM CA bundle (maximum 64 KiB;
+private keys rejected). PodPilot appends it to system trust for OAuth discovery/login, identity
+validation, delegated API proxying, revocation, and tokenless connection tests. TLS verification
+remains enabled; a custom CA is not an insecure-mode fallback.
+
 ### Explicit unrestricted agent exception
 
+This legacy feature-flag-off path remains for the disposable lab and existing compatibility tests.
 `deploy/openshift/overlays/sno-milestone-one/` and the optional
 `deploy/openshift/overlays/remote-poc-agentic/` deliberately enable
 `PODPILOT_AGENT_MODE=unrestricted` and add a localhost-only `oc-runner` sidecar. In this mode a

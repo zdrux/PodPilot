@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     )
     role_approver_groups: list[str] = Field(default_factory=lambda: ["podpilot-approvers"])
     role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
+    delegated_access_enabled: bool = False
+    delegated_session_lifetime_seconds: int = Field(default=7200, ge=300, le=86_400)
+    delegated_login_timeout_seconds: float = Field(default=15.0, ge=3.0, le=60.0)
+    delegated_login_attempts_per_minute: int = Field(default=5, ge=1, le=30)
+    delegated_proxy_timeout_seconds: float = Field(default=310.0, ge=5.0, le=900.0)
     alertmanager_url: str = "https://alertmanager-main.openshift-monitoring.svc:9094"
     service_account_token_path: Path = Path(
         "/var/run/secrets/kubernetes.io/serviceaccount/token"

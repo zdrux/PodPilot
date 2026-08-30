@@ -17,6 +17,7 @@ USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,252}$")
 
 class Role(IntEnum):
     VIEWER = 10
+    DELEGATED_OPERATOR = 15
     INVESTIGATOR = 20
     APPROVER = 30
     BREAKGLASS = 40

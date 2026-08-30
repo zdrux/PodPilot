@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Connect clusters · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Delegated operator</p><h1>Connect development clusters</h1><p class="subtitle">PodPilot will authenticate once to each selected cluster and keep the resulting user token only in API process memory for this PodPilot login session.</p></div></header>
+<section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Unrestricted delegated agent</strong><p>The agent may perform any Kubernetes or OpenShift operation allowed to your remote account. PodPilot sends the supplied credentials to the OAuth endpoint advertised by each admin-registered cluster, and commands and cluster output can be sent to the configured model provider. Tokens expire from PodPilot after {{ session_hours }} hours and are revoked when you sign out.</p></div></section>
+<section class="panel settings-panel delegated-connect-panel">
+  <div class="panel-header"><div><p class="eyebrow">Approved registry</p><h2>Select clusters</h2></div><span class="tag">{{ clusters | length }} available</span></div>
+  {% if connections %}
+  <div class="connected-cluster-list">
+    {% for connection in connections %}<span class="boundary-pill"><strong>{{ connection.cluster_name }}</strong> as {{ connection.remote_username }} · until {{ connection.expires_at | est_time('%H:%M') }}</span>{% endfor %}
+  </div>
+  {% endif %}
+  <form class="settings-form" data-delegated-connect-form data-connect-url="/api/v1/delegated-sessions/connect">
+    <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" open>
+      <summary><span class="cluster-picker-selection" data-cluster-picker-label><span class="cluster-picker-placeholder">Select clusters</span></span><small data-cluster-picker-count></small></summary>
+      <div class="cluster-picker-menu">
+        <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search>
+        <div class="cluster-options">
+        {% for cluster in clusters %}
+          <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
+            <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox {% if cluster.id in connected_cluster_ids %}checked{% endif %}>
+            <span><strong>{{ cluster.name }}</strong><small>{{ cluster.api_url }}{% if cluster.has_custom_ca %} · custom CA{% endif %}</small></span>
+          </label>
+        {% endfor %}
+        </div>
+      </div>
+    </details>
+    <input type="hidden" name="cluster_ids" data-cluster-ids value="[]">
+    <label>Remote username<input name="username" autocomplete="username" required maxlength="253"></label>
+    <label>Remote password<input name="password" type="password" autocomplete="current-password" required maxlength="4096"><small>The password is used only for these login exchanges and is not stored.</small></label>
+    <label class="checkbox-field"><input type="checkbox" name="consent" required><span>I trust the selected cluster registrations and understand this unrestricted agent acts with my remote Kubernetes permissions.</span></label>
+    <div class="form-actions"><button class="button primary" type="submit">Connect selected clusters</button>{% if connections %}<a class="button secondary" href="/ask">Continue to Ask PodPilot</a>{% endif %}</div>
+  </form>
+</section>
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+{% endblock %}

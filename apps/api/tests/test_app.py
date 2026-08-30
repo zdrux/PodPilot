@@ -11672,6 +11672,94 @@ def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:
         assert denied.status_code == 403
 
 
+def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from podpilot_openshift.delegated import DelegatedIdentity
+
+    class LoginClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+        def login(self, username: str, password: str) -> DelegatedIdentity:
+            assert username == "dev-user"
+            assert password == "one-time-password"
+            assert self.kwargs["custom_ca_pem"] is None
+            return DelegatedIdentity(
+                username="dev-user", uid="remote-uid", token="sha256~delegated-token"
+            )
+
+        def revoke(self, _token: str) -> bool:
+            return True
+
+    monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", LoginClient)
+    app, settings = make_app(
+        tmp_path,
+        assignments={"dana": Role.DELEGATED_OPERATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    cluster_id = "50000000-0000-0000-0000-000000000001"
+    engine = build_engine(settings)
+    with TestClient(app) as client:
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            db_session.add(Cluster(
+                id=cluster_id,
+                name="East DEV",
+                api_url="https://api.east-dev.example:6443",
+                credential_key=None,
+                tags_json='{"environment":"dev"}',
+                tls_verify=True,
+                is_enabled=True,
+                is_system=False,
+                status="ready",
+                created_by="ada",
+                updated_by="ada",
+                created_at=now,
+                updated_at=now,
+            ))
+            db_session.commit()
+
+        redirected = client.get(
+            "/ask", headers={"x-forwarded-user": "dana"}, follow_redirects=False
+        )
+        assert redirected.status_code == 303
+        assert redirected.headers["location"] == "/delegated/connect"
+        page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        connected = client.post(
+            "/api/v1/delegated-sessions/connect",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "cluster_ids": json.dumps([cluster_id]),
+                "username": "dev-user",
+                "password": "one-time-password",
+                "consent": "on",
+            },
+        )
+        assert connected.status_code == 200
+        assert "podpilot_delegated_session" in connected.headers["set-cookie"]
+        ask_page = client.get("/ask", headers={"x-forwarded-user": "dana"})
+        assert "Delegated unrestricted mode" in ask_page.text
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "List projects", "cluster_ids": json.dumps([cluster_id])},
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        with Session(engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            assert conversation.execution_mode == "delegated_unrestricted"
+            assert conversation.delegated_session_id
+            assert json.loads(conversation.cluster_ids_json) == [cluster_id]
+    engine.dispose()
+
+
 def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,

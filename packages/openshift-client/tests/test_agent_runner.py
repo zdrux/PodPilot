@@ -88,6 +88,37 @@ def test_agent_runner_client_brokers_one_remote_cluster_credential(monkeypatch) 
     }
 
 
+def test_agent_runner_client_sends_capability_without_delegated_token(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, timeout):
+        captured["payload"] = json
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"exit_code": 0, "stdout": "ok\n", "stderr": ""},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    connection = AgentClusterConnection(
+        cluster_id="cluster-east",
+        cluster_name="East DEV",
+        api_url="https://api.east.example:6443",
+        tls_verify=True,
+        proxy_url=(
+            "http://127.0.0.1:8080/internal/delegated-proxy/"
+            "opaque-capability"
+        ),
+    )
+
+    OcAgentRunnerClient("http://127.0.0.1:8090").execute("oc apply -f object.yaml", connection)
+
+    serialized = json.dumps(captured["payload"])
+    assert "token" not in serialized
+    assert "api.east.example" not in serialized
+    assert "opaque-capability" in serialized
+
+
 def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch) -> None:
     def fake_post(url, *, json, timeout):
         request = httpx.Request("POST", url)
@@ -161,6 +192,25 @@ def test_remote_runner_rejects_plain_http_cluster() -> None:
             "token": "sensitive-token",
             "tls_verify": False,
         })
+
+
+def test_remote_runner_builds_tokenless_delegated_proxy_kubeconfig() -> None:
+    runner = _runner_module()
+    path, _, _, _ = runner._remote_kubeconfig({
+        "id": "cluster-east",
+        "name": "East DEV",
+        "proxy_url": (
+            "http://127.0.0.1:8080/internal/delegated-proxy/opaque-capability"
+        ),
+        "tls_verify": True,
+    })
+    try:
+        payload = json.loads(path.read_text())
+        assert payload["clusters"][0]["cluster"]["server"].endswith("opaque-capability")
+        assert payload["users"][0]["user"] == {}
+        assert "token" not in path.read_text()
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def test_runner_polls_silently_and_terminates_timed_out_process_group(monkeypatch) -> None:

@@ -45,6 +45,7 @@ class OpenShiftGroupRoleResolver:
         cls,
         cache_seconds: int = 30,
         role_groups: RoleGroups = DEFAULT_ROLE_GROUPS,
+        default_role: Role | None = Role.VIEWER,
     ) -> "OpenShiftGroupRoleResolver":
         try:
             config.load_incluster_config()
@@ -55,6 +56,7 @@ class OpenShiftGroupRoleResolver:
             DynamicGroupReader(DynamicClient(api_client)),
             cache_seconds=cache_seconds,
             role_groups=role_groups,
+            default_role=default_role,
         )
 
     def resolve(self, username: str) -> Role | None:
@@ -82,6 +84,7 @@ class OpenShiftGroupRoleResolver:
 class LazyOpenShiftGroupRoleResolver:
     cache_seconds: int = 30
     role_groups: RoleGroups = DEFAULT_ROLE_GROUPS
+    default_role: Role | None = Role.VIEWER
     _resolver: OpenShiftGroupRoleResolver | None = None
 
     def resolve(self, username: str) -> Role | None:
@@ -89,5 +92,6 @@ class LazyOpenShiftGroupRoleResolver:
             self._resolver = OpenShiftGroupRoleResolver.from_environment(
                 cache_seconds=self.cache_seconds,
                 role_groups=self.role_groups,
+                default_role=self.default_role,
             )
         return self._resolver.resolve(username)

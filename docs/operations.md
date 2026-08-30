@@ -153,6 +153,21 @@ provider and credentials are healthy.
 
 ## Environment Variables
 
+- `PODPILOT_DELEGATED_ACCESS_ENABLED`, default `false`; when enabled, authenticated users who match
+  none of the configured elevated PodPilot groups receive the Delegated Operator flow. The checked-in
+  agentic overlays enable it because they also deploy the required runner; the portable base remains off.
+- `PODPILOT_DELEGATED_SESSION_LIFETIME_SECONDS`, default `7200`; bounds API-memory retention and the
+  HttpOnly delegated-session cookie. It does not change the remote OpenShift OAuth token TTL.
+- `PODPILOT_DELEGATED_LOGIN_TIMEOUT_SECONDS`, default `15`; bounds OAuth discovery, login, identity,
+  and revocation calls.
+- `PODPILOT_DELEGATED_LOGIN_ATTEMPTS_PER_MINUTE`, default `5`; process-local per-PodPilot-user
+  throttling for multi-cluster credential submissions.
+- `PODPILOT_DELEGATED_PROXY_TIMEOUT_SECONDS`, default `310`; bounds one brokered Kubernetes API
+  request from the runner.
+- Approvers paste a remote cluster's PEM trust bundle into **Manage → Clusters → Custom Kubernetes
+  API CA bundle**. Save and run **Test connection**; a tokenless delegated cluster reports successful
+  TLS and OAuth discovery without asking for a user's credentials.
+
 - `PODPILOT_AGENT_MODE`, default `guarded`; `unrestricted` selects the lab-only Chat Completions
   shell-tool loop and must be paired with the SNO runner sidecar.
 - `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.

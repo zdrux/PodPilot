@@ -1196,3 +1196,22 @@ returning success, failure, completeness, or a preferred presentation. Tests mus
 decision when they expect a read and must assert that server-side recovery does not occur after an
 agent stop. Historical decisions describing terminal registered enrichments or automatic
 continuations are superseded by this decision.
+
+## 2026-08-30 - Unmatched users use explicit delegated, unrestricted sessions
+
+Context: PodPilot role groups are an application policy boundary, not a faithful representation of
+each user's Kubernetes permissions. Some DEV operators need the agent to exercise exactly their own
+remote RBAC, including writes, without changing the remote clusters or persisting their credentials.
+
+Decision: When delegated access is enabled, users in no configured PodPilot role group become
+Delegated Operators. They explicitly select only Approver-registered clusters, accept an
+unrestricted warning, and complete an OpenShift challenging-client login with one credential pair.
+Passwords are discarded after exchange. Tokens stay in API memory for two hours and are injected by
+a capability-based loopback proxy; they are never given to the model or runner. The runner receives
+no Pod service-account token. Conversations lock their delegated session, execution mode, owner, and
+cluster set. Per-cluster custom CA bundles extend system trust without disabling TLS verification.
+
+Consequences: Remote RBAC and admission are the write boundary for delegated agents. Membership in
+Investigator, Approver, or Breakglass deliberately selects the managed guarded path even when that
+person is cluster-admin elsewhere. Normal expiry/logout attempts token revocation; process loss
+cannot revoke a memory-only token, so the cluster's standard OAuth TTL remains the residual bound.

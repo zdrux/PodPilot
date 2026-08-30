@@ -7,4 +7,5 @@ data:
   environment: sno-lab
   cluster_name: sno.192-168-0-200.sslip.io
   agent_mode: unrestricted
+  delegated_access_enabled: "true"
   adhoc_run_timeout_seconds: "900"
