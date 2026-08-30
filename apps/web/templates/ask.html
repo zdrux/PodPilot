@@ -7,27 +7,11 @@
     <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
-        {% if agent_mode == 'unrestricted' %}
-        <span class="boundary-pill agent-mode-pill" tabindex="0"
-          data-tooltip="The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account."
-          aria-label="Unrestricted agent lab mode. The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.">
+        <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
+          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
+          aria-label="Session cautions. {% if agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary Linux shell and oc commands without PodPilot approval; OpenShift RBAC still applies. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
           <span class="boundary-pill-icon" aria-hidden="true">!</span>
-          <span>Unrestricted lab mode</span>
-        </span>
-        {% endif %}
-        {% if has_unverified_cluster_tls %}
-        <span class="boundary-pill" tabindex="0"
-          data-tooltip="One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details."
-          aria-label="Cluster TLS exception. One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.">
-          <span class="boundary-pill-icon" aria-hidden="true">!</span>
-          <span>Cluster TLS exception</span>
-        </span>
-        {% endif %}
-        <span class="boundary-pill" tabindex="0"
-          data-tooltip="Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
-          aria-label="Cluster selection locked. Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}">
-          <span class="boundary-pill-icon" aria-hidden="true">i</span>
-          <span>Cluster selection locked</span>
+          <span>Session cautions</span>
         </span>
         {% if evidence_by_id %}
         <button class="evidence-toggle" type="button" data-evidence-open

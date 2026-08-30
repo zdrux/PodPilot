@@ -1200,6 +1200,12 @@ server-generated Markdown table containing every collected name. If the table
 states that the object list is incomplete, increase the ceiling deliberately
 rather than removing the bound.
 
+Detailed object projections have a separate byte ceiling. Configure it with
+`PODPILOT_ADHOC_MAX_PAYLOAD_BYTES`, or edit `data.adhoc_max_payload_bytes` in
+`podpilot-runtime`. The shipped OpenShift value is 96,000 bytes and applies to both runtime and
+registered remote cluster readers. Increasing this value does not increase the number of objects
+collected or scanned; it allows more of their bounded projections to remain in evidence.
+
 The inventory ceiling applies only to explicit inventory requests. A diagnostic
 catalog LIST retains its small requested sample and is never promoted to 500 merely
 because its limit equals the schema default. A failure question containing an exact

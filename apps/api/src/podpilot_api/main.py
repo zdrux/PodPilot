@@ -8219,6 +8219,7 @@ def create_app(
         monitoring_max_series=app_settings.thanos_max_series,
     )
     cluster_reader = read_explorer or KubernetesReadOnlyExplorer(
+        max_payload_bytes=app_settings.adhoc_max_payload_bytes,
         log_tail_lines=app_settings.workload_log_tail_lines,
         max_log_bytes=app_settings.workload_max_log_bytes,
         max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
@@ -8285,6 +8286,7 @@ def create_app(
             api_url=cluster.api_url,
             token=token,
             tls_verify=tls_verify,
+            max_payload_bytes=app_settings.adhoc_max_payload_bytes,
             log_tail_lines=app_settings.workload_log_tail_lines,
             max_log_bytes=app_settings.workload_max_log_bytes,
             max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,

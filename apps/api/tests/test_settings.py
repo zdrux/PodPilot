@@ -54,6 +54,18 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
         Settings(adhoc_inventory_max_objects=1001)
 
 
+def test_evidence_payload_ceiling_is_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_MAX_PAYLOAD_BYTES", "96000")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_max_payload_bytes == 96_000
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_payload_bytes=16_383)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_payload_bytes=1_048_577)
+
+
 def test_resource_search_scan_ceiling_is_configurable(monkeypatch) -> None:
     monkeypatch.setenv("PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS", "3000")
 

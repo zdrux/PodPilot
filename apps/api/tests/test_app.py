@@ -7755,7 +7755,7 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         assert '<section class="notice"' not in page.text
         assert "Read-only cluster assistant" not in page.text
         assert 'class="panel-header ask-session-header"' in page.text
-        assert 'class="boundary-pill"' in page.text
+        assert 'class="boundary-pill caution-summary"' in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         created = client.post(
             "/api/v1/adhoc-conversations",
@@ -7767,7 +7767,9 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "selector does not match" in rendered.text
         assert "Evidence used in this answer" in rendered.text
-        assert rendered.text.index('class="boundary-pill"') < rendered.text.index("data-evidence-open")
+        assert rendered.text.index('class="boundary-pill caution-summary"') < rendered.text.index(
+            "data-evidence-open"
+        )
         assert "Inspected 1 cluster target" not in rendered.text
         assert "cluster-pod-1" in rendered.text
         assert '<details class="raw-model-response">' not in rendered.text
@@ -7891,7 +7893,8 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert 'class="boundary-pill agent-mode-pill"' in page.text
+        assert 'class="boundary-pill caution-summary agent-mode-pill"' in page.text
+        assert "Session cautions" in page.text
         assert "Unrestricted lab mode" in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
@@ -9012,7 +9015,10 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
         assignments={"ada": Role.APPROVER},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
-        settings_overrides={"adhoc_metrics_max_response_bytes": 2_097_152},
+        settings_overrides={
+            "adhoc_max_payload_bytes": 96_000,
+            "adhoc_metrics_max_response_bytes": 2_097_152,
+        },
     )
 
     with TestClient(app) as client:
@@ -9038,6 +9044,7 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
 
     assert tested.status_code == 200
     assert isinstance(captured["metric_reader"], BoundedMetricTrendReader)
+    assert captured["max_payload_bytes"] == 96_000
     assert captured["metric_reader"]._source._max_response_bytes == 2_097_152
     assert captured["api_url"] == "https://api.remote.example:6443"
     assert captured["token"] == "sha256~remote-monitoring-token"
@@ -11859,8 +11866,14 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
     assert "appendOptimisticTurn" in script
-    assert 'class="boundary-pill agent-mode-pill"' in template
+    assert 'class="boundary-pill caution-summary' in template
+    assert template.count('class="boundary-pill ') == 1
+    assert "Session cautions" in template
     assert ".agent-mode-pill" in styles
+    assert ".caution-summary::after" in styles
+    assert ".ask-page .ask-session-header" in styles
+    assert "padding-inline: 20px" in styles
+    assert ".answer-table-result { margin: 10px 0 14px; }" in styles
     assert "new URLSearchParams(new FormData(adhocForm))" in script
     assert 'requestBody.set("message", question)' in script
     assert "rawResponseToggle.disabled = true" in script

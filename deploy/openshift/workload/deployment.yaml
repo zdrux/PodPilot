@@ -47,6 +47,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_inventory_max_objects
+            - name: PODPILOT_ADHOC_MAX_PAYLOAD_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_max_payload_bytes
             - name: PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS
               valueFrom:
                 configMapKeyRef:
