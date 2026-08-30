@@ -33,6 +33,7 @@ from podpilot_api.main import (
     _current_reads_are_metric_rankings,
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
+    _deterministic_configuration_comparison_answer,
     _deterministic_audit_answer,
     _deterministic_access_review_answer,
     _deterministic_inventory_answer,
@@ -69,6 +70,8 @@ from podpilot_api.main import (
     _recent_object_references,
     _resource_list_presentation,
     _resource_analysis_coverage,
+    _resource_configuration_comparisons,
+    _configuration_comparison_answer_issue,
     _inquiry_reference_cluster_ids,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
@@ -210,6 +213,144 @@ def test_collection_analysis_does_not_sample_large_inventory() -> None:
         "so PodPilot performed no blanket GET fan-out; narrow the scope or apply a filter "
         "for configuration-level analysis."
     ]
+
+
+def test_configuration_collection_uses_internal_list_then_exact_get_when_list_tool_disabled() -> None:
+    class Provider:
+        def plan_ad_hoc(self, *_args, **_kwargs):
+            return _agent_accepts_seeded_evidence(*_args, **_kwargs)
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls: list[ReadIntent] = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "clusterlogforwarders.observability.openshift.io",
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder",
+                "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent: ReadIntent) -> ReadResult:
+            self.calls.append(intent)
+            if intent.tool == "list_resources":
+                return ReadResult((AdHocObservation(
+                    id="clf-list", tool="list_resources",
+                    summary="Listed ClusterLogForwarders.", source="cluster-api",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "apiVersion": "observability.openshift.io/v1",
+                        "kind": "ClusterLogForwarder",
+                        "resource": "clusterlogforwarders.observability.openshift.io",
+                        "scope": "cluster",
+                        "count": 1,
+                        "objectListComplete": True,
+                        "objects": [{
+                            "namespace": "openshift-logging", "name": "instance",
+                        }],
+                    },
+                ),))
+            assert intent.tool == "get_resource"
+            return ReadResult((AdHocObservation(
+                id="clf-detail", tool="get_resource",
+                summary="Read ClusterLogForwarder openshift-logging/instance.",
+                source="cluster-api", collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "observability.openshift.io/v1",
+                    "kind": "ClusterLogForwarder",
+                    "metadata": {"namespace": "openshift-logging", "name": "instance"},
+                    "spec": {"pipelines": [{"name": "application", "outputRefs": ["default"]}]},
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[], adhoc_list_tool_enabled=False,
+        ),
+        actor="ivy", workflow_id="compare-clf",
+        question="Compare the ClusterLogForwarder configuration.",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            capability="resource_inventory", mode="inventory", operation="inventory",
+            cardinality="collection", answer_goal="configuration",
+            resource_query="ClusterLogForwarder", needs_object_details=True,
+            evidence_goal="Compare every ClusterLogForwarder specification.",
+        ),
+    ))
+
+    assert [intent.tool for intent in explorer.calls] == [
+        "list_resources", "get_resource",
+    ]
+    assert {item["id"] for item in result.evidence} == {"clf-list", "clf-detail"}
+
+
+def test_exact_cluster_configuration_comparison_detects_structural_differences() -> None:
+    evidence = [
+        {
+            "id": "central-detail", "cluster_id": "central",
+            "cluster_name": "Simplii Central DEV", "tool": "get_resource",
+            "data": {
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder",
+                "metadata": {"namespace": "openshift-logging", "name": "instance"},
+                "spec": {
+                    "outputs": [{"name": "default", "type": "lokistack"}],
+                    "pipelines": [{"name": "application", "outputRefs": ["default"]}],
+                },
+            },
+        },
+        {
+            "id": "east-detail", "cluster_id": "east",
+            "cluster_name": "Simplii East DEV", "tool": "get_resource",
+            "data": {
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder",
+                "metadata": {"namespace": "openshift-logging", "name": "instance"},
+                "spec": {
+                    "outputs": [{"name": "east-loki", "type": "lokistack"}],
+                    "pipelines": [{"name": "application", "outputRefs": ["east-loki"]}],
+                },
+            },
+        },
+    ]
+    activity = [{
+        "status": "succeeded", "evidence_ids": ["central-detail", "east-detail"],
+    }]
+
+    comparisons = _resource_configuration_comparisons(
+        evidence=evidence, activity=activity,
+    )
+
+    assert len(comparisons) == 1
+    assert comparisons[0]["specs_equal"] is False
+    assert {item["path"] for item in comparisons[0]["differing_paths"]} == {
+        "spec.outputs[0].name", "spec.pipelines[0].outputRefs[0]",
+    }
+    assert _configuration_comparison_answer_issue(
+        content="Their specifications are identical.",
+        citations=["central-list", "east-list"],
+        comparisons=comparisons,
+    ) == "missing_exact_configuration_citations"
+    assert _configuration_comparison_answer_issue(
+        content="No other status fields or configuration details differ.",
+        citations=["central-detail", "east-detail"],
+        comparisons=comparisons,
+    ) == "configuration_comparison_contradicts_exact_evidence"
+    rendered = _deterministic_configuration_comparison_answer(comparisons)
+    assert rendered["citations"] == ["central-detail", "east-detail"]
+    assert "The specifications differ at 2 field path(s)." in rendered["content"]
+    assert "`spec.outputs[0].name`" in rendered["content"]
 
 
 def test_resource_analysis_coverage_requires_details_in_final_model_context() -> None:

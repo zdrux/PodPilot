@@ -1365,6 +1365,231 @@ def _resource_analysis_coverage(
     return coverage
 
 
+def _flatten_configuration_value(
+    value: object, *, path: str = "spec", depth: int = 0,
+) -> dict[str, object]:
+    """Flatten a sanitized configuration into bounded, comparable field paths."""
+
+    if depth >= 10:
+        return {path: "[DEPTH_LIMIT]"}
+    if isinstance(value, dict):
+        if not value:
+            return {path: {}}
+        flattened: dict[str, object] = {}
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))[:100]:
+            flattened.update(_flatten_configuration_value(
+                item, path=f"{path}.{str(key)[:128]}", depth=depth + 1,
+            ))
+        return flattened
+    if isinstance(value, list):
+        if not value:
+            return {path: []}
+        flattened = {}
+        for index, item in enumerate(value[:50]):
+            flattened.update(_flatten_configuration_value(
+                item, path=f"{path}[{index}]", depth=depth + 1,
+            ))
+        if len(value) > 50:
+            flattened[f"{path}[…]"] = f"{len(value) - 50} additional entries"
+        return flattened
+    return {path: value}
+
+
+def _resource_configuration_comparisons(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+    max_differences: int = 16,
+) -> list[dict[str, object]]:
+    """Build compact structural spec comparisons from current exact-object evidence."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    grouped: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+    for observation in evidence:
+        if (
+            observation.get("tool") != "get_resource"
+            or str(observation.get("id") or "") not in current_ids
+        ):
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+        spec = data.get("spec") if isinstance(data.get("spec"), dict) else None
+        api_version = str(data.get("apiVersion") or "")
+        kind = str(data.get("kind") or "")
+        name = str(metadata.get("name") or "")
+        namespace = str(metadata.get("namespace") or "")
+        if spec is None or not kind or not name:
+            continue
+        grouped.setdefault((api_version, kind, namespace, name), []).append({
+            "cluster_id": str(observation.get("cluster_id") or ""),
+            "cluster": str(
+                observation.get("cluster_name")
+                or observation.get("cluster_id")
+                or "cluster"
+            )[:253],
+            "evidence_id": str(observation["id"]),
+            "spec": spec,
+        })
+
+    comparisons: list[dict[str, object]] = []
+    for (api_version, kind, namespace, name), sources in grouped.items():
+        if len(sources) < 2:
+            continue
+        source_views: list[dict[str, object]] = []
+        flattened_by_cluster: list[dict[str, object]] = []
+        hashes: set[str] = set()
+        for source in sources:
+            canonical = json.dumps(
+                source["spec"], sort_keys=True, separators=(",", ":"), default=str,
+            )
+            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            hashes.add(digest)
+            source_views.append({
+                "cluster_id": source["cluster_id"],
+                "cluster": source["cluster"],
+                "evidence_id": source["evidence_id"],
+                "spec_sha256": digest,
+            })
+            flattened_by_cluster.append(_flatten_configuration_value(source["spec"]))
+        all_paths = sorted({
+            path for flattened in flattened_by_cluster for path in flattened
+        })
+        differing_paths: list[dict[str, object]] = []
+        for path in all_paths:
+            serialized_values = {
+                json.dumps(flattened.get(path, "[MISSING]"), sort_keys=True, default=str)
+                for flattened in flattened_by_cluster
+            }
+            if len(serialized_values) == 1:
+                continue
+            differing_paths.append({
+                "path": path,
+                "values": [
+                    {
+                        "cluster": source_views[index]["cluster"],
+                        "present": path in flattened,
+                        "value": _compact_provider_value(
+                            flattened.get(path, "[MISSING]"),
+                            string_limit=240,
+                            list_limit=8,
+                        ),
+                    }
+                    for index, flattened in enumerate(flattened_by_cluster)
+                ],
+            })
+        comparisons.append({
+            "api_version": api_version,
+            "kind": kind,
+            "namespace": namespace or "cluster",
+            "name": name,
+            "specs_equal": len(hashes) == 1,
+            "sources": source_views,
+            "differing_paths": differing_paths[:max_differences],
+            "differing_path_count": len(differing_paths),
+            "differences_truncated": len(differing_paths) > max_differences,
+        })
+    return comparisons
+
+
+def _deterministic_configuration_comparison_answer(
+    comparisons: list[dict[str, object]],
+) -> dict[str, object]:
+    """Render exact structural differences when model citations are not trustworthy."""
+
+    lines = [
+        "## Configuration comparison",
+        "",
+        "PodPilot compared the complete sanitized `spec` returned by an exact GET on each cluster.",
+    ]
+    citations: list[str] = []
+    limitations: list[str] = []
+    for comparison in comparisons:
+        sources = [
+            item for item in comparison.get("sources") or [] if isinstance(item, dict)
+        ]
+        citations.extend(
+            str(item["evidence_id"]) for item in sources if item.get("evidence_id")
+        )
+        resource = (
+            f"{comparison.get('kind')} "
+            f"{comparison.get('namespace')}/{comparison.get('name')}"
+        )
+        lines.extend(["", f"### {resource}", ""])
+        if comparison.get("specs_equal") is True:
+            lines.append("The complete sanitized specifications are identical.")
+            continue
+        lines.append(
+            f"The specifications differ at {comparison.get('differing_path_count', 0)} "
+            "field path(s)."
+        )
+        differences = [
+            item for item in comparison.get("differing_paths") or []
+            if isinstance(item, dict)
+        ]
+        if differences:
+            clusters = [str(item.get("cluster") or "cluster") for item in sources]
+            lines.extend([
+                "",
+                "| Field | " + " | ".join(clusters) + " |",
+                "|---|" + "---|" * len(clusters),
+            ])
+            for difference in differences:
+                values_by_cluster = {
+                    str(item.get("cluster") or "cluster"): item
+                    for item in difference.get("values") or []
+                    if isinstance(item, dict)
+                }
+                rendered_values = []
+                for cluster in clusters:
+                    value = values_by_cluster.get(cluster, {})
+                    rendered = _evidence_value(value.get("value", "[MISSING]"), limit=240)
+                    rendered_values.append(rendered.replace("|", "\\|").replace("\n", " "))
+                lines.append(
+                    f"| `{str(difference.get('path') or 'spec')}` | "
+                    + " | ".join(rendered_values) + " |"
+                )
+        if comparison.get("differences_truncated"):
+            limitations.append(
+                f"Only the first {len(differences)} differing paths for {resource} are displayed; "
+                "the full-spec hashes still establish that the specifications differ."
+            )
+    return {
+        "answer_mode": "evidence_based",
+        "content": "\n".join(lines),
+        "citations": list(dict.fromkeys(citations)),
+        "limitations": limitations,
+    }
+
+
+def _configuration_comparison_answer_issue(
+    *, content: str, citations: list[str], comparisons: list[dict[str, object]],
+) -> str | None:
+    required_ids = {
+        str(source.get("evidence_id"))
+        for comparison in comparisons
+        for source in (comparison.get("sources") or [])
+        if isinstance(source, dict) and source.get("evidence_id")
+    }
+    if required_ids and not required_ids.issubset(set(citations)):
+        return "missing_exact_configuration_citations"
+    contradicts_difference = re.search(
+        r"(?i)(?:"
+        r"\b(?:specifications?|configs?|configurations?)\b.{0,50}"
+        r"\b(?:identical|the same|do not differ|no differences?)\b|"
+        r"\bno\b.{0,50}\b(?:configuration|config|spec)\w*\b.{0,30}\bdiffer\w*\b"
+        r")",
+        content,
+    )
+    if (
+        any(comparison.get("specs_equal") is False for comparison in comparisons)
+        and contradicts_difference
+    ):
+        return "configuration_comparison_contradicts_exact_evidence"
+    return None
+
+
 def _requested_metadata_fields(question: str) -> set[str]:
     """Identify explicit metadata fields that normal code can render from an exact GET."""
 
@@ -8285,6 +8510,19 @@ async def _collect_bounded_cluster_reads(
     collection_analysis_required = _collection_object_analysis_requested(
         question, inquiry,
     )
+    deterministic_collection_plan = (
+        semantic_resource_plan[0]
+        if (
+            collection_analysis_required
+            and semantic_resource_plan is not None
+            and semantic_resource_plan[0].intents
+            and all(
+                intent.tool in {"list_resources", "search_resources"}
+                for intent in semantic_resource_plan[0].intents
+            )
+        )
+        else None
+    )
     if recovery_anchor_plan is None and inventory_request:
         catalog_question = (
             f"list {inquiry.resource_query}"
@@ -8460,6 +8698,21 @@ async def _collect_bounded_cluster_reads(
             if progress:
                 await progress(
                     "planning", "Prepared deterministic delegated access reviews."
+                )
+        elif (
+            round_number == 1
+            and requested_candidate_id is None
+            and deterministic_collection_plan is not None
+        ):
+            # LIST remains unavailable as a model-selected helper. For an explicit
+            # small-collection configuration analysis, normal code may use the live
+            # catalog to enumerate exact coordinates and immediately fan out bounded
+            # GETs. The model still owns interpretation of the resulting evidence.
+            plan = deterministic_collection_plan
+            if progress:
+                await progress(
+                    "planning",
+                    "Prepared bounded inventory discovery for exact object comparison.",
                 )
         elif round_number == 1 and requested_candidate_id:
             requested_candidates = _grounded_read_candidates(
@@ -10660,6 +10913,14 @@ def create_app(
                     total_byte_limit=8_000,
                     prioritize_object_details=True,
                 )
+                object_comparisons = (
+                    _resource_configuration_comparisons(
+                        evidence=answer_evidence,
+                        activity=activity,
+                    )
+                    if _collection_object_analysis_requested(source_question, inquiry)
+                    else []
+                )
                 analysis_coverage = (
                     _resource_analysis_coverage(
                         evidence=answer_evidence, activity=activity,
@@ -10695,6 +10956,7 @@ def create_app(
                     "model_log_analysis": None,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
                     "analysis_coverage": analysis_coverage,
+                    "object_comparisons": object_comparisons,
                 }
                 if inquiry is not None:
                     answer_context["inquiry"] = inquiry.model_dump()
@@ -10753,6 +11015,23 @@ def create_app(
                         collection_limitations=limitations,
                         observations=answer_evidence,
                     )
+                    comparison_issue = (
+                        _configuration_comparison_answer_issue(
+                            content=str(validated["content"]),
+                            citations=[str(item) for item in validated["citations"]],
+                            comparisons=object_comparisons,
+                        )
+                        if object_comparisons else None
+                    )
+                    if comparison_issue is not None:
+                        validated = _deterministic_configuration_comparison_answer(
+                            object_comparisons
+                        )
+                        limitations.append(
+                            "The agent's configuration comparison did not cite or match every "
+                            "exact-object observation, so PodPilot replaced it with a deterministic "
+                            "structural spec comparison."
+                        )
                 answer_quality_issue = _adhoc_answer_quality_issue(
                     content=str(validated["content"]),
                     answer_mode=str(validated["answer_mode"]),

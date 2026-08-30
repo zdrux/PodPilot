@@ -466,6 +466,12 @@ evidence, and preserves provenance for citations and native tables. It is not mo
 `PODPILOT_ADHOC_LIST_TOOL_ENABLED=false`, which is the shipped OpenShift setting. Existing LIST
 evidence and deterministic internal diagnostics remain readable. Read-only agents must instead use
 exact GETs or bounded field searches and report when unknown collection enumeration is unavailable.
+An explicit configuration comparison is a bounded internal exception: after the live catalog
+resolves the requested Kind, PodPilot may enumerate only to obtain exact object coordinates and
+automatically GET every object when the inventory is complete and no larger than
+`adhoc_detail_fanout_max_objects`. The final-answer context includes full-sanitized-spec hashes and
+bounded differing field paths. A model answer that omits the exact GET citations or contradicts
+that structural comparison is replaced with the deterministic field-difference table.
 Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
 or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
 asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the

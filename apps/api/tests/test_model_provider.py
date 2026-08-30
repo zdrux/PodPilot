@@ -745,6 +745,33 @@ def test_minimal_answer_payload_includes_bounded_guidance_and_inquiry() -> None:
     }]
 
 
+def test_minimal_answer_payload_keeps_structural_object_comparisons() -> None:
+    comparison = {
+        "kind": "ClusterLogForwarder",
+        "namespace": "openshift-logging",
+        "name": "instance",
+        "specs_equal": False,
+        "sources": [
+            {"cluster": "Central", "evidence_id": "central-detail"},
+            {"cluster": "East", "evidence_id": "east-detail"},
+        ],
+        "differing_paths": [{
+            "path": "spec.outputs[0].name",
+            "values": [
+                {"cluster": "Central", "value": "default"},
+                {"cluster": "East", "value": "east-loki"},
+            ],
+        }],
+    }
+
+    payload = _minimal_answer_payload({
+        "question": "Compare ClusterLogForwarders.",
+        "object_comparisons": [comparison],
+    })
+
+    assert payload["object_comparisons"] == [comparison]
+
+
 def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
     answer = ConciseAdHocAnswer(
         answer_mode="general_guidance",

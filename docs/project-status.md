@@ -67,6 +67,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
+  Small, complete configuration collections use internal inventory only to resolve exact object
+  coordinates, then GET every object. Multi-cluster final-answer context carries structural
+  sanitized-spec hashes and differing paths; inventory-only citations or a conclusion that
+  contradicts those exact objects fall back to a deterministic configuration-difference table.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide
