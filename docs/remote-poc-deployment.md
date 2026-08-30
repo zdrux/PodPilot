@@ -142,9 +142,10 @@ every identity authenticated by OpenShift receives that role automatically.
 The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for purpose-built
 typed collectors and historical LIST evidence, and `adhoc_search_max_scan_objects` to `"2000"` for
 bounded projected-field searches that return only matches. The generic LIST helper is absent from
-guarded planning, authored-read schemas, and runtime configuration. Unrestricted/action agents may
-enumerate with deliberately bounded read-only `oc get` commands; investigator-only agents must use
-exact GETs, field searches, or typed summaries.
+agent tool schemas and runtime configuration. Both Investigator and Action conversations enumerate
+with deliberately bounded read-only `oc get` commands through the same agent loop. Their proxy
+capability is the difference: Investigator blocks Kubernetes writes and Secret reads; Action uses
+the signed-in user's full RBAC.
 Collection analysis separately defaults `adhoc_detail_fanout_max_objects` to `"10"`. PodPilot
 automatically GETs every object only for complete inventories at or below this cap; larger or
 incomplete inventories remain inventory-only until the user narrows the request.
@@ -368,9 +369,9 @@ API type, model ID, token, TLS mode, and limits. Test the endpoint before
 activation. Prefer system trust or a custom CA. Insecure TLS disables certificate
 and hostname verification and is inappropriate for a real-workload cluster.
 
-Unrestricted mode requires a Chat Completions profile that passes the tool-call
-capability probe. Responses API profiles remain valid for guarded mode but cannot
-drive the unrestricted `execute_shell` loop.
+Delegated Investigator and Action modes require a Chat Completions profile that passes the
+tool-call capability probe. Responses API profiles remain usable only for legacy non-delegated
+guarded mode and cannot drive the shared `execute_shell` investigation loop.
 
 Start with read-only questions against a designated test namespace. Confirm
 evidence scope, redaction, Pod-log access, Alertmanager freshness, and audit

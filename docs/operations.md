@@ -522,7 +522,7 @@ Do not put real values in tracked `.env` files. Commit only a redacted `.env.exa
 
 ## OpenShift Deployment
 
-### Unrestricted agent simulation on SNO
+### Agentic investigation on SNO
 
 The agentic SNO overlay uses OpenRouter at `https://openrouter.ai/api/v1`, exact model ID
 `openai/gpt-oss-120b`, and API type `chat-completions`. It builds a second
@@ -544,7 +544,7 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 `openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
-Unrestricted turns expose `search_resources`, `http_probe`,
+Agentic turns expose `search_resources`, `http_probe`,
 `query_audit_events`, and `query_metrics` as model-selected helper tools alongside
 `execute_shell`. The probe performs a bounded unauthenticated HEAD or GET for an exact observed
 HTTP(S) URL; an optional connect address preserves the URL hostname for Host and TLS SNI, and TLS
@@ -553,8 +553,10 @@ They never execute
 automatically and never decide whether the turn is complete. Their normalized observations return
 to the model as tool results, are persisted as evidence, and can drive native tables and metric
 cards. The agent interprets the results and decides whether to invoke another helper, use the shell
-escape hatch, or answer. When enumeration is necessary, the unrestricted agent uses a deliberately
-bounded read-only `oc get` command. Wording such as “show”, “list”, “top”, “why”,
+escape hatch, or answer. Delegated Investigator and Action conversations use this same loop. The
+read-only capability rejects Kubernetes writes, exec/attach/proxy/port-forward requests, and Secret
+reads; the Action capability passes the user's requests to normal RBAC and admission. When
+enumeration is necessary, the agent uses a deliberately bounded read-only `oc get` command. Wording such as “show”, “list”, “top”, “why”,
 “investigate”, “diagnose”, and “root cause” does not create a server-owned completion route. A
 native card is a rendering choice, not a completion signal. For example, a top-namespace log-volume
 question uses the Loki application tenant's fixed `bytes_over_time` query and renders payload bytes
@@ -648,7 +650,11 @@ PodPilot Pod. For multi-cluster conversations the model supplies one selected cl
 ID per shell call. The API brokers only that cluster's in-memory delegated user token
 to the loopback runner, which deletes its temporary kubeconfig after the command.
 The conversation's immutable mode determines whether the broker exposes read-only
-typed access or the user's full cluster authorization. Inspect redacted execution metadata with
+typed access or the user's full cluster authorization. **Cluster sign-ins** manages the current
+browser session independently of chat history: select unconnected clusters to add them, use
+**Remove** to revoke one cluster token, or **Remove all sign-ins** to revoke the complete set.
+Removing a cluster used by an existing conversation makes that conversation require reconnection;
+it does not delete the conversation. Inspect redacted execution metadata with
 `oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
 The runner logs startup plus command start, completion, termination, and timeout events. The API
 logs a matching runner request ID, command hash, duration, timeout and truncation flags, and a

@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Connect clusters · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Connect clusters</h1><p class="subtitle">PodPilot authenticates as you and keeps resulting OpenShift tokens only in API-process memory for this browser session. Connected clusters remain available when you start another conversation.</p></div></header>
+<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Cluster sign-ins</h1><p class="subtitle">Add clusters to this PodPilot browser session at any time. Existing sign-ins stay connected and remain available when you start another conversation.</p></div></header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Credentials are scoped by environment</strong><p>Select clusters from one environment at a time. PodPilot discards your password immediately after the OAuth exchanges. Tokens remain for at most {{ session_hours }} hours and are revoked when you sign out.</p></div></section>
 <section class="panel settings-panel delegated-connect-panel">
   <div class="panel-header"><div><p class="eyebrow">Approved registry</p><h2>Select clusters</h2></div><span class="tag">{{ clusters | length }} available</span></div>
   {% if connections %}
   <div class="connected-cluster-list">
-    {% for connection in connections %}<span class="boundary-pill"><strong>{{ connection.cluster_name }}</strong> as {{ connection.remote_username }} · until {{ connection.expires_at | est_time('%H:%M') }}</span>{% endfor %}
+    {% for connection in connections %}
+    <div class="connected-cluster-item">
+      <span><strong>{{ connection.cluster_name }}</strong><small>Signed in as {{ connection.remote_username }} · available until {{ connection.expires_at | est_time('%H:%M') }}</small></span>
+      <button class="button danger compact" type="button" data-delegated-remove-url="/api/v1/delegated-sessions/connections/{{ connection.cluster_id }}/disconnect" data-cluster-name="{{ connection.cluster_name }}">Remove</button>
+    </div>
+    {% endfor %}
   </div>
   {% endif %}
   <form class="settings-form" data-delegated-connect-form data-connect-url="/api/v1/delegated-sessions/connect">
@@ -32,7 +37,7 @@
     <label>Remote password<input name="password" type="password" autocomplete="current-password" required maxlength="4096"><small>The password is used only for these login exchanges and is not stored.</small></label>
     <label class="checkbox-field"><input type="checkbox" name="consent" required><span>I authorize PodPilot to create temporary user tokens for the selected clusters. Action conversations may use every permission granted to this identity.</span></label>
     <input type="hidden" name="next_url" value="{{ next_url }}">
-    <div class="form-actions"><button class="button primary" type="submit">Connect selected clusters</button>{% if connections %}<a class="button secondary" href="/ask?new=1">Start new conversation</a><button class="button danger" type="button" data-delegated-disconnect-url="/api/v1/delegated-sessions/disconnect">Clear cluster sign-ins</button>{% endif %}</div>
+    <div class="form-actions"><button class="button primary" type="submit">Add selected clusters</button>{% if connections %}<a class="button secondary" href="/ask?new=1">Start new conversation</a><button class="button danger" type="button" data-delegated-disconnect-url="/api/v1/delegated-sessions/disconnect">Remove all sign-ins</button>{% endif %}</div>
   </form>
 </section>
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>

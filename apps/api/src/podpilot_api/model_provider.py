@@ -1486,7 +1486,7 @@ class OpenAIResponsesProvider:
         messages: list[dict[str, object]],
     ) -> AgentStep:
         raise ModelProviderError(
-            "Unrestricted agent mode requires a Chat Completions model profile."
+            "Agentic investigation requires a Chat Completions model profile."
         )
 
     @staticmethod
@@ -2188,7 +2188,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "function": {
                 "name": "execute_shell",
                 "description": (
-                    "Execute an unrestricted Linux shell script against one selected OpenShift "
+                    "Execute a Linux shell script against one selected OpenShift "
                     "cluster through PodPilot's oc runner. The API brokers the selected cluster's "
                     "credential; never put credentials in the command. Return codes, stdout, and "
                     "stderr are returned verbatim."

@@ -667,15 +667,41 @@
         }
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
-        if (submit) { submit.disabled = false; submit.textContent = "Connect selected clusters"; }
+      if (submit) { submit.disabled = false; submit.textContent = "Add selected clusters"; }
+    }
+  });
+}
+  document.querySelectorAll("[data-delegated-remove-url]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const clusterName = button.dataset.clusterName || "this cluster";
+      if (!csrf || !window.confirm(`Remove and revoke the ${clusterName} sign-in? Existing conversations that use it will require reconnection.`)) return;
+      button.disabled = true;
+      button.textContent = "Removing…";
+      try {
+        const response = await fetch(button.dataset.delegatedRemoveUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "PodPilot could not remove the cluster sign-in.");
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: "success",
+          message: `${clusterName} was removed from this PodPilot session.`,
+        }));
+        window.location.assign("/delegated/connect");
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = "Remove";
       }
     });
-  }
+  });
   document.querySelector("[data-delegated-disconnect-url]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     if (!csrf || !window.confirm("Clear and revoke every current cluster sign-in? Your saved cluster list and conversations will remain.")) return;
     button.disabled = true;
-    button.textContent = "Clearing…";
+    button.textContent = "Removing…";
     try {
       const response = await fetch(button.dataset.delegatedDisconnectUrl, {
         method: "POST",
@@ -692,7 +718,7 @@
     } catch (error) {
       if (toast) { toast.textContent = error.message; toast.hidden = false; }
       button.disabled = false;
-      button.textContent = "Clear cluster sign-ins";
+      button.textContent = "Remove all sign-ins";
     }
   });
   const appendOptimisticTurn = (question) => {

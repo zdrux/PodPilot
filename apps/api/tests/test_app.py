@@ -135,7 +135,7 @@ from podpilot_diagnostics.adhoc import (
 )
 from podpilot_diagnostics.remediation import ActionResult, ActionValidation
 from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceError
-from podpilot_openshift.agent_runner import AgentCommandResult
+from podpilot_openshift.agent_runner import AgentClusterConnection, AgentCommandResult
 from podpilot_openshift.credentials import CredentialStoreError
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
@@ -564,6 +564,10 @@ def _agent_final_step(content: str = "The agent interpreted the collected eviden
 
 def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows("GET", "/api/v1/pods") is True
+    assert _read_only_proxy_allows("GET", "/api/v1/secrets") is False
+    assert _read_only_proxy_allows(
+        "GET", "/api/v1/namespaces/dev/secrets/database"
+    ) is False
     assert _read_only_proxy_allows(
         "POST", "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
     ) is True
@@ -571,8 +575,133 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows(
         "POST", "/api/v1/namespaces/dev/pods/api/exec"
     ) is False
+    assert _read_only_proxy_allows(
+        "POST", "/api/v1/namespaces/dev/pods/api/attach"
+    ) is False
+    assert _read_only_proxy_allows(
+        "POST", "/api/v1/namespaces/dev/pods/api/portforward"
+    ) is False
+    assert _read_only_proxy_allows(
+        "GET", "/api/v1/namespaces/dev/pods/api/proxy/metrics"
+    ) is False
+    assert _read_only_proxy_allows("PUT", "/api/v1/pods/api/status") is False
     assert _read_only_proxy_allows("PATCH", "/apis/apps/v1/deployments/api") is False
     assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
+
+
+def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
+    tmp_path: Path,
+) -> None:
+    cluster_id = "30500000-0000-0000-0000-000000000001"
+
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, _profile, _api_key, messages):
+            self.agent_messages.append(list(messages))
+            self.calls += 1
+            if self.calls == 1:
+                arguments = json.dumps({
+                    "command": (
+                        "oc get clusterlogforwarders.observability.openshift.io "
+                        "-A -o json"
+                    ),
+                    "cluster_id": cluster_id,
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "read-clf", "type": "function",
+                            "function": {"name": "execute_shell", "arguments": arguments},
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="read-clf", name="execute_shell", arguments=arguments,
+                    ),),
+                )
+            return _agent_final_step("The ClusterLogForwarder configuration was inspected.")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, AgentClusterConnection]] = []
+
+        def execute(self, command, connection=None):
+            assert connection is not None
+            self.calls.append((command, connection))
+            return AgentCommandResult(
+                command=command, exit_code=0,
+                stdout='{"apiVersion":"v1","items":[]}', stderr="",
+            )
+
+    provider = Provider()
+    runner = Runner()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        model_provider=provider,
+        agent_runner=runner,
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    engine = build_engine(settings)
+    with TestClient(app) as client:
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            db_session.add(Cluster(
+                id=cluster_id, name="Central DEV",
+                api_url="https://api.central-dev.example:6443",
+                credential_key=None, tags_json="{}", tls_verify=True,
+                is_enabled=True, is_system=False, status="ready",
+                created_by="ada", updated_by="ada", created_at=now, updated_at=now,
+            ))
+            db_session.add(ModelProfile(
+                id=1, provider_label="OpenRouter",
+                base_url="https://openrouter.ai/api/v1",
+                chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+                embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+                status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+            ))
+            db_session.commit()
+
+        session_id = app.state.delegated_vault.new_session_id()
+        connection = app.state.delegated_vault.put(
+            session_id=session_id, owner="ivy", cluster_id=cluster_id,
+            remote_username="ivy", remote_uid="uid-ivy", token="delegated-token",
+        )
+        client.cookies.set("podpilot_delegated_session", session_id)
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "message": "Compare the ClusterLogForwarder configuration.",
+                "cluster_ids": json.dumps([cluster_id]),
+                "execution_mode": "read_only",
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert "configuration was inspected" in rendered.text
+    assert len(runner.calls) == 1
+    command, runner_connection = runner.calls[0]
+    assert command.startswith("oc get clusterlogforwarders")
+    assert runner_connection.proxy_url is not None
+    assert runner_connection.proxy_url.endswith(connection.read_only_proxy_capability)
+    assert connection.action_proxy_capability not in runner_connection.proxy_url
+    system_prompt = str(provider.agent_messages[0][0]["content"])
+    assert "delegated read-only investigation mode" in system_prompt
+    assert "broker will reject Kubernetes writes" in system_prompt
 
 
 def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
@@ -12533,7 +12662,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert 'data-connected="true"' in connected_checkbox.group(0)
         assert "disabled" in connected_checkbox.group(0)
         assert "Start new conversation" in connect_page.text
-        assert "Clear cluster sign-ins" in connect_page.text
+        assert "Remove all sign-ins" in connect_page.text
         disconnected = client.post(
             "/api/v1/delegated-sessions/disconnect",
             headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
@@ -12544,6 +12673,123 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             session_id=replacement_session_id, owner="dana"
         ) == []
         assert "sha256~replacement-token" in revoked_tokens
+    engine.dispose()
+
+
+def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from podpilot_openshift.delegated import DelegatedIdentity
+
+    revoked_tokens: list[str] = []
+
+    class LoginClient:
+        def __init__(self, **kwargs) -> None:
+            self.api_url = str(kwargs["api_url"])
+
+        def login(self, username: str, password: str) -> DelegatedIdentity:
+            assert (username, password) == ("dev-user", "one-time-password")
+            suffix = "central" if "central" in self.api_url else "east"
+            return DelegatedIdentity(
+                username="dev-user",
+                uid=f"uid-{suffix}",
+                token=f"sha256~{suffix}-token",
+            )
+
+        def revoke(self, token: str) -> bool:
+            revoked_tokens.append(token)
+            return True
+
+    monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", LoginClient)
+    app, settings = make_app(
+        tmp_path,
+        assignments={"dana": Role.DELEGATED_OPERATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    central_id = "51000000-0000-0000-0000-000000000001"
+    east_id = "51000000-0000-0000-0000-000000000002"
+    engine = build_engine(settings)
+    with TestClient(app) as client:
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            for cluster_id, name, slug in (
+                (central_id, "Central DEV", "central-dev"),
+                (east_id, "East DEV", "east-dev"),
+            ):
+                db_session.add(Cluster(
+                    id=cluster_id,
+                    name=name,
+                    environment="dev",
+                    api_url=f"https://api.{slug}.example:6443",
+                    credential_key=None,
+                    tags_json='{"environment":"dev"}',
+                    tls_verify=True,
+                    is_enabled=True,
+                    is_system=False,
+                    status="ready",
+                    created_by="ada",
+                    updated_by="ada",
+                    created_at=now,
+                    updated_at=now,
+                ))
+            db_session.commit()
+
+        page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)}
+        credentials = {
+            "username": "dev-user",
+            "password": "one-time-password",
+            "consent": "on",
+        }
+        first = client.post(
+            "/api/v1/delegated-sessions/connect",
+            headers=headers,
+            data={**credentials, "cluster_ids": json.dumps([central_id])},
+        )
+        assert first.status_code == 200
+        session_id = client.cookies.get("podpilot_delegated_session")
+        assert session_id
+
+        second = client.post(
+            "/api/v1/delegated-sessions/connect",
+            headers=headers,
+            data={**credentials, "cluster_ids": json.dumps([east_id])},
+        )
+        assert second.status_code == 200
+        assert client.cookies.get("podpilot_delegated_session") == session_id
+        assert {
+            item.cluster_id for item in app.state.delegated_vault.list_for(
+                session_id=session_id, owner="dana"
+            )
+        } == {central_id, east_id}
+
+        connect_page = client.get(
+            "/delegated/connect", headers={"x-forwarded-user": "dana"}
+        )
+        assert "Existing sign-ins stay connected" in connect_page.text
+        assert connect_page.text.count("data-delegated-remove-url=") == 2
+        assert "Add selected clusters" in connect_page.text
+
+        removed = client.post(
+            f"/api/v1/delegated-sessions/connections/{central_id}/disconnect",
+            headers=headers,
+        )
+        assert removed.status_code == 200
+        assert removed.json()["disconnected"]["cluster_id"] == central_id
+        assert [
+            item.cluster_id for item in app.state.delegated_vault.list_for(
+                session_id=session_id, owner="dana"
+            )
+        ] == [east_id]
+        assert "sha256~central-token" in revoked_tokens
+        assert "sha256~east-token" not in revoked_tokens
+
+        ask_page = client.get("/ask?new=1", headers={"x-forwarded-user": "dana"})
+        assert "East DEV" in ask_page.text
+        assert "Central DEV" not in ask_page.text
     engine.dispose()
 
 

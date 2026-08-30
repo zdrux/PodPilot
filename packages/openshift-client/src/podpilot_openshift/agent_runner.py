@@ -116,16 +116,16 @@ class OcAgentRunnerClient:
                 pass
             suffix = f": {detail}" if detail else ""
             raise AgentRunnerError(
-                "The unrestricted oc runner rejected the request "
+                "The oc runner rejected the request "
                 f"(HTTP {exc.response.status_code}){suffix}."
             ) from exc
         except httpx.RequestError as exc:
             raise AgentRunnerError(
-                "The unrestricted oc runner request failed before a response was received "
+                "The oc runner request failed before a response was received "
                 f"({type(exc).__name__})."
             ) from exc
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentRunnerError(
-                "The unrestricted oc runner returned an invalid response "
+                "The oc runner returned an invalid response "
                 f"({type(exc).__name__})."
             ) from exc

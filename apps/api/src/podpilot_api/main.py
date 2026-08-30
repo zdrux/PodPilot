@@ -149,13 +149,23 @@ _READ_ONLY_PROXY_POST_SUFFIXES = (
     "/selfsubjectrulesreviews",
     "/selfsubjectreviews",
 )
+_READ_ONLY_PROXY_BLOCKED_SEGMENTS = frozenset({
+    "attach",
+    "exec",
+    "portforward",
+    "proxy",
+    "secrets",
+})
 
 
 def _read_only_proxy_allows(method: str, remote_path: str) -> bool:
     normalized_method = method.upper()
+    normalized_path = "/" + remote_path.strip("/").casefold()
+    path_segments = {segment for segment in normalized_path.split("/") if segment}
+    if path_segments & _READ_ONLY_PROXY_BLOCKED_SEGMENTS:
+        return False
     if normalized_method in {"GET", "HEAD", "OPTIONS"}:
         return True
-    normalized_path = "/" + remote_path.strip("/").casefold()
     return normalized_method == "POST" and normalized_path.endswith(
         _READ_ONLY_PROXY_POST_SUFFIXES
     )
@@ -9565,7 +9575,7 @@ def create_app(
 
     current_user = auth_dependency(app_settings, resolver)
 
-    async def _execute_unrestricted_agent_turn(
+    async def _execute_agent_turn(
         *,
         engine,
         username: str,
@@ -9582,10 +9592,11 @@ def create_app(
         preferred_evidence_view: str | None = None,
         agent_targets: dict[str, tuple[str, AgentClusterConnection | None]],
         agent_readers: dict[str, ReadOnlyExplorer | Callable[[], ReadOnlyExplorer]],
+        read_only: bool,
     ) -> str:
         if profile.api_type != "chat-completions":
             raise ModelProviderError(
-                "Unrestricted agent mode requires a Chat Completions model profile."
+                "Agentic investigation requires a Chat Completions model profile."
             )
         target_catalog = [
             {
@@ -9599,7 +9610,16 @@ def create_app(
         messages: list[dict[str, object]] = [{
             "role": "system",
             "content": (
-                "You are PodPilot running in an explicitly accepted delegated unrestricted mode. "
+                (
+                    "You are PodPilot running in delegated read-only investigation mode. "
+                    "Work exactly as you would in read-write mode: investigate autonomously and use "
+                    "all useful read operations. The broker will reject Kubernetes writes, exec, "
+                    "attach, proxy, port-forward, and Secret reads. Treat a broker rejection as an "
+                    "enforced limitation and continue with other useful read-only checks. "
+                    if read_only else
+                    "You are PodPilot running in explicitly accepted delegated read-write mode. "
+                )
+                +
                 "You have typed read-only collector tools plus an execute_shell escape hatch in a Linux "
                 "sidecar with the OpenShift oc CLI connected through an API broker. The broker injects "
                 "the signed-in operator's in-memory token; the credential is never available to your "
@@ -9668,8 +9688,9 @@ def create_app(
                     "the source was unavailable; never invent its cause or claim that a metrics "
                     "server, add-on, API, or resource is absent unless command output proves it. "
                     "For OpenShift current resource usage, the CLI forms are `oc adm top node` and "
-                    "`oc adm top pod`, not `oc top`. You retain unrestricted execute_shell access for "
-                    "verification and extension.\n\n"
+                    "`oc adm top pod`, not `oc top`. You retain execute_shell access through the "
+                    "conversation's broker-enforced read-only or read-write capability for verification "
+                    "and extension.\n\n"
                     + serialized_enrichment
                 ),
             })
@@ -9690,7 +9711,7 @@ def create_app(
         while True:
             if progress:
                 await progress(
-                    "agent_thinking", "The unrestricted agent is choosing its next action."
+                    "agent_thinking", "The agent is choosing its next action."
                 )
             model_started = asyncio.get_running_loop().time()
             step_method = provider.next_agent_step
@@ -9730,7 +9751,7 @@ def create_app(
                 if elapsed_seconds >= provider_call_deadline:
                     model_task.cancel()
                     raise ModelProviderError(
-                        "The unrestricted agent model call exceeded its configured timeout."
+                        "The agent model call exceeded its configured timeout."
                     )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
@@ -9759,7 +9780,7 @@ def create_app(
                         })
                         continue
                     raise ModelProviderError(
-                        "The unrestricted agent returned neither a tool call nor a final answer "
+                        "The agent returned neither a tool call nor a final answer "
                         "after one finalization retry.",
                         failure_type="agent_contract",
                     )
@@ -9873,7 +9894,7 @@ def create_app(
                     events.append({
                         "seq": (int(events[-1]["seq"]) + 1) if events else 0,
                         "phase": "complete",
-                        "message": "Unrestricted agent run complete.",
+                        "message": "Agent investigation complete.",
                         "at": now.isoformat(),
                     })
                     run.status = "succeeded"
@@ -10273,6 +10294,8 @@ def create_app(
             turn_agent_mode = (
                 "unrestricted"
                 if (
+                    app_settings.delegated_access_enabled
+                    or
                     conversation.execution_mode in {"action", "delegated_unrestricted"}
                     or (
                         not app_settings.delegated_access_enabled
@@ -10358,7 +10381,7 @@ def create_app(
             await progress(
                 "starting",
                 (
-                    "Starting the unrestricted delegated agent run."
+                    "Starting the delegated agent investigation."
                     if turn_agent_mode == "unrestricted"
                     else "Starting the read-only investigation."
                 ),
@@ -10391,6 +10414,7 @@ def create_app(
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 if turn_agent_mode == "unrestricted":
+                    read_only_agent = conversation.execution_mode == "read_only"
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
                     enrichment_limitations: list[str] = []
@@ -10404,7 +10428,7 @@ def create_app(
                         cluster_label = selected_cluster.name
                         if not selected_cluster.is_enabled:
                             enrichment_limitations.append(
-                                f"Cluster {cluster_label} is disabled; unrestricted commands were skipped."
+                                f"Cluster {cluster_label} is disabled; agent commands were skipped."
                             )
                             continue
                         if not app_settings.delegated_access_enabled:
@@ -10454,9 +10478,14 @@ def create_app(
                                 "session; reconnect it to continue this conversation."
                             )
                             continue
+                        proxy_capability = (
+                            connection.read_only_proxy_capability
+                            if read_only_agent else
+                            connection.action_proxy_capability
+                        )
                         proxy_url = (
                             "http://127.0.0.1:8080/internal/delegated-proxy/"
-                            f"{connection.action_proxy_capability}"
+                            f"{proxy_capability}"
                         )
                         delegated_api_url, _, _ = delegated_cluster_endpoint(selected_cluster)
                         agent_targets[selected_cluster.id] = (
@@ -10485,13 +10514,13 @@ def create_app(
                                 ),
                             )
                         )
-                    # In unrestricted mode the agent owns discovery from the first action.
+                    # In delegated mode the agent owns discovery from the first action.
                     # Registered collectors, semantic compilers, prior snapshots, and enrichment
                     # packs are intentionally not executed ahead of the agent or injected as a
                     # preferred direction. The selected cluster catalog, conversation, RBAC,
                     # redaction, command limits, and timeout remain enforced boundaries.
-                    provider_phase = "unrestricted_agent"
-                    return await _execute_unrestricted_agent_turn(
+                    provider_phase = "agentic_investigation"
+                    return await _execute_agent_turn(
                         engine=engine,
                         username=username,
                         conversation_id=conversation_id,
@@ -10507,6 +10536,7 @@ def create_app(
                         preferred_evidence_view=None,
                         agent_targets=agent_targets,
                         agent_readers=agent_readers,
+                        read_only=read_only_agent,
                     )
                 inquiry = None
                 prior_audit_query = _latest_audit_query_semantics(evidence)
@@ -11722,6 +11752,54 @@ def create_app(
                 db_session.commit()
         return JSONResponse({"status": "disconnected", "disconnected": disconnected})
 
+    @app.post("/api/v1/delegated-sessions/connections/{cluster_id}/disconnect")
+    async def disconnect_delegated_cluster(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if not _can_ask(user) or not app_settings.delegated_access_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Delegated cluster login is unavailable for this role.",
+            )
+        session_id = _delegated_session_id(request)
+        connection = request.app.state.delegated_vault.pop_connection(
+            session_id=session_id, owner=user.username, cluster_id=cluster_id
+        ) if session_id else None
+        if connection is None:
+            raise HTTPException(
+                status_code=404,
+                detail="That cluster is not connected in this PodPilot session.",
+            )
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+        revoked = False
+        if cluster is not None:
+            revoked = await run_in_threadpool(
+                delegated_login_client(cluster).revoke, connection.token
+            )
+        cluster_name = cluster.name if cluster is not None else cluster_id
+        with Session(request.app.state.engine) as db_session:
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="delegated.cluster.disconnect",
+                outcome="revoked" if revoked else "removed",
+                details_json=json.dumps({
+                    "cluster_id": cluster_id,
+                    "cluster_name": cluster_name,
+                    "remote_revoked": revoked,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        return JSONResponse({
+            "status": "disconnected",
+            "disconnected": {
+                "cluster_id": cluster_id,
+                "cluster_name": cluster_name,
+                "revoked": revoked,
+            },
+        })
+
     @app.get("/session/logout")
     async def logout_session(
         request: Request, user: AuthContext = Depends(current_user)
@@ -11781,7 +11859,7 @@ def create_app(
             return RedirectResponse("/delegated/connect", status_code=303)
         delegated_cluster_ids = [item.cluster_id for item in delegated_connections]
         turn_agent_mode = (
-            "guarded" if app_settings.delegated_access_enabled
+            "unrestricted" if app_settings.delegated_access_enabled
             else app_settings.agent_mode
         )
         csrf_token, csrf_is_new = _csrf_token(request)
@@ -11807,7 +11885,10 @@ def create_app(
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "model_ready": _profile_is_usable(profile, turn_agent_mode),
-                "read_only_model_ready": _profile_is_usable(profile, "guarded"),
+                "read_only_model_ready": _profile_is_usable(
+                    profile,
+                    "unrestricted" if app_settings.delegated_access_enabled else "guarded",
+                ),
                 "action_model_ready": _profile_is_usable(profile, "unrestricted"),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
@@ -11846,6 +11927,8 @@ def create_app(
             turn_agent_mode = (
                 "unrestricted"
                 if (
+                    app_settings.delegated_access_enabled
+                    or
                     conversation.execution_mode in {"action", "delegated_unrestricted"}
                     or (
                         not app_settings.delegated_access_enabled
@@ -11955,7 +12038,10 @@ def create_app(
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
                 "model_ready": _profile_is_usable(profile, turn_agent_mode),
-                "read_only_model_ready": _profile_is_usable(profile, "guarded"),
+                "read_only_model_ready": _profile_is_usable(
+                    profile,
+                    "unrestricted" if app_settings.delegated_access_enabled else "guarded",
+                ),
                 "action_model_ready": _profile_is_usable(profile, "unrestricted"),
                 "model_status": profile.status if profile else None,
                 "model_detail": profile.last_error if profile and profile.status == "reduced_capability" else None,
@@ -12048,7 +12134,7 @@ def create_app(
         with Session(request.app.state.engine) as db_session:
             profile = _active_profile(db_session)
             if app_settings.delegated_access_enabled:
-                required_agent_mode = "unrestricted" if execution_mode == "action" else "guarded"
+                required_agent_mode = "unrestricted"
                 if not _profile_is_usable(profile, required_agent_mode):
                     raise HTTPException(
                         status_code=409,

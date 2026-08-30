@@ -69,10 +69,16 @@ Logout, replacement, local expiry, disable, and graceful shutdown attempt revoca
 `401` removes the affected connection; the conversation remains durable and resumes after its owner
 reconnects the affected clusters. On the next turn, the conversation binds to that owner's current
 memory-only delegated session; ownership and the immutable cluster set are still enforced.
+Additional cluster logins append to that browser session without replacing its existing
+connections. Removing one connection revokes that token and invalidates only that cluster's proxy
+capabilities; conversations that require the removed cluster remain durable but cannot continue
+until it is reconnected.
 
 The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
 allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
-methods are rejected before the request reaches the cluster. Action capabilities inject the same
+methods and every Secret API read are rejected before the request reaches the cluster. Both modes
+use the same agent loop and expose the same investigation tools; the capability is the enforcement
+difference. Action capabilities inject the same
 user token without reducing its permissions, so Kubernetes RBAC, admission, quota, and policy are
 authoritative. The runner has neither the user token nor a projected service-account token.
 
@@ -135,19 +141,16 @@ For the runtime system cluster, PodPilot uses the in-cluster Kubernetes API and 
 service endpoints with their projected API and service CA bundles; the user's token still crosses
 the same memory-only broker and is evaluated by normal OpenShift RBAC.
 
-### Explicit unrestricted agent exception
+### Unified delegated agent loop
 
-This legacy feature-flag-off path remains for the disposable lab and existing compatibility tests.
-`deploy/openshift/overlays/sno-milestone-one/` and the optional
-`deploy/openshift/overlays/remote-poc-agentic/` deliberately enable
-`PODPILOT_AGENT_MODE=unrestricted` and add a localhost-only `oc-runner` sidecar. In this mode a
-Chat Completions model may execute arbitrary Bash and `oc` commands without PodPilot's read
-schemas, mutation preview, or approval workflow. This is an explicit test fixture, not a production
-security boundary. The base and standard `remote-poc` overlays remain guarded. The remote agentic
-overlay adds no RBAC of its own and therefore exercises every permission already granted to
-`podpilot-investigator` on that target cluster.
+Delegated Investigator and Action conversations use the same Chat Completions agent loop and the
+same tokenless localhost `oc-runner` sidecar. Investigator commands receive only the random
+read-only proxy capability; Action commands receive the action capability. The runner and model
+never receive the user's token. This makes the behavioral distinction read versus read-write rather
+than guarded planner versus unrestricted agent. Legacy non-delegated deployments may still select
+the older guarded planner with `PODPILOT_AGENT_MODE`, but it is not the deployed delegated workflow.
 
-The unrestricted loop exposes registered resource-list, object-field-search, HTTP-probe, metric,
+The shared agent loop exposes registered object-field-search, HTTP-probe, metric,
 and audit collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
 bounded presentation. The API never invokes them merely because a classifier or enrichment pack
@@ -161,7 +164,7 @@ Conversely, a successful registered observation is authoritative only for its de
 Collector completion never disconnects, cancels, or terminates the model loop; the model may
 interpret it, correlate it with another helper, verify it through shell, or answer.
 
-For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
+In legacy non-delegated mode, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators
 must perform the equivalent authorization review before applying the optional agentic overlay. Cluster RBAC and
 admission therefore remain the authoritative execution boundary. For a selected registered remote

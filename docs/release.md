@@ -442,6 +442,15 @@ summary must preserve the complete-coverage rule before confirming absence.
   longer than the runner deadline. They must also prove stdout/stderr are continuously drained,
   retained within the configured byte ceiling, and visibly marked when truncated. Both containers
   retain working liveness/readiness probes.
+- Delegated-mode parity tests must prove Investigator and Action conversations enter the same agent
+  loop with identical investigation tools. Investigator commands must receive only the read-only
+  capability; the proxy must allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while
+  rejecting writes, exec/attach/proxy/port-forward variants, and Secret reads. Action commands must
+  receive the action capability without exposing the user's token to the model or runner.
+- Delegated-session lifecycle tests must prove later logins append clusters to the current browser
+  session, individual removal revokes only the selected token, removed clusters disappear from new
+  conversation selectors, and existing conversations retain durable history while requiring
+  reconnection when one of their selected clusters is removed.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
   `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.

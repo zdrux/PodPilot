@@ -16,7 +16,7 @@ The pending implementation makes Ask user-delegated for every role, uses a 24-ho
 supports per-cluster TLS policy and private user-owned registry entries, and removes stored remote
 cluster credentials. Successful cluster sign-ins are reused across new conversations for the
 browser session. Partial login failures remain retryable without discarding successful connections;
-users can manage or clear cluster sign-ins independently of durable chat history, and an owned
+users can append clusters, revoke one sign-in, or clear all sign-ins independently of durable chat history, and an owned
 conversation can resume after its required clusters are reconnected. The deployed lab still has a
 two-hour session bound and verified remote TLS.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
@@ -48,10 +48,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   registry as cluster management, including the runtime system cluster. Approvers register additional
   DEV cluster API origins and optional custom CA bundles; users multi-select clusters, complete one-time username/password
   challenge logins, and receive two-hour memory-only delegated sessions. New conversations lock
-  their cluster set and execution mode. Unrestricted `oc` requests traverse a random loopback API
+  their cluster set and execution mode. All agent-selected `oc` requests traverse a random loopback API
   capability whose broker injects the user's token; the runner receives neither that token nor the
   Pod service-account token. Logout, expiry, replacement, disable, and graceful shutdown attempt
-  OAuth revocation. Managed role sessions remain guarded and use the read-only broker.
+  OAuth revocation. Investigator and Action sessions use the same agent loop; Investigator receives
+  the read-only proxy capability and Action receives the read-write capability.
 
 - New Ask sessions replace fictional prompt examples with real read-only starter actions. All
   eligible users can start failing-workload or recent-warning investigations against the selected
@@ -69,10 +70,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   runtime orchestration. The final agent sees bounded raw log evidence directly.
   The generic `list_resources` helper is absent from guarded and unrestricted agent schemas and has
   no runtime feature flag. Existing LIST evidence and low-level LIST operations inside purpose-built
-  typed collectors remain supported. Read-only agents use exact GETs, bounded field searches, API
-  discovery, and typed summaries; unrestricted delegated agents can enumerate with deliberately
-  bounded read-only `oc get` commands. Multi-cluster configuration comparisons require matching
-  exact-object evidence from every selected cluster and otherwise return insufficient evidence.
+  typed collectors remain supported. Both delegated modes can enumerate with deliberately bounded
+  read-only `oc get` commands and then fetch the exact object details required for comparison. The
+  broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide

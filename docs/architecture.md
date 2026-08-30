@@ -10,9 +10,10 @@ investigations. Deterministic clients gather cluster resources, events, logs,
 PromQL results, alert rules, and active alerts. Diagnostic tools normalize and
 correlate that evidence before an AI layer explains likely causes and next steps.
 
-The initial product is investigative by default and supports a small catalog of
-approved remediations. Mutations cross a dedicated policy boundary and must not
-be smuggled in through generic shell or unrestricted Kubernetes tools.
+The product is investigative by default. Delegated Investigator and Action conversations use the
+same agent loop and investigation tools; mutations cross a broker capability boundary. Investigator
+requests are read-only, while Action requests are evaluated with the signed-in user's Kubernetes
+RBAC and admission policy.
 
 ## Components
 
@@ -33,8 +34,9 @@ or optional grounded candidates only. Their completion, failure, result shape, o
 presentation hint cannot stop, continue, cancel, replace, or redirect an investigation.
 
 The orchestrator retains enforcement authority rather than investigative authority. It validates
-schemas and exact targets, denies sensitive resources and mutations, applies RBAC, redaction,
-read/time/output bounds, and requires approval at the mutation boundary. An invalid target may be
+schemas and exact targets, denies sensitive resources, applies the selected read-only or read-write
+proxy capability, RBAC, redaction, and time/output bounds, and retains preview plus explicit
+approval at the mutation boundary. An invalid target may be
 returned to the agent for correction, but the server does not substitute a different read. A valid
 agent decision to answer is accepted even when other candidates exist. A valid final answer is
 stored after redaction and safe-Markdown normalization without style rewrites, deterministic prose
@@ -51,17 +53,16 @@ log interpretation.
 
 ## Current Runtime
 
-The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
-agent path. The Chat Completions model can select typed `search_resources`, `http_probe`,
+Delegated Investigator and Action conversations share one agentic path. The Chat Completions model
+can select typed `search_resources`, `http_probe`,
 `query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
 shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
-The broad LIST collector remains behind the broker for deterministic internal use and rollback,
-but the shipped runtime disables it for guarded planning and unrestricted tool schemas omit it.
-Unrestricted enumeration uses bounded read-only `oc get` commands.
+The generic LIST helper is absent from agent schemas. Enumeration uses bounded read-only `oc get`
+commands in both conversation modes.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
@@ -91,7 +92,9 @@ conclusion requires its complete-scan flag; a resource inventory with compacted 
 substitute for complete health coverage.
 Each call identifies one cluster from the conversation's immutable selection. The API resolves that
 cluster's token from the conversation owner's in-memory delegated session and brokers the API origin,
-token, execution capability, and effective TLS mode over Pod loopback for that call only. The
+token, execution capability, and effective TLS mode over Pod loopback for that call only. Read-only
+capabilities allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while blocking writes and
+Secret reads; Action capabilities retain the user's full Kubernetes permissions. The
 `oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
 Linux `oc` binary, deletes the kubeconfig, and returns
 exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
@@ -156,11 +159,13 @@ connection failures, rate limits, and transient server responses while the durab
 remains the outer bound.
 
 In the current Ask architecture the sidecar has no projected service-account credential. FastAPI passes it only
-a random, cluster-specific loopback proxy capability; the proxy injects the user-owned in-memory
+a random, cluster-specific read-only or action loopback proxy capability; the proxy injects the user-owned in-memory
 OAuth token for each Kubernetes request and applies the cluster entry's TLS choice and optional CA
 trust. Conversation rows retain only `read_only` or `action`, the owning session ID, and immutable
-cluster IDs—never the token. The sidecar can therefore issue CREATE, PATCH, APPLY, and DELETE
-requests when the remote user's RBAC permits them, without receiving the bearer token itself.
+cluster IDs—never the token. After the applicable preview and approval controls, Action conversations
+can therefore issue CREATE, PATCH, APPLY, and DELETE requests when the remote user's RBAC permits
+them, while Investigator conversations receive broker HTTP 403 responses for those operations
+without receiving the bearer token itself.
 The picker reads shared entries plus the current user's private entries. Credentials are submitted
 for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses

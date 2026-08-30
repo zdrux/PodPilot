@@ -9,7 +9,12 @@ Ask is the product landing experience. Every cluster request uses a temporary Op
 created from the signed-in user's own credentials; PodPilot stores cluster metadata but no remote
 bearer tokens. Investigator conversations are always read-only. Read-Write users choose read-only
 or Action mode before the first message, and that mode plus the selected clusters remains locked.
+Both modes use the same autonomous investigation loop, typed collectors, and shell-backed `oc`
+capability. The broker gives Investigator mode a read-only Kubernetes capability and gives Action
+mode the user's full Kubernetes capability; product usefulness must not otherwise differ by mode.
 Users may maintain private cluster metadata alongside administrator-managed shared entries.
+Cluster sign-ins belong to the PodPilot browser session rather than a conversation: users may add
+more clusters later, remove one sign-in, or remove all sign-ins without deleting durable chats.
 Cluster Health is not part of the active navigation or remote access model.
 The **Show my access** starter runs deterministic cluster-wide Kubernetes
 SelfSubjectAccessReview checks for common workload resources and renders exactly one permission
@@ -40,7 +45,9 @@ cluster/workload in a lab or non-production environment.
 ## Product Principles
 
 - Evidence before explanation.
-- Investigation is read-only by default; mutations require a typed preview and fresh approval.
+- Investigation is read-only by default; the broker rejects every Kubernetes write in Investigator
+  mode. Action-mode mutations remain behind PodPilot's preview and explicit-approval boundary and
+  are additionally bounded by the signed-in user's RBAC and admission policy.
 - Least privilege and explicit scope.
 - Safe failure and honest uncertainty.
 - OpenShift-first UX with portable Kubernetes foundations.
@@ -51,8 +58,8 @@ cluster/workload in a lab or non-production environment.
 
 ## Non-Goals For The First Milestone
 
-- Autonomous remediation, arbitrary shell execution, or unrestricted model-generated patches.
+- Autonomous remediation in Investigator mode or any write that bypasses the conversation broker.
 - `cluster-admin` access.
-- Arbitrary shell access or an unbounded command interface over the cluster.
+- Direct cluster credentials or an unbrokered command interface over the cluster.
 - Production HA claims based on a single-node Hyper-V lab.
 - Hosting a large model on the SNO control-plane node.
