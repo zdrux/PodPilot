@@ -8000,6 +8000,9 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         assert "RBAC denied the mutation" in rendered.text
 
     assert runner.commands == ["oc auth can-i patch deployments --all-namespaces"]
+    system_prompt = str(provider.agent_messages[0][0]["content"])
+    assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
+    assert "Never fetch unbounded Pod logs by default" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])

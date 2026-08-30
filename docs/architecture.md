@@ -95,6 +95,10 @@ when to invoke them, how to interpret their observations, and whether to continu
 helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
 approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+The standing agent instructions require initial Pod and container log reads to use an exact scope
+when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
+The agent may narrow or expand subsequent reads in bounded increments when that sample is
+insufficient, rather than placing an arbitrary full log stream into every later model request.
 If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
 finalization retry using the command results already in context. A second empty turn fails the run;
 successful commands are not automatically repeated and the loop cannot retry indefinitely.

@@ -383,18 +383,18 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   padding-top: 1px;
 }
 .ask-thread .chat-meta strong { flex-basis: 100%; color: #f2f0eb; }
-.message-model-diagnostics { flex-basis: 100%; width: 100%; margin-top: 5px; color: #8293a8; }
-.message-model-diagnostics > summary { cursor: pointer; color: #7890aa; font-size: 8px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.message-model-diagnostics dl { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; margin: 8px 0 6px; }
+.message-model-diagnostics { flex-basis: 100%; width: 100%; margin-top: 7px; color: #8293a8; }
+.message-model-diagnostics > summary { cursor: pointer; color: #8da5bf; font-size: 11px; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.message-model-diagnostics dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin: 10px 0 8px; }
 .message-model-diagnostics dl div { min-width: 0; }
-.message-model-diagnostics dt { color: #718197; font-size: 7px; text-transform: uppercase; }
-.message-model-diagnostics dd { margin: 1px 0 0; color: #b8c5d5; font: 8px/1.35 "Cascadia Code", Consolas, monospace; }
-.message-model-diagnostics p, .message-model-diagnostics small { display: block; margin: 7px 0 0; color: #718197; font-size: 8px; line-height: 1.45; }
-.message-model-failures { margin-top: 9px; padding-top: 7px; border-top: 1px solid rgba(161, 177, 195, .14); }
-.message-model-failures > strong { color: #d8a08b; font-size: 8px; text-transform: uppercase; }
+.message-model-diagnostics dt { color: #8296ae; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.message-model-diagnostics dd { margin: 2px 0 0; color: #d2dce8; font: 11px/1.4 "Cascadia Code", Consolas, monospace; }
+.message-model-diagnostics p, .message-model-diagnostics small { display: block; margin: 8px 0 0; color: #8da0b8; font-size: 10px; line-height: 1.55; }
+.message-model-failures { margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(161, 177, 195, .14); }
+.message-model-failures > strong { color: #e2ac98; font-size: 10px; text-transform: uppercase; }
 .message-model-failures ul { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
 .message-model-failures li { min-width: 0; padding-left: 7px; border-left: 2px solid rgba(255, 126, 101, .45); }
-.message-model-failures span { display: block; color: #b8c5d5; font-size: 8px; overflow-wrap: anywhere; }
+.message-model-failures span { display: block; color: #c9d5e3; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .message-model-failures small { margin-top: 2px; overflow-wrap: anywhere; }
 .message-model-failures code { color: #8dc9d2; }
 .ask-thread .chat-markdown { margin-top: 0; color: #cbd3da; }
