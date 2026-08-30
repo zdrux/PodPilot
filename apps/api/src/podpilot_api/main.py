@@ -428,6 +428,10 @@ def _can_ask(user: AuthContext) -> bool:
     return user.role == Role.DELEGATED_OPERATOR or user.role >= Role.INVESTIGATOR
 
 
+def _can_manage_configuration(user: AuthContext) -> bool:
+    return user.role in {Role.APPROVER, Role.BREAKGLASS}
+
+
 def _delegated_session_id(request: Request) -> str:
     value = request.cookies.get(DELEGATED_SESSION_COOKIE, "").strip()
     return value if 32 <= len(value) <= 128 else ""
@@ -11446,8 +11450,8 @@ def create_app(
     async def cluster_settings(
         request: Request, user: AuthContext = Depends(current_user)
     ):
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver or Breakglass role.")
         csrf_token, csrf_is_new = _csrf_token(request)
         edit_id = request.query_params.get("edit", "").strip()
         with Session(request.app.state.engine) as db_session:
@@ -11479,8 +11483,8 @@ def create_app(
         request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver or Breakglass role.")
         form = await _urlencoded(request)
         cluster_id = form.get("cluster_id", "").strip()
         name = redact_text(form.get("name", "").strip())[:253]
@@ -11592,8 +11596,8 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver or Breakglass role.")
         form = await _urlencoded(request)
         name = redact_text(form.get("name", "").strip())[:253]
         if not name:
@@ -11647,8 +11651,8 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver or Breakglass role.")
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
@@ -11734,8 +11738,8 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Cluster management requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster management requires the Approver or Breakglass role.")
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
@@ -11771,6 +11775,8 @@ def create_app(
         request: Request,
         user: AuthContext = Depends(current_user),
     ):
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Model settings require the Approver or Breakglass role.")
         csrf_token, csrf_is_new = _csrf_token(request)
         with Session(request.app.state.engine) as db_session:
             rows = list(db_session.scalars(select(ModelProfile).order_by(ModelProfile.id)))
@@ -11841,8 +11847,8 @@ def create_app(
         user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Model settings require the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Model settings require the Approver or Breakglass role.")
         form = await _urlencoded(request)
         profile_id_text = form.get("profile_id", "").strip()
         provider_label = form.get("provider_label", "").strip()
@@ -11992,8 +11998,8 @@ def create_app(
         user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Testing model settings requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Testing model settings requires the Approver or Breakglass role.")
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id) if profile_id else _active_profile(db_session)
             if profile is None:
@@ -12101,8 +12107,8 @@ def create_app(
     @app.post("/api/v1/model-profiles/{profile_id}/activate")
     async def activate_model_profile(request: Request, profile_id: int, user: AuthContext = Depends(current_user)):
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Activating models requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Activating models requires the Approver or Breakglass role.")
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id)
             if profile is None:
@@ -12118,8 +12124,8 @@ def create_app(
     @app.post("/api/v1/model-profiles/{profile_id}/delete")
     async def delete_model_profile(request: Request, profile_id: int, user: AuthContext = Depends(current_user)):
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Deleting models requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Deleting models requires the Approver or Breakglass role.")
         with Session(request.app.state.engine) as db_session:
             profile = db_session.get(ModelProfile, profile_id)
             if profile is None:
@@ -12169,8 +12175,8 @@ def create_app(
 
     @app.get("/memory", response_class=HTMLResponse)
     async def cluster_memory(request: Request, user: AuthContext = Depends(current_user)):
-        if user.role < Role.INVESTIGATOR:
-            raise HTTPException(status_code=403, detail="Cluster memory requires the Investigator role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Cluster memory requires the Approver or Breakglass role.")
         csrf_token, csrf_is_new = _csrf_token(request)
         query = request.query_params.get("q", "").strip()[:500]
         namespace = request.query_params.get("namespace", "").strip()[:253] or None
@@ -12272,8 +12278,8 @@ def create_app(
     @app.post("/api/v1/knowledge")
     async def save_knowledge(request: Request, user: AuthContext = Depends(current_user)) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver or Breakglass role.")
         form = await _urlencoded(request)
         logical_id = form.get("logical_id", "").strip()
         title = redact_text(form.get("title", "").strip())[:253]
@@ -12382,8 +12388,8 @@ def create_app(
         document_id: str, request: Request, user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
         _verify_csrf(request)
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver role or higher.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(status_code=403, detail="Managing cluster memory requires the Approver or Breakglass role.")
         form = await _urlencoded(request)
         enabled_text = form.get("enabled", "").strip().lower()
         if enabled_text not in {"true", "false"}:

@@ -315,12 +315,41 @@
     <div class="ask-empty">
       <div class="radar" aria-hidden="true"></div>
       <h3>What should I investigate?</h3>
-      <p>Include the namespace and resource name when you know them. PodPilot will ask for narrower scope when a safe read cannot be planned.</p>
-      <div class="prompt-examples">
-        <span>Why is pod api-7d9 pending in payments?</span>
-        <span>Compare cluster DNS configuration with pod billing-worker</span>
-        <span>Check the logs for pod checkout-54b in store</span>
+      <p>Choose a read-only investigation to begin with the selected clusters, or enter a specific question below.</p>
+      {% if can_ask %}
+      <div class="prompt-starters" aria-label="Start an investigation">
+        <button type="button" data-starter-prompt="Find currently failing or unhealthy workloads across the selected clusters. Check Pending, CrashLoopBackOff, ImagePullBackOff, and failed Pods, plus Deployments, StatefulSets, and DaemonSets with unavailable replicas. Group findings by cluster and namespace, cite observed evidence, and do not make changes."
+          data-starter-available="{{ 'true' if model_ready and not active_run and not (agent_mode == 'unrestricted' and not delegated_session_active) else 'false' }}" disabled>
+          <strong>Find failing workloads</strong><small>Pending, crashing, image-pull, and unavailable workloads</small>
+        </button>
+        <button type="button" data-starter-prompt="Review Kubernetes warning events from the last hour across the selected clusters. Group recurring reasons by cluster and namespace, identify affected objects, rank the most frequent or recent warnings, cite observed evidence, and do not make changes."
+          data-starter-available="{{ 'true' if model_ready and not active_run and not (agent_mode == 'unrestricted' and not delegated_session_active) else 'false' }}" disabled>
+          <strong>Review recent warnings</strong><small>Recurring warning events from the last hour</small>
+        </button>
+        <button type="button" data-workload-starter-open
+          data-starter-available="{{ 'true' if model_ready and not active_run and not (agent_mode == 'unrestricted' and not delegated_session_active) else 'false' }}" disabled>
+          <strong>Troubleshoot a workload…</strong><small>Inspect a specific namespace and resource</small>
+        </button>
+        {% if is_delegated_mode %}
+        <button type="button" data-starter-prompt="Using read-only commands only, summarize what my delegated OpenShift identity can access on each selected cluster. Report relevant namespace scope and whether I can get, list, create, patch, and delete common workload resources. Do not make changes."
+          data-starter-available="{{ 'true' if model_ready and delegated_session_active and not active_run else 'false' }}" disabled>
+          <strong>Show my access</strong><small>Summarize the effective RBAC of your delegated identity</small>
+        </button>
+        <button type="button" data-starter-prompt="Using read-only commands only, list the OpenShift projects or Kubernetes namespaces visible to my delegated identity on each selected cluster. Include the cluster name and do not make changes."
+          data-starter-available="{{ 'true' if model_ready and delegated_session_active and not active_run else 'false' }}" disabled>
+          <strong>List my projects</strong><small>Show projects visible to your delegated identity</small>
+        </button>
+        {% endif %}
       </div>
+      <form class="workload-starter-form" data-workload-starter-form hidden>
+        <label>Namespace<input name="namespace" required maxlength="253" placeholder="Namespace"></label>
+        <label>Resource<input name="resource" required maxlength="253" placeholder="Pod, Deployment, or workload name"></label>
+        <div class="form-actions">
+          <button class="button primary compact-button" type="submit">Start investigation</button>
+          <button class="button secondary compact-button" type="button" data-workload-starter-cancel>Cancel</button>
+        </div>
+      </form>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -382,7 +411,7 @@
       {% else %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
+      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver or Breakglass user saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
     </div>
   </section>
 

@@ -9,8 +9,8 @@ selected.
 
 PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
 disposable SNO lab at schema head `0020_delegated_sessions`. The 2026-08-30 rollout uses
-application image digest `sha256:24c21e01eecf949ea2d2aea0a9adfa060e90541221e137754154beb9aff5efb7`
-and runner digest `sha256:911d1c5fe6e49d99ee138998ab48667c1275023ce35d0bdcdfd10064c86f671b`.
+application image digest `sha256:19cdd8ff9a651777b4a2ab12b7891b6d7c07396dda4b97cbf2696a55fcb86b9c`
+and runner digest `sha256:dbb8f35dec2105e09815ebc40e1a84df8b952d6f0273bbdeef35f9ded3aa49d0`.
 The lab has delegated access enabled, a two-hour in-memory session bound, verified remote TLS,
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
@@ -28,6 +28,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
+- Cluster, model, and curated-memory configuration now share one explicit management boundary:
+  only Approver and Breakglass sessions see the **Manage** navigation or may open and modify those
+  sections. Investigator, Viewer, and Delegated Operator requests are rejected server-side.
+
 - Branch `codex/delegated-unrestricted-sessions` adds explicit Delegated Operator sessions for users
   outside every configured PodPilot role group. The delegated picker uses the same enabled cluster
   registry as cluster management, including the runtime system cluster. Approvers register additional
@@ -37,6 +41,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   capability whose broker injects the user's token; the runner receives neither that token nor the
   Pod service-account token. Logout, expiry, replacement, disable, and graceful shutdown attempt
   OAuth revocation. Managed role sessions remain guarded and use the read-only broker.
+
+- New Ask sessions replace fictional prompt examples with real read-only starter actions. All
+  eligible users can start failing-workload or recent-warning investigations against the selected
+  clusters or open a namespace/resource workload troubleshooter; delegated sessions also expose
+  effective-access and visible-project checks. Starters
+  use the normal conversation API and stay disabled until cluster, model, and session prerequisites
+  are satisfied.
 
 - The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
   `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and
@@ -74,7 +85,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
   byte counts and truncation flags.
-  The model-free suite passes locally with 665 tests and 82% aggregate coverage.
+  The model-free suite passes locally with 733 tests and 81% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.

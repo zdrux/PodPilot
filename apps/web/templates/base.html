@@ -55,13 +55,12 @@
           </div>
           {% endif %}
         </div>
-        <p class="nav-label section-gap">Manage</p>
         {% if user is defined and user.role.value >= 30 %}
+        <p class="nav-label section-gap">Manage</p>
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
           Clusters
         </a>
-        {% endif %}
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory
@@ -70,6 +69,7 @@
           <span class="nav-icon" aria-hidden="true">⚙</span>
           Model settings
         </a>
+        {% endif %}
       </nav>
 
       {% if user is defined %}

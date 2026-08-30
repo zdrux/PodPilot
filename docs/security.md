@@ -297,8 +297,8 @@ its local `podpilot-htpasswd` provider.
 | --- | --- |
 | Any authenticated OpenShift user | Viewer: view health, alerts, investigations, collected evidence, and audit history |
 | Investigator groups | Start analyses and use investigation-scoped chat |
-| Approver groups | Approve registered low/moderate-risk actions |
-| Breakglass groups | Enter future high-risk approval workflows; no direct cluster-admin grant |
+| Approver groups | Manage cluster, model, and curated-memory configuration; approve registered low/moderate-risk actions |
+| Breakglass groups | The same configuration access as Approver plus future high-risk approval workflows; no direct cluster-admin grant |
 
 The GUI RoleBinding admits the built-in `system:authenticated` group to the exact
 PodPilot Service. The application defaults authenticated users to Viewer, accepts
@@ -306,6 +306,9 @@ multiple existing LDAP-synchronized OpenShift Groups for each elevated role, and
 assigns the highest match. Human users
 do not receive `cluster-reader` or mutation RBAC; the application records the
 authenticated actor separately from its runtime ServiceAccount.
+
+The **Manage** navigation and the cluster, model, and cluster-memory configuration
+pages are hidden from other roles and independently reject their API requests.
 
 The Route and Service expose only the OAuth proxy. FastAPI listens on Pod loopback,
 so clients cannot directly forge `X-Forwarded-User`. The proxy does not forward

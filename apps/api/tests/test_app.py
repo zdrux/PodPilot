@@ -11672,6 +11672,23 @@ def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:
         assert denied.status_code == 403
 
 
+def test_new_ask_renders_real_read_only_starter_actions(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource()
+    )
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+
+    assert page.status_code == 200
+    assert 'data-starter-prompt="Find currently failing or unhealthy workloads' in page.text
+    assert 'data-starter-prompt="Review Kubernetes warning events from the last hour' in page.text
+    assert "data-workload-starter-open" in page.text
+    assert "data-workload-starter-form" in page.text
+    assert "Why is pod api-7d9 pending" not in page.text
+    assert "Show my access" not in page.text
+    assert "List my projects" not in page.text
+
+
 def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -11745,6 +11762,10 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert "podpilot_delegated_session" in connected.headers["set-cookie"]
         ask_page = client.get("/ask", headers={"x-forwarded-user": "dana"})
         assert "Delegated unrestricted mode" in ask_page.text
+        assert "Find failing workloads" in ask_page.text
+        assert "Review recent warnings" in ask_page.text
+        assert "Show my access" in ask_page.text
+        assert "List my projects" in ask_page.text
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
@@ -12500,14 +12521,15 @@ def test_recent_ask_sessions_remain_visible_outside_ask_routes(tmp_path: Path) -
 
     with TestClient(app) as client:
         dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
-        memory = client.get("/memory", headers={"x-forwarded-user": "ivy"})
 
-    for response in (dashboard, memory):
-        assert response.status_code == 200
-        assert 'class="nav-tree expanded"' in response.text
-        assert 'aria-label="Ask PodPilot conversations"' in response.text
-        assert f'href="/ask/{conversation_id}"' in response.text
-        assert "Persistent sidebar session" in response.text
+    assert dashboard.status_code == 200
+    assert 'class="nav-tree expanded"' in dashboard.text
+    assert 'aria-label="Ask PodPilot conversations"' in dashboard.text
+    assert f'href="/ask/{conversation_id}"' in dashboard.text
+    assert "Persistent sidebar session" in dashboard.text
+    assert 'href="/settings/clusters"' not in dashboard.text
+    assert 'href="/settings/model"' not in dashboard.text
+    assert 'href="/memory"' not in dashboard.text
 
 
 def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
@@ -13585,9 +13607,9 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
     )
     with TestClient(app) as client:
         viewer_page = client.get("/settings/model", headers={"x-forwarded-user": "vic"})
-        assert viewer_page.status_code == 200
-        assert "Approver role or higher" in viewer_page.text
-        viewer_csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', viewer_page.text)
+        assert viewer_page.status_code == 403
+        dashboard = client.get("/", headers={"x-forwarded-user": "vic"})
+        viewer_csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
         assert viewer_csrf is not None
         denied = client.post(
             "/api/v1/model-profile",
@@ -13967,6 +13989,34 @@ def test_active_model_can_be_deleted_with_ready_fallback_or_no_model(tmp_path: P
         assert json.loads(events[1].details_json)["activated_profile_id"] is None
     engine.dispose()
     assert credentials.values == {}
+
+
+def test_management_sections_require_approver_or_breakglass(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path,
+        assignments={
+            "ivy": Role.INVESTIGATOR,
+            "ada": Role.APPROVER,
+            "bea": Role.BREAKGLASS,
+        },
+        source=FakeAlertSource(),
+    )
+
+    with TestClient(app) as client:
+        investigator_home = client.get("/", headers={"x-forwarded-user": "ivy"})
+        for path in ("/settings/clusters", "/settings/model", "/memory"):
+            assert client.get(path, headers={"x-forwarded-user": "ivy"}).status_code == 403
+            assert client.get(path, headers={"x-forwarded-user": "ada"}).status_code == 200
+            assert client.get(path, headers={"x-forwarded-user": "bea"}).status_code == 200
+
+        for href in ('/settings/clusters', '/settings/model', '/memory'):
+            assert f'href="{href}"' not in investigator_home.text
+
+        for username in ("ada", "bea"):
+            home = client.get("/", headers={"x-forwarded-user": username})
+            assert home.text.count('<p class="nav-label section-gap">Manage</p>') == 1
+            for href in ('/settings/clusters', '/settings/model', '/memory'):
+                assert f'href="{href}"' in home.text
 
 
 def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> None:

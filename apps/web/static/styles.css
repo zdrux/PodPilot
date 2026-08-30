@@ -462,8 +462,19 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 @media (prefers-reduced-motion: reduce) { .thinking-spinner { animation: none; } .answer-evidence > summary::before, .resource-result-group > summary::before { transition: none; } }
 .ask-empty { min-height: 390px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; }
 .ask-empty p { max-width: 570px; color: var(--muted); font-size: 11px; line-height: 1.65; }
-.prompt-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 680px; }
-.prompt-examples span { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: #8fa0b8; background: #0b1320; font-size: 9px; }
+.prompt-starters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; width: min(680px, 100%); margin-top: 8px; }
+.prompt-starters button { min-height: 66px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 9px; color: #d7e7f2; background: #0b1320; text-align: left; cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+.prompt-starters button:hover:not(:disabled) { border-color: rgba(69, 212, 232, .72); background: rgba(17, 39, 53, .94); transform: translateY(-1px); }
+.prompt-starters button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.prompt-starters button:disabled { cursor: not-allowed; opacity: .46; }
+.prompt-starters strong, .prompt-starters small { display: block; }
+.prompt-starters strong { color: #eefaff; font-size: 12px; line-height: 1.35; }
+.prompt-starters small { margin-top: 5px; color: #8fa0b8; font-size: 10px; line-height: 1.4; }
+.workload-starter-form { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(220px, 1.3fr) auto; align-items: end; gap: 9px; width: min(680px, 100%); margin-top: 10px; padding: 12px; border: 1px solid rgba(69, 212, 232, .35); border-radius: 9px; background: rgba(11, 24, 36, .94); text-align: left; }
+.workload-starter-form[hidden] { display: none; }
+.workload-starter-form label { color: #9db3c5; font-size: 10px; font-weight: 700; }
+.workload-starter-form input { width: 100%; min-height: 38px; margin-top: 5px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: #08111c; }
+.workload-starter-form .form-actions { flex-wrap: nowrap; margin: 0; }
 .answer-limitations { margin: 9px 0 0; padding-left: 17px; }
 .answer-limitations li { padding: 3px 0; color: var(--orange); font-size: 8px; line-height: 1.45; }
 .recommended-checks { margin-top: 15px; padding: 15px 16px; border: 1px solid rgba(69, 212, 232, .42); border-radius: 10px; background: linear-gradient(135deg, rgba(69, 212, 232, .12), rgba(27, 108, 132, .08)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .035); }
@@ -734,6 +745,8 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   .cluster-picker-menu { width: min(520px, calc(100vw - 32px)); }
   .composer-input-wrap textarea { padding-right: 12px; padding-bottom: 64px; }
   .composer-input-wrap > button { right: 9px; bottom: 9px; }
+  .prompt-starters { grid-template-columns: 1fr; }
+  .workload-starter-form { grid-template-columns: 1fr; }
 }
 
 /* Readability baseline: the interface previously used 8–11px text extensively. */
@@ -765,7 +778,8 @@ body { font-size: 15px; }
 .chat-form small { font-size: 11px; line-height: 1.45; }
 .raw-model-response > summary, .raw-model-response h4, .raw-response-switch strong { font-size: 12px; }
 .raw-model-response > p, .raw-model-response pre code, .raw-model-response > summary small, .raw-response-switch small { font-size: 11px; }
-.prompt-examples span { font-size: 12px; }
+.prompt-starters strong { font-size: 14px; }
+.prompt-starters small { font-size: 12px; }
 .ask-empty p, .chat-empty p, .chat-budget p { font-size: 13px; }
 .investigation-list strong { font-size: 14px; line-height: 1.4; }
 .investigation-list span { font-size: 12px; }

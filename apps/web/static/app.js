@@ -513,6 +513,8 @@
     });
   }
   const adhocForm = document.querySelector(".adhoc-chat-form");
+  const starterButtons = Array.from(document.querySelectorAll("[data-starter-prompt]"));
+  const starterActions = Array.from(document.querySelectorAll("[data-starter-available]"));
   const clusterPicker = document.querySelector("[data-cluster-picker]");
   if (clusterPicker) {
     const checkboxes = Array.from(clusterPicker.querySelectorAll("[data-cluster-checkbox]"));
@@ -544,6 +546,9 @@
         pickerLabel.setAttribute("aria-label", names.length ? `Selected clusters: ${names.join(", ")}` : "No clusters selected");
       }
       if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
+      starterActions.forEach((button) => {
+        button.disabled = button.dataset.starterAvailable !== "true" || bounded.length === 0;
+      });
     };
     checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => updatePicker(checkbox)));
     clusterPicker.querySelector("[data-cluster-search]")?.addEventListener("input", (event) => {
@@ -554,6 +559,47 @@
     });
     updatePicker();
   }
+  starterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!adhocForm || button.disabled) return;
+      const selected = Array.from(
+        adhocForm.querySelectorAll("[data-cluster-checkbox]:checked")
+      );
+      if (!selected.length) {
+        if (clusterPicker) clusterPicker.open = true;
+        if (toast) {
+          toast.textContent = "Select at least one cluster before starting an investigation.";
+          toast.hidden = false;
+        }
+        return;
+      }
+      const textarea = adhocForm.querySelector("textarea[name='message']");
+      if (!textarea) return;
+      textarea.value = button.dataset.starterPrompt || "";
+      textarea.dispatchEvent(new Event("input", {bubbles: true}));
+      adhocForm.requestSubmit();
+    });
+  });
+  const workloadStarterForm = document.querySelector("[data-workload-starter-form]");
+  document.querySelector("[data-workload-starter-open]")?.addEventListener("click", () => {
+    if (!workloadStarterForm) return;
+    workloadStarterForm.hidden = false;
+    workloadStarterForm.querySelector("input[name='namespace']")?.focus();
+  });
+  document.querySelector("[data-workload-starter-cancel]")?.addEventListener("click", () => {
+    if (workloadStarterForm) workloadStarterForm.hidden = true;
+  });
+  workloadStarterForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!adhocForm || !workloadStarterForm.checkValidity()) return;
+    const namespace = workloadStarterForm.elements.namespace.value.trim();
+    const resource = workloadStarterForm.elements.resource.value.trim();
+    const textarea = adhocForm.querySelector("textarea[name='message']");
+    if (!namespace || !resource || !textarea) return;
+    textarea.value = `Troubleshoot the workload or Pod named ${resource} in namespace ${namespace} across the selected clusters. Use read-only checks to inspect status, owner relationships, events, readiness, and relevant bounded logs. Cite observed evidence and do not make changes.`;
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+    adhocForm.requestSubmit();
+  });
   const delegatedConnectForm = document.querySelector("[data-delegated-connect-form]");
   if (delegatedConnectForm?.dataset.connectUrl) {
     delegatedConnectForm.addEventListener("submit", async (event) => {

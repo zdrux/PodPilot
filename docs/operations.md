@@ -203,6 +203,9 @@ The current deployment uses these variables:
   arrays may contain multiple existing groups or be empty, but the same group
   cannot map to more than one role; all arrays may be empty, leaving every
   authenticated user at Viewer
+- the **Manage** navigation and its Clusters, Model settings, and Cluster memory
+  pages are available only to users resolved as Approver or Breakglass; the API
+  applies the same authorization to configuration reads and writes
 - role-mapping environment changes require a Pod rollout; membership changes in
   an already configured OpenShift Group are observed after the role cache expires
 - `PODPILOT_ALERTMANAGER_URL`, defaulting to the in-cluster
@@ -403,6 +406,13 @@ discovering its Thanos Querier Route and authenticating with that cluster's regi
 bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
+The empty Ask view offers read-only starter actions for failing workloads and recent warning
+events, plus a scoped workload troubleshooter that collects a namespace and resource name.
+Delegated sessions additionally offer effective-access and visible-project summaries.
+Each button remains disabled until a cluster is selected and the model/session is ready, then
+submits its bounded prompt through the normal new-conversation endpoint with the current cluster
+selection and reasoning settings. Starter actions never contain write instructions.
+
 An Approver can edit the display name and tags of the automatically registered runtime cluster
 from **Manage → Clusters**. The display name is used on the dashboard, in new Ask evidence, and
 in future runtime-cluster operations. Tags make tag-scoped cluster memory eligible for the runtime
@@ -480,14 +490,13 @@ For namespaced resources, including operator-managed custom resources such as St
 and whether the bounded list was complete. A cluster-scoped read can therefore return more
 objects than an `oc get` issued after selecting one namespace.
 
-Investigators can open `/memory` and test scoped lexical retrieval for one cluster.
-Approvers can
-create cluster facts, runbooks, approved incident summaries, and product
+Approvers and Breakglass users can open `/memory`, test scoped lexical retrieval,
+and create cluster facts, runbooks, approved incident summaries, and product
 knowledge; revising an entry creates a new immutable version. Draft, disabled,
 expired, nonmatching, and wrong-namespace entries do not appear in results. An entry
 may select explicit clusters, require exact cluster tags, or leave both empty for global
 guidance. All required tags must match; explicit-cluster and tag matches use OR semantics.
-Restricted entries are visible only to Approvers and are not supplied to Ask. Assign an
+Restricted entries are visible only to Approvers and Breakglass users and are not supplied to Ask. Assign an
 expiry to operational facts likely to drift.
 
 The `0011_cluster_memory` migration creates the relational metadata/chunk tables
