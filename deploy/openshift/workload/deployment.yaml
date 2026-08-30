@@ -49,6 +49,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_inventory_max_objects
+            - name: PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_detail_fanout_max_objects
             - name: PODPILOT_ADHOC_MAX_PAYLOAD_BYTES
               valueFrom:
                 configMapKeyRef:

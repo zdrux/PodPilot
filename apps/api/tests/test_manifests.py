@@ -93,6 +93,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
+    assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"
     assert runtime["data"]["adhoc_max_payload_bytes"] == "96000"
     assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
     assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
@@ -107,6 +108,14 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert configured["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_inventory_max_objects",
+    }
+    detail_fanout = next(
+        item for item in env
+        if item["name"] == "PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS"
+    )
+    assert detail_fanout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_detail_fanout_max_objects",
     }
     payload_bytes = next(
         item for item in env if item["name"] == "PODPILOT_ADHOC_MAX_PAYLOAD_BYTES"

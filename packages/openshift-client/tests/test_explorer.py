@@ -378,6 +378,7 @@ def test_get_configmap_preserves_configuration_and_redacts_sensitive_keys():
     assert result.observations[0].data["data"] == {
         "UPSTREAM_DNS": "10.0.0.2", "password": "[REDACTED]"
     }
+    assert result.observations[0].data["podpilotEvidenceRole"] == "object_detail"
     assert "managedFields" not in result.observations[0].data["metadata"]
     assert dynamic.resources.calls == [{"api_version": "v1", "kind": "ConfigMap"}]
     assert resource.calls == [{"name": "api", "namespace": "payments"}]
@@ -549,6 +550,7 @@ def test_resource_name_resolves_from_discovery_and_compacts_list_payload():
 
     assert resources.calls == [{"api_version": "route.openshift.io/v1", "kind": "Route"}]
     assert result.observations[0].data["kind"] == "Route"
+    assert result.observations[0].data["podpilotEvidenceRole"] == "inventory"
     assert result.observations[0].data["items"][0]["spec"]["host"] == "api.example.test"
 
 

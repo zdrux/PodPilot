@@ -1226,6 +1226,15 @@ server-generated Markdown table containing every collected name. If the table
 states that the object list is incomplete, increase the ceiling deliberately
 rather than removing the bound.
 
+A LIST or bounded field search is inventory evidence, not configuration or health analysis. For
+an analysis question about a collection, PodPilot automatically follows a complete inventory with
+exact GETs only when the collection contains at most 10 objects. Configure this independent cap
+from 1 to 25 with `PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS`, or edit
+`data.adhoc_detail_fanout_max_objects` in `podpilot-runtime`. If inventory is incomplete, exceeds
+the cap, or does not retain every exact object reference, PodPilot performs no blanket or sampled
+GET fan-out and tells the operator to narrow the scope. A complete analysis claim requires exact
+GET detail for every listed object to be present in the final model context.
+
 Detailed object projections have a separate byte ceiling. Configure it with
 `PODPILOT_ADHOC_MAX_PAYLOAD_BYTES`, or edit `data.adhoc_max_payload_bytes` in
 `podpilot-runtime`. The shipped OpenShift value is 96,000 bytes and applies to both runtime and

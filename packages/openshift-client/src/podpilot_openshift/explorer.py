@@ -1650,6 +1650,7 @@ class KubernetesReadOnlyExplorer:
                     "names": object_names,
                     "objects": object_refs,
                     "items": projections,
+                    "podpilotEvidenceRole": "inventory",
                     "detailProjection": "kind_specific_bounded",
                     "fullObjectsIncluded": False,
                     "logCandidates": log_candidates,
@@ -1667,6 +1668,8 @@ class KubernetesReadOnlyExplorer:
         for obj in items:
             raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
             payload = _sanitize(raw)
+            if isinstance(payload, dict):
+                payload["podpilotEvidenceRole"] = "object_detail"
             if isinstance(payload, dict) and kind in {
                 "Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob",
             }:

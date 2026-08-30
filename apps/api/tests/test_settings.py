@@ -54,6 +54,18 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
         Settings(adhoc_inventory_max_objects=1001)
 
 
+def test_detail_fanout_ceiling_is_small_and_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS", "12")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_detail_fanout_max_objects == 12
+    with pytest.raises(ValidationError):
+        Settings(adhoc_detail_fanout_max_objects=0)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_detail_fanout_max_objects=26)
+
+
 def test_evidence_payload_ceiling_is_configurable(monkeypatch) -> None:
     monkeypatch.setenv("PODPILOT_ADHOC_MAX_PAYLOAD_BYTES", "96000")
 

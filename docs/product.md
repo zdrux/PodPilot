@@ -45,6 +45,9 @@ cluster/workload in a lab or non-production environment.
 - Safe failure and honest uncertainty.
 - OpenShift-first UX with portable Kubernetes foundations.
 - Deterministic diagnostics remain useful when the model is unavailable.
+- Resource LIST/search evidence is inventory only. Collection analysis uses exact GET evidence for
+  every object only when the complete collection fits the configured small fan-out bound; larger
+  collections must be narrowed and are reported as partial rather than sampled as if complete.
 
 ## Non-Goals For The First Milestone
 

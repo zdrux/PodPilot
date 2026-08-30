@@ -142,6 +142,9 @@ every identity authenticated by OpenShift receives that role automatically.
 The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for
 returned LIST evidence and `adhoc_search_max_scan_objects` to `"2000"` for bounded
 projected-field searches that return only matches.
+Collection analysis separately defaults `adhoc_detail_fanout_max_objects` to `"10"`. PodPilot
+automatically GETs every object only for complete inventories at or below this cap; larger or
+incomplete inventories remain inventory-only until the user narrows the request.
 Metric trends default to a 30-day range and 300 points per series through
 `adhoc_metrics_max_range_seconds: "2592000"` and
 `adhoc_metrics_max_points_per_series: "300"`. Thanos response bodies default to a bounded

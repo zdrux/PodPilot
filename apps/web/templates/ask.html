@@ -75,7 +75,7 @@
         <section class="resource-result" aria-labelledby="resource-result-{{ message.id }}">
           <div class="resource-result-heading">
             <div>
-              <span class="evidence-tool">Observed resources</span>
+              <span class="evidence-tool">Observed inventory</span>
               <h3 id="resource-result-{{ message.id }}">{{ presentation.title }}</h3>
               <p>{{ presentation.total_count }} unique matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster/resource group{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
             </div>
@@ -86,7 +86,7 @@
               <summary>
                 <span><strong>{{ group.cluster_name }}</strong><small>{{ group.kind }}{% if group.match_field %} · <code>{{ group.match_field }}</code> {{ group.match_operator }} <code>{{ group.match_value }}</code>{% endif %}</small></span>
                 <span class="resource-result-count">{{ group.count }} match{% if group.count != 1 %}es{% endif %}</span>
-                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Complete{% else %}Incomplete{% endif %}</span>
+                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Inventory complete{% else %}Inventory incomplete{% endif %}</span>
               </summary>
               {% if group.rows %}
               <div class="resource-result-toolbar">

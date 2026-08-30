@@ -22,8 +22,10 @@ from podpilot_api.main import (
     _adhoc_evidence_view,
     _agent_collector_error_detail,
     _bind_plan_log_intents,
+    _bounded_detail_fanout,
     _build_delegated_read_only_explorer,
     _classify_ad_hoc_inquiry,
+    _collection_object_analysis_requested,
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
     _compact_answer_evidence,
@@ -66,6 +68,7 @@ from podpilot_api.main import (
     _normalize_agent_collector_arguments,
     _recent_object_references,
     _resource_list_presentation,
+    _resource_analysis_coverage,
     _inquiry_reference_cluster_ids,
     _semantic_metric_read_plan,
     _semantic_audit_read_plan,
@@ -135,6 +138,120 @@ from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_collection_analysis_expands_only_small_complete_inventory() -> None:
+    inquiry = InquirySemantics(
+        mode="investigate", cardinality="collection",
+        resource_query="ClusterLogForwarder", needs_object_details=True,
+        evidence_goal="Analyze every ClusterLogForwarder configuration.",
+    )
+    observations = (AdHocObservation(
+        id="cluster-forwarders", tool="list_resources",
+        summary="Listed ClusterLogForwarders.", source="cluster-api",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "observability.openshift.io/v1",
+            "kind": "ClusterLogForwarder",
+            "resource": "clusterlogforwarders.observability.openshift.io",
+            "scope": "all-namespaces",
+            "count": 2,
+            "objectListComplete": True,
+            "objects": [
+                {"name": "instance", "namespace": "openshift-logging"},
+                {"name": "application", "namespace": "team-a"},
+            ],
+        },
+    ),)
+
+    assert _collection_object_analysis_requested(
+        "Analyze the cluster log forwarders", inquiry,
+    ) is True
+    intents, limitations = _bounded_detail_fanout(observations, max_objects=10)
+
+    assert limitations == []
+    assert intents == [
+        ReadIntent(
+            tool="get_resource",
+            resource="clusterlogforwarders.observability.openshift.io",
+            api_version="observability.openshift.io/v1",
+            kind="ClusterLogForwarder",
+            namespace="openshift-logging",
+            name="instance",
+        ),
+        ReadIntent(
+            tool="get_resource",
+            resource="clusterlogforwarders.observability.openshift.io",
+            api_version="observability.openshift.io/v1",
+            kind="ClusterLogForwarder",
+            namespace="team-a",
+            name="application",
+        ),
+    ]
+
+
+def test_collection_analysis_does_not_sample_large_inventory() -> None:
+    observations = (AdHocObservation(
+        id="cluster-namespaces", tool="list_resources",
+        summary="Listed Namespaces.", source="cluster-api",
+        collected_at=datetime.now(timezone.utc),
+        data={
+            "apiVersion": "v1", "kind": "Namespace", "resource": "namespaces",
+            "scope": "cluster", "count": 11, "objectListComplete": True,
+            "objects": [{"name": f"namespace-{index}"} for index in range(11)],
+        },
+    ),)
+
+    intents, limitations = _bounded_detail_fanout(observations, max_objects=10)
+
+    assert intents == []
+    assert limitations == [
+        "The Namespace LIST found 11 objects. Automatic object analysis is capped at 10, "
+        "so PodPilot performed no blanket GET fan-out; narrow the scope or apply a filter "
+        "for configuration-level analysis."
+    ]
+
+
+def test_resource_analysis_coverage_requires_details_in_final_model_context() -> None:
+    evidence = [{
+        "id": "inventory", "cluster_id": "central", "cluster_name": "Central",
+        "tool": "list_resources", "data": {
+            "apiVersion": "example.io/v1", "kind": "Widget",
+            "objectListComplete": True,
+            "objects": [
+                {"namespace": "one", "name": "first"},
+                {"namespace": "two", "name": "second"},
+            ],
+        },
+    }, {
+        "id": "first-detail", "cluster_id": "central", "cluster_name": "Central",
+        "tool": "get_resource", "data": {
+            "apiVersion": "example.io/v1", "kind": "Widget",
+            "metadata": {"namespace": "one", "name": "first"},
+        },
+    }, {
+        "id": "second-detail", "cluster_id": "central", "cluster_name": "Central",
+        "tool": "get_resource", "data": {
+            "apiVersion": "example.io/v1", "kind": "Widget",
+            "metadata": {"namespace": "two", "name": "second"},
+        },
+    }]
+    activity = [{
+        "status": "succeeded",
+        "evidence_ids": ["inventory", "first-detail", "second-detail"],
+    }]
+
+    coverage = _resource_analysis_coverage(
+        evidence=evidence, activity=activity, included_evidence_ids={"first-detail"},
+    )
+
+    assert coverage == [{
+        "cluster_id": "central", "cluster_name": "Central",
+        "api_version": "example.io/v1", "kind": "Widget",
+        "inventory_complete": True, "discovered_count": 2,
+        "inspected_count": 2, "details_supplied_count": 1,
+        "analysis_complete": False,
+    }]
 
 
 def _agent_accepts_seeded_evidence(*args, **kwargs) -> ReadPlan:
@@ -5993,6 +6110,105 @@ def test_inventory_details_begin_with_catalog_list_before_optional_planning() ->
     assert provider.contexts[0]["completed_reads"] == []
     assert provider.contexts[0]["read_candidates"]
     assert result.evidence == []
+
+
+def test_collection_analysis_auto_gets_every_object_in_small_complete_list() -> None:
+    class Provider:
+        def plan_ad_hoc(self, _profile, _api_key, context):
+            if not context["completed_reads"]:
+                return ReadPlan(
+                    goal_type="diagnose", decision="collect",
+                    scope_summary="List the forwarders before analyzing them.",
+                    intents=[ReadIntent(
+                        tool="list_resources",
+                        resource="clusterlogforwarders.observability.openshift.io",
+                        api_version="observability.openshift.io/v1",
+                        kind="ClusterLogForwarder", limit=20,
+                    )],
+                )
+            return ReadPlan(
+                goal_type="diagnose", decision="answer_from_evidence",
+                scope_summary="Every discovered forwarder was inspected.",
+                supporting_evidence_ids=[
+                    str(item["id"]) for item in context["observations"]
+                ],
+            )
+
+    class Explorer:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def resource_catalog(self, **_kwargs):
+            return [{
+                "resource": "clusterlogforwarders.observability.openshift.io",
+                "apiVersion": "observability.openshift.io/v1",
+                "kind": "ClusterLogForwarder", "namespaced": True,
+                "verbs": ["get", "list"],
+            }]
+
+        def execute(self, intent):
+            self.calls.append(intent)
+            if intent.tool == "list_resources":
+                return ReadResult((AdHocObservation(
+                    id="forwarder-inventory", tool="list_resources",
+                    summary="Listed ClusterLogForwarders.", source="cluster-api",
+                    collected_at=datetime.now(timezone.utc),
+                    data={
+                        "apiVersion": "observability.openshift.io/v1",
+                        "kind": "ClusterLogForwarder",
+                        "resource": "clusterlogforwarders.observability.openshift.io",
+                        "scope": "all-namespaces", "count": 2,
+                        "objectListComplete": True,
+                        "objects": [
+                            {"namespace": "openshift-logging", "name": "instance"},
+                            {"namespace": "team-a", "name": "application"},
+                        ],
+                    },
+                ),))
+            return ReadResult((AdHocObservation(
+                id=f"forwarder-{intent.name}", tool="get_resource",
+                summary=f"Read {intent.namespace}/{intent.name}.", source="cluster-api",
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "apiVersion": "observability.openshift.io/v1",
+                    "kind": "ClusterLogForwarder",
+                    "metadata": {"namespace": intent.namespace, "name": intent.name},
+                    "spec": {"outputs": []}, "status": {"conditions": []},
+                },
+            ),))
+
+    explorer = Explorer()
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer,
+        profile=ModelProfileConfig(
+            provider_label="test", base_url="https://models.example.test/v1",
+            chat_model="test", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200,
+        ),
+        api_key="test-api-token",
+        settings=Settings(
+            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            role_breakglass_groups=[], adhoc_detail_fanout_max_objects=10,
+        ),
+        actor="ivy", workflow_id="forwarder-analysis",
+        question="Analyze every cluster log forwarder and summarize its configuration.",
+        conversation=[], existing_evidence=[],
+        inquiry=InquirySemantics(
+            mode="investigate", cardinality="collection",
+            resource_query="ClusterLogForwarder", needs_object_details=True,
+            evidence_goal="Analyze every ClusterLogForwarder configuration.",
+        ),
+    ))
+
+    assert [(call.tool, call.namespace, call.name) for call in explorer.calls] == [
+        ("list_resources", None, None),
+        ("get_resource", "openshift-logging", "instance"),
+        ("get_resource", "team-a", "application"),
+    ]
+    assert [item["tool"] for item in result.activity] == [
+        "list_resources", "get_resource", "get_resource",
+    ]
+    assert not any("coverage is partial" in item for item in result.limitations)
 
 
 def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() -> None:

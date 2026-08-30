@@ -71,6 +71,7 @@ from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.adhoc import (
     DEFAULT_METRIC_RANGE_SECONDS,
+    AdHocObservation,
     InvestigationGap,
     PodLogCandidate,
     ReadIntent,
@@ -1184,6 +1185,184 @@ def _question_requires_object_details(question: str) -> bool:
         question,
     ))
     return not explicit_inventory
+
+
+def _collection_object_analysis_requested(
+    question: str, inquiry: InquirySemantics | None,
+) -> bool:
+    """Distinguish collection analysis from inventory and exact-object reads."""
+
+    if inquiry is not None:
+        if inquiry.cardinality == "exact_one" or inquiry.object_name:
+            return False
+        if inquiry.mode == "inventory" and not inquiry.needs_object_details:
+            return False
+        if inquiry.cardinality == "collection" and inquiry.needs_object_details:
+            return True
+        if not inquiry.resource_query:
+            return False
+    return _question_requires_object_details(question)
+
+
+def _bounded_detail_fanout(
+    observations: tuple[AdHocObservation, ...], *, max_objects: int,
+) -> tuple[list[ReadIntent], list[str]]:
+    """Compile exact GETs only for a complete, safely small inventory result."""
+
+    intents: list[ReadIntent] = []
+    limitations: list[str] = []
+    for observation in observations:
+        if observation.tool not in {"list_resources", "search_resources"}:
+            continue
+        data = observation.data
+        kind = str(data.get("kind") or "Resource")
+        complete = (
+            data.get("searchComplete") is True
+            if observation.tool == "search_resources" else
+            data.get("objectListComplete") is True
+        )
+        refs = [
+            item for item in (data.get("objects") or [])
+            if isinstance(item, dict) and item.get("name")
+        ]
+        declared_count = data.get("count")
+        count = (
+            int(declared_count)
+            if isinstance(declared_count, int) and not isinstance(declared_count, bool)
+            else len(refs)
+        )
+        if count == 0:
+            continue
+        if not complete:
+            limitations.append(
+                f"The {kind} LIST is inventory-only and incomplete, so PodPilot did not fan out "
+                "exact GETs or claim complete object analysis."
+            )
+            continue
+        if count > max_objects:
+            limitations.append(
+                f"The {kind} LIST found {count} objects. Automatic object analysis is capped at "
+                f"{max_objects}, so PodPilot performed no blanket GET fan-out; narrow the scope or "
+                "apply a filter for configuration-level analysis."
+            )
+            continue
+        if len(refs) != count:
+            limitations.append(
+                f"The {kind} LIST reported {count} objects but retained {len(refs)} exact object "
+                "references, so PodPilot did not claim complete object analysis."
+            )
+            continue
+        api_version = str(data.get("apiVersion") or "") or None
+        resource = str(data.get("resource") or "") or None
+        for ref in refs:
+            ref_kind = str(ref.get("kind") or kind)
+            if ref_kind.casefold() == "secret":
+                continue
+            namespace = ref.get("namespace")
+            if not namespace and data.get("scope") not in {None, "cluster"}:
+                namespace = data.get("scope")
+            intents.append(ReadIntent(
+                tool="get_resource",
+                resource=str(ref.get("resource") or resource or "") or None,
+                api_version=str(ref.get("apiVersion") or api_version or "") or None,
+                kind=ref_kind,
+                namespace=str(namespace) if namespace else None,
+                name=str(ref["name"]),
+            ))
+    return intents, limitations
+
+
+def _resource_analysis_coverage(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+    included_evidence_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
+    """Describe LIST discovery versus exact-GET coverage without model inference."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        if entry.get("status") == "succeeded"
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    inventories: dict[tuple[str, str, str], dict[str, object]] = {}
+    inspected: dict[tuple[str, str, str, str, str], str] = {}
+    for observation in evidence:
+        if str(observation.get("id") or "") not in current_ids:
+            continue
+        data = observation.get("data") if isinstance(observation.get("data"), dict) else {}
+        cluster_id = str(
+            observation.get("cluster_id") or observation.get("cluster_name") or "cluster"
+        )
+        cluster_name = str(
+            observation.get("cluster_name") or observation.get("cluster_id") or "cluster"
+        )
+        kind = str(data.get("kind") or "Resource")
+        api_version = str(data.get("apiVersion") or "unknown")
+        if observation.get("tool") in {"list_resources", "search_resources"}:
+            key = (cluster_id, api_version, kind)
+            entry = inventories.setdefault(key, {
+                "cluster_id": cluster_id,
+                "cluster_name": cluster_name,
+                "api_version": api_version,
+                "kind": kind,
+                "objects": set(),
+                "inventory_complete": True,
+            })
+            objects = entry["objects"]
+            assert isinstance(objects, set)
+            for ref in data.get("objects") or []:
+                if not isinstance(ref, dict) or not ref.get("name"):
+                    continue
+                namespace = str(
+                    ref.get("namespace")
+                    or (data.get("scope") if data.get("scope") != "cluster" else "")
+                    or ""
+                )
+                objects.add((namespace, str(ref["name"])))
+            complete = (
+                data.get("searchComplete") is True
+                if observation.get("tool") == "search_resources" else
+                data.get("objectListComplete") is True
+            )
+            entry["inventory_complete"] = bool(entry["inventory_complete"]) and complete
+        elif observation.get("tool") == "get_resource":
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+            name = str(metadata.get("name") or "")
+            if name:
+                inspected[(
+                    cluster_id, api_version, kind,
+                    str(metadata.get("namespace") or ""), name,
+                )] = str(observation.get("id") or "")
+
+    coverage: list[dict[str, object]] = []
+    for (cluster_id, api_version, kind), entry in inventories.items():
+        objects = entry.pop("objects")
+        assert isinstance(objects, set)
+        inspected_count = sum(
+            1 for namespace, name in objects
+            if (cluster_id, api_version, kind, namespace, name) in inspected
+        )
+        supplied_count = sum(
+            1 for namespace, name in objects
+            if (
+                (cluster_id, api_version, kind, namespace, name) in inspected
+                and (
+                    included_evidence_ids is None
+                    or inspected[(cluster_id, api_version, kind, namespace, name)]
+                    in included_evidence_ids
+                )
+            )
+        )
+        discovered_count = len(objects)
+        inventory_complete = bool(entry["inventory_complete"])
+        coverage.append({
+            **entry,
+            "discovered_count": discovered_count,
+            "inspected_count": inspected_count,
+            "details_supplied_count": supplied_count,
+            "analysis_complete": inventory_complete and supplied_count == discovered_count,
+        })
+    return coverage
 
 
 def _requested_metadata_fields(question: str) -> set[str]:
@@ -4315,6 +4494,7 @@ def _model_fact_cards(
     question: str = "",
     max_cards: int = 8,
     total_byte_limit: int = 8_000,
+    prioritize_object_details: bool = False,
 ) -> list[dict[str, object]]:
     """Normalize observations into small, resource-agnostic model evidence cards."""
 
@@ -4341,6 +4521,27 @@ def _model_fact_cards(
     ordered.extend(
         reversed([item for item in evidence if str(item.get("id")) not in current_ids])
     )
+    if prioritize_object_details:
+        cluster_order: list[str] = []
+        by_cluster: dict[str, list[dict[str, object]]] = {}
+        for item in ordered:
+            cluster = str(
+                item.get("cluster_id") or item.get("cluster_name") or "cluster"
+            )
+            if cluster not in by_cluster:
+                by_cluster[cluster] = []
+                cluster_order.append(cluster)
+            by_cluster[cluster].append(item)
+        for items in by_cluster.values():
+            items.sort(key=lambda item: (
+                0 if item.get("tool") == "get_resource" else
+                2 if item.get("tool") in {"list_resources", "search_resources"} else 1
+            ))
+        ordered = []
+        while any(by_cluster.values()):
+            for cluster in cluster_order:
+                if by_cluster[cluster]:
+                    ordered.append(by_cluster[cluster].pop(0))
     cards: list[dict[str, object]] = []
     used_bytes = 0
     for item in ordered:
@@ -4351,6 +4552,15 @@ def _model_fact_cards(
         card: dict[str, object] = {
             "id": str(item["id"]),
             "cluster": str(item.get("cluster_name") or item.get("cluster_id") or "cluster")[:253],
+            "tool": str(item.get("tool") or "")[:80],
+            "evidence_role": str(
+                data.get("podpilotEvidenceRole")
+                or (
+                    "inventory"
+                    if item.get("tool") in {"list_resources", "search_resources"} else
+                    "object_detail" if item.get("tool") == "get_resource" else "observation"
+                )
+            )[:40],
             "summary": redact_text(str(item.get("summary") or "Observed cluster evidence."))[:500],
             "facts": list(view.get("facts") or [])[:12],
         }
@@ -4462,6 +4672,19 @@ def _model_fact_cards(
                     for detail in card["material_details"][:2]
                     if isinstance(detail, dict)
                 ]
+            elif card.get("material_details"):
+                detail = next((
+                    item for item in card["material_details"]
+                    if isinstance(item, dict)
+                ), {})
+                card["material_details"] = [{
+                    key: (
+                        _compact_provider_value(value, string_limit=180, list_limit=4)
+                        if key in {"spec", "status"} else value
+                    )
+                    for key, value in detail.items()
+                    if key in {"kind", "namespace", "name", "spec", "status"}
+                }]
             else:
                 card.pop("material_details", None)
             card["names"] = list(card.get("names") or [])[:8]
@@ -4689,6 +4912,8 @@ def _grounded_read_candidates(
     investigation_gaps: list[InvestigationGap] | None = None,
     catalog_entries: list[dict[str, object]] | None = None,
     preferred_resource_query: str | None = None,
+    collection_analysis_required: bool = False,
+    detail_fanout_limit: int = 10,
     limit: int = 12,
 ) -> list[_GroundedReadCandidate]:
     """Build compact non-executable choices backed only by trusted server state."""
@@ -4853,9 +5078,31 @@ def _grounded_read_candidates(
         api_version = str(data.get("apiVersion") or "") or None
         resource = str(data.get("resource") or "") or None
         evidence_id = str(observation.get("id") or "")
-        for ref in (data.get("objects") or [])[:8]:
-            if not isinstance(ref, dict) or not ref.get("name"):
+        refs = [
+            ref for ref in (data.get("objects") or [])
+            if isinstance(ref, dict) and ref.get("name")
+        ]
+        if collection_analysis_required:
+            complete = (
+                data.get("searchComplete") is True
+                if observation.get("tool") == "search_resources" else
+                data.get("objectListComplete") is True
+            )
+            declared_count = data.get("count")
+            count = (
+                int(declared_count)
+                if isinstance(declared_count, int) and not isinstance(declared_count, bool)
+                else len(refs)
+            )
+            if not complete or count > detail_fanout_limit or len(refs) != count:
+                # Large or incomplete inventories require a narrower query or a
+                # typed aggregate collector. Do not turn the first few rows into
+                # an apparently representative object-analysis sample.
                 continue
+            refs = refs[:detail_fanout_limit]
+        else:
+            refs = refs[:8]
+        for ref in refs:
             ref_kind = str(ref.get("kind") or kind)
             ref_api_version = str(ref.get("apiVersion") or api_version or "") or None
             ref_resource = str(ref.get("resource") or resource or "") or None
@@ -8029,6 +8276,9 @@ async def _collect_bounded_cluster_reads(
         if inquiry is not None
         else not _question_requires_object_details(question)
     )
+    collection_analysis_required = _collection_object_analysis_requested(
+        question, inquiry,
+    )
     if recovery_anchor_plan is None and inventory_request:
         catalog_question = (
             f"list {inquiry.resource_query}"
@@ -8212,6 +8462,8 @@ async def _collect_bounded_cluster_reads(
                 seen_intents=seen_intents,
                 investigation_gaps=investigation_gaps,
                 catalog_entries=catalog_entries,
+                collection_analysis_required=collection_analysis_required,
+                detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
             )
             requested_candidate = next((
                 candidate for candidate in requested_candidates
@@ -8254,6 +8506,8 @@ async def _collect_bounded_cluster_reads(
                         if inquiry is not None and inquiry.mode == "inventory"
                         else None
                     ),
+                    collection_analysis_required=collection_analysis_required,
+                    detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
                 )
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -8502,6 +8756,41 @@ async def _collect_bounded_cluster_reads(
                 result = await run_in_threadpool(cluster_reader.execute, intent)
                 evidence.extend(item.to_dict() for item in result.observations)
                 limitations.extend(result.limitations)
+                if (
+                    collection_analysis_required
+                    and intent.tool in {"list_resources", "search_resources"}
+                ):
+                    detail_intents, fanout_limitations = _bounded_detail_fanout(
+                        result.observations,
+                        max_objects=settings.adhoc_detail_fanout_max_objects,
+                    )
+                    limitations.extend(fanout_limitations)
+                    pending_cost = sum(
+                        _investigation_unit_cost(pending)
+                        for pending in intent_queue[queue_index:]
+                    )
+                    available_units = max(
+                        0, regular_unit_ceiling - units_used - pending_cost
+                    )
+                    covered_or_scheduled = 0
+                    for detail_intent in detail_intents:
+                        detail_signature = _read_intent_signature(detail_intent)
+                        detail_cost = _investigation_unit_cost(detail_intent)
+                        if detail_signature in seen_intents:
+                            covered_or_scheduled += 1
+                            continue
+                        if detail_cost > available_units:
+                            continue
+                        seen_intents.add(detail_signature)
+                        intent_queue.append(detail_intent)
+                        available_units -= detail_cost
+                        covered_or_scheduled += 1
+                    if covered_or_scheduled < len(detail_intents):
+                        limitations.append(
+                            f"PodPilot discovered {len(detail_intents)} objects eligible for exact "
+                            "analysis but the bounded read budget could not cover all of them; analysis "
+                            "coverage is partial."
+                        )
                 probe_failed = intent.tool == "http_probe" and any(
                     item.data.get("outcome") == "failed" for item in result.observations
                 )
@@ -10341,6 +10630,24 @@ def create_app(
                 answer_findings = _compact_answer_findings(
                     derive_adhoc_findings(answer_evidence), total_byte_limit=12_000
                 )[:8]
+                answer_facts = _model_fact_cards(
+                    answer_evidence,
+                    activity=activity,
+                    question=message_text,
+                    max_cards=8,
+                    total_byte_limit=8_000,
+                    prioritize_object_details=True,
+                )
+                analysis_coverage = (
+                    _resource_analysis_coverage(
+                        evidence=answer_evidence, activity=activity,
+                        included_evidence_ids={
+                            str(item.get("id") or "") for item in answer_facts
+                        },
+                    )
+                    if _collection_object_analysis_requested(source_question, inquiry)
+                    else []
+                )
                 answer_context: dict[str, object] = {
                     "clusters": [_cluster_summary(item) for item in selected_clusters],
                     "question": provider_question,
@@ -10354,9 +10661,7 @@ def create_app(
                     "earlier_context_summary": redact_text(context_summary)[-1500:],
                     "scope_summary": collected_scope_summary,
                     "observations": answer_observations,
-                    "facts": _model_fact_cards(
-                        answer_evidence, activity=activity, question=message_text,
-                    ),
+                    "facts": answer_facts,
                     "curated_knowledge": knowledge_context[:6],
                     "evidence_context": answer_context_metadata,
                     "findings": answer_findings,
@@ -10367,6 +10672,7 @@ def create_app(
                     ),
                     "model_log_analysis": None,
                     "collection_limitations": _dedupe_limitations(limitations, limit=10),
+                    "analysis_coverage": analysis_coverage,
                 }
                 if inquiry is not None:
                     answer_context["inquiry"] = inquiry.model_dump()

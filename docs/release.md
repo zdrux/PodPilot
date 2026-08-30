@@ -342,7 +342,12 @@ still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight,
 and budgets. When a corrected action selection contains only malformed object reads, PodPilot must
 discard them, execute nothing, and safely answer from evidence already collected instead of reporting
 a failed collection round. Query-relevant catalog matches must remain available beside relationship candidates, and
-bounded LIST/search results must become exact GET candidates on the next round. Actual provider payloads
+bounded LIST/search results must become exact GET candidates on the next round. Provider payloads
+must label LIST/search evidence as inventory-only. A complete collection at or below the configured
+detail fan-out cap must compile to exact GETs for every non-sensitive object; incomplete or oversized
+collections must compile to no blanket GETs and must report the need to narrow scope. Tests must also
+prove that analysis coverage remains incomplete when any discovered object's GET detail is absent
+from the final model context, even if that GET executed successfully. Actual provider payloads
 must omit graph, ledger, tool policy, executable candidate intents, raw observation envelopes, and
 domain-specific teaching; only a bounded policy-filtered catalog projection may be included. Tests must
 assert planner caps of six fact cards/5 KB, twelve action ID/label pairs, and twelve catalog entries. The concise final-answer payload must assert
