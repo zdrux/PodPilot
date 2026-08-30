@@ -7,6 +7,10 @@
     <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
+        {% if is_delegated_mode %}
+        <a class="button secondary compact-button" href="/delegated/connect">Cluster sign-ins</a>
+        {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
+        {% endif %}
         <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
           data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' and is_delegated_mode %}• Delegated unrestricted mode — The agent may create, patch, apply, or delete objects without PodPilot approval. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC applies as you.&#10;{% elif agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode != 'unrestricted' %} PodPilot remains read-only.{% endif %}"
           aria-label="Session cautions. {% if agent_mode == 'unrestricted' and is_delegated_mode %}Delegated unrestricted mode: the model can change selected clusters using your OpenShift identity and RBAC. {% elif agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary shell and oc commands. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
@@ -355,7 +359,7 @@
 
     <div class="ask-composer">
       {% if is_delegated_mode and not delegated_session_active %}
-      <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}{% endif %}">Reconnect clusters</a> to continue this conversation.</p></div>
+      <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}&amp;retry={{ missing_delegated_cluster_ids | join(',') }}{% endif %}">Reconnect the missing clusters</a> to continue this conversation, or <a href="/ask?new=1">start a new conversation</a> with the clusters that are still connected.</p></div>
       {% endif %}
       {% if can_ask %}
       <form class="chat-form adhoc-chat-form" method="post"
@@ -389,7 +393,7 @@
               </div>
             </details>
             <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
-            {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
+            {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">Change</a>{% endif %}
           </div>
           <div class="composer-controls">
             {% if not conversation and is_delegated_mode %}

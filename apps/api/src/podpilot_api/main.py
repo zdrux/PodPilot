@@ -11355,6 +11355,12 @@ def create_app(
             ))
             cluster_names = {item.id: item.name for item in clusters}
             recent = recent_conversations_for(db_session, user.username)
+        visible_cluster_ids = {item.id for item in clusters}
+        retry_cluster_ids = [
+            item
+            for item in request.query_params.get("retry", "").split(",")
+            if item in visible_cluster_ids
+        ]
         response = templates.TemplateResponse(
             request=request,
             name="delegated_connect.html",
@@ -11370,12 +11376,13 @@ def create_app(
                     "expires_at": item.expires_at,
                 } for item in connections],
                 "connected_cluster_ids": [item.cluster_id for item in connections],
+                "retry_cluster_ids": retry_cluster_ids,
                 "session_hours": round(app_settings.delegated_session_lifetime_seconds / 3600, 1),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "next_url": (
                     request.query_params.get("next", "")
                     if request.query_params.get("next", "").startswith("/ask")
-                    else "/ask"
+                    else "/ask?new=1"
                 ),
             },
         )
@@ -11392,7 +11399,10 @@ def create_app(
     ) -> JSONResponse:
         _verify_csrf(request)
         if not _can_ask(user) or not app_settings.delegated_access_enabled:
-            raise HTTPException(status_code=403, detail="Delegated cluster login is unavailable for this role.")
+            raise HTTPException(
+                status_code=403,
+                detail="Delegated cluster login is unavailable for this role.",
+            )
         if not request.app.state.delegated_vault.allow_login(
             owner=user.username,
             attempts_per_minute=app_settings.delegated_login_attempts_per_minute,
@@ -11477,10 +11487,70 @@ def create_app(
                 db_session.commit()
         password = ""
         if not connected:
-            raise HTTPException(status_code=401, detail="None of the selected cluster logins succeeded.")
+            return JSONResponse(
+                {
+                    "detail": "None of the selected cluster logins succeeded.",
+                    "connected": [],
+                    "failed": failed,
+                },
+                status_code=401,
+            )
         response = JSONResponse({"status": "connected", "connected": connected, "failed": failed})
         _set_delegated_session_cookie(response, session_id, app_settings)
         return response
+
+    @app.post("/api/v1/delegated-sessions/disconnect")
+    async def disconnect_delegated_clusters(
+        request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        if not _can_ask(user) or not app_settings.delegated_access_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Delegated cluster login is unavailable for this role.",
+            )
+        session_id = _delegated_session_id(request)
+        connections = request.app.state.delegated_vault.pop_session(
+            session_id=session_id, owner=user.username
+        ) if session_id else []
+        with Session(request.app.state.engine) as db_session:
+            cluster_by_id = {
+                item.id: item for item in db_session.scalars(
+                    select(Cluster).where(
+                        Cluster.id.in_([item.cluster_id for item in connections])
+                    )
+                )
+            }
+        disconnected: list[dict[str, object]] = []
+        for connection in connections:
+            cluster = cluster_by_id.get(connection.cluster_id)
+            revoked = False
+            if cluster is not None:
+                revoked = await run_in_threadpool(
+                    delegated_login_client(cluster).revoke, connection.token
+                )
+            disconnected.append({
+                "cluster_id": connection.cluster_id,
+                "cluster_name": (
+                    cluster.name if cluster is not None else connection.cluster_id
+                ),
+                "revoked": revoked,
+            })
+        if disconnected:
+            with Session(request.app.state.engine) as db_session:
+                for item in disconnected:
+                    db_session.add(AuditEvent(
+                        actor=user.username,
+                        action="delegated.cluster.disconnect",
+                        outcome="revoked" if item["revoked"] else "removed",
+                        details_json=json.dumps({
+                            "cluster_id": item["cluster_id"],
+                            "cluster_name": item["cluster_name"],
+                            "remote_revoked": item["revoked"],
+                        }, sort_keys=True),
+                    ))
+                db_session.commit()
+        return JSONResponse({"status": "disconnected", "disconnected": disconnected})
 
     @app.get("/session/logout")
     async def logout_session(
@@ -11582,6 +11652,7 @@ def create_app(
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": turn_agent_mode,
                 "delegated_session_active": bool(delegated_connections),
+                "missing_delegated_cluster_ids": [],
                 "is_delegated_mode": app_settings.delegated_access_enabled,
                 "can_use_action_mode": _can_use_action_mode(user),
                 "can_ask": _can_ask(user),
@@ -11614,13 +11685,14 @@ def create_app(
                 else "guarded"
             )
             delegated_session_active = False
+            connected_ids: set[str] = set()
             if conversation.delegated_session_id:
                 current_session_id = _delegated_session_id(request)
                 connected_ids = {
                     item.cluster_id for item in request.app.state.delegated_vault.list_for(
                         session_id=current_session_id, owner=user.username
                     )
-                } if current_session_id == conversation.delegated_session_id else set()
+                } if current_session_id else set()
                 delegated_session_active = set(
                     json.loads(conversation.cluster_ids_json or "[]")
                 ).issubset(connected_ids)
@@ -11651,6 +11723,9 @@ def create_app(
                 else _preferred_reasoning_effort(db_session, user.username, profile)
             )
             conversation_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
+            missing_delegated_cluster_ids = [
+                item for item in conversation_cluster_ids if item not in connected_ids
+            ] if conversation.delegated_session_id else []
             available_clusters = list(db_session.scalars(
                 select(Cluster).where(
                     (Cluster.is_enabled.is_(True)) | (Cluster.id.in_(conversation_cluster_ids))
@@ -11730,6 +11805,7 @@ def create_app(
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": turn_agent_mode,
                 "delegated_session_active": delegated_session_active,
+                "missing_delegated_cluster_ids": missing_delegated_cluster_ids,
                 "is_delegated_mode": bool(conversation.delegated_session_id),
                 "can_use_action_mode": _can_use_action_mode(user),
                 "can_ask": _can_ask(user),
@@ -11874,7 +11950,7 @@ def create_app(
                     item.cluster_id for item in request.app.state.delegated_vault.list_for(
                         session_id=session_id, owner=user.username
                     )
-                } if session_id == conversation.delegated_session_id else set()
+                } if session_id else set()
                 if not set(json.loads(conversation.cluster_ids_json or "[]")).issubset(connected_ids):
                     raise HTTPException(
                         status_code=409,
@@ -11883,6 +11959,7 @@ def create_app(
                             "Reconnect the affected clusters to continue this conversation."
                         ),
                     )
+                conversation.delegated_session_id = session_id
             if "reasoning_effort" in form:
                 _save_reasoning_preference(
                     db_session,
@@ -11938,12 +12015,13 @@ def create_app(
                     item.cluster_id for item in request.app.state.delegated_vault.list_for(
                         session_id=session_id, owner=user.username
                     )
-                } if session_id == conversation.delegated_session_id else set()
+                } if session_id else set()
                 if not set(json.loads(conversation.cluster_ids_json or "[]")).issubset(connected_ids):
                     raise HTTPException(
                         status_code=409,
                         detail="Reconnect the affected clusters to continue this conversation.",
                     )
+                conversation.delegated_session_id = session_id
             activity = json.loads(message.tool_activity_json or "{}")
             actions = activity.get("suggested_followup_actions") or []
             action = next((

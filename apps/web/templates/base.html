@@ -12,7 +12,7 @@
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <a class="brand" href="/ask" aria-label="PodPilot home">
+      <a class="brand" href="/ask?new=1" aria-label="PodPilot home">
         <span class="brand-mark" aria-hidden="true">P</span>
         <span>
           <strong>PodPilot</strong>
@@ -29,7 +29,7 @@
         </a>
         {% endif %}
         <div class="nav-tree {% if recent_conversations is defined and recent_conversations %}expanded{% endif %}">
-          <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
+          <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask?new=1">
             <span class="nav-icon" aria-hidden="true">✦</span>
             Ask PodPilot
           </a>
@@ -37,7 +37,7 @@
           <div class="nav-subtree" aria-label="Ask PodPilot conversations">
             <div class="nav-subtree-heading">
               <span>Sessions</span>
-              <a href="/ask" title="New conversation" aria-label="New conversation">+</a>
+              <a href="/ask?new=1" title="New conversation" aria-label="New conversation">+</a>
             </div>
             <ul class="nav-session-list">
               {% for item in recent_conversations %}

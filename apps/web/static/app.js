@@ -543,7 +543,7 @@
         const selectedEnvironment = bounded[0]?.dataset.environment || "";
         checkboxes.forEach((item) => {
           if (!item.checked) {
-            item.disabled = Boolean(
+            item.disabled = item.dataset.connected === "true" || Boolean(
               selectedEnvironment && item.dataset.environment !== selectedEnvironment
             );
           }
@@ -638,20 +638,63 @@
           body: new URLSearchParams(new FormData(delegatedConnectForm)),
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.detail || "PodPilot could not connect the selected clusters.");
-        const failed = Array.isArray(payload.failed) ? payload.failed.length : 0;
+        if (!response.ok) {
+          const failedNames = Array.isArray(payload.failed)
+            ? payload.failed.map((item) => item.cluster_name).filter(Boolean)
+            : [];
+          throw new Error(
+            failedNames.length
+              ? `${payload.detail || "Cluster login failed"} ${failedNames.join(", ")}. Check the credentials and retry.`
+              : payload.detail || "PodPilot could not connect the selected clusters.",
+          );
+        }
+        const failedItems = Array.isArray(payload.failed) ? payload.failed : [];
+        const failed = failedItems.length;
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
           tone: failed ? "warning" : "success",
-          message: failed ? `${payload.connected.length} cluster(s) connected; ${failed} failed.` : `${payload.connected.length} cluster(s) connected.`,
+          message: failed
+            ? `${payload.connected.length} cluster(s) connected. Retry required for: ${failedItems.map((item) => item.cluster_name).join(", ")}.`
+            : `${payload.connected.length} cluster(s) connected.`,
         }));
-        const nextUrl = delegatedConnectForm.elements.next_url?.value || "/ask";
-        window.location.assign(nextUrl.startsWith("/ask") ? nextUrl : "/ask");
+        const nextUrl = delegatedConnectForm.elements.next_url?.value || "/ask?new=1";
+        if (failed) {
+          const retryUrl = new URL("/delegated/connect", window.location.origin);
+          retryUrl.searchParams.set("retry", failedItems.map((item) => item.cluster_id).join(","));
+          retryUrl.searchParams.set("next", nextUrl.startsWith("/ask") ? nextUrl : "/ask?new=1");
+          window.location.assign(`${retryUrl.pathname}${retryUrl.search}`);
+        } else {
+          window.location.assign(nextUrl.startsWith("/ask") ? nextUrl : "/ask?new=1");
+        }
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = "Connect selected clusters"; }
       }
     });
   }
+  document.querySelector("[data-delegated-disconnect-url]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (!csrf || !window.confirm("Clear and revoke every current cluster sign-in? Your saved cluster list and conversations will remain.")) return;
+    button.disabled = true;
+    button.textContent = "Clearing…";
+    try {
+      const response = await fetch(button.dataset.delegatedDisconnectUrl, {
+        method: "POST",
+        headers: {"X-PodPilot-CSRF": csrf},
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "PodPilot could not clear the cluster sign-ins.");
+      window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+        tone: "success",
+        message: "Cluster sign-ins cleared. Select clusters and sign in again.",
+      }));
+      window.location.assign("/delegated/connect");
+    } catch (error) {
+      if (toast) { toast.textContent = error.message; toast.hidden = false; }
+      button.disabled = false;
+      button.textContent = "Clear cluster sign-ins";
+    }
+  });
   const appendOptimisticTurn = (question) => {
     const panel = document.querySelector(".ask-panel");
     if (!panel) return null;

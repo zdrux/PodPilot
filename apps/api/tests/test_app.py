@@ -12188,6 +12188,8 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
 ) -> None:
     from podpilot_openshift.delegated import DelegatedIdentity
 
+    revoked_tokens: list[str] = []
+
     class LoginClient:
         def __init__(self, **kwargs) -> None:
             self.kwargs = kwargs
@@ -12201,6 +12203,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             )
 
         def revoke(self, _token: str) -> bool:
+            revoked_tokens.append(_token)
             return True
 
     monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", LoginClient)
@@ -12268,6 +12271,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert "podpilot_delegated_session" in connected.headers["set-cookie"]
         ask_page = client.get("/ask", headers={"x-forwarded-user": "dana"})
         assert "Investigate · read-only" in ask_page.text
+        assert 'href="/delegated/connect">Cluster sign-ins</a>' in ask_page.text
         assert "Find failing workloads" in ask_page.text
         assert "Review recent warnings" in ask_page.text
         assert "Show my access" in ask_page.text
@@ -12291,11 +12295,65 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
         )
         assert "Cluster session needs reconnection" in ended_page.text
+        assert f"retry={cluster_id}" in ended_page.text
+        assert 'href="/ask?new=1">start a new conversation</a>' in ended_page.text
         ended_composer = re.search(
             r'<textarea id="adhoc-message"[^>]*>', ended_page.text
         )
         assert ended_composer is not None
         assert "disabled" in ended_composer.group(0)
+
+        replacement_session_id = app.state.delegated_vault.new_session_id()
+        app.state.delegated_vault.put(
+            session_id=replacement_session_id,
+            owner="dana",
+            cluster_id=cluster_id,
+            remote_username="dev-user",
+            remote_uid="remote-uid",
+            token="sha256~replacement-token",
+        )
+        client.cookies.set("podpilot_delegated_session", replacement_session_id)
+        recovered_page = client.get(
+            f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
+        )
+        recovered_composer = re.search(
+            r'<textarea id="adhoc-message"[^>]*>', recovered_page.text
+        )
+        assert recovered_composer is not None
+        assert "disabled" not in recovered_composer.group(0)
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Continue with my current cluster sign-in."},
+            follow_redirects=False,
+        )
+        assert continued.status_code == 303
+        with Session(engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            assert conversation.delegated_session_id == replacement_session_id
+
+        connect_page = client.get(
+            "/delegated/connect", headers={"x-forwarded-user": "dana"}
+        )
+        connected_checkbox = re.search(
+            rf'<input[^>]+value="{cluster_id}"[^>]+>', connect_page.text
+        )
+        assert connected_checkbox is not None
+        assert 'data-connected="true"' in connected_checkbox.group(0)
+        assert "disabled" in connected_checkbox.group(0)
+        assert "Start new conversation" in connect_page.text
+        assert "Clear cluster sign-ins" in connect_page.text
+        disconnected = client.post(
+            "/api/v1/delegated-sessions/disconnect",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert disconnected.status_code == 200
+        assert disconnected.json()["disconnected"][0]["cluster_id"] == cluster_id
+        assert app.state.delegated_vault.list_for(
+            session_id=replacement_session_id, owner="dana"
+        ) == []
+        assert "sha256~replacement-token" in revoked_tokens
     engine.dispose()
 
 
@@ -12357,6 +12415,96 @@ def test_delegated_operator_can_connect_the_system_cluster(
         "https://oauth-openshift.openshift-authentication.svc/oauth/authorize"
     )
     assert clients[0]["custom_ca_pem"] == "api-ca\nservice-ca\n"
+
+
+def test_partial_delegated_login_keeps_successes_and_preselects_retry(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from podpilot_openshift.delegated import DelegatedIdentity, DelegatedLoginError
+
+    class LoginClient:
+        def __init__(self, **kwargs) -> None:
+            self.api_url = kwargs["api_url"]
+
+        def login(self, _username: str, _password: str) -> DelegatedIdentity:
+            if "failed" in self.api_url:
+                raise DelegatedLoginError("The credentials were rejected.")
+            return DelegatedIdentity(
+                username="dev-user", uid="remote-uid", token="sha256~working-token"
+            )
+
+        def revoke(self, _token: str) -> bool:
+            return True
+
+    monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", LoginClient)
+    app, settings = make_app(
+        tmp_path,
+        assignments={"dana": Role.DELEGATED_OPERATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    working_id = "50500000-0000-0000-0000-000000000001"
+    failed_id = "50500000-0000-0000-0000-000000000002"
+    engine = build_engine(settings)
+    with TestClient(app) as client:
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            for cluster_id, name, host in (
+                (working_id, "Working DEV", "working"),
+                (failed_id, "Failed DEV", "failed"),
+            ):
+                db_session.add(Cluster(
+                    id=cluster_id,
+                    name=name,
+                    api_url=f"https://api.{host}.example:6443",
+                    credential_key=None,
+                    tags_json='{"environment":"dev"}',
+                    environment="dev",
+                    visibility="shared",
+                    owner=None,
+                    tls_verify=True,
+                    is_enabled=True,
+                    is_system=False,
+                    status="ready",
+                    created_by="ada",
+                    updated_by="ada",
+                    created_at=now,
+                    updated_at=now,
+                ))
+            db_session.commit()
+        page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        connected = client.post(
+            "/api/v1/delegated-sessions/connect",
+            headers={"x-forwarded-user": "dana", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "cluster_ids": json.dumps([working_id, failed_id]),
+                "username": "dev-user",
+                "password": "one-time-password",
+                "consent": "on",
+            },
+        )
+        assert connected.status_code == 200
+        assert [item["cluster_id"] for item in connected.json()["connected"]] == [working_id]
+        assert [item["cluster_id"] for item in connected.json()["failed"]] == [failed_id]
+
+        retry_page = client.get(
+            f"/delegated/connect?retry={failed_id}&next=/ask?new=1",
+            headers={"x-forwarded-user": "dana"},
+        )
+        working_checkbox = re.search(
+            rf'<input[^>]+value="{working_id}"[^>]+>', retry_page.text
+        )
+        failed_checkbox = re.search(
+            rf'<input[^>]+value="{failed_id}"[^>]+>', retry_page.text
+        )
+        assert working_checkbox is not None and failed_checkbox is not None
+        assert 'data-connected="true"' in working_checkbox.group(0)
+        assert "disabled" in working_checkbox.group(0)
+        assert "checked" in failed_checkbox.group(0)
+        assert 'value="/ask?new=1"' in retry_page.text
+    engine.dispose()
 
 
 def test_read_write_user_selects_action_mode_while_investigator_is_read_only(

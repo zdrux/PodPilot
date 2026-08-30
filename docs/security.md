@@ -66,8 +66,9 @@ validates `/users/~`, and immediately discards the password. Tokens remain only 
 memory for at most 24 hours, keyed by an HttpOnly session cookie, owner, and cluster. They are never
 stored in SQLite, Kubernetes Secrets, browser storage, model input, runner JSON, commands, or logs.
 Logout, replacement, local expiry, disable, and graceful shutdown attempt revocation. A remote
-`401` removes the affected connection; the conversation remains durable and resumes after the user
-reconnects the affected clusters with the same PodPilot session.
+`401` removes the affected connection; the conversation remains durable and resumes after its owner
+reconnects the affected clusters. On the next turn, the conversation binds to that owner's current
+memory-only delegated session; ownership and the immutable cluster set are still enforced.
 
 The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
 allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes

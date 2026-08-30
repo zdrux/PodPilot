@@ -14,7 +14,11 @@ application image digest `sha256:19cdd8ff9a651777b4a2ab12b7891b6d7c07396dda4b97c
 and runner digest `sha256:dbb8f35dec2105e09815ebc40e1a84df8b952d6f0273bbdeef35f9ded3aa49d0`.
 The pending implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,
 supports per-cluster TLS policy and private user-owned registry entries, and removes stored remote
-cluster credentials. The deployed lab still has a two-hour session bound and verified remote TLS.
+cluster credentials. Successful cluster sign-ins are reused across new conversations for the
+browser session. Partial login failures remain retryable without discarding successful connections;
+users can manage or clear cluster sign-ins independently of durable chat history, and an owned
+conversation can resume after its required clusters are reconnected. The deployed lab still has a
+two-hour session bound and verified remote TLS.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
