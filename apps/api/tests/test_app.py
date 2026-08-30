@@ -4833,6 +4833,74 @@ def test_resource_list_presentation_preserves_incomplete_empty_group() -> None:
     assert presentation["groups"][0]["scanned_count"] == 500
 
 
+def test_resource_list_presentation_merges_repeated_cluster_kind_reads() -> None:
+    evidence = [
+        {
+            "id": "central-first", "cluster_id": "central",
+            "cluster_name": "CMSP Central DEV", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder", "scope": "cluster", "count": 1,
+                "names": ["instance"],
+                "objects": [{"namespace": "openshift-logging", "name": "instance"}],
+                "objectListComplete": True,
+            },
+        },
+        {
+            "id": "central-repeat", "cluster_id": "central",
+            "cluster_name": "CMSP Central DEV", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder", "scope": "cluster", "count": 2,
+                "names": ["instance", "log-forwarder"],
+                "objects": [
+                    {"namespace": "openshift-logging", "name": "instance"},
+                    {"namespace": "asgph-dit", "name": "log-forwarder"},
+                ],
+                "objectListComplete": True,
+            },
+        },
+        {
+            "id": "east-empty", "cluster_id": "east",
+            "cluster_name": "CMSP East DEV", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder", "scope": "cluster", "count": 0,
+                "names": [], "objects": [], "objectListComplete": True,
+            },
+        },
+        {
+            "id": "east-result", "cluster_id": "east",
+            "cluster_name": "CMSP East DEV", "tool": "list_resources",
+            "data": {
+                "kind": "ClusterLogForwarder", "scope": "cluster", "count": 1,
+                "names": ["instance"],
+                "objects": [{"namespace": "openshift-logging", "name": "instance"}],
+                "objectListComplete": True,
+            },
+        },
+    ]
+    presentation = _resource_list_presentation(
+        evidence=evidence,
+        activity=[
+            {"tool": "list_resources", "status": "succeeded", "evidence_ids": [item["id"]]}
+            for item in evidence
+        ],
+        citations=[item["id"] for item in evidence],
+    )
+
+    assert presentation is not None
+    assert presentation["total_count"] == 3
+    assert presentation["displayed_count"] == 3
+    assert len(presentation["groups"]) == 2
+    central, east = presentation["groups"]
+    assert central["cluster_name"] == "CMSP Central DEV"
+    assert central["count"] == 2
+    assert central["evidence_ids"] == ["central-first", "central-repeat"]
+    assert [row["name"] for row in central["rows"]] == ["instance", "log-forwarder"]
+    assert east["cluster_name"] == "CMSP East DEV"
+    assert east["count"] == 1
+    assert east["evidence_ids"] == ["east-empty", "east-result"]
+    assert [row["name"] for row in east["rows"]] == ["instance"]
+
+
 def test_resource_list_presentation_projects_match_values_through_lists() -> None:
     presentation = _resource_list_presentation(
         evidence=[{

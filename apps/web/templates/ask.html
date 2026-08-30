@@ -77,7 +77,7 @@
             <div>
               <span class="evidence-tool">Observed resources</span>
               <h3 id="resource-result-{{ message.id }}">{{ presentation.title }}</h3>
-              <p>{{ presentation.total_count }} matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster result{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
+              <p>{{ presentation.total_count }} unique matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster/resource group{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
             </div>
           </div>
           <div class="resource-result-groups">

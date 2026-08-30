@@ -2825,8 +2825,6 @@ def _resource_list_presentation(
         return "Unknown"
 
     groups: list[dict[str, object]] = []
-    total_count = 0
-    displayed_count = 0
     kinds: set[str] = set()
     match_fields: set[str] = set()
     filtered = False
@@ -2859,7 +2857,6 @@ def _resource_list_presentation(
             if isinstance(declared_count, int) and not isinstance(declared_count, bool)
             else len(names)
         )
-        total_count += count
         refs = data.get("objects") if isinstance(data.get("objects"), list) else []
         items = data.get("items") if isinstance(data.get("items"), list) else []
         items_by_ref: dict[tuple[str, str], dict[str, object]] = {}
@@ -2874,9 +2871,8 @@ def _resource_list_presentation(
                 items_by_ref[(namespace, name)] = item
                 items_by_name.setdefault(name, item)
         rows: list[dict[str, str]] = []
-        remaining = max(0, max_rows - displayed_count)
         scope = str(data.get("scope") or "cluster")
-        for index, raw_name in enumerate(names[:remaining]):
+        for index, raw_name in enumerate(names[:max_rows]):
             name = redact_text(str(raw_name))[:253]
             ref = refs[index] if index < len(refs) and isinstance(refs[index], dict) else {}
             indexed_item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
@@ -2901,7 +2897,6 @@ def _resource_list_presentation(
                 "matched_value": field_value(item, match_field) if match_field else "—",
                 "ready": ready_value(item),
             })
-        displayed_count += len(rows)
         cluster_name = redact_text(str(
             observation.get("cluster_name")
             or observation.get("cluster_id")
@@ -2931,6 +2926,84 @@ def _resource_list_presentation(
 
     if not groups:
         return None
+
+    # A multi-round investigation can cite the same resource type more than once
+    # for one cluster (for example, an initial list followed by a narrower list).
+    # Present the union as one cluster/kind result instead of implying that each
+    # observation is a different cluster result. Preserve every evidence ID and
+    # use conservative completeness when any contributing read was incomplete.
+    merged_groups: list[dict[str, object]] = []
+    merged_by_key: dict[tuple[str, str], dict[str, object]] = {}
+    row_keys_by_group: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
+    for group in groups:
+        key = (
+            str(group["cluster_id"]).casefold(),
+            str(group["kind"]).casefold(),
+        )
+        existing = merged_by_key.get(key)
+        if existing is None:
+            existing = dict(group)
+            existing["evidence_ids"] = [str(group["evidence_id"])]
+            existing["rows"] = list(group["rows"])
+            merged_groups.append(existing)
+            merged_by_key[key] = existing
+            row_keys_by_group[key] = {
+                (
+                    str(row.get("kind") or "").casefold(),
+                    str(row.get("namespace") or ""),
+                    str(row.get("name") or ""),
+                )
+                for row in existing["rows"]
+                if isinstance(row, dict)
+            }
+            continue
+
+        evidence_ids = existing["evidence_ids"]
+        assert isinstance(evidence_ids, list)
+        evidence_id = str(group["evidence_id"])
+        if evidence_id not in evidence_ids:
+            evidence_ids.append(evidence_id)
+        existing_rows = existing["rows"]
+        assert isinstance(existing_rows, list)
+        row_keys = row_keys_by_group[key]
+        for row in group["rows"]:
+            assert isinstance(row, dict)
+            row_key = (
+                str(row.get("kind") or "").casefold(),
+                str(row.get("namespace") or ""),
+                str(row.get("name") or ""),
+            )
+            if row_key not in row_keys:
+                row_keys.add(row_key)
+                existing_rows.append(row)
+        existing["count"] = max(
+            int(existing["count"]), int(group["count"]), len(existing_rows)
+        )
+        existing["complete"] = bool(existing["complete"]) and bool(group["complete"])
+        scanned_counts = [
+            value for value in (existing.get("scanned_count"), group.get("scanned_count"))
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        existing["scanned_count"] = max(scanned_counts) if scanned_counts else None
+        for field in ("match_field", "match_operator", "match_value"):
+            if existing.get(field) != group.get(field):
+                existing[field] = None
+
+    groups = merged_groups
+    displayed_count = 0
+    total_count = 0
+    for group in groups:
+        rows = group["rows"]
+        assert isinstance(rows, list)
+        remaining = max(0, max_rows - displayed_count)
+        retained_rows = rows[:remaining]
+        group["rows"] = retained_rows
+        group["displayed_count"] = len(retained_rows)
+        group["count"] = max(int(group["count"]), len(rows))
+        group["omitted_count"] = max(0, int(group["count"]) - len(retained_rows))
+        displayed_count += len(retained_rows)
+        total_count += int(group["count"])
+
     return {
         "version": 1,
         "type": "grouped_resource_list",
@@ -8244,11 +8317,14 @@ async def _collect_bounded_cluster_reads(
                     plan = bound_plan
                     discarded_intents = getattr(plan, "_discarded_intent_count", 0)
                     if discarded_intents:
-                        limitations.append(
+                        limitations.append((
                             "PodPilot retained the valid model-selected reads and discarded "
+                            if plan.intents else
+                            "PodPilot discarded "
+                        ) + (
                             f"{discarded_intents} malformed object read"
                             f"{'s' if discarded_intents != 1 else ''}."
-                        )
+                        ))
                     LOGGER.info(
                         "podpilot.adhoc.plan_decision actor=%s workflow_id=%s round=%s "
                         "attempt=%s goal=%s decision=%s intents=%s novel=%s",

@@ -231,12 +231,14 @@ class ActionSelection(BaseModel):
             )
             plan._discarded_intent_count = self._discarded_object_reads
             return plan
-        return ReadPlan(
+        plan = ReadPlan(
             goal_type="diagnose",
             decision="answer_from_evidence",
             scope_summary="No additional supplied evidence action was selected.",
             stop_reason="no_material_read",
         )
+        plan._discarded_intent_count = self._discarded_object_reads
+        return plan
 
 
 class ConciseAdHocAnswer(BaseModel):
@@ -2614,7 +2616,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             except (TypeError, ValidationError):
                 discarded += 1
 
-        if not action_ids and not object_reads:
+        if not action_ids and not object_reads and not raw_reads:
             return None
         selection = ActionSelection(action_ids=action_ids, object_reads=object_reads)
         selection._discarded_object_reads = discarded

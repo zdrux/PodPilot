@@ -1300,6 +1300,31 @@ def test_action_selection_salvage_retains_valid_reads_after_failed_correction() 
     assert plan._discarded_intent_count == 1
 
 
+def test_action_selection_salvage_safely_stops_when_every_object_read_is_invalid() -> None:
+    selected = OpenAIChatCompletionsProvider._salvage_action_selection(
+        ActionSelection,
+        json.dumps({
+            "action_ids": [],
+            "object_reads": [
+                {
+                    "tool": "search_resources", "resource": "clusterlogforwarders",
+                    "namespace": "openshift-logging",
+                },
+                {
+                    "tool": "get_resource", "resource": "clusterlogforwarders",
+                    "name": "first object",
+                },
+            ],
+        }),
+    )
+
+    assert selected is not None
+    plan = selected.to_read_plan()
+    assert plan.decision == "answer_from_evidence"
+    assert plan.intents == []
+    assert plan._discarded_intent_count == 2
+
+
 def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
     context = {
         "question": "Why is this workload failing?",

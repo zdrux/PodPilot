@@ -339,7 +339,9 @@ Candidate-first gates must prove that candidate rounds use the compact `ActionSe
 candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, and model-authored
 reads are limited to discovery, GET, LIST, and bounded field search. Tests must prove authored reads
 still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight, duplicate suppression,
-and budgets. Query-relevant catalog matches must remain available beside relationship candidates, and
+and budgets. When a corrected action selection contains only malformed object reads, PodPilot must
+discard them, execute nothing, and safely answer from evidence already collected instead of reporting
+a failed collection round. Query-relevant catalog matches must remain available beside relationship candidates, and
 bounded LIST/search results must become exact GET candidates on the next round. Actual provider payloads
 must omit graph, ledger, tool policy, executable candidate intents, raw observation envelopes, and
 domain-specific teaching; only a bounded policy-filtered catalog projection may be included. Tests must
@@ -353,6 +355,9 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
+Resource-presentation gates must merge repeated cited LIST/search observations by cluster and Kind,
+deduplicate resource identity by Kind/namespace/name, retain every contributing evidence ID, and mark
+the merged group incomplete if any contributing read was incomplete.
 They must also prove that exact operator URLs become grounded probe candidates only after Route
 evidence or a structured probe gap, and that normal-priority healthy Pod logs are offered for either
 a structured log gap or an explicit failure question. EndpointSlice/Endpoints target references must
