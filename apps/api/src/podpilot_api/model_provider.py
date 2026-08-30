@@ -2262,20 +2262,6 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 },
             }
 
-        search_resources_tool = collector_tool(
-            "search_resources",
-            "Do not use this tool for inventory. Search a Kubernetes/OpenShift object's exact "
-            "dot-separated field path using a "
-            "server-bounded scan. Prefer this over dumping a resource list and grepping it. "
-            "Both match_field and match_value are mandatory. For inventory without an exact "
-            "field filter, use execute_shell with a bounded oc get command instead. "
-            "The result returns to you and never ends the investigation.",
-            (
-                "resource", "api_version", "kind", "namespace", "label_selector",
-                "match_field", "match_value", "match_operator", "limit",
-            ),
-            ("resource", "api_version", "kind", "match_field", "match_value"),
-        )
         pod_health_tool = collector_tool(
             "pod_health_summary",
             "Evaluate current Pod and container health with an anomaly-first bounded scan. Use "
@@ -2334,7 +2320,6 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         )
         tools = [
             shell_tool,
-            search_resources_tool,
             pod_health_tool,
             http_probe_tool,
             audit_tool,

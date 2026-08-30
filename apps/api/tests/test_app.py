@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,7 +139,9 @@ from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceErr
 from podpilot_openshift.agent_runner import AgentClusterConnection, AgentCommandResult
 from podpilot_openshift.credentials import CredentialStoreError
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
+from podpilot_openshift.log_metrics import LokiQueryClient
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
+from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -589,33 +592,64 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
 
 
-def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("execution_mode", ["read_only", "action"])
+def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
     constructor_threads: list[int] = []
     event_loop_threads: set[int] = set()
+    explorer_kwargs: list[dict[str, object]] = []
+    telemetry_calls: list[tuple[str, str, str]] = []
+    telemetry_token_providers: list[Callable[[], str]] = []
 
     class Explorer:
         def preflight(self, _intent) -> None:
             return None
 
-        def execute(self, _intent) -> ReadResult:
+        def execute(self, intent) -> ReadResult:
             return ReadResult((AdHocObservation(
-                id="clf-search-result",
-                tool="search_resources",
-                summary="Found the requested ClusterLogForwarder.",
-                source="kubernetes:observability.openshift.io/v1:ClusterLogForwarder",
+                id=f"delegated-{intent.tool}",
+                tool=intent.tool,
+                summary=f"Collected delegated {intent.tool} evidence.",
+                source=f"test:{intent.tool}",
                 collected_at=datetime.now(timezone.utc),
-                data={"kind": "ClusterLogForwarder", "objects": []},
+                data={"complete": True},
             ),))
 
-    def build_explorer(**_kwargs):
+    def build_explorer(**kwargs):
         constructor_threads.append(threading.get_ident())
+        explorer_kwargs.append(kwargs)
         return Explorer()
 
     monkeypatch.setattr(
         KubernetesReadOnlyExplorer, "for_remote_cluster", build_explorer
+    )
+    monkeypatch.setattr(
+        ThanosQueryClient,
+        "for_remote_cluster",
+        lambda **kwargs: (
+            telemetry_token_providers.append(kwargs["token_provider"])
+            or
+            telemetry_calls.append((
+                "metrics", kwargs["api_url"], kwargs["token_provider"](),
+            ))
+            or SimpleNamespace()
+        ),
+    )
+    monkeypatch.setattr(
+        LokiQueryClient,
+        "for_remote_cluster",
+        lambda **kwargs: (
+            telemetry_token_providers.append(kwargs["token_provider"])
+            or
+            telemetry_calls.append((
+                str(kwargs.get("tenant") or "application"),
+                kwargs["api_url"],
+                kwargs["token_provider"](),
+            ))
+            or SimpleNamespace()
+        ),
     )
 
     class Provider(FakeModelProvider):
@@ -630,28 +664,49 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
             if self.calls == 1:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
-                    "resource": "clusterlogforwarders",
-                    "api_version": "observability.openshift.io/v1",
-                    "kind": "ClusterLogForwarder",
-                    "match_field": "metadata.name",
-                    "match_value": "instance",
+                    "metric": "top_log_volume_by_namespace",
+                    "metric_scope": "cluster",
+                    "metric_operation": "rank",
+                    "metric_group_by": ["namespace"],
                 })
                 return AgentStep(
                     assistant_message={
                         "role": "assistant", "content": None,
                         "tool_calls": [{
-                            "id": "search-clf", "type": "function",
+                            "id": "rank-logs", "type": "function",
                             "function": {
-                                "name": "search_resources", "arguments": arguments,
+                                "name": "query_metrics", "arguments": arguments,
                             },
                         }],
                     },
                     content=None,
                     tool_calls=(AgentToolCall(
-                        id="search-clf", name="search_resources", arguments=arguments,
+                        id="rank-logs", name="query_metrics", arguments=arguments,
                     ),),
                 )
             if self.calls == 2:
+                arguments = json.dumps({
+                    "cluster_id": cluster_id,
+                    "audit_operation_scope": "deletes",
+                    "audit_outcome": "all",
+                    "limit": 10,
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "audit-deletes", "type": "function",
+                            "function": {
+                                "name": "query_audit_events", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="audit-deletes", name="query_audit_events", arguments=arguments,
+                    ),),
+                )
+            if self.calls == 3:
                 arguments = json.dumps({
                     "command": (
                         "oc get clusterlogforwarders.observability.openshift.io "
@@ -690,7 +745,7 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
     runner = Runner()
     app, settings = make_app(
         tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
+        assignments={"ivy": Role.APPROVER},
         source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("model-token"),
         model_provider=provider,
@@ -738,7 +793,7 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
             data={
                 "message": "Compare the ClusterLogForwarder configuration.",
                 "cluster_ids": json.dumps([cluster_id]),
-                "execution_mode": "read_only",
+                "execution_mode": execution_mode,
             },
             follow_redirects=False,
         )
@@ -749,15 +804,43 @@ def test_delegated_read_only_conversation_uses_agent_loop_and_read_only_proxy(
     assert "configuration was inspected" in rendered.text
     assert constructor_threads
     assert constructor_threads[0] not in event_loop_threads
+    assert explorer_kwargs[0]["metric_reader"] is not None
+    assert explorer_kwargs[0]["log_metric_reader"] is not None
+    assert explorer_kwargs[0]["audit_reader"] is not None
+    assert telemetry_calls == [
+        ("metrics", "https://api.central-dev.example:6443", "delegated-token"),
+        ("application", "https://api.central-dev.example:6443", "delegated-token"),
+        ("audit", "https://api.central-dev.example:6443", "delegated-token"),
+    ]
     assert len(runner.calls) == 1
     command, runner_connection = runner.calls[0]
     assert command.startswith("oc get clusterlogforwarders")
     assert runner_connection.proxy_url is not None
-    assert runner_connection.proxy_url.endswith(connection.read_only_proxy_capability)
-    assert connection.action_proxy_capability not in runner_connection.proxy_url
+    expected_capability = (
+        connection.read_only_proxy_capability
+        if execution_mode == "read_only"
+        else connection.action_proxy_capability
+    )
+    other_capability = (
+        connection.action_proxy_capability
+        if execution_mode == "read_only"
+        else connection.read_only_proxy_capability
+    )
+    assert runner_connection.proxy_url.endswith(expected_capability)
+    assert other_capability not in runner_connection.proxy_url
     system_prompt = str(provider.agent_messages[0][0]["content"])
-    assert "delegated read-only investigation mode" in system_prompt
-    assert "broker will reject Kubernetes writes" in system_prompt
+    if execution_mode == "read_only":
+        assert "delegated read-only investigation mode" in system_prompt
+        assert "broker will reject Kubernetes writes" in system_prompt
+    else:
+        assert "delegated read-write mode" in system_prompt
+    assert "same investigation tools" in system_prompt
+    assert "search_resources helpers are unavailable" in system_prompt
+    assert "delegated-token" not in json.dumps(provider.agent_messages)
+    assert telemetry_token_providers
+    # TestClient shutdown clears the in-memory delegated session; retained
+    # telemetry adapters must no longer be able to resolve its bearer token.
+    assert all(item() == "" for item in telemetry_token_providers)
 
 
 def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
@@ -778,6 +861,9 @@ def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
         proxy_url=(
             "http://127.0.0.1:8080/internal/delegated-proxy/opaque-capability"
         ),
+        telemetry_api_url="https://api.remote.example:6443",
+        token_provider=lambda: "delegated-token",
+        telemetry_tls_verify=True,
         settings=Settings(),
     ))
 
@@ -8895,7 +8981,7 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     system_prompt = str(provider.agent_messages[0][0]["content"])
     assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
     assert "Never fetch unbounded Pod logs by default" in system_prompt
-    assert "typed list_resources helper is unavailable" in system_prompt
+    assert "list_resources and search_resources helpers are unavailable" in system_prompt
     assert "Markdown table with a header row" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
@@ -9024,7 +9110,7 @@ def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnos
     assert '<ul class="answer-limitations">' not in rendered.text
     assert "Cluster unknown" not in rendered.text
     search_feedback = json.loads(str(provider.agent_messages[1][-1]["content"]))
-    assert "For inventory, use execute_shell" in search_feedback["retry_guidance"]
+    assert "Correct the arguments using the tool schema" in search_feedback["retry_guidance"]
     command_feedback = json.loads(str(provider.agent_messages[2][-1]["content"]))
     assert "exactly one cluster_id" in command_feedback["retry_guidance"]
     assert SYSTEM_CLUSTER_ID in command_feedback["retry_guidance"]
@@ -9304,19 +9390,6 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
 ) -> None:
     calls = [
         (
-            "search_resources",
-            {
-                "cluster_id": SYSTEM_CLUSTER_ID,
-                "resource": "routes.route.openshift.io",
-                "api_version": "route.openshift.io/v1",
-                "kind": "Route",
-                "match_field": "spec.host",
-                "match_value": ".az.cibc.com",
-                "match_operator": "contains",
-                "limit": 100,
-            },
-        ),
-        (
             "pod_health_summary",
             {
                 "cluster_id": SYSTEM_CLUSTER_ID,
@@ -9397,18 +9470,7 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         def execute(self, intent: ReadIntent) -> ReadResult:
             self.calls.append(intent)
             data: dict[str, object]
-            if intent.tool == "search_resources":
-                data = {
-                    "resource": intent.resource, "kind": intent.kind,
-                    "matchField": intent.match_field, "matchValue": intent.match_value,
-                    "matchOperator": intent.match_operator, "count": 1,
-                    "scannedCount": 40, "searchComplete": True,
-                    "objects": [{
-                        "namespace": "payments", "name": "checkout",
-                        "fields": {"spec.host": "checkout.az.cibc.com"},
-                    }],
-                }
-            elif intent.tool == "pod_health_summary":
+            if intent.tool == "pod_health_summary":
                 data = {
                     "healthSummaryVersion": 1,
                     "scope": intent.namespace,
@@ -9492,8 +9554,7 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         )
 
     assert [intent.tool for intent in explorer.calls] == [
-        "search_resources", "pod_health_summary", "http_probe",
-        "query_audit_events", "query_metrics",
+        "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
     ]
     health_intent = next(
         intent for intent in explorer.calls if intent.tool == "pod_health_summary"
@@ -9509,12 +9570,11 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         intent for intent in explorer.calls if intent.tool == "query_metrics"
     )
     assert metric_intent.range_seconds == 300
-    assert len(provider.agent_messages) == 6
-    assert "checkout.az.cibc.com" in json.dumps(provider.agent_messages[1])
-    assert "app.kubernetes.io/name=loki" in json.dumps(provider.agent_messages[2])
-    assert "TLSv1.3" in json.dumps(provider.agent_messages[3])
-    assert "druciare-adm" in json.dumps(provider.agent_messages[4])
-    assert "cpu_usage" in json.dumps(provider.agent_messages[5])
+    assert len(provider.agent_messages) == 5
+    assert "app.kubernetes.io/name=loki" in json.dumps(provider.agent_messages[1])
+    assert "TLSv1.3" in json.dumps(provider.agent_messages[2])
+    assert "druciare-adm" in json.dumps(provider.agent_messages[3])
+    assert "cpu_usage" in json.dumps(provider.agent_messages[4])
     assert "completion does not mean the investigation is complete" in json.dumps(
         provider.agent_messages[1]
     )
@@ -9526,10 +9586,10 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
             AdHocMessage.role == "assistant"
         ))
         assert conversation is not None
-        assert len(json.loads(conversation.evidence_json)) == 5
+        assert len(json.loads(conversation.evidence_json)) == 4
         assert assistant is not None
         assert assistant.answer_mode == "evidence_based"
-        assert len(json.loads(assistant.citations_json)) == 5
+        assert len(json.loads(assistant.citations_json)) == 4
     engine.dispose()
 
 
@@ -10336,6 +10396,11 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert page.status_code == 200 and csrf is not None
+        assert "<h1>Cluster Management</h1>" in page.text
+        assert re.search(
+            r'href="/settings/clusters"[^>]*>[\s\S]*?Cluster Management\s*</a>',
+            page.text,
+        )
         denied = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
         assert denied.status_code == 403
         saved = client.post(
@@ -12751,6 +12816,15 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         )
         assert redirected.status_code == 303
         assert redirected.headers["location"] == "/delegated/connect"
+        cluster_redirect = client.get(
+            f"/clusters/{cluster_id}/ask",
+            headers={"x-forwarded-user": "dana"},
+            follow_redirects=False,
+        )
+        assert cluster_redirect.status_code == 303
+        assert cluster_redirect.headers["location"].startswith(
+            f"/delegated/connect?retry={cluster_id}&"
+        )
         page = client.get("/delegated/connect", headers={"x-forwarded-user": "dana"})
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
@@ -12969,7 +13043,53 @@ def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
 
         ask_page = client.get("/ask?new=1", headers={"x-forwarded-user": "dana"})
         assert "East DEV" in ask_page.text
-        assert "Central DEV" not in ask_page.text
+        assert "Central DEV" in ask_page.text
+        assert 'class="cluster-session-status connected"' in ask_page.text
+        assert 'class="cluster-session-status disconnected"' in ask_page.text
+        assert 'aria-label="Available clusters"' in ask_page.text
+        assert 'aria-label="Add an ad hoc cluster"' in ask_page.text
+
+        east_start = client.get(
+            f"/clusters/{east_id}/ask",
+            headers={"x-forwarded-user": "dana"},
+            follow_redirects=False,
+        )
+        assert east_start.status_code == 303
+        assert east_start.headers["location"] == f"/ask?new=1&cluster_ids={east_id}"
+        east_page = client.get(
+            east_start.headers["location"], headers={"x-forwarded-user": "dana"}
+        )
+        east_checkbox = re.search(
+            rf'<input[^>]+value="{east_id}"[^>]+>', east_page.text
+        )
+        central_checkbox = re.search(
+            rf'<input[^>]+value="{central_id}"[^>]+>', east_page.text
+        )
+        assert east_checkbox is not None and "checked" in east_checkbox.group(0)
+        assert central_checkbox is not None and "checked" not in central_checkbox.group(0)
+        assert 'data-connected="false"' in central_checkbox.group(0)
+
+        central_start = client.get(
+            f"/clusters/{central_id}/ask",
+            headers={"x-forwarded-user": "dana"},
+            follow_redirects=False,
+        )
+        assert central_start.status_code == 303
+        assert central_start.headers["location"].startswith(
+            f"/delegated/connect?retry={central_id}&"
+        )
+        assert f"cluster_id%3D{central_id}" in central_start.headers["location"]
+
+        expanded_start = client.get(
+            f"/ask?new=1&cluster_ids={east_id},{central_id}",
+            headers={"x-forwarded-user": "dana"},
+            follow_redirects=False,
+        )
+        assert expanded_start.status_code == 303
+        assert expanded_start.headers["location"].startswith(
+            f"/delegated/connect?retry={central_id}&"
+        )
+        assert f"cluster_ids%3D{east_id}%2C{central_id}" in expanded_start.headers["location"]
     engine.dispose()
 
 
@@ -15395,6 +15515,7 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
     with TestClient(app) as client:
         page = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
         assert page.status_code == 200
+        assert "<h1>Add cluster</h1>" in page.text
         csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
         assert csrf is not None
         created = client.post(

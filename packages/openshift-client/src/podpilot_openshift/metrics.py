@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import httpx
 
@@ -68,6 +68,7 @@ class ThanosQueryClient:
         base_url: str,
         token_path: Path | None = None,
         token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         ca_path: Path | None = None,
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
@@ -78,11 +79,12 @@ class ThanosQueryClient:
         max_response_bytes: int = 1_048_576,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if (token_path is None) == (token is None):
+        if sum(source is not None for source in (token_path, token, token_provider)) != 1:
             raise ValueError("Configure exactly one Thanos bearer-token source.")
         self._base_url = base_url.rstrip("/")
         self._token_path = token_path
         self._token = token
+        self._token_provider = token_provider
         self._ca_path = ca_path
         self._tls_verify = tls_verify
         self._route_discovery_url = (
@@ -100,7 +102,8 @@ class ThanosQueryClient:
         cls,
         *,
         api_url: str,
-        token: str,
+        token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         api_tls_verify: bool = True,
         **kwargs: Any,
     ) -> "ThanosQueryClient":
@@ -108,6 +111,7 @@ class ThanosQueryClient:
         return cls(
             base_url="https://thanos-querier.invalid",
             token=token,
+            token_provider=token_provider,
             route_discovery_url=(
                 f"{api_url.rstrip('/')}"
                 "/apis/route.openshift.io/v1/namespaces/openshift-monitoring/"
@@ -165,6 +169,8 @@ class ThanosQueryClient:
             token = (
                 self._token_path.read_text(encoding="utf-8").strip()
                 if self._token_path is not None
+                else self._token_provider().strip()
+                if self._token_provider is not None
                 else (self._token or "").strip()
             )
             if not token:

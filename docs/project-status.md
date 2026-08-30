@@ -19,6 +19,10 @@ browser session. Partial login failures remain retryable without discarding succ
 users can append clusters, revoke one sign-in, or clear all sign-ins independently of durable chat history, and an owned
 conversation can resume after its required clusters are reconnected. The deployed lab still has a
 two-hour session bound and verified remote TLS.
+The pending Workspace navigation also exposes visible clusters as a sidebar tree with connected and
+sign-in-required indicators. A cluster click starts a fresh preselected conversation or routes
+through the existing credential form first; the tree's add control opens private ad hoc registration.
+Shared registry administration now appears as **Cluster Management** in the Manage section.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
@@ -68,15 +72,19 @@ records remain, but execution now awaits a separate approval-gated action servic
   respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
-  The generic `list_resources` helper is absent from guarded and unrestricted agent schemas and has
-  no runtime feature flag. Existing LIST evidence and low-level LIST operations inside purpose-built
-  typed collectors remain supported. Both delegated modes can enumerate with deliberately bounded
-  read-only `oc get` commands and then fetch the exact object details required for comparison. The
+  The generic `list_resources` and `search_resources` helpers are absent from the unified agent
+  schema and have no runtime feature flag. Existing resource evidence and low-level object reads
+  inside purpose-built typed collectors remain supported. Both delegated modes can enumerate and
+  filter with deliberately bounded read-only `oc get` commands and then fetch the exact object
+  details required for comparison. The
   broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
-- Agent tool schemas now enumerate selected cluster IDs and explicitly reserve `search_resources`
-  for field-filtered searches. Rejected model-formatting attempts receive retry guidance and render
+- Agent tool schemas now enumerate selected cluster IDs. Rejected model-formatting attempts receive retry guidance and render
   as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
   and command failures remain visible.
+- Delegated and shared-credential unified-agent conversations expose the same purpose-built HTTP,
+  metric, and audit collectors. Delegated Thanos and Loki reads resolve the current memory-only user
+  token per request and stop working immediately after capability revocation; read-only versus
+  read-write behavior is enforced by the Kubernetes broker rather than by different tool menus.
 - Delegated typed collectors initialize their Kubernetes discovery clients in the worker pool. A
   collector can therefore call the loopback token broker without deadlocking the ASGI event loop or
   starving liveness and readiness probes while an investigation is running.

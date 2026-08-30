@@ -7,6 +7,11 @@ Current releases must verify that no active manifest grants access to a remote c
 Secret, every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
 select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
 and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
+Verify the Workspace cluster tree is owner-filtered, reflects current in-memory connection state,
+preselects exactly one connected cluster in a fresh composer, and sends an unconnected selection
+through login before returning to that composer. Configuration administrators must receive a
+separate **Cluster Management** navigation entry, while authorized users retain the ad hoc cluster
+add control.
 Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
 selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
 the same result shape across repeated runs.
@@ -360,9 +365,10 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
-Guarded planning and authored-read schemas must neither offer nor execute `list_resources`, the
-runtime settings and manifests must contain no LIST-helper feature flag, and unrestricted tool
-schemas must omit `list_resources`. Final-answer prompts must request Markdown tables for comparable multi-item
+Guarded planning and authored-read schemas must neither offer nor execute generic
+`list_resources` or `search_resources` calls, the runtime settings and manifests must contain no
+generic inventory-helper feature flag, and unified-agent tool schemas must omit both helpers.
+Final-answer prompts must request Markdown tables for comparable multi-item
 results; presentation tests must continue proving that answer-derived tables are bounded, sanitized,
 and not treated as evidence. Resource-presentation gates must merge repeated cited internal
 LIST/search observations by cluster and Kind,
@@ -443,17 +449,23 @@ summary must preserve the complete-coverage rule before confirming absence.
   retained within the configured byte ceiling, and visibly marked when truncated. Both containers
   retain working liveness/readiness probes.
 - Delegated-mode parity tests must prove Investigator and Action conversations enter the same agent
-  loop with identical investigation tools. Investigator commands must receive only the read-only
+  loop with identical investigation tools, including HTTP probes, metrics, and audit events, while
+  omitting generic LIST and SEARCH helpers. Investigator commands must receive only the read-only
   capability; the proxy must allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while
   rejecting writes, exec/attach/proxy/port-forward variants, and Secret reads. Action commands must
   receive the action capability without exposing the user's token to the model or runner.
 - Delegated typed-reader tests must prove lazy Kubernetes discovery runs outside the ASGI event loop,
   so loopback broker requests and liveness/readiness probes remain serviceable during collector
-  initialization.
+  initialization. They must also prove the metric and audit adapters use the selected cluster URL
+  and TLS policy, resolve only the current in-memory delegated token, and fail closed after session
+  revocation.
 - Agent-tool correction tests must prove cluster IDs are constrained to the selected set, one call
-  cannot concatenate multiple targets, unfiltered inventory is redirected from `search_resources`
-  to bounded `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved
+  cannot concatenate multiple targets, generic object inventory/search is performed with bounded
+  `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved
   limitations. Genuine runner and collector failures must remain prominent.
+- Safe-Markdown presentation tests must prove attribute-free HTML break tags render as line breaks
+  in extracted and fallback Markdown tables without enabling other raw HTML or interpreting tags
+  inside code spans and fences.
 - Delegated-session lifecycle tests must prove later logins append clusters to the current browser
   session, individual removal revokes only the selected token, removed clusters disappear from new
   conversation selectors, and existing conversations retain durable history while requiring

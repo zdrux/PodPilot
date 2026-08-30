@@ -4,6 +4,7 @@ import json
 import re
 
 from markdown_it import MarkdownIt
+from markdown_it.common.utils import escapeHtml
 from markupsafe import Markup
 
 
@@ -11,6 +12,19 @@ _renderer = MarkdownIt(
     "commonmark",
     {"breaks": True, "html": False, "linkify": False, "typographer": False},
 ).enable("table")
+
+_HTML_BREAK = re.compile(r"<br[ \t]*/?>", re.IGNORECASE)
+
+
+def _render_text_with_safe_breaks(_renderer, tokens, index, _options, _env) -> str:
+    """Allow only HTML-style line breaks while escaping every other text fragment."""
+
+    parts = _HTML_BREAK.split(tokens[index].content)
+    rendered = [escapeHtml(part) for part in parts]
+    return "<br>\n".join(rendered)
+
+
+_renderer.add_render_rule("text", _render_text_with_safe_breaks)
 
 _FENCED_CODE = re.compile(
     r"(?ms)^```(?P<language>json)?[ \t]*\n(?P<body>.*?)\n```[ \t]*$"

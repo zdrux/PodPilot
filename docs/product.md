@@ -15,6 +15,12 @@ mode the user's full Kubernetes capability; product usefulness must not otherwis
 Users may maintain private cluster metadata alongside administrator-managed shared entries.
 Cluster sign-ins belong to the PodPilot browser session rather than a conversation: users may add
 more clusters later, remove one sign-in, or remove all sign-ins without deleting durable chats.
+The Workspace sidebar lists every enabled cluster visible to the user and marks its current
+browser-session login state. Selecting a connected cluster opens a fresh composer preselected for
+that cluster; selecting a disconnected cluster first opens the existing username/password login
+flow and then returns to that preselection. The cluster-tree add control opens private ad hoc
+cluster registration. Shared registry administration is separately labeled **Cluster Management**
+under the administrative section.
 Cluster Health is not part of the active navigation or remote access model.
 The **Show my access** starter runs deterministic cluster-wide Kubernetes
 SelfSubjectAccessReview checks for common workload resources and renders exactly one permission

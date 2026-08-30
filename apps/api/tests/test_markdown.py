@@ -21,6 +21,27 @@ def test_chat_markdown_escapes_html_and_rejects_unsafe_links() -> None:
     assert '<a href="javascript:' not in rendered
 
 
+def test_safe_html_breaks_render_in_markdown_tables_without_enabling_html() -> None:
+    rendered = str(render_safe_markdown(
+        "| Cluster | Outputs |\n|---|---|\n"
+        "| Central | Kafka<br>Syslog<BR />Loki<br/>Archive |"
+    ))
+
+    assert "Kafka<br>\nSyslog<br>\nLoki<br>\nArchive" in rendered
+    assert "&lt;br" not in rendered
+
+
+def test_html_break_allowlist_does_not_apply_inside_code_or_to_other_tags() -> None:
+    rendered = str(render_safe_markdown(
+        "`<br>` <script>alert(1)</script> <br class=\"unsafe\">"
+    ))
+
+    assert "<code>&lt;br&gt;</code>" in rendered
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "&lt;br class=&quot;unsafe&quot;&gt;" in rendered
+
+
 def test_chat_markdown_pretty_prints_fenced_and_standalone_json() -> None:
     fenced = str(render_safe_markdown(
         'Observed payload:\n\n```json\n{"outputs":[{"name":"kafka","ready":true}]}\n```'
@@ -80,3 +101,14 @@ def test_extracted_markdown_cells_remain_safe_markdown_not_trusted_html() -> Non
     assert "<script>" not in rendered
     assert "&lt;script&gt;" in rendered
     assert "<strong>blocked</strong>" in rendered
+
+
+def test_extracted_markdown_table_cells_render_safe_html_breaks() -> None:
+    table = split_markdown_tables(
+        "| Cluster | Outputs |\n|---|---|\n"
+        "| Central | Kafka<br>Syslog<br />Loki |"
+    )[0]
+    cell = table["rows"][0]["cells"][1]
+    rendered = str(render_safe_markdown(cell))
+
+    assert rendered == "<p>Kafka<br>\nSyslog<br>\nLoki</p>\n"

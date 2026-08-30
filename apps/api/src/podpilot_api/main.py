@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -172,13 +172,81 @@ def _read_only_proxy_allows(method: str, remote_path: str) -> bool:
 
 
 async def _build_delegated_read_only_explorer(
-    *, proxy_url: str, settings: Settings
+    *, proxy_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
+    telemetry_tls_verify: bool, settings: Settings,
 ) -> KubernetesReadOnlyExplorer:
     """Build a brokered explorer without blocking the broker's ASGI event loop."""
 
     return await run_in_threadpool(
-        KubernetesReadOnlyExplorer.for_remote_cluster,
+        _make_delegated_read_only_explorer,
         api_url=proxy_url,
+        telemetry_api_url=telemetry_api_url,
+        token_provider=token_provider,
+        telemetry_tls_verify=telemetry_tls_verify,
+        settings=settings,
+    )
+
+
+def _remote_observability_adapters(
+    *, api_url: str, tls_verify: bool, settings: Settings,
+    token: str | None = None, token_provider: Callable[[], str] | None = None,
+) -> dict[str, object]:
+    """Build the same bounded monitoring and logging readers for one remote identity."""
+
+    credential: dict[str, object] = (
+        {"token_provider": token_provider}
+        if token_provider is not None else
+        {"token": token}
+    )
+    return {
+        "metric_reader": BoundedMetricTrendReader(
+            ThanosQueryClient.for_remote_cluster(
+                api_url=api_url,
+                api_tls_verify=tls_verify,
+                timeout_seconds=settings.thanos_timeout_seconds,
+                max_series=settings.thanos_max_series,
+                max_points_per_series=settings.adhoc_metrics_max_points_per_series,
+                max_response_bytes=settings.adhoc_metrics_max_response_bytes,
+                **credential,
+            ),
+            max_range_seconds=settings.adhoc_metrics_max_range_seconds,
+            max_points_per_series=settings.adhoc_metrics_max_points_per_series,
+        ),
+        "log_metric_reader": BoundedLogVolumeReader(
+            LokiQueryClient.for_remote_cluster(
+                api_url=api_url,
+                api_tls_verify=tls_verify,
+                route_name=settings.loki_route_name,
+                timeout_seconds=settings.loki_timeout_seconds,
+                max_series=settings.loki_max_series,
+                **credential,
+            ),
+            max_range_seconds=settings.adhoc_logs_max_range_seconds,
+        ),
+        "audit_reader": BoundedAuditEventReader(
+            LokiQueryClient.for_remote_cluster(
+                api_url=api_url,
+                api_tls_verify=tls_verify,
+                route_name=settings.loki_route_name,
+                tenant="audit",
+                timeout_seconds=settings.loki_timeout_seconds,
+                max_series=settings.loki_max_series,
+                max_response_bytes=settings.adhoc_audit_max_response_bytes,
+                **credential,
+            ),
+            max_range_seconds=settings.adhoc_audit_max_range_seconds,
+        ),
+    }
+
+
+def _make_delegated_read_only_explorer(
+    *, api_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
+    telemetry_tls_verify: bool, settings: Settings,
+) -> KubernetesReadOnlyExplorer:
+    """Build one delegated reader; only its Kubernetes capability varies by mode."""
+
+    return KubernetesReadOnlyExplorer.for_remote_cluster(
+        api_url=api_url,
         token="broker-injected",
         tls_verify=False,
         max_payload_bytes=settings.adhoc_max_payload_bytes,
@@ -188,6 +256,12 @@ async def _build_delegated_read_only_explorer(
         http_probe=BoundedHttpProbe(
             timeout_seconds=settings.adhoc_http_probe_timeout_seconds,
             max_response_bytes=settings.adhoc_http_probe_max_bytes,
+        ),
+        **_remote_observability_adapters(
+            api_url=telemetry_api_url,
+            token_provider=token_provider,
+            tls_verify=telemetry_tls_verify,
+            settings=settings,
         ),
     )
 
@@ -7489,16 +7563,6 @@ def _agent_tool_retry_guidance(
             "Retry with exactly one cluster_id from this allowed set: "
             f"{allowed}. For a multi-cluster comparison, issue one separate tool call per cluster."
         )
-    if tool_name == "search_resources" and (
-        "requires match_field and match_value" in error
-        or "match_field" in error
-        or "match_value" in error
-    ):
-        return (
-            "search_resources is only for a filtered field search and requires both "
-            "match_field and match_value. For inventory, use execute_shell with a bounded "
-            "oc get command and exactly one allowed cluster_id."
-        )
     return (
         "Correct the arguments using the tool schema and retry only if this read remains "
         "material to the operator's request."
@@ -9312,11 +9376,6 @@ def create_app(
             max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
         ),
     )
-    templates = Jinja2Templates(directory=app_settings.web_dir / "templates")
-    templates.env.filters["safe_markdown"] = render_safe_markdown
-    templates.env.filters["est_time"] = _format_est_time
-    templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
-
     def recent_conversations_for(
         db_session: Session, username: str
     ) -> list[AdHocConversation]:
@@ -9326,6 +9385,41 @@ def create_app(
             .order_by(AdHocConversation.updated_at.desc())
             .limit(20)
         ))
+
+    def workspace_navigation_context(request: Request) -> dict[str, object]:
+        """Provide one consistent cluster/session tree to every authenticated page."""
+
+        username = request.headers.get(app_settings.proxy_user_header, "").strip()
+        if not username:
+            return {"workspace_clusters": []}
+        session_id = _delegated_session_id(request)
+        connected_ids = {
+            item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                session_id=session_id, owner=username
+            )
+        } if app_settings.delegated_access_enabled and session_id else set()
+        with Session(request.app.state.engine) as db_session:
+            rows = list(db_session.scalars(
+                select(Cluster).where(
+                    Cluster.is_enabled.is_(True), _visible_clusters(username)
+                ).order_by(Cluster.environment, Cluster.name)
+            ))
+        clusters: list[dict[str, object]] = []
+        for row in rows:
+            item = _cluster_summary(row)
+            item["session_connected"] = (
+                row.id in connected_ids if app_settings.delegated_access_enabled else True
+            )
+            clusters.append(item)
+        return {"workspace_clusters": clusters}
+
+    templates = Jinja2Templates(
+        directory=app_settings.web_dir / "templates",
+        context_processors=[workspace_navigation_context],
+    )
+    templates.env.filters["safe_markdown"] = render_safe_markdown
+    templates.env.filters["est_time"] = _format_est_time
+    templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
 
     def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:
         if remote_read_explorer_factory is not None:
@@ -9343,42 +9437,11 @@ def create_app(
                 timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
                 max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
             ),
-            metric_reader=BoundedMetricTrendReader(
-                ThanosQueryClient.for_remote_cluster(
-                    api_url=cluster.api_url,
-                    token=token,
-                    api_tls_verify=tls_verify,
-                    timeout_seconds=app_settings.thanos_timeout_seconds,
-                    max_series=app_settings.thanos_max_series,
-                    max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
-                    max_response_bytes=app_settings.adhoc_metrics_max_response_bytes,
-                ),
-                max_range_seconds=app_settings.adhoc_metrics_max_range_seconds,
-                max_points_per_series=app_settings.adhoc_metrics_max_points_per_series,
-            ),
-            log_metric_reader=BoundedLogVolumeReader(
-                LokiQueryClient.for_remote_cluster(
-                    api_url=cluster.api_url,
-                    token=token,
-                    api_tls_verify=tls_verify,
-                    route_name=app_settings.loki_route_name,
-                    timeout_seconds=app_settings.loki_timeout_seconds,
-                    max_series=app_settings.loki_max_series,
-                ),
-                max_range_seconds=app_settings.adhoc_logs_max_range_seconds,
-            ),
-            audit_reader=BoundedAuditEventReader(
-                LokiQueryClient.for_remote_cluster(
-                    api_url=cluster.api_url,
-                    token=token,
-                    api_tls_verify=tls_verify,
-                    route_name=app_settings.loki_route_name,
-                    tenant="audit",
-                    timeout_seconds=app_settings.loki_timeout_seconds,
-                    max_series=app_settings.loki_max_series,
-                    max_response_bytes=app_settings.adhoc_audit_max_response_bytes,
-                ),
-                max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
+            **_remote_observability_adapters(
+                api_url=cluster.api_url,
+                token=token,
+                tls_verify=tls_verify,
+                settings=app_settings,
             ),
         )
 
@@ -9657,7 +9720,9 @@ def create_app(
                     "You are PodPilot running in explicitly accepted delegated read-write mode. "
                 )
                 +
-                "You have typed read-only collector tools plus an execute_shell escape hatch in a Linux "
+                "Investigator and Action conversations have the same investigation tools; only the "
+                "broker's permission to forward write operations differs. You have typed read-only "
+                "collector tools plus an execute_shell escape hatch in a Linux "
                 "sidecar with the OpenShift oc CLI connected through an API broker. The broker injects "
                 "the signed-in operator's in-memory token; the credential is never available to your "
                 "shell. Work autonomously: "
@@ -9677,10 +9742,10 @@ def create_app(
                 "Pod logs by default. If the first sample is insufficient, narrow or filter the "
                 "request, or expand it deliberately in bounded increments instead of dumping the "
                 "entire log. "
-                "Use search_resources for requested object-field filters instead of dumping a full list. "
-                "The typed list_resources helper is unavailable. When an inventory is necessary, use a "
-                "bounded read-only `oc get` command through execute_shell and request only fields needed "
-                "for the operator's question. Never dump Secrets or credentials. "
+                "The generic typed list_resources and search_resources helpers are unavailable. Use "
+                "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
+                "field filtering, project only the fields needed for the operator's question, and filter "
+                "large JSON responses inside the runner before returning them. Never dump Secrets or credentials. "
                 "Use http_probe for an exact observed HTTP(S) endpoint. connect_host preserves the "
                 "URL hostname as HTTP Host and TLS SNI while connecting to an observed address. Keep "
                 "TLS verification enabled unless the operator's investigation specifically requires "
@@ -9864,12 +9929,10 @@ def create_app(
                         evidence=agent_evidence, activity=activity,
                     )
                 )
-                resource_list_presentation = _resource_list_presentation(
-                    evidence=agent_evidence,
-                    activity=activity,
-                    citations=enrichment_citations,
-                    suppress_markdown_table=False,
-                )
+                # The agent owns result presentation in the unified agent loop. Typed
+                # collectors provide evidence only; they do not add an unsolicited
+                # inventory table beside the agent's Markdown response.
+                resource_list_presentation = None
                 assistant_message_id = str(uuid4())
                 now = datetime.now(timezone.utc)
                 with Session(engine) as db_session:
@@ -9947,7 +10010,6 @@ def create_app(
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
                 if tool_call.name in {
-                    "search_resources",
                     "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
                 }:
@@ -10553,6 +10615,13 @@ def create_app(
                             "http://127.0.0.1:8080/internal/delegated-proxy/"
                             f"{proxy_capability}"
                         )
+                        def delegated_token_provider(
+                            capability: str = proxy_capability,
+                            vault: DelegatedSessionVault = delegated_vault,
+                        ) -> str:
+                            grant = vault.grant_by_capability(capability)
+                            return grant[0].token if grant is not None else ""
+
                         delegated_api_url, _, _ = delegated_cluster_endpoint(selected_cluster)
                         agent_targets[selected_cluster.id] = (
                             cluster_label,
@@ -10566,18 +10635,14 @@ def create_app(
                             ),
                         )
                         agent_readers[selected_cluster.id] = (
-                            lambda url=proxy_url: KubernetesReadOnlyExplorer.for_remote_cluster(
+                            lambda url=proxy_url, cluster=selected_cluster,
+                            token_provider=delegated_token_provider:
+                            _make_delegated_read_only_explorer(
                                 api_url=url,
-                                token="broker-injected",
-                                tls_verify=False,
-                                max_payload_bytes=app_settings.adhoc_max_payload_bytes,
-                                log_tail_lines=app_settings.workload_log_tail_lines,
-                                max_log_bytes=app_settings.workload_max_log_bytes,
-                                max_search_scan_objects=app_settings.adhoc_search_max_scan_objects,
-                                http_probe=BoundedHttpProbe(
-                                    timeout_seconds=app_settings.adhoc_http_probe_timeout_seconds,
-                                    max_response_bytes=app_settings.adhoc_http_probe_max_bytes,
-                                ),
+                                telemetry_api_url=cluster.api_url,
+                                token_provider=token_provider,
+                                telemetry_tls_verify=cluster.tls_verify,
+                                settings=app_settings,
                             )
                         )
                     # In delegated mode the agent owns discovery from the first action.
@@ -10723,6 +10788,13 @@ def create_app(
                             "http://127.0.0.1:8080/internal/delegated-proxy/"
                             f"{connection.read_only_proxy_capability}"
                         )
+                        def delegated_token_provider(
+                            capability: str = connection.read_only_proxy_capability,
+                            vault: DelegatedSessionVault = delegated_vault,
+                        ) -> str:
+                            grant = vault.grant_by_capability(capability)
+                            return grant[0].token if grant is not None else ""
+
                         try:
                             # DynamicClient performs synchronous API discovery while it is
                             # constructed. The broker is served by this same ASGI process, so
@@ -10731,6 +10803,9 @@ def create_app(
                             # remains available to service the loopback request.
                             reader = await _build_delegated_read_only_explorer(
                                 proxy_url=proxy_url,
+                                telemetry_api_url=selected_cluster.api_url,
+                                token_provider=delegated_token_provider,
+                                telemetry_tls_verify=selected_cluster.tls_verify,
                                 settings=app_settings,
                             )
                         except Exception as exc:
@@ -11921,8 +11996,29 @@ def create_app(
         delegated_connections = request.app.state.delegated_vault.list_for(
             session_id=session_id, owner=user.username
         ) if session_id else []
+        requested_cluster_ids = list(dict.fromkeys([
+            item.strip()
+            for item in (
+                request.query_params.get("cluster_ids", "").split(",")
+                if request.query_params.get("cluster_ids") else
+                [request.query_params.get("cluster_id", "")]
+            )
+            if item.strip()
+        ]))[:app_settings.adhoc_max_clusters_per_conversation]
         if app_settings.delegated_access_enabled and not delegated_connections:
-            return RedirectResponse("/delegated/connect", status_code=303)
+            connect_query = (
+                urlencode({
+                    "retry": ",".join(requested_cluster_ids),
+                    "next": (
+                        "/ask?new=1&cluster_ids=" + ",".join(requested_cluster_ids)
+                    ),
+                })
+                if requested_cluster_ids else ""
+            )
+            return RedirectResponse(
+                f"/delegated/connect?{connect_query}" if connect_query else "/delegated/connect",
+                status_code=303,
+            )
         delegated_cluster_ids = [item.cluster_id for item in delegated_connections]
         turn_agent_mode = (
             "unrestricted" if app_settings.delegated_access_enabled
@@ -11939,11 +12035,36 @@ def create_app(
             cluster_query = select(Cluster).where(Cluster.is_enabled.is_(True))
             if app_settings.delegated_access_enabled:
                 cluster_query = cluster_query.where(
-                    Cluster.id.in_(delegated_cluster_ids), _visible_clusters(user.username)
+                    _visible_clusters(user.username)
                 )
             available_clusters = list(db_session.scalars(
                 cluster_query.order_by(Cluster.environment, Cluster.name)
             ))
+        available_cluster_ids = {item.id for item in available_clusters}
+        missing_requested_ids = [
+            item for item in requested_cluster_ids
+            if item in available_cluster_ids and item not in delegated_cluster_ids
+        ] if app_settings.delegated_access_enabled else []
+        if missing_requested_ids:
+            query = urlencode({
+                "retry": ",".join(missing_requested_ids),
+                "next": "/ask?new=1&cluster_ids=" + ",".join(requested_cluster_ids),
+            })
+            return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
+        if (
+            requested_cluster_ids
+            and set(requested_cluster_ids).issubset(available_cluster_ids)
+            and (
+                not app_settings.delegated_access_enabled
+                or set(requested_cluster_ids).issubset(delegated_cluster_ids)
+            )
+        ):
+            selected_cluster_ids = requested_cluster_ids
+        else:
+            selected_cluster_ids = (
+                delegated_cluster_ids[:app_settings.adhoc_max_clusters_per_conversation]
+                if delegated_connections else [SYSTEM_CLUSTER_ID]
+            )
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
@@ -11962,9 +12083,10 @@ def create_app(
                 "selected_reasoning_effort": selected_reasoning_effort,
                 "active_run": None,
                 "clusters": [_cluster_summary(item) for item in available_clusters],
-                "selected_cluster_ids": (
-                    delegated_cluster_ids[:app_settings.adhoc_max_clusters_per_conversation]
-                    if delegated_connections else [SYSTEM_CLUSTER_ID]
+                "selected_cluster_ids": selected_cluster_ids,
+                "connected_cluster_ids": (
+                    delegated_cluster_ids if app_settings.delegated_access_enabled
+                    else list(available_cluster_ids)
                 ),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": turn_agent_mode,
@@ -11980,6 +12102,35 @@ def create_app(
             response.set_cookie(CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
                                 httponly=True, samesite="strict", max_age=28_800)
         return response
+
+    @app.get("/clusters/{cluster_id}/ask")
+    async def start_cluster_conversation(
+        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> RedirectResponse:
+        if not _can_ask(user):
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires an authorized role.")
+        with Session(request.app.state.engine) as db_session:
+            cluster = db_session.scalar(select(Cluster).where(
+                Cluster.id == cluster_id,
+                Cluster.is_enabled.is_(True),
+                _visible_clusters(user.username),
+            ))
+        if cluster is None:
+            raise HTTPException(status_code=404, detail="That cluster is unavailable.")
+        if app_settings.delegated_access_enabled:
+            session_id = _delegated_session_id(request)
+            connected_ids = {
+                item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                    session_id=session_id, owner=user.username
+                )
+            } if session_id else set()
+            if cluster_id not in connected_ids:
+                query = urlencode({
+                    "retry": cluster_id,
+                    "next": f"/ask?new=1&cluster_id={cluster_id}",
+                })
+                return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
+        return RedirectResponse(f"/ask?new=1&cluster_ids={cluster_id}", status_code=303)
 
     @app.get("/ask/{conversation_id}", response_class=HTMLResponse)
     async def ask_podpilot_conversation(
@@ -12124,6 +12275,10 @@ def create_app(
                 } if active_run_row else None),
                 "clusters": [_cluster_summary(item) for item in available_clusters],
                 "selected_cluster_ids": conversation_cluster_ids,
+                "connected_cluster_ids": (
+                    list(connected_ids) if conversation.delegated_session_id
+                    else [item.id for item in available_clusters]
+                ),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
                 "agent_mode": turn_agent_mode,
                 "delegated_session_active": delegated_session_active,
@@ -12183,11 +12338,15 @@ def create_app(
                     session_id=delegated_session_id, owner=user.username
                 )
             } if delegated_session_id else set()
-            if not set(requested_cluster_ids).issubset(connected_ids):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Sign in to every selected cluster before starting this conversation.",
-                )
+            missing_cluster_ids = [
+                item for item in requested_cluster_ids if item not in connected_ids
+            ]
+            if missing_cluster_ids:
+                query = urlencode({
+                    "retry": ",".join(missing_cluster_ids),
+                    "next": "/ask?new=1&cluster_ids=" + ",".join(requested_cluster_ids),
+                })
+                return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
             requested_mode = form.get("execution_mode", "read_only").strip().casefold()
             if requested_mode not in {"read_only", "action"}:
                 raise HTTPException(status_code=422, detail="Select a valid conversation mode.")

@@ -390,10 +390,12 @@
                 {% for cluster in clusters %}
                   <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
                     <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox
+                      data-connected="{{ 'true' if cluster.id in connected_cluster_ids else 'false' }}"
+                      data-login-url="/delegated/connect?retry={{ cluster.id }}&amp;next=/ask?new=1%26cluster_id={{ cluster.id }}"
                       {% if cluster.id in selected_cluster_ids %}checked{% endif %}
                       {% if conversation or not cluster.is_enabled %}disabled{% endif %}>
                     <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}runtime cluster{% else %}{{ cluster.api_url }}{% endif %}</small></span>
-                    {% if not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
+                    {% if cluster.id not in connected_cluster_ids %}<em>Sign in</em>{% elif not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
                   </label>
                 {% endfor %}
                 </div>

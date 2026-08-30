@@ -44,25 +44,29 @@ injection, or server-directed gap recovery. Citation conflicts change evidence s
 limitations; they do not erase the agent's text. Deterministic answer generation is reserved for a
 model-provider or structured-contract failure after evidence has already been collected.
 
-Native resource tables, metric cards, and parsed dynamic-column Markdown tables are presentation
-views. They are additive and never suppress the complete agent response. `list_resources`,
-`search_resources`, and `watch_resources` return bounded projections with
-`fullObjectsIncluded=false`; the agent decides whether exact object reads are material. Raw bounded
+Metric cards and parsed dynamic-column Markdown tables are presentation views. They are additive
+and never suppress the complete agent response. The unified agent does not receive generic
+`list_resources` or `search_resources` tools and does not receive an unsolicited native inventory
+table; it gathers Kubernetes objects with bounded brokered `oc` reads and authors the result shape.
+Purpose-built legacy collectors may still use bounded projected object reads internally. Raw bounded
 log tails remain available to the final agent instead of being replaced by a separate server-side
-log interpretation.
+log interpretation. Safe-Markdown rendering recognizes attribute-free `<br>`, `<br/>`, and
+`<br />` tags as line breaks in ordinary text and table cells. All other raw HTML remains escaped,
+and break-like text inside inline or fenced code remains literal.
 
 ## Current Runtime
 
-Delegated Investigator and Action conversations share one agentic path. The Chat Completions model
-can select typed `search_resources`, `http_probe`,
-`query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
+Delegated and shared-credential Investigator and Action conversations share the same agent tool
+contract. The Chat Completions model can select typed `http_probe`, `query_audit_events`, and
+`query_metrics` helpers in the same iterative loop as its brokered
 shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
-The generic LIST helper is absent from agent schemas. Enumeration uses bounded read-only `oc get`
-commands in both conversation modes.
+The generic LIST and SEARCH helpers are absent from every unified-agent schema. Enumeration and
+general object-field filtering use bounded `oc get` commands in both conversation modes. The agent
+must project or filter large responses in the runner before returning them to model context.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
@@ -106,7 +110,9 @@ approval. The loop retains conversation ownership, provider credentials, redacti
 reuse/persistence, progress, command metadata audit, and the run deadline.
 Lazy delegated typed-reader construction, including Kubernetes dynamic-client discovery through the
 loopback broker, runs in a worker thread. It must not block the ASGI event loop that serves that same
-broker or the health endpoints.
+broker or the health endpoints. Delegated metric and audit adapters resolve the current token from
+the memory-only capability vault for each request, use the registered cluster TLS policy, and become
+unavailable as soon as that capability is revoked or expires.
 Agent tool schemas enumerate the conversation's selected cluster IDs and require one target per
 call. Malformed arguments are rejected before cluster execution with bounded correction guidance.
 Those model-formatting mistakes remain audited and appear only in collapsed tool-call diagnostics;

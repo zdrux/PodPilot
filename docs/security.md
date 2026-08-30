@@ -73,6 +73,10 @@ Additional cluster logins append to that browser session without replacing its e
 connections. Removing one connection revokes that token and invalidates only that cluster's proxy
 capabilities; conversations that require the removed cluster remain durable but cannot continue
 until it is reconnected.
+Sidebar connection indicators are derived only from the current owner and HttpOnly delegated
+session cookie. They expose no token material. Opening an unconnected cluster carries only its
+registered ID through the login redirect; credentials are still submitted solely to the existing
+bounded OAuth exchange and are discarded immediately afterward.
 
 The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
 allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
@@ -150,8 +154,10 @@ never receive the user's token. This makes the behavioral distinction read versu
 than guarded planner versus unrestricted agent. Legacy non-delegated deployments may still select
 the older guarded planner with `PODPILOT_AGENT_MODE`, but it is not the deployed delegated workflow.
 
-The shared agent loop exposes registered object-field-search, HTTP-probe, metric,
-and audit collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
+The shared agent loop exposes registered HTTP-probe, metric, and audit collectors as model-callable
+helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not
+model-callable; the agent uses bounded brokered `oc get` commands and authors its own presentation.
+Those typed reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
 bounded presentation. The API never invokes them merely because a classifier or enrichment pack
 recognized a request. Their observations return to the model, which alone chooses the next tool or
@@ -163,6 +169,10 @@ exact redacted collection failures.
 Conversely, a successful registered observation is authoritative only for its declared scope.
 Collector completion never disconnects, cancels, or terminates the model loop; the model may
 interpret it, correlate it with another helper, verify it through shell, or answer.
+Delegated Thanos and Loki clients resolve a fresh bearer token from the selected capability for each
+request. The token is never placed in model or runner messages, and revoking or expiring the
+memory-only capability immediately makes those adapters unavailable. Investigator and Action use
+the same adapters; only the Kubernetes broker capability permits or rejects writes.
 
 In legacy non-delegated mode, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators

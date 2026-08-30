@@ -405,8 +405,8 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "search_resources",
-        "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
+        "execute_shell", "pod_health_summary", "http_probe",
+        "query_audit_events", "query_metrics",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
@@ -431,8 +431,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert health_tool["parameters"]["required"] == ["cluster_id"]
     assert "label_selector" in health_tool["parameters"]["properties"]
     assert "complete zero-anomaly result" in health_tool["description"]
-    assert "Do not use this tool for inventory" in tools_by_name["search_resources"]["description"]
-    assert "Both match_field and match_value are mandatory" in tools_by_name["search_resources"]["description"]
+    assert "search_resources" not in tools_by_name
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]

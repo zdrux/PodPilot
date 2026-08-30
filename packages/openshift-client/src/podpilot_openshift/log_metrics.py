@@ -47,6 +47,7 @@ class LokiQueryClient:
         base_url: str,
         token_path: Path | None = None,
         token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         ca_path: Path | None = None,
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
@@ -57,11 +58,12 @@ class LokiQueryClient:
         tenant: str = "application",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if (token_path is None) == (token is None):
+        if sum(source is not None for source in (token_path, token, token_provider)) != 1:
             raise ValueError("Configure exactly one Loki bearer-token source.")
         normalized_base_url = base_url.rstrip("/")
         self._token_path = token_path
         self._token = token
+        self._token_provider = token_provider
         self._ca_path = ca_path
         self._tls_verify = tls_verify
         self._route_discovery_url = (
@@ -87,7 +89,8 @@ class LokiQueryClient:
         cls,
         *,
         api_url: str,
-        token: str,
+        token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         api_tls_verify: bool = True,
         route_name: str = "logging-loki",
         tenant: str = "application",
@@ -97,6 +100,7 @@ class LokiQueryClient:
         return cls(
             base_url=f"https://logging-loki.invalid/api/logs/v1/{tenant}",
             token=token,
+            token_provider=token_provider,
             tenant=tenant,
             route_discovery_url=(
                 f"{api_url.rstrip('/')}"
@@ -216,6 +220,8 @@ class LokiQueryClient:
             token = (
                 self._token_path.read_text(encoding="utf-8").strip()
                 if self._token_path is not None
+                else self._token_provider().strip()
+                if self._token_provider is not None
                 else (self._token or "").strip()
             )
             if not token:

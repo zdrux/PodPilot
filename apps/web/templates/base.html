@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="dark">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=quiet-ledger-4">
-  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=workspace-clusters-1">
+  <script src="{{ url_for('static', path='/app.js') }}?v=workspace-clusters-1" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
@@ -57,16 +57,38 @@
           </div>
           {% endif %}
         </div>
-        {% if ask_first %}<a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
-          <span class="nav-icon" aria-hidden="true">⌘</span>
-          Clusters
-        </a>{% endif %}
-        {% if user is defined and user.role.value >= 30 %}
+        {% if ask_first and user is defined %}
+        <div class="nav-tree cluster-nav-tree {% if workspace_clusters %}expanded{% endif %}">
+          <a class="nav-link {% if request.url.path.startswith('/clusters/') or request.url.path == '/delegated/connect' %}active{% endif %}" href="/delegated/connect">
+            <span class="nav-icon" aria-hidden="true">⌘</span>
+            Clusters
+          </a>
+          <div class="nav-subtree" aria-label="Available clusters">
+            <div class="nav-subtree-heading">
+              <span>Available</span>
+              {% if user is defined and user.role.value >= 15 %}<a href="/settings/clusters?new=1" title="Add an ad hoc cluster" aria-label="Add an ad hoc cluster">+</a>{% endif %}
+            </div>
+            <ul class="nav-session-list nav-cluster-list">
+              {% for cluster in workspace_clusters %}
+              <li>
+                <a class="nav-session-link nav-cluster-link" href="/clusters/{{ cluster.id }}/ask" title="Start a conversation with {{ cluster.name }}">
+                  <span class="cluster-session-status {% if cluster.session_connected %}connected{% else %}disconnected{% endif %}" aria-hidden="true"></span>
+                  <span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment | upper }} · {{ 'Signed in' if cluster.session_connected else 'Sign-in required' }}</small></span>
+                </a>
+              </li>
+              {% else %}
+              <li class="nav-session-empty">No clusters are available.</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+        {% endif %}
+        {% if user is defined and user.can_manage_configuration %}
         <p class="nav-label section-gap">Manage</p>
-        {% if not ask_first %}<a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
+        <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
-          Clusters
-        </a>{% endif %}
+          Cluster Management
+        </a>
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory

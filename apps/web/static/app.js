@@ -573,7 +573,26 @@
         button.disabled = button.dataset.starterAvailable !== "true" || bounded.length === 0;
       });
     };
-    checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => updatePicker(checkbox)));
+    checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => {
+      if (
+        checkbox.checked
+        && checkbox.dataset.connected === "false"
+        && checkbox.dataset.loginUrl
+        && !clusterPicker.closest("[data-delegated-connect-form]")
+      ) {
+        const requestedIds = checkboxes.filter((item) => item.checked).map((item) => item.value);
+        const loginUrl = new URL(checkbox.dataset.loginUrl, window.location.origin);
+        loginUrl.searchParams.set("retry", checkbox.value);
+        loginUrl.searchParams.set(
+          "next",
+          `/ask?new=1&cluster_ids=${requestedIds.join(",")}`,
+        );
+        checkbox.checked = false;
+        window.location.assign(loginUrl.toString());
+        return;
+      }
+      updatePicker(checkbox);
+    }));
     clusterPicker.querySelector("[data-cluster-search]")?.addEventListener("input", (event) => {
       const query = event.target.value.trim().toLowerCase();
       clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {

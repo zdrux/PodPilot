@@ -272,6 +272,29 @@ def test_remote_client_discovers_standard_lokistack_route() -> None:
     assert client.query_namespace_volume("fixed").samples == ()
 
 
+def test_loki_client_resolves_a_fresh_bearer_token_for_each_request() -> None:
+    supplied = iter(("delegated-one", "delegated-two"))
+    observed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.headers["authorization"])
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"resultType": "vector", "result": []},
+        })
+
+    client = LokiQueryClient(
+        base_url="https://logs.example.test/api/logs/v1/application",
+        token_provider=lambda: next(supplied),
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.query_log_volume("fixed")
+    client.query_log_volume("fixed")
+
+    assert observed == ["Bearer delegated-one", "Bearer delegated-two"]
+
+
 def test_loki_denial_has_actionable_role_guidance(tmp_path: Path) -> None:
     client = _client(tmp_path, lambda _request: httpx.Response(403))
 
