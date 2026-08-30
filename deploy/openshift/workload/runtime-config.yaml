@@ -11,7 +11,6 @@ data:
   cluster_name: configure-cluster-name
   adhoc_inventory_max_objects: "500"
   adhoc_detail_fanout_max_objects: "10"
-  adhoc_list_tool_enabled: "false"
   adhoc_max_payload_bytes: "96000"
   adhoc_search_max_scan_objects: "2000"
   adhoc_metrics_max_range_seconds: "2592000"

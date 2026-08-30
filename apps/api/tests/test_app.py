@@ -207,11 +207,14 @@ def test_explicit_comparison_overrides_plain_inventory_classification() -> None:
     ) is True
 
 
-def test_collection_configuration_guidance_compiles_inventory_for_exact_fanout() -> None:
+@pytest.mark.parametrize("classified_cardinality", ["collection", "unknown", "exact_one"])
+def test_collection_configuration_guidance_does_not_compile_removed_list_helper(
+    classified_cardinality: str,
+) -> None:
     compiled = _semantic_resource_read_plan(
         InquirySemantics(
             mode="explain", operation="configuration_guidance",
-            cardinality="collection", answer_goal="configuration",
+            cardinality=classified_cardinality, answer_goal="configuration",
             resource_query="ClusterLogForwarder", needs_object_details=False,
             evidence_goal="Compare ClusterLogForwarder configurations.",
         ),
@@ -225,13 +228,21 @@ def test_collection_configuration_guidance_compiles_inventory_for_exact_fanout()
         conversation=[], inventory_limit=500,
     )
 
-    assert compiled is not None
-    assert compiled[0].intents == [ReadIntent(
-        tool="list_resources",
-        resource="clusterlogforwarders.observability.openshift.io",
-        api_version="observability.openshift.io/v1",
-        kind="ClusterLogForwarder", limit=500,
-    )]
+    assert compiled is None
+
+
+def test_cross_cluster_comparison_overrides_erroneous_exact_one_classification() -> None:
+    inquiry = InquirySemantics(
+        mode="explain", operation="configuration_guidance",
+        cardinality="exact_one", answer_goal="configuration",
+        resource_query="ClusterLogForwarder", needs_object_details=False,
+        evidence_goal="Compare ClusterLogForwarder configurations.",
+    )
+
+    assert _collection_object_analysis_requested(
+        "Compare the ClusterLogForwarder configurations across the two clusters.",
+        inquiry,
+    ) is True
 
 
 def test_collection_analysis_does_not_sample_large_inventory() -> None:
@@ -256,7 +267,7 @@ def test_collection_analysis_does_not_sample_large_inventory() -> None:
     ]
 
 
-def test_configuration_collection_uses_internal_list_then_exact_get_when_list_tool_disabled() -> None:
+def test_configuration_comparison_does_not_invoke_removed_list_helper() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return _agent_accepts_seeded_evidence(*_args, **_kwargs)
@@ -317,23 +328,22 @@ def test_configuration_collection_uses_internal_list_then_exact_get_when_list_to
         api_key="test-token",
         settings=Settings(
             auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
-            role_breakglass_groups=[], adhoc_list_tool_enabled=False,
+            role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="compare-clf",
-        question="Compare the ClusterLogForwarder configuration.",
+        question="Compare the ClusterLogForwarder configurations across the two clusters.",
         conversation=[], existing_evidence=[],
         inquiry=InquirySemantics(
-            capability="resource_inventory", mode="inventory", operation="inventory",
-            cardinality="collection", answer_goal="identifiers",
+            capability="configuration_guidance", mode="explain",
+            operation="configuration_guidance",
+            cardinality="exact_one", answer_goal="configuration",
             resource_query="ClusterLogForwarder", needs_object_details=False,
             evidence_goal="Compare every ClusterLogForwarder specification.",
         ),
     ))
 
-    assert [intent.tool for intent in explorer.calls] == [
-        "list_resources", "get_resource",
-    ]
-    assert {item["id"] for item in result.evidence} == {"clf-list", "clf-detail"}
+    assert explorer.calls == []
+    assert result.evidence == []
 
 
 def test_exact_cluster_configuration_comparison_detects_structural_differences() -> None:
@@ -464,13 +474,13 @@ def test_disabled_list_tool_is_not_offered_as_a_grounded_candidate() -> None:
                 api_version="example.io/v1", kind="Widget",
             )],
         ),
-        seen_intents=set(), list_tool_enabled=False,
+        seen_intents=set(),
     )
 
     assert candidates == []
 
 
-def test_disabled_list_tool_rejects_model_authored_list_without_execution() -> None:
+def test_removed_list_tool_rejects_model_authored_list_without_execution() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return ReadPlan(
@@ -500,7 +510,7 @@ def test_disabled_list_tool_rejects_model_authored_list_without_execution() -> N
         api_key="test-api-token",
         settings=Settings(
             auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
-            role_breakglass_groups=[], adhoc_list_tool_enabled=False,
+            role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="list-disabled", question="List Widgets.",
         conversation=[], existing_evidence=[],
@@ -508,7 +518,7 @@ def test_disabled_list_tool_rejects_model_authored_list_without_execution() -> N
 
     assert explorer.calls == []
     assert result.evidence == []
-    assert any("did not select a safe evidence read" in item for item in result.limitations)
+    assert any("removed list_resources helper" in item for item in result.limitations)
 
 
 def _agent_accepts_seeded_evidence(*args, **kwargs) -> ReadPlan:
@@ -1137,17 +1147,7 @@ def test_related_inventory_followup_binds_parent_scope_and_selector_value() -> N
         inventory_limit=500,
     )
 
-    assert compiled is not None
-    plan, terminal = compiled
-    assert terminal is True
-    assert plan.goal_type == "inventory"
-    assert plan.intents == [ReadIntent(
-        tool="list_resources", resource="kafkatopics.kafka.strimzi.io",
-        api_version="kafka.strimzi.io/v1beta2", kind="KafkaTopic",
-        namespace="kafka-observability",
-        label_selector="strimzi.io/cluster=kafka-observability-cluster",
-        limit=500,
-    )]
+    assert compiled is None
 
 
 def test_semantic_relationship_followup_binds_reverse_kafka_target() -> None:
@@ -1284,13 +1284,7 @@ def test_semantic_relationship_followup_compiles_selector_collection() -> None:
         conversation=[], inventory_limit=500,
     )
 
-    assert compiled is not None
-    plan, terminal = compiled
-    assert terminal is True
-    assert plan.intents == [ReadIntent(
-        tool="list_resources", resource="nodes", api_version="v1", kind="Node",
-        label_selector="node-role.kubernetes.io/worker=", limit=500,
-    )]
+    assert compiled is None
 
 
 def test_semantic_classification_retries_invalid_json_and_supplies_prior_audit_query() -> None:
@@ -1750,14 +1744,18 @@ def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
             if context["investigation_round"] == 1:
                 return ReadPlan(
                     scope_summary="Try an ambiguous resource plural.",
-                    intents=[ReadIntent(tool="list_resources", resource="routes")],
+                    intents=[ReadIntent(
+                        tool="search_resources", resource="routes",
+                        match_field="metadata.name", match_value="api",
+                    )],
                 )
             if context["investigation_round"] == 2:
                 return ReadPlan(
-                    scope_summary="Use an unambiguous safe resource.",
-                    intents=[ReadIntent(
-                        tool="list_resources", resource="pods", api_version="v1",
-                        kind="Pod", namespace="payments", limit=5,
+                        scope_summary="Use an unambiguous safe resource.",
+                        intents=[ReadIntent(
+                            tool="search_resources", resource="pods", api_version="v1",
+                            kind="Pod", namespace="payments", limit=5,
+                            match_field="metadata.name", match_value="api",
                     )],
                 )
             return ReadPlan(
@@ -1780,7 +1778,7 @@ def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
             self.calls.append(intent)
             return ReadResult((AdHocObservation(
                 id="cluster-pods-1",
-                tool="list_resources",
+                tool="search_resources",
                 summary="Read Pods in payments.",
                 source="kubernetes:v1:Pod:payments/*",
                 collected_at=datetime.now(timezone.utc),
@@ -1900,7 +1898,7 @@ def test_collection_does_not_automatically_retry_tls_trust_failure() -> None:
     assert all("automatic_followup" not in item for item in result.activity)
 
 
-def test_collection_lets_model_plan_cross_namespace_network_policy_evidence() -> None:
+def test_collection_discards_removed_list_reads_but_retains_exact_reads() -> None:
     class Provider:
         def __init__(self) -> None:
             self.contexts = []
@@ -1976,15 +1974,15 @@ def test_collection_lets_model_plan_cross_namespace_network_policy_evidence() ->
     ))
 
     assert [call.kind for call in explorer.calls] == [
-        "Pod", "Pod", "Namespace", "Namespace", "NetworkPolicy", "NetworkPolicy",
+        "Pod", "Pod", "Namespace", "Namespace",
     ]
-    assert [call.namespace for call in explorer.calls[-2:]] == ["frontend", "data"]
-    assert len(result.activity) == 6
+    assert len(result.activity) == 4
     assert all(item["status"] == "succeeded" for item in result.activity)
+    assert any("removed list_resources helper" in item for item in result.limitations)
     assert len(provider.contexts) == 2
     assert "planner_feedback" not in provider.contexts[-1]
     assert provider.contexts[1]["investigation_round"] == 2
-    assert len(provider.contexts[1]["observations"]) == 6
+    assert len(provider.contexts[1]["observations"]) == 4
 
 
 def test_collection_lets_model_investigate_repeated_certificate_log_signals() -> None:
@@ -3710,7 +3708,7 @@ def test_model_metric_semantics_are_not_overridden_by_question_heuristics() -> N
     }
 
 
-def test_model_inventory_semantics_are_not_overridden_by_question_heuristics() -> None:
+def test_model_inventory_semantics_cannot_invoke_removed_list_helper() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return _agent_accepts_seeded_evidence(*_args, **_kwargs)
@@ -3759,11 +3757,8 @@ def test_model_inventory_semantics_are_not_overridden_by_question_heuristics() -
         ),
     ))
 
-    assert explorer.calls == [ReadIntent(
-        tool="list_resources", resource="nodes", api_version="v1",
-        kind="Node", limit=500,
-    )]
-    assert result.evidence[0]["data"]["names"] == ["worker-1"]
+    assert explorer.calls == []
+    assert result.evidence == []
 
 
 def test_semantic_audit_plan_preserves_model_extracted_values() -> None:
@@ -5459,7 +5454,7 @@ def test_kafka_inventory_omits_unrelated_clusterrole_list_evidence() -> None:
     assert "aggregate-view" not in content
 
 
-def test_kafka_inventory_candidates_do_not_include_clusterroles() -> None:
+def test_kafka_inventory_candidates_do_not_offer_removed_list_helper() -> None:
     candidates = _grounded_read_candidates(
         question="List Kafka clusters on each OpenShift cluster.",
         evidence=[{
@@ -5488,7 +5483,7 @@ def test_kafka_inventory_candidates_do_not_include_clusterroles() -> None:
         ],
     )
 
-    assert [candidate.intent.kind for candidate in candidates] == ["Kafka"]
+    assert candidates == []
 
 
 def test_model_authored_inventory_plan_cannot_change_requested_kind() -> None:
@@ -5542,7 +5537,7 @@ def test_inventory_plan_cannot_drop_or_change_field_predicate() -> None:
     assert "does not preserve" in _inventory_plan_scope_errors(changed_search, inquiry)[0]
 
 
-def test_inventory_collection_uses_live_catalog_without_model_planning() -> None:
+def test_inventory_collection_does_not_turn_live_catalog_into_list_execution() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return _agent_accepts_seeded_evidence(*_args, **_kwargs)
@@ -5594,13 +5589,12 @@ def test_inventory_collection_uses_live_catalog_without_model_planning() -> None
         conversation=[], existing_evidence=[],
     ))
 
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].resource == "kafkas.kafka.strimzi.io"
-    assert result.activity[0]["status"] == "succeeded"
-    assert result.evidence[0]["id"] == "cluster-kafka-list"
+    assert explorer.calls == []
+    assert result.activity == []
+    assert result.evidence == []
 
 
-def test_model_semantics_can_route_novel_inventory_wording_through_live_catalog() -> None:
+def test_model_inventory_semantics_do_not_restore_removed_list_helper() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return _agent_accepts_seeded_evidence(*_args, **_kwargs)
@@ -5650,16 +5644,15 @@ def test_model_semantics_can_route_novel_inventory_wording_through_live_catalog(
         ),
     ))
 
-    assert [call.resource for call in explorer.calls] == ["kafkas.kafka.strimzi.io"]
-    assert result.evidence[0]["id"] == "cluster-kafka-list"
+    assert explorer.calls == []
+    assert result.evidence == []
     rendered = _deterministic_inventory_answer(
         evidence=result.evidence,
         activity=result.activity,
         question="Tell me where our streaming installations live.",
         inventory_only=True,
     )
-    assert rendered is not None
-    assert "`orders`" in str(rendered["content"])
+    assert rendered is None
 
 
 def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
@@ -6163,10 +6156,7 @@ def test_uncompiled_field_predicate_cannot_make_plain_inventory_terminal() -> No
         conversation=[], inventory_limit=500,
     )
 
-    assert compiled is not None
-    plan, terminal = compiled
-    assert terminal is False
-    assert plan.intents[0].tool == "list_resources"
+    assert compiled is None
 
 
 def test_semantic_coordinates_must_be_grounded_in_operator_context() -> None:
@@ -6302,7 +6292,7 @@ def test_exact_node_label_capability_executes_grounded_get() -> None:
     assert result.evidence[0]["data"]["metadata"]["labels"] == {"role": "worker"}
 
 
-def test_inventory_details_begin_with_catalog_list_before_optional_planning() -> None:
+def test_inventory_details_do_not_offer_catalog_list_candidate() -> None:
     class Provider:
         def __init__(self) -> None:
             self.contexts = []
@@ -6365,11 +6355,11 @@ def test_inventory_details_begin_with_catalog_list_before_optional_planning() ->
     assert explorer.calls == []
     assert provider.contexts
     assert provider.contexts[0]["completed_reads"] == []
-    assert provider.contexts[0]["read_candidates"]
+    assert provider.contexts[0]["read_candidates"] == []
     assert result.evidence == []
 
 
-def test_collection_analysis_auto_gets_every_object_in_small_complete_list() -> None:
+def test_collection_analysis_does_not_auto_list_or_fan_out_gets() -> None:
     class Provider:
         def plan_ad_hoc(self, _profile, _api_key, context):
             if not context["completed_reads"]:
@@ -6457,15 +6447,9 @@ def test_collection_analysis_auto_gets_every_object_in_small_complete_list() -> 
         ),
     ))
 
-    assert [(call.tool, call.namespace, call.name) for call in explorer.calls] == [
-        ("list_resources", None, None),
-        ("get_resource", "openshift-logging", "instance"),
-        ("get_resource", "team-a", "application"),
-    ]
-    assert [item["tool"] for item in result.activity] == [
-        "list_resources", "get_resource", "get_resource",
-    ]
-    assert not any("coverage is partial" in item for item in result.limitations)
+    assert explorer.calls == []
+    assert result.activity == []
+    assert result.evidence == []
 
 
 def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() -> None:
@@ -6502,7 +6486,7 @@ def test_hybrid_inventory_survives_final_provider_failure_for_novel_wording() ->
     assert "cluster-kafka-list" in rendered["citations"]
 
 
-def test_inventory_catalog_miss_refreshes_before_planning() -> None:
+def test_inventory_catalog_refresh_does_not_execute_removed_list_helper() -> None:
     class Provider:
         def plan_ad_hoc(self, *_args, **_kwargs):
             return _agent_accepts_seeded_evidence(*_args, **_kwargs)
@@ -6556,11 +6540,10 @@ def test_inventory_catalog_miss_refreshes_before_planning() -> None:
         conversation=[], existing_evidence=[],
     ))
 
-    assert explorer.catalog_calls == [False, True]
-    assert [call.resource for call in explorer.calls] == ["widgets.example.io"]
-    assert result.activity[0]["tool"] == "list_resources"
-    assert result.activity[0]["status"] == "succeeded"
-    assert result.evidence[0]["data"]["names"] == ["sample-widget"]
+    assert explorer.catalog_calls == [False]
+    assert explorer.calls == []
+    assert result.activity == []
+    assert result.evidence == []
 
 
 def test_model_kafka_cluster_alias_is_canonicalized_to_live_kafka_kind() -> None:
@@ -6627,8 +6610,8 @@ def test_model_kafka_cluster_alias_is_canonicalized_to_live_kafka_kind() -> None
         ),
     ))
 
-    assert [call.kind for call in explorer.calls] == ["Kafka"]
-    assert result.evidence[0]["data"]["names"] == ["vc-cluster"]
+    assert explorer.calls == []
+    assert result.evidence == []
 
 
 def test_multi_cluster_inventory_distinguishes_catalog_miss_from_zero_objects() -> None:
@@ -7005,7 +6988,7 @@ def test_inventory_fallback_enumerates_custom_resources_without_question_classif
     assert rendered["citations"] == ["cluster-kafka-1"]
 
 
-def test_free_form_diagnostic_list_retains_small_model_sample() -> None:
+def test_free_form_diagnostic_cannot_restore_removed_list_helper() -> None:
     class FreeFormPlanner:
         def __init__(self) -> None:
             self.calls = 0
@@ -7093,12 +7076,10 @@ def test_free_form_diagnostic_list_retains_small_model_sample() -> None:
         existing_evidence=[],
     ))
 
-    assert provider.calls == 2
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].resource == "kafkatopics"
-    assert explorer.calls[0].namespace == "kafka-observability"
-    assert explorer.calls[0].limit == 20
-    assert result.evidence[-1]["data"]["names"] == ["audit-events"]
+    assert provider.calls == 1
+    assert explorer.calls == []
+    assert result.evidence == []
+    assert any("removed list_resources helper" in item for item in result.limitations)
 
 
 class FakeAlertSource:
@@ -7399,8 +7380,10 @@ class DiscoveryThenLogsProvider(FakeModelProvider):
                 scope_summary="Discover kube-apiserver Pods.",
                 limitations=["An exact Pod name is needed before logs can be read."],
                 intents=[ReadIntent(
-                    tool="list_resources", api_version="v1", kind="Pod",
+                    tool="search_resources", api_version="v1", kind="Pod",
                     namespace="openshift-kube-apiserver", limit=5,
+                    match_field="metadata.name", match_value="kube-apiserver",
+                    match_operator="contains",
                 )],
             )
         if round_number == 2:
@@ -7428,16 +7411,22 @@ class DiscoveryThenLogsExplorer:
 
     def execute(self, intent):
         self.calls.append(intent)
-        if intent.tool == "list_resources":
+        if intent.tool == "search_resources":
             return ReadResult((AdHocObservation(
-                id="cluster-pod-list", tool="list_resources",
+                id="cluster-pod-search", tool="search_resources",
                 summary="Discovered kube-apiserver-sno1.",
                 source="kubernetes:v1:Pod:openshift-kube-apiserver/kube-apiserver-sno1",
                 collected_at=datetime.now(timezone.utc),
                 data={
+                    "kind": "Pod",
                     "namespace": "openshift-kube-apiserver",
                     "name": "kube-apiserver-sno1",
                     "containers": ["kube-apiserver"],
+                    "logCandidates": [{
+                        "namespace": "openshift-kube-apiserver",
+                        "pod": "kube-apiserver-sno1",
+                        "containers": ["kube-apiserver"],
+                    }],
                 },
             ),))
         return ReadResult((AdHocObservation(
@@ -7480,8 +7469,10 @@ class InvalidLogTargetsThenFallbackProvider(FakeModelProvider):
             goal_type="logs",
             scope_summary="Discover kube-apiserver Pods before reading logs.",
             intents=[ReadIntent(
-                tool="list_resources", api_version="v1", kind="Pod",
+                tool="search_resources", api_version="v1", kind="Pod",
                 namespace="openshift-kube-apiserver", limit=20,
+                match_field="metadata.name", match_value="kube-apiserver",
+                match_operator="contains",
             )],
         )
 
@@ -7502,10 +7493,10 @@ class ExactCandidateFallbackExplorer:
 
     def execute(self, intent):
         self.calls.append(intent)
-        if intent.tool == "list_resources":
+        if intent.tool == "search_resources":
             return ReadResult((AdHocObservation(
                 id="cluster-kube-api-pods",
-                tool="list_resources",
+                tool="search_resources",
                 summary="Discovered kube-apiserver Pods.",
                 source="kubernetes:v1:Pod:openshift-kube-apiserver/*",
                 collected_at=datetime.now(timezone.utc),
@@ -7604,7 +7595,15 @@ class IncidentJobExplorer:
 class StorageClassProvider(FakeModelProvider):
     def answer_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> AdHocAnswer:
         self.adhoc_answer_calls.append(context)
-        storage = next(item for item in context["observations"] if item["id"] == "cluster-sc-1")
+        storage = next((
+            item for item in context["observations"] if item["id"] == "cluster-sc-1"
+        ), None)
+        if storage is None:
+            return AdHocAnswer(
+                answer_mode="insufficient_evidence",
+                answer="No StorageClass inventory was collected because the LIST helper is unavailable.",
+                cited_evidence_ids=[],
+            )
         storage_name = storage["data"]["items"][0]["metadata"]["name"]
         return AdHocAnswer(
             answer_mode="evidence_based",
@@ -10786,7 +10785,7 @@ def test_ask_continues_to_answer_when_later_plan_is_invalid(tmp_path: Path) -> N
     assert len(provider.adhoc_answer_calls) == 1
 
 
-def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
+def test_ask_storageclass_inventory_does_not_use_removed_list_helper(
     tmp_path: Path,
 ) -> None:
     provider = StorageClassProvider()
@@ -10819,18 +10818,14 @@ def test_ask_storageclass_inventory_uses_deterministic_read_without_model_plan(
             follow_redirects=False,
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "cluster exposes the managed-premium StorageClass" in rendered.text
-        assert "managed-premium" in rendered.text
-        assert "cluster-sc-1" in rendered.text
-        assert "No observations were provided" not in rendered.text
+        assert "No StorageClass inventory was collected" in rendered.text
+        assert "managed-premium" not in rendered.text
+        assert "cluster-sc-1" not in rendered.text
         assert "Suggested next checks" not in rendered.text
 
     assert provider.adhoc_plan_calls
     assert len(provider.adhoc_answer_calls) == 1
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].api_version == "storage.k8s.io/v1"
-    assert explorer.calls[0].kind == "StorageClass"
-    assert explorer.calls[0].limit == 500
+    assert explorer.calls == []
 
 
 def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
@@ -10875,12 +10870,10 @@ def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
     assert "model did not produce a usable evidence-backed interpretation" in rendered.text
     assert "model planner did not select a safe evidence read" not in rendered.text
     assert [call.tool for call in explorer.calls] == [
-        "search_resources", "get_resource", "list_resources", "pod_logs",
-        "get_resource", "search_resources",
+        "search_resources", "get_resource",
     ]
     assert explorer.calls[1].name == "model-server"
-    assert explorer.calls[2].kind == "Pod"
-    assert explorer.calls[3].name == "model-server-abc"
+    assert "removed list_resources helper" in rendered.text
 
 
 def test_diagnostic_stop_is_respected_without_server_directed_reads(
@@ -11235,7 +11228,7 @@ def test_failure_question_offers_healthy_exact_pod_log_candidate() -> None:
     assert all(candidate.capability != "cluster_events" for candidate in neutral_candidates)
 
 
-def test_grounded_candidates_keep_query_relevant_catalog_reads_with_owner_edges() -> None:
+def test_grounded_candidates_do_not_turn_catalog_matches_into_list_reads() -> None:
     candidates = _grounded_read_candidates(
         question="Is there Authorino configuration that defines the token format?",
         evidence=[],
@@ -11274,11 +11267,8 @@ def test_grounded_candidates_keep_query_relevant_catalog_reads_with_owner_edges(
         ],
     )
 
-    assert candidates[0].relation == "catalog_match"
-    catalog_targets = [item for item in candidates if item.relation == "catalog_match"]
-    assert {item.intent.kind for item in catalog_targets} == {"AuthConfig", "ConfigMap"}
-    assert all(item.intent.namespace == "kuadrant-system" for item in catalog_targets)
-    assert any(item.relation == "owned_by" for item in candidates)
+    assert all(item.relation != "catalog_match" for item in candidates)
+    assert [item.relation for item in candidates] == ["owned_by"]
     assert all(item.intent.kind != "Node" for item in candidates)
 
 
@@ -11493,7 +11483,7 @@ def test_grounded_candidates_prioritize_workload_evidence_after_tls_response() -
     )
 
     assert candidates[0].capability == "pod_logs"
-    assert any(item.capability == "endpoints" for item in candidates)
+    assert all(item.intent.tool != "list_resources" for item in candidates)
 
 
 def test_agent_stop_is_not_overridden_by_structured_gap_candidate(
@@ -11923,7 +11913,7 @@ def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
     assert "reason=invalid_correction" not in caplog.text
 
 
-def test_invalid_later_plan_continues_with_discovered_exact_candidate(caplog) -> None:
+def test_removed_list_plan_stops_before_later_candidate_recovery(caplog) -> None:
     class Provider(FakeModelProvider):
         def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
             self.adhoc_plan_calls.append(context)
@@ -12002,14 +11992,14 @@ def test_invalid_later_plan_continues_with_discovered_exact_candidate(caplog) ->
         conversation=[], existing_evidence=[],
     ))
 
-    assert [call.tool for call in explorer.calls] == ["list_resources"]
+    assert explorer.calls == []
     assert not any(item["id"] == "cluster-kafka-detail" for item in result.evidence)
-    assert "highest-priority unread candidate" not in " ".join(result.limitations)
+    assert "removed list_resources helper" in " ".join(result.limitations)
     assert "podpilot.adhoc.invalid_plan_candidate_recovery" not in caplog.text
-    assert "failed schema validation" in caplog.text
+    assert "failed schema validation" not in caplog.text
 
 
-def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
+def test_removed_list_helper_prevents_implicit_route_pod_log_expansion(
     tmp_path: Path,
 ) -> None:
     provider = RouteOnlyAnswerProvider()
@@ -12059,16 +12049,16 @@ def test_passthrough_route_answer_cannot_hide_multiline_missing_pem_log(
     # The model-authored answer is retained without server-authored log prose.
     assert len(provider.adhoc_answer_calls) == 1
     assert provider.log_analysis_calls == []
-    final_log = next(
-        item for item in provider.adhoc_answer_calls[0]["observations"]
-        if item["tool"] == "pod_logs"
+    assert not any(
+        item["tool"] == "pod_logs"
+        for item in provider.adhoc_answer_calls[0]["observations"]
     )
-    assert "FileNotFoundError" in final_log["data"]["tail"]
     assert "router forwards the client TLS stream" in rendered.text
     assert "Model-assisted log analysis" not in rendered.text
     assert "backend process could not load its configured PEM certificate" not in rendered.text
     assert "passthrough" in rendered.text
     assert "Backend log findings" not in rendered.text
+    assert "removed list_resources helper" in rendered.text
 
 
 def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(
@@ -12206,7 +12196,7 @@ def test_ask_typed_cluster_operator_health_overrides_model_refusal(
 def test_ask_uses_safely_reduced_active_profile_and_shows_warning(
     tmp_path: Path,
 ) -> None:
-    provider = FakeModelProvider()
+    provider = FailingAdHocProvider()
     app, settings = make_app(
         tmp_path,
         assignments={"ivy": Role.INVESTIGATOR},
@@ -12293,7 +12283,7 @@ def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Pa
         assert "cluster-api-logs" in rendered.text
         assert "exact Pod name is needed" not in rendered.text
 
-    assert [call.tool for call in explorer.calls] == ["list_resources", "pod_logs"]
+    assert [call.tool for call in explorer.calls] == ["search_resources", "pod_logs"]
     assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == (
         settings.adhoc_max_reads_per_turn - 1
     )
@@ -12337,7 +12327,7 @@ def test_ask_rejects_synthesized_log_targets_and_falls_back_to_exact_candidates(
 
     assert rendered.status_code == 200
     assert "used exact discovered Pod/container targets" not in rendered.text
-    assert [call.tool for call in explorer.calls] == ["list_resources"]
+    assert [call.tool for call in explorer.calls] == ["search_resources"]
     repaired_contexts = [
         context for context in provider.adhoc_plan_calls
             if context.get("planner_feedback", {}).get("code") == "model_target_not_grounded"

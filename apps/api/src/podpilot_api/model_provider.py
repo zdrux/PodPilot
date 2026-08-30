@@ -163,7 +163,7 @@ class AuthoredObjectRead(BaseModel):
     """Small model-authored object read; the broker still resolves and authorizes it."""
 
     tool: Literal[
-        "discover_resources", "get_resource", "list_resources", "search_resources"
+        "discover_resources", "get_resource", "search_resources"
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -182,7 +182,7 @@ class AuthoredObjectRead(BaseModel):
     def normalize_cluster_wide_namespace(cls, value: object) -> object:
         if not isinstance(value, dict):
             return value
-        if value.get("tool") in {"list_resources", "search_resources"} and (
+        if value.get("tool") == "search_resources" and (
             value.get("namespace") == "*" or value.get("name") == "*"
         ):
             normalized = dict(value)
@@ -1205,8 +1205,7 @@ _ADHOC_CANDIDATE_PLANNER_INSTRUCTIONS = (
     "supplied action. When any supplied action exactly names the needed object, return its ID and do not "
     "author that object again. You may author up to three "
     "object_reads using only discover_resources, get_resource, or search_resources as named in "
-    "object_read_policy. Use list_resources only when tool policy explicitly exposes it; deployments "
-    "normally disable that helper. "
+    "object_read_policy. The generic list_resources helper is not available. "
     "Use the supplied resource_catalog for exact resource types. A named GET requires an exact known name "
     "and namespace; otherwise discover the API or use a bounded field search first. "
     "Never request Secrets, identity/token/access-review resources, subresources, logs, probes, metrics, "
@@ -1659,25 +1658,17 @@ class OpenAIResponsesProvider:
                         "mode": "candidate_selection",
                         "direct_intents_allowed": True,
                         "direct_intent_tools": [
-                            "discover_resources", "get_resource", "list_resources",
-                            "search_resources",
+                            "discover_resources", "get_resource", "search_resources",
                         ],
                         "remaining_reads": 2,
                     },
                 },
             )
             if (
-                discovery.decision != "collect"
-                or not discovery.intents
-                or any(intent.tool == "pod_logs" for intent in discovery.intents)
-                or not any(
-                    intent.tool == "list_resources"
-                    and (intent.resource == "pods" or str(intent.kind).lower() in {"pod", "pods"})
-                    for intent in discovery.intents
-                )
+                any(intent.tool in {"list_resources", "pod_logs"} for intent in discovery.intents)
             ):
                 raise ModelProviderError(
-                    "The model did not plan discovery before an ungrounded Pod log read."
+                    "The model requested an unavailable LIST or ungrounded Pod log read."
                 )
             followup = self.plan_ad_hoc(
                 profile,
@@ -1697,11 +1688,11 @@ class OpenAIResponsesProvider:
                         ],
                     }],
                     "observations": [{
-                        "id": "probe-pods", "tool": "list_resources",
+                        "id": "probe-pods", "tool": "search_resources",
                         "data": {"scope": "payments", "names": ["api-probe-1"]},
                     }],
                     "completed_reads": [{
-                        "tool": "list_resources",
+                        "tool": "search_resources",
                         "status": "succeeded",
                         "target": "Pods in namespace payments",
                         "evidence_ids": ["probe-pods"],
@@ -1721,7 +1712,7 @@ class OpenAIResponsesProvider:
                         "mode": "candidate_selection",
                         "direct_intents_allowed": False,
                         "available": [
-                            "discover_resources", "get_resource", "list_resources", "search_resources",
+                            "discover_resources", "get_resource", "search_resources",
                             "watch_resources", "pod_logs", "http_probe", "query_metrics",
                         ],
                         "resource_catalog": [],
@@ -2006,7 +1997,9 @@ class OpenAIResponsesProvider:
                     "Pod, Route, or Authorino when present. Also return a semantic read shape. "
                     "For a compound symptom-and-logs request, select workload_logs because logs are the "
                     "requested evidence operation. Return cardinality, exact object_name and "
-                    "namespace when explicitly present in the question or recent context. When an "
+                    "namespace when explicitly present in the question or recent context. When one "
+                    "resource type is compared across clusters, set cardinality=collection and "
+                    "needs_object_details=true without inventing object_name. When an "
                     "elliptical follow-up refers to one entry in recent_object_references, return that "
                     "entry's exact opaque id in object_reference_id instead of reconstructing its name. "
                     "Leave object_reference_id null when no supplied entry is the intended object. "
@@ -2877,7 +2870,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "including referenced ConfigMaps and objects named in recent context; and explanation for "
                 "conceptual questions. Prefer a specific capability over cluster_investigation. For a "
                 "compound symptom-and-logs request, choose workload_logs. Return cardinality, resource_query, exact "
-                "object_name and namespace only when supplied by the question or recent context. For an "
+                "object_name and namespace only when supplied by the question or recent context. When one "
+                "resource type is compared across clusters, set cardinality=collection and "
+                "needs_object_details=true without inventing object_name. For an "
                 "elliptical follow-up that refers to an entry in recent_object_references, select its exact "
                 "opaque id in object_reference_id instead of copying coordinates; otherwise leave that field "
                 "null. For a collection related to a prior object, return the parent's id in "

@@ -337,13 +337,13 @@ but recommendation prose, graph hints, and gap text must never execute directly 
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
 Candidate-first gates must prove that candidate rounds use the compact `ActionSelection` schema,
 candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, and model-authored
-reads are limited to discovery, GET, and bounded field search when the LIST feature flag is off. Tests must prove authored reads
+reads are limited to discovery, GET, and bounded field search. Tests must prove authored reads
 still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight, duplicate suppression,
 and budgets. When a corrected action selection contains only malformed object reads, PodPilot must
 discard them, execute nothing, and safely answer from evidence already collected instead of reporting
 a failed collection round. Query-relevant catalog matches must remain available beside relationship candidates, and
-bounded LIST/search results must become exact GET candidates on the next round. Provider payloads
-must label LIST/search evidence as inventory-only. A complete collection at or below the configured
+bounded search results must become exact GET candidates on the next round. Provider payloads must
+label search and historical LIST evidence as inventory-only. A complete collection at or below the configured
 detail fan-out cap must compile to exact GETs for every non-sensitive object; incomplete or oversized
 collections must compile to no blanket GETs and must report the need to narrow scope. Tests must also
 prove that analysis coverage remains incomplete when any discovered object's GET detail is absent
@@ -360,9 +360,9 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
-The shipped manifest must set `adhoc_list_tool_enabled` to false, guarded planning must neither offer
-nor execute LIST candidates under that setting, and unrestricted tool schemas must omit
-`list_resources`. Final-answer prompts must request Markdown tables for comparable multi-item
+Guarded planning and authored-read schemas must neither offer nor execute `list_resources`, the
+runtime settings and manifests must contain no LIST-helper feature flag, and unrestricted tool
+schemas must omit `list_resources`. Final-answer prompts must request Markdown tables for comparable multi-item
 results; presentation tests must continue proving that answer-derived tables are bounded, sanitized,
 and not treated as evidence. Resource-presentation gates must merge repeated cited internal
 LIST/search observations by cluster and Kind,

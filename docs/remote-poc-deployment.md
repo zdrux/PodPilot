@@ -139,12 +139,12 @@ Group resource names for Investigator, Approver, and Breakglass. Multiple
 synchronized LDAP groups can map to one elevated role; use `[]` for an unused
 role. A group may appear in only one role array. Viewer has no group mapping:
 every identity authenticated by OpenShift receives that role automatically.
-The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for
-returned LIST evidence and `adhoc_search_max_scan_objects` to `"2000"` for bounded
-projected-field searches that return only matches.
-The same ConfigMap ships `adhoc_list_tool_enabled: "false"`, removing the broad LIST helper from
-guarded model planning. Unrestricted/action agents may enumerate with deliberately bounded
-read-only `oc get` commands; investigator-only agents must use exact GETs or field searches.
+The base runtime ConfigMap defaults `adhoc_inventory_max_objects` to `"500"` for purpose-built
+typed collectors and historical LIST evidence, and `adhoc_search_max_scan_objects` to `"2000"` for
+bounded projected-field searches that return only matches. The generic LIST helper is absent from
+guarded planning, authored-read schemas, and runtime configuration. Unrestricted/action agents may
+enumerate with deliberately bounded read-only `oc get` commands; investigator-only agents must use
+exact GETs, field searches, or typed summaries.
 Collection analysis separately defaults `adhoc_detail_fanout_max_objects` to `"10"`. PodPilot
 automatically GETs every object only for complete inventories at or below this cap; larger or
 incomplete inventories remain inventory-only until the user narrows the request.

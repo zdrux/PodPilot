@@ -435,16 +435,16 @@ is evidence, never a server-owned completion decision. The server does not autom
 discovered objects, retry TLS without verification, read referenced ConfigMaps, collect Pod logs,
 or expand an answer-authored evidence gap. Those exact reads remain available as grounded
 candidates; the agent chooses whether they are material and whether to continue or answer.
-For explicit inventory wording, normal code stabilizes the route after model classification and
-canonicalizes generic noun variants against the live catalog—for example, `KafkaCluster` or
-“Kafka clusters” can resolve to the uniquely discovered `Kafka` kind. A catalog miss triggers one
-fresh API-discovery pass. If it remains unresolved, PodPilot continues through bounded planning;
-it never reports an empty inventory unless an actual resource LIST succeeds with zero objects.
+For resource wording, normal code canonicalizes generic noun variants against the live catalog—for
+example, `KafkaCluster` or “Kafka clusters” can resolve to the uniquely discovered `Kafka` kind. A
+catalog miss triggers one fresh API-discovery pass. The generic `list_resources` agent helper is not
+registered or offered. Read-only planning can use exact GETs, bounded field searches, API discovery,
+and typed summaries; if none can establish the requested inventory, PodPilot reports insufficient
+evidence instead of inferring an empty result. Unrestricted delegated agents may issue a deliberately
+bounded read-only `oc get` command through the shell tool.
 This applies to health, diagnosis, comparison, explanation, configuration, topology, behavior,
 inventory, count, existence, and snapshot-replay questions. No collector result is
-inventory-terminal. When a
-`list_resources` plan omits a deliberate limit, the broker replaces the model schema's
-20-object default with the configured bounded inventory window. Every answer that cites successful current-turn `list_resources` or
+inventory-terminal. Every answer that cites successful current-turn historical LIST evidence or
 `search_resources` evidence also persists a bounded `grouped_resource_list` presentation. Ask
 renders one collapsible section per cluster with Kind, namespace, resource name, Ready state,
 completeness, scan count, and the matched field value when retained. Each populated cluster table
@@ -459,23 +459,13 @@ place and the UI labels them as answer-derived; this presentation conversion doe
 contents authoritative evidence. Extraction is bounded to eight tables, 24 columns, 1,000 rows per
 table, and 4,096 characters per cell. Tables beyond those bounds remain in the safe Markdown fallback.
 The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
-The internal `list_resources` collector exists to make broad Kubernetes discovery safe and reproducible: it resolves a
-live API resource, enforces namespace/RBAC/sensitivity policy and bounded pagination, normalizes
-identity plus approved object projections, records completeness and truncation separately, redacts
-evidence, and preserves provenance for citations and native tables. It is not model-facing when
-`PODPILOT_ADHOC_LIST_TOOL_ENABLED=false`, which is the shipped OpenShift setting. Existing LIST
-evidence and deterministic internal diagnostics remain readable. Read-only agents must instead use
-exact GETs or bounded field searches and report when unknown collection enumeration is unavailable.
-An explicit configuration comparison is a bounded internal exception: after the live catalog
-resolves the requested Kind, PodPilot may enumerate only to obtain exact object coordinates and
-automatically GET every object when the inventory is complete and no larger than
-`adhoc_detail_fanout_max_objects`. The final-answer context includes full-sanitized-spec hashes and
-bounded differing field paths. A model answer that omits the exact GET citations or contradicts
-that structural comparison is replaced with the deterministic field-difference table. Explicit
-comparison wording activates this path even when semantic classification initially labels the
-request as plain inventory or collection-level configuration guidance. If matching exact-object
-evidence is unavailable from every selected cluster, PodPilot returns insufficient evidence and
-withholds any equality claim.
+The generic `list_resources` helper has been removed from guarded planning, authored object-read
+schemas, runtime configuration, and unrestricted tool schemas. Existing persisted LIST evidence and
+low-level Kubernetes LIST operations inside purpose-built typed collectors remain readable; they are
+implementation details, not an agent-selectable skill. A configuration comparison therefore requires
+matching exact-object GET evidence from every selected cluster, normally from operator-supplied
+coordinates or a sufficiently narrow field search. Without it, PodPilot returns insufficient evidence
+and withholds equality and difference claims.
 Presentation-only follow-ups may refer to the latest resource result as `these`, `those`, `them`,
 or the previous results. PodPilot restores the validated Kind and filters from evidence rather than
 asking the model to infer them from prose. Naming one uniquely matching selected cluster narrows the
@@ -1230,27 +1220,19 @@ candidates after the repair also fails. Rejected proposals do not count against
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`. A later `OpenShift RBAC denied ... pods/log`
 message means the exact request reached the ServiceAccount authorization boundary.
 
-The default inventory ceiling is 500 objects per LIST and may be set from 50 to
-1,000 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests, edit
-`data.adhoc_inventory_max_objects` in `podpilot-runtime`; the Deployment maps it
-into both application and migration containers. Reapply the workload and restart
-the Deployment after changing the ConfigMap. Explicit list requests render a
-server-generated Markdown table containing every collected name. If the table
-states that the object list is incomplete, increase the ceiling deliberately
-rather than removing the bound.
+Purpose-built typed collectors and historical LIST evidence retain the 500-object default ceiling,
+configurable from 50 to 1,000 with `PODPILOT_ADHOC_INVENTORY_MAX_OBJECTS`. In OpenShift manifests,
+edit `data.adhoc_inventory_max_objects` in `podpilot-runtime`; the Deployment maps it into both
+application and migration containers. This setting does not enable a generic agent LIST helper.
 
-A LIST or bounded field search is inventory evidence, not configuration or health analysis. For
-an analysis question about a collection, PodPilot automatically follows a complete inventory with
-exact GETs only when the collection contains at most 10 objects. Configure this independent cap
-from 1 to 25 with `PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS`, or edit
-`data.adhoc_detail_fanout_max_objects` in `podpilot-runtime`. If inventory is incomplete, exceeds
-the cap, or does not retain every exact object reference, PodPilot performs no blanket or sampled
-GET fan-out and tells the operator to narrow the scope. A complete analysis claim requires exact
-GET detail for every listed object to be present in the final model context.
-
-`PODPILOT_ADHOC_LIST_TOOL_ENABLED` controls whether guarded model planning may select the broad
-LIST helper. The OpenShift runtime ConfigMap ships `adhoc_list_tool_enabled: "false"`. Set it to
-`"true"` only to restore the bounded helper experiment, then restart the Deployment.
+A bounded field search is inventory evidence, not configuration or health analysis. PodPilot may
+follow a complete, sufficiently small search result with exact GETs, but it never blanket-GETs an
+unknown collection. Configure the independent search-detail cap from 1 to 25 with
+`PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS`, or edit
+`data.adhoc_detail_fanout_max_objects` in `podpilot-runtime`. If search coverage is incomplete,
+exceeds the cap, or lacks every exact object reference, PodPilot performs no blanket or sampled GET
+fan-out and tells the operator to narrow the scope. A complete analysis claim requires exact GET
+detail for every compared object to be present in the final model context.
 
 Detailed object projections have a separate byte ceiling. Configure it with
 `PODPILOT_ADHOC_MAX_PAYLOAD_BYTES`, or edit `data.adhoc_max_payload_bytes` in

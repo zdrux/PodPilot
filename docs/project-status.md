@@ -61,18 +61,18 @@ records remain, but execution now awaits a separate approval-gated action servic
   are satisfied.
 
 - The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
-  `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and
+  search/watch projections, catalogs, relationship graphs, findings, and
   enrichment packs can expose grounded candidates and native views but cannot force a read,
   continue/stop decision, terminal result, or replacement conclusion. Valid agent stops are
   respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
-  Small, complete configuration collections use internal inventory only to resolve exact object
-  coordinates, then GET every object. Multi-cluster final-answer context carries structural
-  sanitized-spec hashes and differing paths; inventory-only citations or a conclusion that
-  contradicts those exact objects fall back to a deterministic configuration-difference table.
-  Explicit comparison wording overrides a plain-inventory classification, and missing matching
-  exact GETs now produce an insufficient-evidence response rather than an equality conclusion.
+  The generic `list_resources` helper is absent from guarded and unrestricted agent schemas and has
+  no runtime feature flag. Existing LIST evidence and low-level LIST operations inside purpose-built
+  typed collectors remain supported. Read-only agents use exact GETs, bounded field searches, API
+  discovery, and typed summaries; unrestricted delegated agents can enumerate with deliberately
+  bounded read-only `oc get` commands. Multi-cluster configuration comparisons require matching
+  exact-object evidence from every selected cluster and otherwise return insufficient evidence.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide

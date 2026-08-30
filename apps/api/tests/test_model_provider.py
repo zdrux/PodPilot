@@ -783,10 +783,11 @@ def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
     assert answer.cited_evidence_ids == []
 
 
-def test_authored_collection_read_normalizes_model_wildcards() -> None:
+def test_authored_search_read_normalizes_model_wildcards() -> None:
     authored = AuthoredObjectRead(
-        tool="list_resources", resource="configmaps", api_version="v1",
+        tool="search_resources", resource="configmaps", api_version="v1",
         kind="ConfigMap", namespace="*", name="*",
+        match_field="metadata.name", match_value="application",
     )
 
     assert authored.namespace is None
@@ -1259,12 +1260,13 @@ def test_action_selection_uses_exact_ids_as_the_safe_continuation_signal() -> No
     assert empty_plan.stop_reason == "no_material_read"
 
 
-def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None:
+def test_action_selection_can_author_bounded_object_search_and_gets() -> None:
     selected = ActionSelection.model_validate({
         "object_reads": [
             {
-                "tool": "list_resources", "resource": "authconfigs.authorino.kuadrant.io",
+                "tool": "search_resources", "resource": "authconfigs.authorino.kuadrant.io",
                 "kind": "AuthConfig", "namespace": "kuadrant-system", "limit": 20,
+                "match_field": "metadata.name", "match_value": "application",
             },
             {
                 "tool": "get_resource", "resource": "configmaps", "kind": "ConfigMap",
@@ -1274,7 +1276,7 @@ def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None
     })
 
     plan = selected.to_read_plan()
-    assert [intent.tool for intent in plan.intents] == ["list_resources", "get_resource"]
+    assert [intent.tool for intent in plan.intents] == ["search_resources", "get_resource"]
     assert plan.intents[0].resource == "authconfigs.authorino.kuadrant.io"
     assert plan.intents[1].name == "authorino-config"
 
@@ -1285,15 +1287,24 @@ def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None
                 "namespace": "kuadrant-system",
             }],
         })
+    with pytest.raises(ValueError):
+        ActionSelection.model_validate({
+            "object_reads": [{
+                "tool": "list_resources", "resource": "configmaps",
+                "namespace": "kuadrant-system",
+            }],
+        })
 
 
 def test_action_selection_normalizes_cluster_wide_namespace_placeholder() -> None:
     selected = ActionSelection.model_validate({
         "object_reads": [{
-            "tool": "list_resources",
+            "tool": "search_resources",
             "resource": "kafkas.kafka.strimzi.io",
             "kind": "Kafka",
             "namespace": "*",
+            "match_field": "metadata.name",
+            "match_value": "application",
         }],
     })
 
@@ -1379,7 +1390,7 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
             "supporting_evidence_ids": ["evidence-1"],
         }],
         "completed_reads": [{
-            "tool": "list_resources",
+            "tool": "search_resources",
             "status": "succeeded",
             "target": "Pods in namespace production",
             "evidence_ids": ["evidence-1"],
@@ -1406,7 +1417,7 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
         "supporting_evidence_ids": ["evidence-1"],
     }]
     assert planner["completed_reads"] == [{
-        "tool": "list_resources",
+        "tool": "search_resources",
         "status": "succeeded",
         "target": "Pods in namespace production",
         "evidence_ids": ["evidence-1"],
@@ -1595,9 +1606,10 @@ def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
         planning_contexts.append(context)
         if context["investigation_round"] == 1:
             return ReadPlan(
-                scope_summary="Discover Pods before reading logs.",
+                scope_summary="Search for the exact Pod before reading logs.",
                 intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
+                    tool="search_resources", resource="pods", namespace="payments",
+                    match_field="metadata.name", match_value="api-probe-1",
                 )],
             )
         return ReadPlan(
@@ -1628,7 +1640,7 @@ def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
     )
     assert planning_contexts[1]["read_candidates"][0]["capability"] == "pod_logs"
     assert planning_contexts[1]["completed_reads"] == [{
-        "tool": "list_resources",
+        "tool": "search_resources",
         "status": "succeeded",
         "target": "Pods in namespace payments",
         "evidence_ids": ["probe-pods"],
@@ -1643,7 +1655,8 @@ def test_ask_schema_probe_identifies_answer_phase() -> None:
             return ReadPlan(
                 scope_summary="Discover Pods before reading logs.",
                 intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
+                    tool="search_resources", resource="pods", namespace="payments",
+                    match_field="metadata.name", match_value="api-probe-1",
                 )],
             )
         return ReadPlan(
@@ -1680,7 +1693,7 @@ def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
     assert passed is False
     assert detail == (
         "ActionSelection probe failed. "
-        "The model did not plan discovery before an ungrounded Pod log read."
+        "The model requested an unavailable LIST or ungrounded Pod log read."
     )
 
 
@@ -1692,7 +1705,8 @@ def test_ask_schema_probe_rejects_repeated_discovery_instead_of_grounded_action(
         return ReadPlan(
             scope_summary="List the namespace Pods again.",
             intents=[ReadIntent(
-                tool="list_resources", resource="pods", namespace="payments",
+                tool="search_resources", resource="pods", namespace="payments",
+                match_field="metadata.name", match_value="api-probe-1",
             )],
         )
 
@@ -1716,7 +1730,8 @@ def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
             return ReadPlan(
                 scope_summary="Discover Pods before reading logs.",
                 intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
+                    tool="search_resources", resource="pods", namespace="payments",
+                    match_field="metadata.name", match_value="api-probe-1",
                 )],
             )
         return ReadPlan(

@@ -1187,13 +1187,27 @@ def _question_requires_object_details(question: str) -> bool:
     return not explicit_inventory
 
 
+def _question_requests_cross_cluster_comparison(question: str) -> bool:
+    """Recognize explicit collection comparisons independently of model cardinality."""
+
+    return bool(
+        re.search(r"(?i)\b(?:compare|comparison|differences?|differ)\b", question)
+        and re.search(r"(?i)\bclusters?\b", question)
+    )
+
+
 def _collection_object_analysis_requested(
     question: str, inquiry: InquirySemantics | None,
 ) -> bool:
     """Distinguish collection analysis from inventory and exact-object reads."""
 
+    explicit_cluster_comparison = _question_requests_cross_cluster_comparison(question)
     if inquiry is not None:
-        if inquiry.cardinality == "exact_one" or inquiry.object_name:
+        if inquiry.object_name:
+            return False
+        if explicit_cluster_comparison and inquiry.resource_query:
+            return True
+        if inquiry.cardinality == "exact_one":
             return False
         if inquiry.mode == "inventory" and not inquiry.needs_object_details:
             # The classifier can reasonably call a comparison an inventory request
@@ -5176,7 +5190,6 @@ def _grounded_read_candidates(
     preferred_resource_query: str | None = None,
     collection_analysis_required: bool = False,
     detail_fanout_limit: int = 10,
-    list_tool_enabled: bool = True,
     limit: int = 12,
 ) -> list[_GroundedReadCandidate]:
     """Build compact non-executable choices backed only by trusted server state."""
@@ -5199,10 +5212,9 @@ def _grounded_read_candidates(
         relation: str | None = None,
     ) -> None:
         prepared = normalize_read_intent(intent)
-        if prepared.tool == "list_resources" and not list_tool_enabled:
-            # The broad LIST helper is intentionally not model-facing. Keep the
-            # collector implementation for deterministic internal diagnostics and
-            # existing evidence, but do not offer it as an agent action.
+        if prepared.tool == "list_resources":
+            # Historical evidence and purpose-built collectors can still contain
+            # LIST observations, but the generic helper is never an agent action.
             return
         signature = _read_intent_signature(prepared)
         if (
@@ -5431,70 +5443,6 @@ def _grounded_read_candidates(
                 reason="Exact coordinate compiled from the operator request.",
                 relation="operator_anchor",
             )
-
-    # Keep a small query-relevant API frontier even when graph candidates exist.
-    # This prevents a generic owner edge from hiding a configuration CRD or ConfigMap
-    # that the operator explicitly asked about.
-    ranked_catalog = sorted(
-        (
-            (_catalog_relevance(question, entry), entry)
-            for entry in (catalog_entries or [])
-            if isinstance(entry, dict)
-        ),
-        key=lambda item: (-item[0], str(item[1].get("resource") or "")),
-    )
-    has_exact_configuration_reference = any(
-        candidate.relation == "configures_from" for candidate in candidates
-    )
-    selected_catalog = (
-        [] if recovery_anchor_plan is not None or has_exact_configuration_reference else
-        [entry for score, entry in ranked_catalog if score > 0][:4]
-    )
-    if not selected_catalog and not candidates:
-        selected_catalog = [entry for _score, entry in ranked_catalog[:6]]
-    observed_namespaces = {
-        str(node.get("namespace"))
-        for node in relationship_graph.get("nodes") or []
-        if isinstance(node, dict)
-        and node.get("observed")
-        and node.get("namespace") not in {None, "cluster"}
-    }
-    namespace_hint = next(iter(observed_namespaces)) if len(observed_namespaces) == 1 else None
-    for entry in selected_catalog:
-        if not isinstance(entry, dict):
-            continue
-        verbs = entry.get("verbs")
-        if isinstance(verbs, list) and "list" not in verbs:
-            continue
-        resource = str(entry.get("resource") or "")
-        kind = str(entry.get("kind") or "")
-        if not resource or not kind:
-            continue
-        if preferred_resource_query and not _resource_kind_matches_query(
-            kind, preferred_resource_query,
-        ):
-            continue
-        try:
-            intent = ReadIntent(
-                tool="list_resources",
-                resource=resource,
-                api_version=str(entry.get("apiVersion") or "") or None,
-                kind=kind,
-                namespace=(namespace_hint if entry.get("namespaced") else None),
-                limit=20,
-            )
-        except ValueError:
-            continue
-        add(
-            intent,
-            capability="resource_read",
-            target=(
-                f"List a bounded sample of {kind} resources"
-                + (f" in {namespace_hint}" if namespace_hint and entry.get("namespaced") else "")
-            ),
-            reason="The readable API catalog lexically matches the operator's current question.",
-            relation="catalog_match",
-        )
 
     protocol_proven = any(
         item.get("tool") == "http_probe"
@@ -5748,7 +5696,6 @@ def _investigation_capability_ledger(
     tools = [
         tool_state("discover_resources"),
         tool_state("get_resource"),
-        tool_state("list_resources"),
         tool_state("search_resources"),
         tool_state("pod_health_summary"),
         tool_state("node_health_summary"),
@@ -8230,21 +8177,7 @@ def _semantic_resource_read_plan(
                 ),
                 True,
             )
-        return (
-            ReadPlan(
-                goal_type="diagnose",
-                scope_summary=f"List bounded Events in {namespace or 'the cluster'}.",
-                intents=[ReadIntent(
-                    tool="list_resources",
-                    resource=catalog_intent.resource,
-                    api_version=catalog_intent.api_version,
-                    kind=catalog_intent.kind,
-                    namespace=namespace,
-                    limit=inquiry.result_limit or min(50, inventory_limit),
-                )],
-            ),
-            True,
-        )
+        return None
     if inquiry.operation == "logs":
         if str(catalog_intent.kind or "").casefold() != "pod" or not name:
             return None
@@ -8296,7 +8229,12 @@ def _semantic_resource_read_plan(
             ),
             True,
         )
-    exact_one = (
+    collection_configuration_comparison = (
+        inquiry.operation == "configuration_guidance"
+        and not name
+        and _question_requests_cross_cluster_comparison(question)
+    )
+    exact_one = not collection_configuration_comparison and (
         generic_exact_diagnostic
         or inquiry.cardinality == "exact_one"
         or inquiry.operation == "object_fields"
@@ -8354,25 +8292,7 @@ def _semantic_resource_read_plan(
                 or continue_diagnostic_investigation
             ),
         )
-    return (
-        ReadPlan(
-            goal_type=inquiry.planner_goal,
-            scope_summary=(
-                f"List {catalog_intent.kind} resources in {namespace or 'the cluster'}."
-            ),
-            intents=[ReadIntent(
-                tool="list_resources",
-                resource=catalog_intent.resource,
-                api_version=catalog_intent.api_version,
-                kind=catalog_intent.kind,
-                namespace=namespace if namespaced is not False else None,
-                label_selector=inquiry.label_selector,
-                limit=inventory_limit,
-            )],
-        ),
-        not bool(inquiry.requested_fields)
-        and not _question_has_field_predicate(question),
-    )
+    return None
 
 
 _GENERIC_RESOURCE_QUERY_WORDS = {
@@ -8476,7 +8396,6 @@ async def _collect_bounded_cluster_reads(
         else None
     )
     catalog_entries: list[dict[str, object]] = []
-    catalog_available = False
     catalog_reader = getattr(cluster_reader, "resource_catalog", None)
     if (
         callable(catalog_reader)
@@ -8491,7 +8410,6 @@ async def _collect_bounded_cluster_reads(
                 query=(inquiry.resource_query if inquiry and inquiry.resource_query else question),
                 limit=120,
             )
-            catalog_available = True
         except ReadOnlyExplorerError as exc:
             LOGGER.warning(
                 "podpilot.resource_catalog.unavailable actor=%s workflow_id=%s error=%s",
@@ -8538,11 +8456,6 @@ async def _collect_bounded_cluster_reads(
     if semantic_resource_plan is not None:
         recovery_anchor_plan = semantic_resource_plan[0]
 
-    # Once live discovery resolves an explicit inventory question, normal code owns
-    # the same bounded LIST on every selected cluster. This avoids asking the model
-    # to independently rediscover identical syntax and semantics per cluster.
-    # A catalog miss is routing uncertainty, not proof that the cluster has zero
-    # objects. Refresh once, then continue through bounded planning if unresolved.
     inventory_request = (
         inquiry.mode == "inventory"
         if inquiry is not None
@@ -8551,72 +8464,6 @@ async def _collect_bounded_cluster_reads(
     collection_analysis_required = _collection_object_analysis_requested(
         question, inquiry,
     )
-    deterministic_collection_plan = (
-        semantic_resource_plan[0]
-        if (
-            collection_analysis_required
-            and semantic_resource_plan is not None
-            and semantic_resource_plan[0].intents
-            and all(
-                intent.tool in {"list_resources", "search_resources"}
-                for intent in semantic_resource_plan[0].intents
-            )
-        )
-        else None
-    )
-    if recovery_anchor_plan is None and inventory_request:
-        catalog_question = (
-            f"list {inquiry.resource_query}"
-            if inquiry is not None and inquiry.resource_query
-            else question
-        )
-        catalog_plan = plan_catalog_read(
-            catalog_question,
-            catalog_entries,
-            inventory_limit=settings.adhoc_inventory_max_objects,
-        )
-        if catalog_plan is not None:
-            recovery_anchor_plan = catalog_plan[0]
-        elif catalog_available:
-            refreshed_entries = catalog_entries
-            try:
-                refreshed_entries = await run_in_threadpool(
-                    catalog_reader,
-                    query=(inquiry.resource_query if inquiry else question),
-                    limit=120,
-                    refresh=True,
-                )
-            except TypeError:
-                # Test doubles and third-party explorers may implement the older
-                # read-only signature. Continuing to planning remains safe.
-                pass
-            except ReadOnlyExplorerError as exc:
-                LOGGER.warning(
-                    "podpilot.resource_catalog.refresh_unavailable actor=%s "
-                    "workflow_id=%s error=%s",
-                    actor,
-                    workflow_id,
-                    str(exc),
-                )
-            refreshed_query = _canonical_resource_query(
-                inquiry.resource_query if inquiry else None,
-                refreshed_entries,
-            )
-            if inquiry is not None and refreshed_query != inquiry.resource_query:
-                inquiry = inquiry.model_copy(update={"resource_query": refreshed_query})
-            refreshed_plan = plan_catalog_read(
-                f"list {refreshed_query}" if refreshed_query else question,
-                refreshed_entries,
-                inventory_limit=settings.adhoc_inventory_max_objects,
-            )
-            if refreshed_plan is not None:
-                recovery_anchor_plan = refreshed_plan[0]
-            else:
-                limitations.append(
-                    "Live API discovery did not resolve the requested inventory type; "
-                    "PodPilot continued with bounded planning instead of treating that "
-                    "routing miss as an empty cluster inventory."
-                )
     def planner_context(
         *,
         round_number: int,
@@ -8699,7 +8546,6 @@ async def _collect_bounded_cluster_reads(
                 "direct_intents_allowed": True,
                 "direct_intent_tools": [
                     "discover_resources", "get_resource",
-                    *(["list_resources"] if settings.adhoc_list_tool_enabled else []),
                     "search_resources",
                 ],
                 "remaining_reads": remaining_reads,
@@ -8740,21 +8586,6 @@ async def _collect_bounded_cluster_reads(
                 await progress(
                     "planning", "Prepared deterministic delegated access reviews."
                 )
-        elif (
-            round_number == 1
-            and requested_candidate_id is None
-            and deterministic_collection_plan is not None
-        ):
-            # LIST remains unavailable as a model-selected helper. For an explicit
-            # small-collection configuration analysis, normal code may use the live
-            # catalog to enumerate exact coordinates and immediately fan out bounded
-            # GETs. The model still owns interpretation of the resulting evidence.
-            plan = deterministic_collection_plan
-            if progress:
-                await progress(
-                    "planning",
-                    "Prepared bounded inventory discovery for exact object comparison.",
-                )
         elif round_number == 1 and requested_candidate_id:
             requested_candidates = _grounded_read_candidates(
                 question=question,
@@ -8766,7 +8597,6 @@ async def _collect_bounded_cluster_reads(
                 catalog_entries=catalog_entries,
                 collection_analysis_required=collection_analysis_required,
                 detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
-                list_tool_enabled=settings.adhoc_list_tool_enabled,
             )
             requested_candidate = next((
                 candidate for candidate in requested_candidates
@@ -8811,7 +8641,6 @@ async def _collect_bounded_cluster_reads(
                     ),
                     collection_analysis_required=collection_analysis_required,
                     detail_fanout_limit=settings.adhoc_detail_fanout_max_objects,
-                    list_tool_enabled=settings.adhoc_list_tool_enabled,
                 )
                 if progress:
                     await progress("planning", "Planning safe read-only checks.")
@@ -8852,12 +8681,20 @@ async def _collect_bounded_cluster_reads(
                     evidence=evidence,
                 )
                 binding_errors.extend(_inventory_plan_scope_errors(bound_plan, inquiry))
-                if not settings.adhoc_list_tool_enabled and any(
+                removed_list_reads = sum(
                     intent.tool == "list_resources" for intent in bound_plan.intents
-                ):
-                    binding_errors.append(
-                        "The broad list_resources helper is disabled. Use an exact GET, a bounded "
-                        "field search, or report that enumeration is unavailable in read-only mode."
+                )
+                if removed_list_reads:
+                    bound_plan = bound_plan.model_copy(update={
+                        "intents": [
+                            intent for intent in bound_plan.intents
+                            if intent.tool != "list_resources"
+                        ],
+                    })
+                    limitations.append(
+                        f"PodPilot discarded {removed_list_reads} request"
+                        f"{'s' if removed_list_reads != 1 else ''} for the removed "
+                        "list_resources helper."
                     )
                 target_errors = [*candidate_errors, *binding_errors]
                 prepared_signatures: list[str] = []
@@ -10050,7 +9887,7 @@ def create_app(
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
                 if tool_call.name in {
-                    "list_resources", "search_resources",
+                    "search_resources",
                     "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
                 }:
