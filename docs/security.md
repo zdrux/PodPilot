@@ -52,7 +52,43 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
-### Delegated unrestricted sessions
+### User-delegated Ask sessions
+
+All deployed Ask sessions use the selected user's OpenShift identity on every selected cluster.
+PodPilot has two execution entitlements: Investigator is permanently read-only; Read-Write may
+choose **Investigate · read-only** or **Action · my cluster permissions** when creating a
+conversation. Cluster selection and mode are immutable for that conversation. Unmatched users are
+denied. Configuration administration is a separate group-derived capability.
+
+Users submit one username/password pair for clusters in one declared environment at a time.
+PodPilot performs the challenging-client OAuth exchange against each exact registered origin,
+validates `/users/~`, and immediately discards the password. Tokens remain only in API-process
+memory for at most 24 hours, keyed by an HttpOnly session cookie, owner, and cluster. They are never
+stored in SQLite, Kubernetes Secrets, browser storage, model input, runner JSON, commands, or logs.
+Logout, replacement, local expiry, disable, and graceful shutdown attempt revocation. A remote
+`401` removes the affected connection; the conversation remains durable and resumes after the user
+reconnects the affected clusters with the same PodPilot session.
+
+The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
+allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
+methods are rejected before the request reaches the cluster. Action capabilities inject the same
+user token without reducing its permissions, so Kubernetes RBAC, admission, quota, and policy are
+authoritative. The runner has neither the user token nor a projected service-account token.
+
+The cluster registry stores API metadata only. Shared entries are configuration-admin managed;
+each authorized user may also create private entries visible only to that owner and configuration
+administrators. Entries carry an environment, HTTPS API origin, tags, optional public CA bundle,
+and a per-entry TLS verification choice. Users may disable certificate and hostname verification;
+the UI and conversation mark that interception risk and saves/tests are audited. There is no
+deployment-wide TLS policy override and no stored remote bearer token.
+
+The runtime system cluster follows the same delegated-user path. PodPilot uses the internal API and
+OAuth service origins plus projected public CA bundles, but never substitutes the Pod service
+account for an interactive Ask request.
+
+The following historical design is superseded and retained only as migration context.
+
+### Superseded delegated unrestricted sessions
 
 When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
 configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
@@ -200,16 +236,13 @@ evidence but preserves an audit record containing the conversation ID and actor,
 not message content. A per-user rate limit applies across all of that user's
 conversations.
 
-Standalone Ask conversations also pin an immutable cluster-ID selection. The browser
-cannot change routing on a continuation request. Normal code loads only those registered
-entries, refuses disabled or missing targets, reads each opaque bearer token immediately
-before use, and attributes retained evidence to the source cluster. Remote tokens are
-stored only in `ai-ops/podpilot-cluster-credentials`; SQLite and API responses contain
-only opaque keys. RBAC restricts the runtime to `get`, `patch`, and `update` that exact
-Secret and does not allow Secret creation or enumeration. Cluster create, update, token
-rotation, connection test, and disable operations require Approver-or-higher, CSRF, and
-content-free audit metadata. Disabling removes the Secret key but preserves historical
-conversation and evidence attribution.
+Standalone Ask conversations also pin an immutable cluster-ID selection and execution
+mode. The browser cannot change either value on a continuation request. Normal code loads
+only entries visible to the owner, refuses disabled or disconnected targets, obtains the
+user token from the in-memory delegated-session vault, and attributes retained evidence
+to the source cluster. Shared cluster metadata requires configuration-administrator
+capability; users may create, update, test, and disable their own private entries. These
+operations require CSRF and content-free audit metadata and never accept a bearer token.
 
 Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
@@ -217,11 +250,9 @@ credential-bearing exception: a network attacker can impersonate the API server,
 the bearer token, and alter evidence. The management page warns before use, the registry
 stores the exception, connection tests audit it, and every affected Ask session displays one
 compact connection-boundary indicator instead of repeating a limitation under each answer. The
-`remote-poc-agentic` overlay is an explicit broader lab exception:
-it sets `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY=false`, forcing registered remote readers and runner
-commands in that deployment to skip certificate and hostname verification. The management page
-displays the environment override. This does not change model-provider or ordinary application TLS
-policy and should not be used in production.
+The chosen per-cluster setting is used for delegated login, typed reads, and runner
+commands. There is no project-wide remote-cluster TLS override. This does not change
+model-provider or ordinary application TLS policy.
 
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,
@@ -247,14 +278,10 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
 - Model endpoint metadata, TLS mode, and optional public CA certificates are stored
   in SQLite. API tokens are not: each profile references an opaque key in the one
   resourceName-restricted credential Secret.
-- Remote cluster origins, tags, and TLS mode are stored in SQLite. Their bearer tokens
-  are not: each cluster references an opaque key in the separate fixed
-  `ai-ops/podpilot-cluster-credentials` Secret.
-- The OAuth-protected GUI sends a new token once to FastAPI. The runtime uses its
-  projected ServiceAccount identity to patch only that Secret key, never returns
-  the value, and rereads it before inference. Kubernetes Secret `data` is base64
-  encoding, not application-level encryption; cluster encryption-at-rest and
-  Secret-access controls remain administrator responsibilities.
+- Remote cluster origins, environment, ownership/visibility, tags, and TLS mode are
+  stored in SQLite. User passwords are used only for the selected environment login
+  exchange and discarded; resulting cluster tokens remain only in process memory for
+  the OAuth-backed delegated session and are never returned to the browser.
 - `insecure` TLS mode is an explicit PoC compatibility escape hatch. It disables
   server certificate and hostname verification, so a bearer token and model data
   can be intercepted. Prefer system trust or a custom CA and do not enable this

@@ -104,6 +104,15 @@ def test_challenging_login_can_use_a_trusted_internal_oauth_endpoint() -> None:
     assert "oauth.apps.example" not in requested_hosts
 
 
+def test_delegated_login_allows_per_cluster_tls_verification_disable() -> None:
+    client = OpenShiftDelegatedLoginClient(
+        api_url="https://api.private.example:6443",
+        tls_verify=False,
+    )
+
+    assert client.verify is False
+
+
 def test_custom_ca_rejects_private_key_material() -> None:
     with pytest.raises(DelegatedLoginError, match="private key"):
         validate_custom_ca("-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----")

@@ -143,11 +143,6 @@ def test_agent_mode_defaults_guarded_and_rejects_unknown_values() -> None:
         Settings(agent_mode="unbounded")
 
 
-def test_remote_cluster_tls_verification_defaults_secure_and_can_be_disabled() -> None:
-    assert Settings(_env_file=None).remote_cluster_tls_verify is True
-    assert Settings(remote_cluster_tls_verify=False).remote_cluster_tls_verify is False
-
-
 def test_agent_command_timeout_and_heartbeat_are_bounded() -> None:
     settings = Settings(agent_command_timeout_seconds=120, agent_heartbeat_seconds=5)
     assert settings.agent_command_timeout_seconds == 120

@@ -194,11 +194,6 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: agent_heartbeat_seconds
-            - name: PODPILOT_REMOTE_CLUSTER_TLS_VERIFY
-              valueFrom:
-                configMapKeyRef:
-                  name: podpilot-runtime
-                  key: remote_cluster_tls_verify
             - name: PODPILOT_MODEL_TIMEOUT_MAX_SECONDS
               valueFrom:
                 configMapKeyRef:
@@ -209,6 +204,16 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: role_investigator_groups
+            - name: PODPILOT_ROLE_READ_WRITE_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: role_read_write_groups
+            - name: PODPILOT_CONFIGURATION_ADMIN_GROUPS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: configuration_admin_groups
             - name: PODPILOT_ROLE_APPROVER_GROUPS
               valueFrom:
                 configMapKeyRef:
@@ -226,8 +231,6 @@ spec:
             - name: PODPILOT_AUTH_MODE
               value: proxy
             - name: PODPILOT_MODEL_CREDENTIAL_STORE
-              value: kubernetes
-            - name: PODPILOT_CLUSTER_CREDENTIAL_STORE
               value: kubernetes
             - name: PODPILOT_POC_MODE
               value: "true"

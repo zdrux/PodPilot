@@ -7,11 +7,14 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
-disposable SNO lab at schema head `0020_delegated_sessions`. The 2026-08-30 rollout uses
+PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` remains deployed on the
+disposable SNO lab at schema head `0020_delegated_sessions`; the working tree now targets
+`0021_user_delegated_access` and has not yet been deployed. The 2026-08-30 rollout uses
 application image digest `sha256:19cdd8ff9a651777b4a2ab12b7891b6d7c07396dda4b97cbf2696a55fcb86b9c`
 and runner digest `sha256:dbb8f35dec2105e09815ebc40e1a84df8b952d6f0273bbdeef35f9ded3aa49d0`.
-The lab has delegated access enabled, a two-hour in-memory session bound, verified remote TLS,
+The pending implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,
+supports per-cluster TLS policy and private user-owned registry entries, and removes stored remote
+cluster credentials. The deployed lab still has a two-hour session bound and verified remote TLS.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
@@ -27,6 +30,10 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- Ask now redirects every authorized role through user-owned cluster connections. Investigator is
+  read-only; Read-Write chooses read-only or Action at conversation creation. Configuration
+  administration is orthogonal. Cluster Health is removed from active navigation.
 
 - Cluster, model, and curated-memory configuration now share one explicit management boundary:
   only Approver and Breakglass sessions see the **Manage** navigation or may open and modify those
@@ -74,10 +81,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
   passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
   promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
-  Each unrestricted shell call names one selected cluster. The API brokers only that registered
-  cluster's stored token to the loopback runner, which uses and deletes a per-command kubeconfig.
-  The remote agentic overlay forces remote TLS verification off, while guarded deployments keep
-  the secure default. Runner/API logs expose redacted target, TLS, exit, duration, and byte-count
+  Each Action-mode shell call names one selected cluster. The API brokers only that cluster's
+  in-memory delegated user token to the loopback runner, which uses and deletes a per-command
+  kubeconfig. Per-cluster TLS policy is honored consistently. Runner/API logs expose redacted
+  target, TLS, exit, duration, and byte-count
   metadata, periodic heartbeat logs are suppressed in both containers, failed-command summaries appear in
   Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
   124. The API still publishes changing live Ask progress while the outer run retains

@@ -14,9 +14,15 @@ class DelegatedConnection:
     remote_username: str
     remote_uid: str
     token: str = field(repr=False)
-    proxy_capability: str
+    read_only_proxy_capability: str
+    action_proxy_capability: str
     created_at: datetime
     expires_at: datetime
+
+    @property
+    def proxy_capability(self) -> str:
+        """Compatibility alias for callers that predate conversation modes."""
+        return self.action_proxy_capability
 
 
 class DelegatedSessionVault:
@@ -26,7 +32,7 @@ class DelegatedSessionVault:
         self.lifetime_seconds = lifetime_seconds
         self._lock = threading.RLock()
         self._connections: dict[tuple[str, str], DelegatedConnection] = {}
-        self._capabilities: dict[str, tuple[str, str]] = {}
+        self._capabilities: dict[str, tuple[str, str, str]] = {}
         self._expired: list[DelegatedConnection] = []
         self._login_attempts: dict[str, list[datetime]] = {}
 
@@ -64,16 +70,23 @@ class DelegatedSessionVault:
             remote_username=remote_username,
             remote_uid=remote_uid,
             token=token,
-            proxy_capability=secrets.token_urlsafe(32),
+            read_only_proxy_capability=secrets.token_urlsafe(32),
+            action_proxy_capability=secrets.token_urlsafe(32),
             created_at=now,
             expires_at=now + timedelta(seconds=self.lifetime_seconds),
         )
         with self._lock:
             prior = self._connections.pop((session_id, cluster_id), None)
             if prior is not None:
-                self._capabilities.pop(prior.proxy_capability, None)
+                self._capabilities.pop(prior.read_only_proxy_capability, None)
+                self._capabilities.pop(prior.action_proxy_capability, None)
             self._connections[(session_id, cluster_id)] = connection
-            self._capabilities[connection.proxy_capability] = (session_id, cluster_id)
+            self._capabilities[connection.read_only_proxy_capability] = (
+                session_id, cluster_id, "read_only"
+            )
+            self._capabilities[connection.action_proxy_capability] = (
+                session_id, cluster_id, "action"
+            )
         return connection
 
     def get(self, *, session_id: str, owner: str, cluster_id: str) -> DelegatedConnection | None:
@@ -87,17 +100,23 @@ class DelegatedSessionVault:
                 return None
             return connection
 
-    def by_capability(self, capability: str) -> DelegatedConnection | None:
+    def grant_by_capability(
+        self, capability: str
+    ) -> tuple[DelegatedConnection, str] | None:
         with self._lock:
             key = self._capabilities.get(capability)
-            connection = self._connections.get(key) if key else None
+            connection = self._connections.get((key[0], key[1])) if key else None
             if connection is None:
                 return None
             if connection.expires_at <= datetime.now(timezone.utc):
                 self._expired.append(connection)
                 self._remove_locked(connection)
                 return None
-            return connection
+            return connection, key[2]
+
+    def by_capability(self, capability: str) -> DelegatedConnection | None:
+        grant = self.grant_by_capability(capability)
+        return grant[0] if grant else None
 
     def list_for(self, *, session_id: str, owner: str) -> list[DelegatedConnection]:
         with self._lock:
@@ -160,4 +179,5 @@ class DelegatedSessionVault:
 
     def _remove_locked(self, connection: DelegatedConnection) -> None:
         self._connections.pop((connection.session_id, connection.cluster_id), None)
-        self._capabilities.pop(connection.proxy_capability, None)
+        self._capabilities.pop(connection.read_only_proxy_capability, None)
+        self._capabilities.pop(connection.action_proxy_capability, None)

@@ -5,11 +5,16 @@ resources:
   - ../../auth/group-rbac
   - ../../workload
   - image-stream.yaml
+components:
+  - ../../components/agentic-runner
 images:
   # Pods pull the ImageStreamTag through the stable in-cluster registry service.
   # Change newTag when promoting a different PodPilot image.
   - name: podpilot
     newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot
+    newTag: 0.12.0
+  - name: podpilot-oc-runner
+    newName: image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot-oc-runner
     newTag: 0.12.0
 patches:
   - path: runtime-config-patch.yaml

@@ -153,10 +153,9 @@ provider and credentials are healthy.
 
 ## Environment Variables
 
-- `PODPILOT_DELEGATED_ACCESS_ENABLED`, default `false`; when enabled, authenticated users who match
-  none of the configured elevated PodPilot groups receive the Delegated Operator flow. The checked-in
-  agentic overlays enable it because they also deploy the required runner; the portable base remains off.
-- `PODPILOT_DELEGATED_SESSION_LIFETIME_SECONDS`, default `7200`; bounds API-memory retention and the
+- `PODPILOT_DELEGATED_ACCESS_ENABLED`; checked-in workload manifests set it to `true`, making
+  user-owned tokens mandatory for Ask. The code-level `false` default remains for migration tests.
+- `PODPILOT_DELEGATED_SESSION_LIFETIME_SECONDS`, workload default `86400`; bounds API-memory retention and the
   HttpOnly delegated-session cookie. It does not change the remote OpenShift OAuth token TTL.
 - `PODPILOT_DELEGATED_LOGIN_TIMEOUT_SECONDS`, default `15`; bounds OAuth discovery, login, identity,
   and revocation calls.
@@ -169,12 +168,12 @@ provider and credentials are healthy.
   `oauth-openshift` service, are the verified in-cluster endpoints used when a delegated user
   selects PodPilot's system cluster. The API and service CA paths come from
   `PODPILOT_SERVICE_ACCOUNT_CA_PATH` and `PODPILOT_SERVICE_CA_PATH`.
-- Approvers paste a remote cluster's PEM trust bundle into **Manage → Clusters → Custom Kubernetes
-  API CA bundle**. Save and run **Test connection**; a tokenless delegated cluster reports successful
+- Users manage private entries and configuration administrators manage shared entries under
+  **Clusters**. Save and run **Test OAuth discovery**; a tokenless entry reports successful
   TLS and OAuth discovery without asking for a user's credentials.
 
-- `PODPILOT_AGENT_MODE`, default `guarded`; `unrestricted` selects the lab-only Chat Completions
-  shell-tool loop and must be paired with the SNO runner sidecar.
+- `PODPILOT_AGENT_MODE`; checked-in workload manifests set `unrestricted` and deploy the runner.
+  Conversation mode chooses the read-only collector or Action loop.
 - `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.
 - `PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS`, default `300`; the runner terminates the complete shell
   process group at this deadline and returns exit code `124`.
@@ -184,9 +183,8 @@ provider and credentials are healthy.
 - `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls silent runner polling and in-flight
   model/command progress updates persisted to the active Ask run. It does not emit periodic
   container-log heartbeat messages.
-- `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY`, default `true`; the remote agentic PoC overlay sets it to
-  `false`, forcing registered remote readers and runner commands to skip certificate and hostname
-  verification. This credential-interception risk is limited to that lab overlay.
+- TLS verification is stored per cluster. Users may disable certificate and hostname verification
+  for private entries; configuration administrators make that choice for shared entries.
 
 The current deployment uses these variables:
 
@@ -198,6 +196,9 @@ The current deployment uses these variables:
 - `PODPILOT_ROLE_CACHE_SECONDS`, default `30`
 - `PODPILOT_ROLE_INVESTIGATOR_GROUPS`, JSON array defaulting to
   `["podpilot-investigators"]`
+- `PODPILOT_ROLE_READ_WRITE_GROUPS`, JSON array defaulting to `["podpilot-read-write"]`
+- `PODPILOT_CONFIGURATION_ADMIN_GROUPS`, an orthogonal capability array defaulting to
+  `["podpilot-configuration-admins"]`
 - `PODPILOT_ROLE_APPROVER_GROUPS`, JSON array defaulting to `["podpilot-approvers"]`
 - `PODPILOT_ROLE_BREAKGLASS_GROUPS`, JSON array defaulting to `["podpilot-breakglass"]`;
   arrays may contain multiple existing groups or be empty, but the same group
@@ -251,10 +252,8 @@ The current deployment uses these variables:
 - `PODPILOT_MODEL_SECRET_NAMESPACE`, default `ai-ops`
 - `PODPILOT_MODEL_SECRET_NAME`, default `podpilot-model-credentials`
 - `PODPILOT_MODEL_SECRET_KEY`, default `api_key`
-- `PODPILOT_CLUSTER_CREDENTIAL_STORE`, `environment` for local development or
-  `kubernetes` for managed cluster entries
-- `PODPILOT_CLUSTER_SECRET_NAMESPACE`, default `ai-ops`
-- `PODPILOT_CLUSTER_SECRET_NAME`, default `podpilot-cluster-credentials`
+- `PODPILOT_ROLE_READ_WRITE_GROUPS`, groups whose members may start Action-mode chats
+- `PODPILOT_CONFIGURATION_ADMIN_GROUPS`, groups whose members may manage shared cluster metadata
 - `PODPILOT_MODEL_TIMEOUT_MAX_SECONDS`, default `240`, controls the highest timeout
   an Approver may save on a model profile (configuration range `30`–`300` seconds)
 - `PODPILOT_ADHOC_MAX_CLUSTERS_PER_CONVERSATION`, default `10`
@@ -638,18 +637,15 @@ oc get deployment podpilot -n ai-ops -o jsonpath='{.spec.template.spec.container
 Expected results are `podpilot-investigator`, `yes`, `no`, and a container list containing
 `oc-runner`. Do not apply `deploy/openshift/overlays/poc-cluster-admin` to this simulation.
 
-### Optional unrestricted remote PoC
+### Delegated Action mode
 
-The guarded remote overlay remains the default. After separately building and
-promoting `podpilot` and `podpilot-oc-runner` under the same immutable version,
-apply `deploy/openshift/overlays/remote-poc-agentic`. That overlay inherits the
-remote OAuth, storage, role mapping, and RBAC configuration and adds only the
-shared runner component plus `agent_mode: unrestricted` and
-`remote_cluster_tls_verify: false`. It creates no second
-Deployment: `oc-runner` is the third container in the existing PodPilot Pod.
-For multi-cluster conversations the model supplies one selected cluster ID per shell call. The API
-brokers only that cluster's stored token to the loopback runner, which deletes its temporary
-kubeconfig after the command. Inspect redacted execution metadata with
+The remote overlay includes the runner component and sets `agent_mode: unrestricted`.
+It creates no second Deployment: `oc-runner` is the third container in the existing
+PodPilot Pod. For multi-cluster conversations the model supplies one selected cluster
+ID per shell call. The API brokers only that cluster's in-memory delegated user token
+to the loopback runner, which deletes its temporary kubeconfig after the command.
+The conversation's immutable mode determines whether the broker exposes read-only
+typed access or the user's full cluster authorization. Inspect redacted execution metadata with
 `oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
 The runner logs startup plus command start, completion, termination, and timeout events. The API
 logs a matching runner request ID, command hash, duration, timeout and truncation flags, and a
@@ -721,8 +717,6 @@ commands.
    ```powershell
    if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "OPENAI_API_KEY is not set" }
    oc -n ai-ops create secret generic podpilot-model-credentials --from-literal=api_key=$env:OPENAI_API_KEY --dry-run=client -o yaml | oc apply -f -
-   oc -n ai-ops get secret podpilot-cluster-credentials *> $null
-   if ($LASTEXITCODE -ne 0) { oc create -f deploy/openshift/workload/cluster-credentials.yaml }
    ```
 
    Open `/settings/model` as an Approver to add one or more endpoints. Choose
@@ -762,24 +756,9 @@ commands.
    only for a disposable PoC endpoint. Rotate the provider key if it ever appears
    in terminal or application output.
 
-   `model-credentials.yaml` and `cluster-credentials.yaml` document the fixed Secret
-   identities but are deliberately excluded from the workload kustomization so a later
-   manifest apply cannot erase existing tokens.
-
-   If saving a managed cluster fails, verify the out-of-band Secret and its narrowly
-   scoped runtime permission before checking the remote cluster. Saving does not contact
-   the remote API; it first persists the submitted token in this Secret:
-
-   ```powershell
-   oc get secret podpilot-cluster-credentials -n ai-ops
-   oc auth can-i patch secret/podpilot-cluster-credentials -n ai-ops --as=system:serviceaccount:ai-ops:podpilot-investigator
-   oc logs deployment/podpilot -n ai-ops -c api --since=10m
-   ```
-
-   The first two commands must succeed. PodPilot returns a safe, specific message for a
-   missing Secret or denied RBAC and logs the failed credential operation without the
-   submitted token. A browser message stating that PodPilot returned no response instead
-   points to the Route/OAuth proxy or a lost API pod connection.
+   `model-credentials.yaml` documents the fixed model Secret identity but is deliberately
+   excluded from the workload kustomization so a later manifest apply cannot erase the
+   provider token. Remote-cluster credentials are not stored in a Kubernetes Secret.
 
 5. Validate and deploy the complete SNO overlay. Optionally retain the separate
    PoC cluster-admin binding for the `ai-observer` development/break-glass identity;

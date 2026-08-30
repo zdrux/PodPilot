@@ -12,7 +12,7 @@
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <a class="brand" href="/" aria-label="PodPilot home">
+      <a class="brand" href="/ask" aria-label="PodPilot home">
         <span class="brand-mark" aria-hidden="true">P</span>
         <span>
           <strong>PodPilot</strong>
@@ -22,10 +22,12 @@
 
       <nav class="nav-list">
         <p class="nav-label">Workspace</p>
+        {% if not ask_first %}
         <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
           <span class="nav-icon" aria-hidden="true">⌁</span>
           Cluster health
         </a>
+        {% endif %}
         <div class="nav-tree {% if recent_conversations is defined and recent_conversations %}expanded{% endif %}">
           <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
             <span class="nav-icon" aria-hidden="true">✦</span>
@@ -55,12 +57,16 @@
           </div>
           {% endif %}
         </div>
-        {% if user is defined and user.role.value >= 30 %}
-        <p class="nav-label section-gap">Manage</p>
-        <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
+        {% if ask_first %}<a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
           Clusters
-        </a>
+        </a>{% endif %}
+        {% if user is defined and user.role.value >= 30 %}
+        <p class="nav-label section-gap">Manage</p>
+        {% if not ask_first %}<a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
+          <span class="nav-icon" aria-hidden="true">⌘</span>
+          Clusters
+        </a>{% endif %}
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory
@@ -77,7 +83,7 @@
         <div class="avatar" aria-hidden="true">{{ user.username[0] | upper }}</div>
         <div class="identity-copy">
           <strong title="{{ user.username }}">{{ user.username }}</strong>
-          <span>{{ user.role.label }}</span>
+          <span>{% if ask_first and user.role.value >= 30 %}Read-Write{% else %}{{ user.role.label }}{% endif %}</span>
         </div>
         <a class="signout" href="/session/logout" title="Clear PodPilot session" aria-label="Clear PodPilot session">↪</a>
       </div>

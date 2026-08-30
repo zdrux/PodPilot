@@ -1,8 +1,19 @@
-apiVersion: image.openshift.io/v1
-kind: ImageStream
-metadata:
-  name: podpilot
-  namespace: ai-ops
-  labels:
-    app.kubernetes.io/name: podpilot
-    app.kubernetes.io/component: application-image
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: podpilot
+      namespace: ai-ops
+      labels:
+        app.kubernetes.io/name: podpilot
+        app.kubernetes.io/component: application-image
+  - apiVersion: image.openshift.io/v1
+    kind: ImageStream
+    metadata:
+      name: podpilot-oc-runner
+      namespace: ai-ops
+      labels:
+        app.kubernetes.io/name: podpilot
+        app.kubernetes.io/component: agent-runner-image

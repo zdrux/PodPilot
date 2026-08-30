@@ -26,10 +26,16 @@ class Settings(BaseSettings):
     role_investigator_groups: list[str] = Field(
         default_factory=lambda: ["podpilot-investigators"]
     )
+    role_read_write_groups: list[str] = Field(
+        default_factory=lambda: ["podpilot-read-write"]
+    )
+    configuration_admin_groups: list[str] = Field(
+        default_factory=lambda: ["podpilot-configuration-admins"]
+    )
     role_approver_groups: list[str] = Field(default_factory=lambda: ["podpilot-approvers"])
     role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
     delegated_access_enabled: bool = False
-    delegated_session_lifetime_seconds: int = Field(default=7200, ge=300, le=86_400)
+    delegated_session_lifetime_seconds: int = Field(default=86_400, ge=300, le=86_400)
     delegated_login_timeout_seconds: float = Field(default=15.0, ge=3.0, le=60.0)
     delegated_login_attempts_per_minute: int = Field(default=5, ge=1, le=30)
     delegated_proxy_timeout_seconds: float = Field(default=310.0, ge=5.0, le=900.0)
@@ -107,11 +113,12 @@ class Settings(BaseSettings):
     cluster_credential_store: Literal["environment", "kubernetes"] = "environment"
     cluster_secret_namespace: str = "ai-ops"
     cluster_secret_name: str = "podpilot-cluster-credentials"
-    remote_cluster_tls_verify: bool = True
     poc_mode: bool = False
 
     @field_validator(
         "role_investigator_groups",
+        "role_read_write_groups",
+        "configuration_admin_groups",
         "role_approver_groups",
         "role_breakglass_groups",
     )
@@ -130,6 +137,7 @@ class Settings(BaseSettings):
     def validate_role_group_mapping(self) -> "Settings":
         role_groups = (
             self.role_investigator_groups,
+            self.role_read_write_groups,
             self.role_approver_groups,
             self.role_breakglass_groups,
         )

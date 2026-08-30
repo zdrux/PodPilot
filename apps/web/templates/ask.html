@@ -319,15 +319,15 @@
       {% if can_ask %}
       <div class="prompt-starters" aria-label="Start an investigation">
         <button type="button" data-starter-prompt="Find currently failing or unhealthy workloads across the selected clusters. Check Pending, CrashLoopBackOff, ImagePullBackOff, and failed Pods, plus Deployments, StatefulSets, and DaemonSets with unavailable replicas. Group findings by cluster and namespace, cite observed evidence, and do not make changes."
-          data-starter-available="{{ 'true' if model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
+          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
           <strong>Find failing workloads</strong><small>Pending, crashing, image-pull, and unavailable workloads</small>
         </button>
         <button type="button" data-starter-prompt="Review Kubernetes warning events from the last hour across the selected clusters. Group recurring reasons by cluster and namespace, identify affected objects, rank the most frequent or recent warnings, cite observed evidence, and do not make changes."
-          data-starter-available="{{ 'true' if model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
+          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
           <strong>Review recent warnings</strong><small>Recurring warning events from the last hour</small>
         </button>
         <button type="button" data-workload-starter-open
-          data-starter-available="{{ 'true' if model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
+          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
           <strong>Troubleshoot a workload…</strong><small>Inspect a specific namespace and resource</small>
         </button>
         {% if is_delegated_mode %}
@@ -355,10 +355,12 @@
 
     <div class="ask-composer">
       {% if is_delegated_mode and not delegated_session_active %}
-      <div class="chat-budget"><strong>Delegated session ended</strong><p>The in-memory cluster credentials for this conversation are no longer available. <a href="/delegated/connect">Sign in again</a> and start a new conversation.</p></div>
+      <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}{% endif %}">Reconnect clusters</a> to continue this conversation.</p></div>
       {% endif %}
       {% if can_ask %}
       <form class="chat-form adhoc-chat-form" method="post"
+        data-read-only-model-ready="{{ 'true' if read_only_model_ready else 'false' }}"
+        data-action-model-ready="{{ 'true' if action_model_ready else 'false' }}"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
         <div class="composer-meta-row">
           <div class="question-cluster-row">
@@ -390,6 +392,16 @@
             {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
           </div>
           <div class="composer-controls">
+            {% if not conversation and is_delegated_mode %}
+            <label class="reasoning-effort-picker" for="execution-mode">Mode
+              <select id="execution-mode" name="execution_mode">
+                <option value="read_only" selected>Investigate · read-only</option>
+                {% if can_use_action_mode %}<option value="action">Action · my cluster permissions</option>{% endif %}
+              </select>
+            </label>
+            {% elif conversation and is_delegated_mode %}
+            <span class="boundary-pill"><strong>{{ 'Action' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'Investigate · read-only' }}</strong></span>
+            {% endif %}
             <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
               <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>
                 <option value="provider_default" {% if not selected_reasoning_effort %}selected{% endif %}>Provider default</option>
@@ -405,7 +417,7 @@
         </div>
         <div class="composer-input-wrap">
           <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}></textarea>
-          <button class="button primary" type="submit" {% if not model_ready or active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
+          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
         </div>
       </form>
       {% else %}

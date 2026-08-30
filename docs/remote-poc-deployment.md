@@ -207,14 +207,13 @@ test "$(oc get secret podpilot-oauth-cookie -n ai-ops \
   -o jsonpath='{.data.session_secret}' | base64 -d | wc -c)" -eq 32
 ```
 
-Create the empty, fixed-name model and cluster credential Secrets. Approvers add
-tokens later through the GUI, and PodPilot patches opaque keys dynamically:
+Create the empty, fixed-name model credential Secret. Configuration administrators
+add model endpoints later through the GUI. Remote-cluster credentials are user-delegated
+and are not stored in PodPilot Secrets:
 
 ```bash
 oc get secret podpilot-model-credentials -n ai-ops >/dev/null 2>&1 || \
   oc create -f deploy/openshift/workload/model-credentials.yaml
-oc get secret podpilot-cluster-credentials -n ai-ops >/dev/null 2>&1 || \
-  oc create -f deploy/openshift/workload/cluster-credentials.yaml
 ```
 
 ## 6. Verify existing LDAP-synchronized elevated-role groups
@@ -276,11 +275,11 @@ The overlay applies, in dependency-safe form:
 - `auth/group-rbac/ui-access-rbac.yaml`, admitting `system:authenticated` to the
   exact PodPilot Service;
 - `workload/runtime-config.yaml` and `workload/persistentvolumeclaim.yaml`;
-- `workload/model-credentials-rbac.yaml` and `workload/cluster-credentials-rbac.yaml`;
+- `workload/model-credentials-rbac.yaml`;
 - `workload/deployment.yaml`, `service.yaml`, `route.yaml`, and
   `network-policy.yaml`.
 
-The OAuth cookie, model credential, and cluster credential Secret values remain out-of-band.
+The OAuth cookie and model credential Secret values remain out-of-band.
 
 ## 8. Verify access before inviting users
 
@@ -292,7 +291,6 @@ oc auth can-i get configmaps --all-namespaces --as="$SA"
 oc auth can-i get groups.user.openshift.io --as="$SA"
 oc auth can-i get secrets --all-namespaces --as="$SA"
 oc auth can-i get secret/podpilot-model-credentials -n ai-ops --as="$SA"
-oc auth can-i get secret/podpilot-cluster-credentials -n ai-ops --as="$SA"
 oc auth can-i get secret/example-unrelated-secret -n ai-ops --as="$SA"
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 oc auth can-i get alertmanagers.monitoring.coreos.com/main --subresource=api \
@@ -304,10 +302,10 @@ oc -n ai-ops logs deployment/podpilot -c migrate
 oc -n ai-ops logs deployment/podpilot -c api --since=10m
 ```
 
-Expected results are `yes` for Pods, Pod logs, ConfigMaps, Groups, the exact model and
-cluster credential Secrets, and the named Alertmanager API. Expect `no` for cluster-wide
+Expected results are `yes` for Pods, Pod logs, ConfigMaps, Groups, the exact model
+credential Secret, and the named Alertmanager API. Expect `no` for cluster-wide
 Secrets, the unrelated Secret, and Deployment patch. PodPilot has `get`/`patch`
-only on its exact model- and cluster-credential Secrets in `ai-ops`.
+only on its exact model credential Secret in `ai-ops`.
 The PVC must be `Bound`, the Deployment `1/1 Available`, and the migration log
 must end at the repository's current Alembic head.
 
@@ -320,22 +318,20 @@ oc -n ai-ops get deployment podpilot \
 oc -n ai-ops get configmap podpilot-runtime \
   -o jsonpath='{.data.agent_mode}{"\n"}'
 oc -n ai-ops get configmap podpilot-runtime \
-  -o jsonpath='{.data.remote_cluster_tls_verify}{"\n"}'
-oc -n ai-ops get configmap podpilot-runtime \
   -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_command_max_output_bytes}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
 oc -n ai-ops exec deployment/podpilot -c oc-runner -- oc version --client
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 ```
 
-Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `false`, `300 262144 10`, a Linux
+Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `300 262144 10`, a Linux
 OpenShift CLI client version, and the RBAC result appropriate to the remote
 identity. Review any `yes` result before exposing agentic mode; the sidecar will
 be able to exercise every permission granted to that service account.
 
-In a multi-cluster Ask session, the API resolves the token for each model-selected registered
-cluster from `podpilot-cluster-credentials` and passes it only over Pod loopback for that command.
-The runner uses `insecure-skip-tls-verify: true` because this overlay forces remote TLS verification
-off, deletes the per-command kubeconfig, and logs only cluster identity, TLS mode, exit code,
+In a multi-cluster Ask session, the API resolves the token for each model-selected cluster
+from the in-memory delegated session and passes it only over Pod loopback for that command.
+The runner follows the selected cluster's TLS policy, deletes the per-command kubeconfig,
+and logs only cluster identity, TLS mode, exit code,
 duration, and output byte counts:
 
 ```bash

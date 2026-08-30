@@ -516,6 +516,19 @@
   const starterButtons = Array.from(document.querySelectorAll("[data-starter-prompt]"));
   const starterActions = Array.from(document.querySelectorAll("[data-starter-available]"));
   const clusterPicker = document.querySelector("[data-cluster-picker]");
+  const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
+  const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
+  if (executionMode && askSubmit) {
+    const updateModeAvailability = () => {
+      const ready = executionMode.value === "action"
+        ? adhocForm.dataset.actionModelReady === "true"
+        : adhocForm.dataset.readOnlyModelReady === "true";
+      askSubmit.disabled = !ready;
+      askSubmit.textContent = executionMode.value === "action" ? "Act" : "Investigate";
+    };
+    executionMode.addEventListener("change", updateModeAvailability);
+    updateModeAvailability();
+  }
   if (clusterPicker) {
     const checkboxes = Array.from(clusterPicker.querySelectorAll("[data-cluster-checkbox]"));
     const hidden = document.querySelector("[data-cluster-ids]");
@@ -526,6 +539,16 @@
       const selected = checkboxes.filter((item) => item.checked);
       if (selected.length > maxSelected && changed) changed.checked = false;
       const bounded = checkboxes.filter((item) => item.checked);
+      if (clusterPicker.closest("[data-delegated-connect-form]")) {
+        const selectedEnvironment = bounded[0]?.dataset.environment || "";
+        checkboxes.forEach((item) => {
+          if (!item.checked) {
+            item.disabled = Boolean(
+              selectedEnvironment && item.dataset.environment !== selectedEnvironment
+            );
+          }
+        });
+      }
       if (hidden) hidden.value = JSON.stringify(bounded.map((item) => item.value));
       const names = bounded.map((item) => item.closest("label")?.querySelector("strong")?.textContent || "cluster");
       if (pickerLabel) {
@@ -621,7 +644,8 @@
           tone: failed ? "warning" : "success",
           message: failed ? `${payload.connected.length} cluster(s) connected; ${failed} failed.` : `${payload.connected.length} cluster(s) connected.`,
         }));
-        window.location.assign("/ask");
+        const nextUrl = delegatedConnectForm.elements.next_url?.value || "/ask";
+        window.location.assign(nextUrl.startsWith("/ask") ? nextUrl : "/ask");
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = "Connect selected clusters"; }

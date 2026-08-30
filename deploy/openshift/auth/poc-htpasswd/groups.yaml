@@ -12,6 +12,26 @@ users:
 apiVersion: user.openshift.io/v1
 kind: Group
 metadata:
+  name: podpilot-read-write
+  labels:
+    app.kubernetes.io/name: podpilot
+users:
+  - podpilot-approver
+  - podpilot-breakglass
+---
+apiVersion: user.openshift.io/v1
+kind: Group
+metadata:
+  name: podpilot-configuration-admins
+  labels:
+    app.kubernetes.io/name: podpilot
+users:
+  - podpilot-approver
+  - podpilot-breakglass
+---
+apiVersion: user.openshift.io/v1
+kind: Group
+metadata:
   name: podpilot-approvers
   labels:
     app.kubernetes.io/name: podpilot

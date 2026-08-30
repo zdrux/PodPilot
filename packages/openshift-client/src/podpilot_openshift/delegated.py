@@ -50,6 +50,7 @@ class OpenShiftDelegatedLoginClient:
         *,
         api_url: str,
         custom_ca_pem: str | None = None,
+        tls_verify: bool = True,
         authorization_endpoint_override: str | None = None,
         timeout_seconds: float = 15.0,
         transport: httpx.BaseTransport | None = None,
@@ -66,7 +67,7 @@ class OpenShiftDelegatedLoginClient:
         ):
             raise DelegatedLoginError("Delegated login requires a registered HTTPS Kubernetes API origin.")
         self.api_url = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
-        self.verify = tls_context(custom_ca_pem)
+        self.verify: ssl.SSLContext | bool = tls_context(custom_ca_pem) if tls_verify else False
         self.authorization_endpoint_override = (
             self._validated_authorization_endpoint(authorization_endpoint_override)
             if authorization_endpoint_override else None

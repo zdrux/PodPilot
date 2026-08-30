@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Connect clusters · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Delegated operator</p><h1>Connect development clusters</h1><p class="subtitle">PodPilot will authenticate once to each selected cluster and keep the resulting user token only in API process memory for this PodPilot login session.</p></div></header>
-<section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Unrestricted delegated agent</strong><p>The agent may perform any Kubernetes or OpenShift operation allowed to your cluster account. PodPilot sends the supplied credentials to the trusted OAuth endpoint for each configured cluster, and commands and cluster output can be sent to the configured model provider. Tokens expire from PodPilot after {{ session_hours }} hours and are revoked when you sign out.</p></div></section>
+<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Connect clusters</h1><p class="subtitle">PodPilot authenticates as you and keeps resulting OpenShift tokens only in API-process memory for this browser session.</p></div></header>
+<section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Credentials are scoped by environment</strong><p>Select clusters from one environment at a time. PodPilot discards your password immediately after the OAuth exchanges. Tokens remain for at most {{ session_hours }} hours and are revoked when you sign out.</p></div></section>
 <section class="panel settings-panel delegated-connect-panel">
   <div class="panel-header"><div><p class="eyebrow">Approved registry</p><h2>Select clusters</h2></div><span class="tag">{{ clusters | length }} available</span></div>
   {% if connections %}
@@ -17,9 +17,9 @@
         <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search>
         <div class="cluster-options">
         {% for cluster in clusters %}
-          <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
-            <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox {% if cluster.id in connected_cluster_ids %}checked{% endif %}>
-            <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}PodPilot system cluster{% else %}{{ cluster.api_url }}{% if cluster.has_custom_ca %} · custom CA{% endif %}{% endif %}</small></span>
+          <label data-cluster-option data-search="{{ cluster.environment }} {{ cluster.name }} {{ cluster.tags | tojson }}">
+            <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox data-environment="{{ cluster.environment }}">
+            <span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment | upper }} · {% if cluster.is_system %}PodPilot system cluster{% else %}{{ cluster.api_url }}{% if cluster.has_custom_ca %} · custom CA{% endif %}{% if not cluster.tls_verify %} · TLS verification disabled{% endif %}{% endif %}</small></span>
           </label>
         {% endfor %}
         </div>
@@ -28,7 +28,8 @@
     <input type="hidden" name="cluster_ids" data-cluster-ids value="[]">
     <label>Remote username<input name="username" autocomplete="username" required maxlength="253"></label>
     <label>Remote password<input name="password" type="password" autocomplete="current-password" required maxlength="4096"><small>The password is used only for these login exchanges and is not stored.</small></label>
-    <label class="checkbox-field"><input type="checkbox" name="consent" required><span>I trust the selected cluster registrations and understand this unrestricted agent acts with my remote Kubernetes permissions.</span></label>
+    <label class="checkbox-field"><input type="checkbox" name="consent" required><span>I authorize PodPilot to create temporary user tokens for the selected clusters. Action conversations may use every permission granted to this identity.</span></label>
+    <input type="hidden" name="next_url" value="{{ next_url }}">
     <div class="form-actions"><button class="button primary" type="submit">Connect selected clusters</button>{% if connections %}<a class="button secondary" href="/ask">Continue to Ask PodPilot</a>{% endif %}</div>
   </form>
 </section>

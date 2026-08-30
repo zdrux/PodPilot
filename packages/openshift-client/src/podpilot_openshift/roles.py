@@ -38,7 +38,9 @@ class OpenShiftGroupRoleResolver:
     cache_seconds: int = 30
     role_groups: RoleGroups = DEFAULT_ROLE_GROUPS
     default_role: Role | None = Role.VIEWER
+    management_groups: tuple[str, ...] = ()
     _cache: dict[str, tuple[float, Role | None]] = field(default_factory=dict)
+    _management_cache: dict[str, tuple[float, bool]] = field(default_factory=dict)
 
     @classmethod
     def from_environment(
@@ -46,6 +48,7 @@ class OpenShiftGroupRoleResolver:
         cache_seconds: int = 30,
         role_groups: RoleGroups = DEFAULT_ROLE_GROUPS,
         default_role: Role | None = Role.VIEWER,
+        management_groups: tuple[str, ...] = (),
     ) -> "OpenShiftGroupRoleResolver":
         try:
             config.load_incluster_config()
@@ -57,6 +60,7 @@ class OpenShiftGroupRoleResolver:
             cache_seconds=cache_seconds,
             role_groups=role_groups,
             default_role=default_role,
+            management_groups=management_groups,
         )
 
     def resolve(self, username: str) -> Role | None:
@@ -79,12 +83,25 @@ class OpenShiftGroupRoleResolver:
         self._cache[username] = (now + self.cache_seconds, resolved)
         return resolved
 
+    def can_manage(self, username: str) -> bool:
+        now = monotonic()
+        cached = self._management_cache.get(username)
+        if cached is not None and cached[0] >= now:
+            return cached[1]
+        allowed = any(
+            username in self.reader.users(group_name)
+            for group_name in self.management_groups
+        )
+        self._management_cache[username] = (now + self.cache_seconds, allowed)
+        return allowed
+
 
 @dataclass
 class LazyOpenShiftGroupRoleResolver:
     cache_seconds: int = 30
     role_groups: RoleGroups = DEFAULT_ROLE_GROUPS
     default_role: Role | None = Role.VIEWER
+    management_groups: tuple[str, ...] = ()
     _resolver: OpenShiftGroupRoleResolver | None = None
 
     def resolve(self, username: str) -> Role | None:
@@ -93,5 +110,12 @@ class LazyOpenShiftGroupRoleResolver:
                 cache_seconds=self.cache_seconds,
                 role_groups=self.role_groups,
                 default_role=self.default_role,
+                management_groups=self.management_groups,
             )
         return self._resolver.resolve(username)
+
+    def can_manage(self, username: str) -> bool:
+        if self._resolver is None:
+            self.resolve(username)
+        assert self._resolver is not None
+        return self._resolver.can_manage(username)

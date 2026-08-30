@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Cluster management · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Manage</p><h1>Clusters</h1><p class="subtitle">Manage the OpenShift API connections available to Ask PodPilot. Shared tokens use the credential Secret; delegated user tokens remain only in API memory.</p></div><div class="topbar-actions"><a class="button primary" href="/settings/clusters">Add cluster</a></div></header>
+<header class="topbar"><div><p class="eyebrow">Connections</p><h1>Clusters</h1><p class="subtitle">Choose shared cluster metadata or maintain your own private list. PodPilot stores no Kubernetes bearer tokens.</p></div><div class="topbar-actions"><a class="button primary" href="/settings/clusters">Add private cluster</a></div></header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>TLS verification exceptions carry credentials</strong><p>Disabling verification sends the cluster bearer token and receives evidence without authenticating the API server. Use only for explicitly accepted internal environments.</p></div></section>
 <div class="settings-grid cluster-settings-grid">
   <aside class="panel side-list-panel">
     <div class="panel-header"><div><p class="eyebrow">Registry</p><h2>Configured clusters</h2></div><span class="tag">{{ clusters | length }}</span></div>
     <ul class="model-profile-list cluster-registry-list">
     {% for cluster in clusters %}
-      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/settings/clusters?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if cluster.is_system %}<em>System</em>{% elif not cluster.is_enabled %}<em>Disabled</em>{% endif %}</span><b>{{ cluster.status | replace('_', ' ') }}</b><small>{% if cluster.is_system %}In-cluster service account{% else %}{{ cluster.api_url }}{% endif %}</small></a></li>
+      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/settings/clusters?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if cluster.is_system %}<em>System</em>{% elif cluster.visibility == 'private' %}<em>Private</em>{% elif not cluster.is_enabled %}<em>Disabled</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{% if cluster.is_system %}Runtime OpenShift cluster{% else %}{{ cluster.api_url }}{% endif %}</small></a></li>
     {% else %}<li class="side-empty">No cluster entries are configured.</li>{% endfor %}
     </ul>
   </aside>
@@ -31,12 +31,21 @@
         <p class="muted-copy">The display name and tags describe the cluster where PodPilot is running across the dashboard, Ask PodPilot, and future evidence. The projected service-account connection remains managed by the deployment.</p>
         <div class="form-actions"><button class="button primary" type="submit">Save metadata</button></div>
       </form>
+    {% elif selected and not selected_editable %}
+      <div class="settings-form">
+        <p class="muted-copy">This is shared cluster metadata. You can select it for your own delegated sessions, but only a configuration administrator may edit it.</p>
+        <dl class="settings-summary"><div><dt>Environment</dt><dd>{{ selected.environment | upper }}</dd></div><div><dt>API URL</dt><dd>{{ selected.api_url }}</dd></div><div><dt>TLS verification</dt><dd>{{ 'Enabled' if selected.tls_verify else 'Disabled' }}</dd></div></dl>
+        <div class="form-actions"><a class="button primary" href="/delegated/connect">Connect clusters</a></div>
+      </div>
     {% else %}
     <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters">
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>
+      <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment if selected else 'dev' }}" placeholder="dev"><small>Credentials are submitted once per selected environment.</small></label>
+      {% if can_manage_shared_clusters %}
+      <label>Visibility<select name="visibility"><option value="private" {% if not selected or selected.visibility == 'private' %}selected{% endif %}>Private · only me</option><option value="shared" {% if selected and selected.visibility == 'shared' %}selected{% endif %}>Shared · all PodPilot users</option></select></label>
+      {% else %}<input type="hidden" name="visibility" value="private">{% endif %}
       <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
-      <label>Shared bearer token <span class="muted-copy">(optional for delegated clusters)</span><input name="token" type="password" autocomplete="new-password" placeholder="{% if selected %}Leave blank to keep the current token{% else %}sha256~…{% endif %}"><small>Shared managed sessions use this token. Delegated users authenticate with their own credentials instead.</small></label>
       <label>Custom Kubernetes API CA bundle
         <textarea name="custom_ca_pem" rows="8" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----">{{ selected.custom_ca_pem if selected else '' }}</textarea>
         <small>Optional PEM certificate bundle appended to system trust for OAuth login, identity verification, API proxying, and connection tests. Private keys are rejected.</small>
@@ -50,11 +59,10 @@
         <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
         <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
       </label>
-      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or (not selected and remote_cluster_tls_verify) %}checked{% endif %} {% if not remote_cluster_tls_verify %}disabled{% endif %}><span>Verify the Kubernetes API TLS certificate</span></label>
-      <input type="hidden" name="tls_verify" value="{{ 'true' if remote_cluster_tls_verify and ((selected and selected.tls_verify) or not selected) else 'false' }}">
-      {% if not remote_cluster_tls_verify %}<div class="inline-warning">TLS verification is disabled for all remote clusters by this deployment environment.</div>{% endif %}
+      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify the Kubernetes API TLS certificate and hostname</span></label>
+      <input type="hidden" name="tls_verify" value="{{ 'true' if (selected and selected.tls_verify) or not selected else 'false' }}">
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
-      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/disable" data-action-kind="disable" data-confirm="Disable this cluster and remove its stored token? Historical conversations will be retained.">Disable</button>{% endif %}</div>
+      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test OAuth discovery</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/disable" data-action-kind="disable" data-confirm="Disable this cluster metadata? Historical conversations will be retained.">Disable</button>{% endif %}</div>
       {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}
       {% if selected and selected.last_tested_at %}<p class="muted-copy">Last tested {{ selected.last_tested_at | est_time('%Y-%m-%d %H:%M:%S') }}.</p>{% endif %}
     </form>

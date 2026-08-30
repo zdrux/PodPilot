@@ -3,6 +3,15 @@
 Last reviewed: 2026-08-22
 Update when: target user, product scope, core workflow, or non-goals change.
 
+## Current access model
+
+Ask is the product landing experience. Every cluster request uses a temporary OpenShift token
+created from the signed-in user's own credentials; PodPilot stores cluster metadata but no remote
+bearer tokens. Investigator conversations are always read-only. Read-Write users choose read-only
+or Action mode before the first message, and that mode plus the selected clusters remains locked.
+Users may maintain private cluster metadata alongside administrator-managed shared entries.
+Cluster Health is not part of the active navigation or remote access model.
+
 ## Problem
 
 OpenShift operators must correlate alerts, metrics, events, logs, workload state,

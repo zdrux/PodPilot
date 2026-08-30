@@ -58,6 +58,7 @@ from podpilot_api.main import (
     _preferred_metric_evidence_view,
     _profile_is_usable,
     _question_requires_agentic_investigation,
+    _read_only_proxy_allows,
     _question_cluster_ids,
     _normalize_agent_collector_arguments,
     _recent_object_references,
@@ -172,6 +173,19 @@ def _agent_final_step(content: str = "The agent interpreted the collected eviden
         content=content,
         tool_calls=(),
     )
+
+
+def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
+    assert _read_only_proxy_allows("GET", "/api/v1/pods") is True
+    assert _read_only_proxy_allows(
+        "POST", "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
+    ) is True
+    assert _read_only_proxy_allows("POST", "/api/v1/namespaces/dev/pods") is False
+    assert _read_only_proxy_allows(
+        "POST", "/api/v1/namespaces/dev/pods/api/exec"
+    ) is False
+    assert _read_only_proxy_allows("PATCH", "/apis/apps/v1/deployments/api") is False
+    assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
 
 
 def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:
@@ -9051,7 +9065,6 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         settings_overrides={
             "agent_mode": "unrestricted",
             "agent_heartbeat_seconds": 2,
-            "remote_cluster_tls_verify": False,
         },
     )
     engine = build_engine(settings)
@@ -9108,10 +9121,10 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
     assert [call[1].cluster_id for call in runner.calls] == cluster_ids
-    assert all(call[1].tls_verify is False for call in runner.calls)
+    assert all(call[1].tls_verify is True for call in runner.calls)
     assert "synthetic failure" in rendered.text
     assert "East DEV" in rendered.text
-    assert "Cluster TLS exception" in rendered.text
+    assert "Cluster TLS exception" not in rendered.text
     assert "API TLS verification is disabled" not in rendered.text
     assert "credentials and evidence are vulnerable to interception" not in rendered.text
     assert all("token-" not in str(messages) for messages in provider.agent_messages)
@@ -11741,6 +11754,18 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
                 created_at=now,
                 updated_at=now,
             ))
+            db_session.add(ModelProfile(
+                id=1,
+                provider_label="Test",
+                base_url="https://models.example.test/v1",
+                chat_model="test-model",
+                embedding_model=None,
+                timeout_seconds=30,
+                max_output_tokens=1200,
+                status="ready",
+                capabilities_json='{"structured_output": true}',
+                updated_by="dana",
+            ))
             db_session.commit()
 
         redirected = client.get(
@@ -11766,7 +11791,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert connected.status_code == 200
         assert "podpilot_delegated_session" in connected.headers["set-cookie"]
         ask_page = client.get("/ask", headers={"x-forwarded-user": "dana"})
-        assert "Delegated unrestricted mode" in ask_page.text
+        assert "Investigate · read-only" in ask_page.text
         assert "Find failing workloads" in ask_page.text
         assert "Review recent warnings" in ask_page.text
         assert "Show my access" in ask_page.text
@@ -11782,14 +11807,14 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         with Session(engine) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
-            assert conversation.execution_mode == "delegated_unrestricted"
+            assert conversation.execution_mode == "read_only"
             assert conversation.delegated_session_id
             assert json.loads(conversation.cluster_ids_json) == [cluster_id]
         client.cookies.delete("podpilot_delegated_session")
         ended_page = client.get(
             f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
         )
-        assert "Delegated session ended" in ended_page.text
+        assert "Cluster session needs reconnection" in ended_page.text
         ended_composer = re.search(
             r'<textarea id="adhoc-message"[^>]*>', ended_page.text
         )
@@ -11856,6 +11881,91 @@ def test_delegated_operator_can_connect_the_system_cluster(
         "https://oauth-openshift.openshift-authentication.svc/oauth/authorize"
     )
     assert clients[0]["custom_ca_pem"] == "api-ca\nservice-ca\n"
+
+
+def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
+    tmp_path: Path,
+) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    cluster_id = "51000000-0000-0000-0000-000000000001"
+    engine = build_engine(settings)
+    with TestClient(app) as client:
+        with Session(engine) as db_session:
+            now = datetime.now(timezone.utc)
+            db_session.add(Cluster(
+                id=cluster_id,
+                name="Shared DEV",
+                api_url="https://api.shared-dev.example:6443",
+                credential_key=None,
+                tags_json="{}",
+                environment="dev",
+                visibility="shared",
+                owner=None,
+                tls_verify=True,
+                is_enabled=True,
+                is_system=False,
+                status="ready",
+                created_by="ada",
+                updated_by="ada",
+                created_at=now,
+                updated_at=now,
+            ))
+            db_session.add(ModelProfile(
+                id=1,
+                provider_label="OpenRouter",
+                base_url="https://openrouter.ai/api/v1",
+                chat_model="test-agent",
+                api_type="chat-completions",
+                embedding_model=None,
+                timeout_seconds=30,
+                max_output_tokens=1200,
+                status="ready",
+                capabilities_json='{"tool_calls": true}',
+                updated_by="ada",
+            ))
+            db_session.commit()
+
+        for username, requested_mode, expected_status in (
+            ("ivy", "action", 403),
+            ("ada", "action", 303),
+        ):
+            session_id = app.state.delegated_vault.new_session_id()
+            app.state.delegated_vault.put(
+                session_id=session_id,
+                owner=username,
+                cluster_id=cluster_id,
+                remote_username=username,
+                remote_uid=f"uid-{username}",
+                token=f"token-{username}",
+            )
+            client.cookies.set("podpilot_delegated_session", session_id)
+            page = client.get("/ask", headers={"x-forwarded-user": username})
+            csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+            assert csrf is not None
+            response = client.post(
+                "/api/v1/adhoc-conversations",
+                headers={"x-forwarded-user": username, "x-podpilot-csrf": csrf.group(1)},
+                data={
+                    "message": "Check the selected cluster.",
+                    "cluster_ids": json.dumps([cluster_id]),
+                    "execution_mode": requested_mode,
+                },
+                follow_redirects=False,
+            )
+            assert response.status_code == expected_status
+
+        conversation_id = response.headers["location"].rsplit("/", 1)[-1]
+        with Session(engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            assert conversation is not None
+            assert conversation.execution_mode == "action"
+            assert conversation.delegated_session_id
+    engine.dispose()
 
 
 def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Path) -> None:
@@ -14032,6 +14142,55 @@ def test_management_sections_require_approver_or_breakglass(tmp_path: Path) -> N
             assert home.text.count('<p class="nav-label section-gap">Manage</p>') == 1
             for href in ('/settings/clusters', '/settings/model', '/memory'):
                 assert f'href="{href}"' in home.text
+
+
+def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: Path) -> None:
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR, "grace": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
+        assert page.status_code == 200
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/clusters",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={
+                "name": "Ivy ad-hoc DEV",
+                "environment": "dev",
+                "visibility": "private",
+                "api_url": "https://api.adhoc-dev.example:6443",
+                "tls_verify": "false",
+                "tags_json": '{"team":"payments"}',
+            },
+        )
+        assert created.status_code == 200
+        cluster_id = created.json()["cluster_id"]
+
+        own_page = client.get("/settings/clusters", headers={"x-forwarded-user": "ivy"})
+        other_page = client.get("/settings/clusters", headers={"x-forwarded-user": "grace"})
+        assert "Ivy ad-hoc DEV" in own_page.text
+        assert "Ivy ad-hoc DEV" not in other_page.text
+        denied = client.post(
+            f"/api/v1/clusters/{cluster_id}/disable",
+            headers={"x-forwarded-user": "grace", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert denied.status_code == 403
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        cluster = db_session.get(Cluster, cluster_id)
+        assert cluster is not None
+        assert cluster.owner == "ivy"
+        assert cluster.visibility == "private"
+        assert cluster.environment == "dev"
+        assert cluster.tls_verify is False
+        assert cluster.credential_key is None
+    engine.dispose()
 
 
 def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> None:

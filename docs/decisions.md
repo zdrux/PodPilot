@@ -1216,3 +1216,28 @@ Consequences: Remote RBAC and admission are the write boundary for delegated age
 Investigator, Approver, or Breakglass deliberately selects the managed guarded path even when that
 person is cluster-admin elsewhere. Normal expiry/logout attempts token revocation; process loss
 cannot revoke a memory-only token, so the cluster's standard OAuth TTL remains the residual bound.
+
+## 2026-08-30 - All Ask access is user-delegated with conversation-scoped mode
+
+Context: Maintaining reader identities and stored tokens on every cluster duplicated Kubernetes
+RBAC inside PodPilot and made the application identity, rather than the human operator, the
+effective principal. The first delegated design applied only to unmatched users and forced elevated
+PodPilot roles back through the managed service-account path.
+
+Decision: Supersede that split. Every deployed Ask session authenticates the user to each selected
+cluster with one credential submission per environment, discards passwords after OAuth exchange,
+and retains tokens only in process memory for at most 24 hours. Investigator is permanently
+read-only. Read-Write chooses immutable `read_only` or `action` mode at conversation creation.
+Separate broker capabilities enforce read-only Kubernetes methods or pass Action requests under the
+user's native RBAC. A `401` disconnects the affected token and the durable conversation resumes
+after reauthentication. Shared cluster metadata and user-owned private entries contain no bearer
+token. TLS certificate and hostname verification is a per-entry user/admin choice, including an
+explicit disable option. Configuration administration is orthogonal to execution entitlement.
+`/` redirects to Ask and Cluster Health leaves the active product navigation.
+
+Consequences: Remote cluster-reader accounts and the cluster-credential Secret/RBAC are removed
+from active deployments. Kubernetes RBAC and admission remain authoritative for Action mode;
+PodPilot can only reduce permissions in read-only mode. Process loss requires reauthentication but
+does not destroy conversation history. User-provided private endpoints expand the trusted private
+network surface and therefore retain strict HTTPS-origin parsing, bounded responses, exact-origin
+OAuth redirects, audit events, redaction, and visible TLS warnings.

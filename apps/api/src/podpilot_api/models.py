@@ -87,6 +87,9 @@ class Cluster(Base):
     tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     tls_verify: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     custom_ca_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    environment: Mapped[str] = mapped_column(String(64), nullable=False, default="default", index=True)
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="shared", index=True)
+    owner: Mapped[str | None] = mapped_column(String(253), nullable=True, index=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_tested")
@@ -230,7 +233,7 @@ class AdHocConversation(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     cluster_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     execution_mode: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="managed_guarded"
+        String(32), nullable=False, default="read_only"
     )
     delegated_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

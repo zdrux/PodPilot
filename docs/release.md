@@ -3,6 +3,11 @@
 Last reviewed: 2026-08-24
 Update when: release surfaces, QA coverage, migrations, rollback, or deployment gates change.
 
+Current releases must verify that no active manifest grants access to a remote cluster-credential
+Secret, every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
+select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
+and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
+
 ## Release Surfaces
 
 - Single API/web container with Alembic migrations and an OpenShift Deployment.

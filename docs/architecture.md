@@ -86,10 +86,10 @@ one `execute_shell` function. Broad Pod health questions use the anomaly-first
 `pod_health_summary` helper, optionally scoped by namespace and label selector. A universal healthy
 conclusion requires its complete-scan flag; a resource inventory with compacted status detail cannot
 substitute for complete health coverage.
-Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
-use the projected service-account identity. For a registered remote cluster the API resolves that
-cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback
-for that call only. The `oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
+Each call identifies one cluster from the conversation's immutable selection. The API resolves that
+cluster's token from the conversation owner's in-memory delegated session and brokers the API origin,
+token, execution capability, and effective TLS mode over Pod loopback for that call only. The
+`oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
 Linux `oc` binary, deletes the kubeconfig, and returns
 exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
 model returns a final assistant message or the durable Ask run reaches its outer execution
@@ -152,33 +152,31 @@ provider timeout and transient retry count (default three); the SDK retries time
 connection failures, rate limits, and transient server responses while the durable Ask deadline
 remains the outer bound.
 
-In delegated mode the sidecar has no projected service-account credential. FastAPI passes it only
+In the current Ask architecture the sidecar has no projected service-account credential. FastAPI passes it only
 a random, cluster-specific loopback proxy capability; the proxy injects the user-owned in-memory
-OAuth token for each Kubernetes request and applies the registered cluster's system-plus-custom-CA
-trust. Conversation rows retain only the execution mode, owning PodPilot session ID, and immutable
+OAuth token for each Kubernetes request and applies the cluster entry's TLS choice and optional CA
+trust. Conversation rows retain only `read_only` or `action`, the owning session ID, and immutable
 cluster IDs—never the token. The sidecar can therefore issue CREATE, PATCH, APPLY, and DELETE
 requests when the remote user's RBAC permits them, without receiving the bearer token itself.
-The delegated picker reads every enabled entry from the cluster registry. For the system entry,
+The picker reads shared entries plus the current user's private entries. Credentials are submitted
+for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
 the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
 
-In the legacy feature-flag-off lab mode, the sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
+In legacy feature-flag-off compatibility mode, the sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
 agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
 separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
 the standard remote identity and grants no additional RBAC. Consequently the model may ask for
 any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
-portable base and standard remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
-The optional remote agentic overlay also forces registered remote-cluster TLS verification off; the
-secure default remains on everywhere else.
+current workload and remote overlays enable delegated access and deploy the runner. No active
+deployment reads a remote cluster-token Secret; TLS policy is stored per cluster entry.
 
-The guarded single Pod contains two containers; either unrestricted overlay adds the runner as a
-third. The OpenShift OAuth proxy is the
+The current Pod contains the API, OAuth proxy, and tokenless runner. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
-`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
-highest matching elevated role from deployment-configured OpenShift Group lists
-or, when delegated access is enabled, defaults an otherwise unmatched authenticated user to
-Delegated Operator (Viewer when disabled), renders the dashboard,
-and persists schema state in SQLite on the `podpilot-data` PVC. An init container
+`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves Investigator or Read-Write
+from deployment-configured OpenShift groups, resolves configuration administration independently,
+and denies unmatched users. The landing route redirects to Ask; Cluster Health is not active.
+The API persists schema state in SQLite on the `podpilot-data` PVC. An init container
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.
 
@@ -221,13 +219,12 @@ Schema-validated interpretation is displayed separately from deterministic facts
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
-The Ask-only cluster registry stores API origins, tags, lifecycle state, TLS policy,
-and opaque credential keys in SQLite. Remote bearer tokens live under those keys in
-the resourceName-restricted `ai-ops/podpilot-cluster-credentials` Secret. The runtime
-cluster is registered automatically and continues to use its projected service-account
-identity; an Approver may update only its display name and tags. An Approver can create,
-update, test, and disable remote entries; disabling removes the usable token but retains
-metadata and historical attribution.
+The Ask-only cluster registry stores API origins, environment, ownership/visibility,
+tags, lifecycle state, and per-cluster TLS policy in SQLite. Shared entries are managed
+by configuration administrators; each user may also maintain private entries. The
+registry never stores a remote-cluster credential. At conversation connect time the API
+exchanges the user's environment credentials with every selected cluster and keeps only
+the resulting tokens in the in-memory delegated-session vault.
 
 Every standalone Ask conversation stores an immutable ordered selection of one to ten
 cluster IDs. Changing selection starts another conversation and preserves the old session.
@@ -237,7 +234,7 @@ and attributes every observation, read record, citation, limitation, and compari
 source cluster. A failed or disabled target becomes a cluster-specific limitation instead
 of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
 health, alert investigations, or remediation in this release. Typed Ask metrics use each
-remote cluster's registered bearer token: PodPilot discovers the cluster's
+remote cluster's delegated user token: PodPilot discovers the cluster's
 `openshift-monitoring/thanos-querier` Route through its Kubernetes API, then queries that
 authenticated Route through the same bounded metrics adapter used by the runtime cluster.
 Aggregate application-log rankings similarly discover the conventional
