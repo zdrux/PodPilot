@@ -514,8 +514,12 @@ and pipes the OpenRouter key over stdin to the API container. The bootstrap modu
 `openrouter_api_key` in the existing resourceName-restricted model credential Secret, activates the
 fixed profile, and probes Chat Completions/tool-calling support. It never prints the key.
 
-Unrestricted turns expose `list_resources`, `search_resources`, `query_audit_events`, and
-`query_metrics` as model-selected helper tools alongside `execute_shell`. They never execute
+Unrestricted turns expose `list_resources`, `search_resources`, `http_probe`,
+`query_audit_events`, and `query_metrics` as model-selected helper tools alongside
+`execute_shell`. The probe performs a bounded unauthenticated HEAD or GET for an exact observed
+HTTP(S) URL; an optional connect address preserves the URL hostname for Host and TLS SNI, and TLS
+verification remains enabled unless the model explicitly selects a scoped HTTPS trust diagnostic.
+They never execute
 automatically and never decide whether the turn is complete. Their normalized observations return
 to the model as tool results, are persisted as evidence, and can drive native tables and metric
 cards. The agent interprets the results and decides whether to invoke another helper, use the shell

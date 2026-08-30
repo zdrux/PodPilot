@@ -2214,60 +2214,77 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 },
             }
 
+        list_resources_tool = collector_tool(
+            "list_resources",
+            "Collect a bounded Kubernetes/OpenShift resource inventory. This helper returns "
+            "evidence to you and never ends the investigation.",
+            ("resource", "api_version", "kind", "namespace", "label_selector", "limit"),
+            ("resource", "api_version", "kind"),
+        )
+        search_resources_tool = collector_tool(
+            "search_resources",
+            "Search a Kubernetes/OpenShift object's exact dot-separated field path using a "
+            "server-bounded scan. Prefer this over dumping a resource list and grepping it. "
+            "The result returns to you and never ends the investigation.",
+            (
+                "resource", "api_version", "kind", "namespace", "label_selector",
+                "match_field", "match_value", "match_operator", "limit",
+            ),
+            ("resource", "api_version", "kind", "match_field", "match_value"),
+        )
+        http_probe_tool = collector_tool(
+            "http_probe",
+            "Run a bounded, unauthenticated HTTP(S) connectivity, TLS, and response probe from "
+            "PodPilot. Use an exact absolute URL grounded in the operator request or collected "
+            "evidence. connect_host may target an observed IP or hostname while preserving the "
+            "URL hostname for HTTP Host and TLS SNI. TLS verification defaults to true; disable "
+            "it only for a scoped HTTPS trust diagnosis, and never treat an unverified success "
+            "as proof of server identity. This helper returns evidence to you and never ends "
+            "the investigation.",
+            ("url", "connect_host", "method", "tls_verify"),
+            ("url",),
+        )
+        audit_tool = collector_tool(
+            "query_audit_events",
+            "Query the registered, bounded Loki audit-log source. Kubernetes Events and "
+            "events.audit.k8s.io are not cluster audit logs. Use this helper for audit actors, "
+            "operations, resources, namespaces, and outcomes. Its result returns to you and "
+            "never ends the investigation.",
+            (
+                "namespace", "audit_username", "audit_resource", "audit_operation_scope",
+                "audit_outcome", "audit_search_until_limit", "range_seconds", "limit",
+            ),
+            ("audit_operation_scope", "audit_outcome"),
+        )
+        metric_tool = collector_tool(
+            "query_metrics",
+            "Query a registered bounded metric through PodPilot's Thanos or Loki metric "
+            "adapter. Use this before improvising raw PromQL or LogQL; the helper selects the "
+            "correct backend for the metric. Its result returns to you and never ends the "
+            "investigation.",
+            (
+                "metric", "metric_scope", "api_version", "kind", "namespace", "name",
+                "container", "metric_operation", "metric_statistic", "metric_group_by",
+                "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
+                "limit",
+            ),
+            ("metric", "metric_scope"),
+        )
         tools = [
             shell_tool,
-            collector_tool(
-                "list_resources",
-                "Collect a bounded Kubernetes/OpenShift resource inventory. This helper returns "
-                "evidence to you and never ends the investigation.",
-                ("resource", "api_version", "kind", "namespace", "label_selector", "limit"),
-                ("resource", "api_version", "kind"),
-            ),
-            collector_tool(
-                "search_resources",
-                "Search a Kubernetes/OpenShift object's exact dot-separated field path using a "
-                "server-bounded scan. Prefer this over dumping a resource list and grepping it. "
-                "The result returns to you and never ends the investigation.",
-                (
-                    "resource", "api_version", "kind", "namespace", "label_selector",
-                    "match_field", "match_value", "match_operator", "limit",
-                ),
-                ("resource", "api_version", "kind", "match_field", "match_value"),
-            ),
-            collector_tool(
-                "query_audit_events",
-                "Query the registered, bounded Loki audit-log source. Kubernetes Events and "
-                "events.audit.k8s.io are not cluster audit logs. Use this helper for audit actors, "
-                "operations, resources, namespaces, and outcomes. Its result returns to you and "
-                "never ends the investigation.",
-                (
-                    "namespace", "audit_username", "audit_resource", "audit_operation_scope",
-                    "audit_outcome", "audit_search_until_limit", "range_seconds", "limit",
-                ),
-                ("audit_operation_scope", "audit_outcome"),
-            ),
-            collector_tool(
-                "query_metrics",
-                "Query a registered bounded metric through PodPilot's Thanos or Loki metric "
-                "adapter. Use this before improvising raw PromQL or LogQL; the helper selects the "
-                "correct backend for the metric. Its result returns to you and never ends the "
-                "investigation.",
-                (
-                    "metric", "metric_scope", "api_version", "kind", "namespace", "name",
-                    "container", "metric_operation", "metric_statistic", "metric_group_by",
-                    "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
-                    "limit",
-                ),
-                ("metric", "metric_scope"),
-            ),
+            list_resources_tool,
+            search_resources_tool,
+            http_probe_tool,
+            audit_tool,
+            metric_tool,
         ]
-        audit_parameters = tools[3]["function"]["parameters"]["properties"]
+        audit_parameters = audit_tool["function"]["parameters"]["properties"]
         audit_parameters["audit_search_until_limit"]["description"] = (
             "Set true only when the operator explicitly asks for a last/top N result so the "
             "bounded reader may widen backward until N matches or its policy ceiling. Keep false "
             "for vague 'recent' requests."
         )
-        metric_parameters = tools[4]["function"]["parameters"]["properties"]
+        metric_parameters = metric_tool["function"]["parameters"]["properties"]
         metric_parameters["range_seconds"]["default"] = 300
         metric_parameters["range_seconds"]["description"] = (
             "Requested metric period in seconds. Use 300 when the operator supplies no period; "

@@ -8203,6 +8203,16 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
             },
         ),
         (
+            "http_probe",
+            {
+                "cluster_id": SYSTEM_CLUSTER_ID,
+                "url": "https://checkout.az.cibc.com/health",
+                "connect_host": "10.0.0.10",
+                "method": "GET",
+                "tls_verify": True,
+            },
+        ),
+        (
             "query_audit_events",
             {
                 "cluster_id": SYSTEM_CLUSTER_ID,
@@ -8275,6 +8285,13 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
                         "fields": {"spec.host": "checkout.az.cibc.com"},
                     }],
                 }
+            elif intent.tool == "http_probe":
+                data = {
+                    "url": intent.url, "connectHost": intent.connect_host,
+                    "method": intent.method, "outcome": "succeeded",
+                    "statusCode": 200, "tlsVerificationRequested": intent.tls_verify,
+                    "tls": {"verified": True, "version": "TLSv1.3"},
+                }
             elif intent.tool == "query_audit_events":
                 data = {
                     "namespace": intent.namespace, "username": intent.audit_username,
@@ -8337,12 +8354,13 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         )
 
     assert [intent.tool for intent in explorer.calls] == [
-        "search_resources", "query_audit_events", "query_metrics",
+        "search_resources", "http_probe", "query_audit_events", "query_metrics",
     ]
-    assert len(provider.agent_messages) == 4
+    assert len(provider.agent_messages) == 5
     assert "checkout.az.cibc.com" in json.dumps(provider.agent_messages[1])
-    assert "druciare-adm" in json.dumps(provider.agent_messages[2])
-    assert "cpu_usage" in json.dumps(provider.agent_messages[3])
+    assert "TLSv1.3" in json.dumps(provider.agent_messages[2])
+    assert "druciare-adm" in json.dumps(provider.agent_messages[3])
+    assert "cpu_usage" in json.dumps(provider.agent_messages[4])
     assert "completion does not mean the investigation is complete" in json.dumps(
         provider.agent_messages[1]
     )
@@ -8354,10 +8372,10 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
             AdHocMessage.role == "assistant"
         ))
         assert conversation is not None
-        assert len(json.loads(conversation.evidence_json)) == 3
+        assert len(json.loads(conversation.evidence_json)) == 4
         assert assistant is not None
         assert assistant.answer_mode == "evidence_based"
-        assert len(json.loads(assistant.citations_json)) == 3
+        assert len(json.loads(assistant.citations_json)) == 4
     engine.dispose()
 
 

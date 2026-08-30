@@ -8493,6 +8493,10 @@ def create_app(
                 "selected cluster when the operator asks for a multi-cluster result. Never place a "
                 "bearer token, kubeconfig, or credential in a command. "
                 "Use search_resources for requested object-field filters instead of dumping a full list. "
+                "Use http_probe for an exact observed HTTP(S) endpoint. connect_host preserves the "
+                "URL hostname as HTTP Host and TLS SNI while connecting to an observed address. Keep "
+                "TLS verification enabled unless the operator's investigation specifically requires "
+                "a scoped trust-bypass comparison; an unverified success does not prove identity. "
                 "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
                 "not the cluster audit log. Use query_metrics for registered metrics before improvising "
                 "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. A typed "
@@ -8718,7 +8722,7 @@ def create_app(
             for tool_call in step.tool_calls:
                 if tool_call.name in {
                     "list_resources", "search_resources",
-                    "query_audit_events", "query_metrics",
+                    "http_probe", "query_audit_events", "query_metrics",
                 }:
                     collector_cluster_id = ""
                     collector_cluster_name = ""

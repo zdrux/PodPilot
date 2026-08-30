@@ -53,7 +53,7 @@ log interpretation.
 
 The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
 agent path. The Chat Completions model can select typed `list_resources`, `search_resources`,
-`query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
+`http_probe`, `query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
 shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
@@ -81,7 +81,7 @@ KafkaTopic inventory follow-ups bind a named Kafka CR from prior evidence to its
 namespace and compile the `strimzi.io/cluster=<name>` selector through the live resource catalog;
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
-The API then sends OpenAI-compatible Chat Completions requests with the four typed read helpers and
+The API then sends OpenAI-compatible Chat Completions requests with the five typed read helpers and
 one `execute_shell` function.
 Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
 use the projected service-account identity. For a registered remote cluster the API resolves that

@@ -63,8 +63,8 @@ security boundary. The base and standard `remote-poc` overlays remain guarded. T
 overlay adds no RBAC of its own and therefore exercises every permission already granted to
 `podpilot-investigator` on that target cluster.
 
-The unrestricted loop exposes registered resource-list, object-field-search, metric, and audit
-collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
+The unrestricted loop exposes registered resource-list, object-field-search, HTTP-probe, metric,
+and audit collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
 bounded presentation. The API never invokes them merely because a classifier or enrichment pack
 recognized a request. Their observations return to the model, which alone chooses the next tool or

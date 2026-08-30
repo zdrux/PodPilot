@@ -393,17 +393,24 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
         "execute_shell", "list_resources", "search_resources",
-        "query_audit_events", "query_metrics",
+        "http_probe", "query_audit_events", "query_metrics",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
     assert "cluster_id" in parameters["properties"]
-    audit_tool = request["tools"][3]["function"]
+    tools_by_name = {
+        item["function"]["name"]: item["function"] for item in request["tools"]
+    }
+    probe_tool = tools_by_name["http_probe"]
+    assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
+    assert "Host and TLS SNI" in probe_tool["description"]
+    assert "never ends the investigation" in probe_tool["description"]
+    audit_tool = tools_by_name["query_audit_events"]
     assert "Kubernetes Events" in audit_tool["description"]
     assert audit_tool["parameters"]["required"] == [
         "cluster_id", "audit_operation_scope", "audit_outcome",
     ]
-    metric_tool = request["tools"][4]["function"]
+    metric_tool = tools_by_name["query_metrics"]
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",
     ]
