@@ -3899,6 +3899,13 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
     conversation_id = "00000000-0000-0000-0000-000000000181"
     evidence_id = "metric-log-volume-1"
     fallback_text = "Fallback metric ranking remains available."
+    duplicate_row = "markdown-only-namespace"
+    answer = (
+        "## Top namespaces\n\n"
+        "| Rank | Namespace | Volume |\n|---:|---|---:|\n"
+        f"| 1 | {duplicate_row} | 1 MiB |\n\n"
+        f"{fallback_text}"
+    )
     evidence = [{
         "id": evidence_id,
         "tool": "query_metrics",
@@ -3940,7 +3947,7 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
             conversation_id=conversation_id,
             role="assistant",
             actor=None,
-            content=fallback_text,
+            content=answer,
             answer_mode="evidence_based",
             citations_json=json.dumps([evidence_id]),
             tool_activity_json=json.dumps({
@@ -3958,6 +3965,8 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         assert "Observed metric" in rendered.text
         assert "Top Application-Log Volume by Namespace" in rendered.text
         assert fallback_text in rendered.text
+        assert duplicate_row not in rendered.text
+        assert 'class="answer-table-result"' not in rendered.text
 
         engine = build_engine(settings)
         with Session(engine) as db_session:
@@ -3974,6 +3983,8 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         assert fallback.status_code == 200
         assert "Observed metric" not in fallback.text
         assert fallback_text in fallback.text
+        assert duplicate_row in fallback.text
+        assert 'class="answer-table-result"' in fallback.text
 
 
 def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
@@ -12063,6 +12074,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert ".ask-page .ask-session-header" in styles
     assert "padding-inline: 20px" in styles
     assert ".answer-table-result { margin: 10px 0 14px; }" in styles
+    assert ".metric-ranking-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px;" in styles
+    assert ".metric-table-wrap { overflow-x: auto; border-radius: 8px; background: rgba(8, 15, 26, .42); }" in styles
+    assert ".metric-ranking-table th { color: var(--subtle); font-size: 11px;" in styles
+    assert ".metric-ranking-table td { color: #e8f3fb; }" in styles
+    assert ".metric-ranking-table code { color: #e8f3fb; font-size: 13px;" in styles
     assert "new URLSearchParams(new FormData(adhocForm))" in script
     assert 'requestBody.set("message", question)' in script
     assert "rawResponseToggle.disabled = true" in script

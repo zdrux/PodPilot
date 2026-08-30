@@ -504,17 +504,18 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .metric-trend-legend .metric-trend-key-3 span { background: #a78bfa; }
 .metric-trend-legend .metric-trend-key-4 span { background: #f472b6; }
 .metric-trend-legend .metric-trend-key-5 span { background: #facc15; }
-.metric-table-wrap { overflow-x: auto; }
-.metric-ranking-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
-.metric-ranking-table th, .metric-ranking-table td { padding: 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
-.metric-ranking-table th { color: var(--subtle); font-size: 9px; text-transform: uppercase; }
-.metric-ranking-table code { color: #cbd8e5; font-size: 10px; }
+.metric-table-wrap { overflow-x: auto; border-radius: 8px; background: rgba(8, 15, 26, .42); }
+.metric-ranking-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.metric-ranking-table th, .metric-ranking-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.metric-ranking-table th { color: var(--subtle); font-size: 11px; text-transform: uppercase; }
+.metric-ranking-table td { color: #e8f3fb; }
+.metric-ranking-table code { color: #e8f3fb; font-size: 13px; }
 .metric-current { min-width: 190px; }
 .metric-current progress { width: 108px; height: 8px; margin-right: 9px; border: 0; border-radius: 999px; vertical-align: middle; overflow: hidden; background: #101a28; }
 .metric-current progress::-webkit-progress-bar { background: #101a28; }
 .metric-current progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, #1daec3, var(--cyan)); }
 .metric-current progress::-moz-progress-bar { border-radius: 999px; background: linear-gradient(90deg, #1daec3, var(--cyan)); }
-.metric-current strong { color: #e6f6f8; font-size: 11px; }
+.metric-current strong { color: #f2fbff; font-size: 13px; }
 .resource-result { margin: 14px 0; padding: 14px; border: 1px solid rgba(69, 212, 232, .22); border-radius: 10px; background: rgba(69, 212, 232, .035); }
 .resource-result-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 10px; }
 .resource-result-heading h3 { margin: 7px 0 3px; font-size: 14px; }
@@ -756,8 +757,9 @@ body { font-size: 15px; }
 .chat-markdown { font-size: 15px; line-height: 1.72; }
 .answer-evidence > summary { font-size: 12px; }
 .answer-limitations li { font-size: 12px; line-height: 1.55; }
-.metric-result-heading p, .metric-result > small, .metric-ranking-table { font-size: 12px; }
-.metric-ranking-table th { font-size: 10px; }
+.metric-result-heading p, .metric-result > small { font-size: 12px; }
+.metric-ranking-table { font-size: 13px; }
+.metric-ranking-table th { font-size: 11px; }
 .chat-form label { font-size: 12px; }
 .chat-form textarea { min-height: 96px; font-size: 15px; }
 .chat-form small { font-size: 11px; line-height: 1.45; }

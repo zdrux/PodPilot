@@ -10359,8 +10359,11 @@ def create_app(
             if row.role == "assistant":
                 answer_blocks = split_markdown_tables(row.content)
                 if (
-                    resource_presentation is not None
-                    and resource_presentation.get("suppress_markdown_table") is True
+                    prefer_metric_card
+                    or (
+                        resource_presentation is not None
+                        and resource_presentation.get("suppress_markdown_table") is True
+                    )
                 ):
                     answer_blocks = [
                         block for block in answer_blocks
