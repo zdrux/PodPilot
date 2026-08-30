@@ -1196,7 +1196,10 @@ def _collection_object_analysis_requested(
         if inquiry.cardinality == "exact_one" or inquiry.object_name:
             return False
         if inquiry.mode == "inventory" and not inquiry.needs_object_details:
-            return False
+            # The classifier can reasonably call a comparison an inventory request
+            # because it starts by locating a collection. The operator's explicit
+            # request for configuration/state details is the stronger signal.
+            return _question_requires_object_details(question)
         if inquiry.cardinality == "collection" and inquiry.needs_object_details:
             return True
         if not inquiry.resource_query:
@@ -1560,6 +1563,40 @@ def _deterministic_configuration_comparison_answer(
         "content": "\n".join(lines),
         "citations": list(dict.fromkeys(citations)),
         "limitations": limitations,
+    }
+
+
+def _deterministic_configuration_comparison_unavailable_answer(
+    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
+) -> dict[str, object]:
+    """Refuse an equality claim when exact multi-cluster specs are incomplete."""
+
+    current_ids = {
+        str(evidence_id)
+        for entry in activity
+        for evidence_id in (entry.get("evidence_ids") or [])
+    }
+    citations = [
+        str(item.get("id"))
+        for item in evidence
+        if (
+            str(item.get("id") or "") in current_ids
+            and item.get("tool") in {"list_resources", "search_resources", "get_resource"}
+        )
+    ]
+    return {
+        "answer_mode": "insufficient_evidence",
+        "content": (
+            "## Configuration comparison incomplete\n\n"
+            "PodPilot found inventory evidence, but it did not obtain matching exact-object "
+            "configuration evidence from every selected cluster. The available evidence cannot "
+            "establish that the specifications are identical or identify all differences."
+        ),
+        "citations": list(dict.fromkeys(citations)),
+        "limitations": [
+            "Exact GET evidence for matching objects on every selected cluster is required before "
+            "PodPilot can compare complete sanitized specifications."
+        ],
     }
 
 
@@ -8262,7 +8299,11 @@ def _semantic_resource_read_plan(
     exact_one = (
         generic_exact_diagnostic
         or inquiry.cardinality == "exact_one"
-        or inquiry.operation in {"object_fields", "configuration_guidance"}
+        or inquiry.operation == "object_fields"
+        or (
+            inquiry.operation == "configuration_guidance"
+            and inquiry.cardinality != "collection"
+        )
     )
     if exact_one:
         if not name:
@@ -10913,12 +10954,16 @@ def create_app(
                     total_byte_limit=8_000,
                     prioritize_object_details=True,
                 )
+                configuration_comparison_required = (
+                    len(selected_clusters) > 1
+                    and _collection_object_analysis_requested(source_question, inquiry)
+                )
                 object_comparisons = (
                     _resource_configuration_comparisons(
                         evidence=answer_evidence,
                         activity=activity,
                     )
-                    if _collection_object_analysis_requested(source_question, inquiry)
+                    if configuration_comparison_required
                     else []
                 )
                 analysis_coverage = (
@@ -11023,7 +11068,16 @@ def create_app(
                         )
                         if object_comparisons else None
                     )
-                    if comparison_issue is not None:
+                    if configuration_comparison_required and not object_comparisons:
+                        validated = _deterministic_configuration_comparison_unavailable_answer(
+                            evidence=answer_evidence,
+                            activity=activity,
+                        )
+                        limitations.append(
+                            "PodPilot did not receive matching exact-object configuration evidence "
+                            "from every selected cluster, so it withheld the agent's comparison."
+                        )
+                    elif comparison_issue is not None:
                         validated = _deterministic_configuration_comparison_answer(
                             object_comparisons
                         )

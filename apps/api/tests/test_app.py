@@ -34,6 +34,7 @@ from podpilot_api.main import (
     _dedupe_limitations,
     _deterministic_evidence_fallback_answer,
     _deterministic_configuration_comparison_answer,
+    _deterministic_configuration_comparison_unavailable_answer,
     _deterministic_audit_answer,
     _deterministic_access_review_answer,
     _deterministic_inventory_answer,
@@ -193,6 +194,46 @@ def test_collection_analysis_expands_only_small_complete_inventory() -> None:
     ]
 
 
+def test_explicit_comparison_overrides_plain_inventory_classification() -> None:
+    inquiry = InquirySemantics(
+        mode="inventory", operation="inventory", cardinality="collection",
+        resource_query="ClusterLogForwarder", needs_object_details=False,
+        evidence_goal="Locate ClusterLogForwarders.",
+    )
+
+    assert _collection_object_analysis_requested(
+        "Compare the ClusterLogForwarder on each cluster and summarize the differences.",
+        inquiry,
+    ) is True
+
+
+def test_collection_configuration_guidance_compiles_inventory_for_exact_fanout() -> None:
+    compiled = _semantic_resource_read_plan(
+        InquirySemantics(
+            mode="explain", operation="configuration_guidance",
+            cardinality="collection", answer_goal="configuration",
+            resource_query="ClusterLogForwarder", needs_object_details=False,
+            evidence_goal="Compare ClusterLogForwarder configurations.",
+        ),
+        resource_catalog=[{
+            "resource": "clusterlogforwarders.observability.openshift.io",
+            "apiVersion": "observability.openshift.io/v1",
+            "kind": "ClusterLogForwarder", "namespaced": True,
+            "verbs": ["get", "list"],
+        }],
+        question="Compare the ClusterLogForwarder on each cluster.",
+        conversation=[], inventory_limit=500,
+    )
+
+    assert compiled is not None
+    assert compiled[0].intents == [ReadIntent(
+        tool="list_resources",
+        resource="clusterlogforwarders.observability.openshift.io",
+        api_version="observability.openshift.io/v1",
+        kind="ClusterLogForwarder", limit=500,
+    )]
+
+
 def test_collection_analysis_does_not_sample_large_inventory() -> None:
     observations = (AdHocObservation(
         id="cluster-namespaces", tool="list_resources",
@@ -283,8 +324,8 @@ def test_configuration_collection_uses_internal_list_then_exact_get_when_list_to
         conversation=[], existing_evidence=[],
         inquiry=InquirySemantics(
             capability="resource_inventory", mode="inventory", operation="inventory",
-            cardinality="collection", answer_goal="configuration",
-            resource_query="ClusterLogForwarder", needs_object_details=True,
+            cardinality="collection", answer_goal="identifiers",
+            resource_query="ClusterLogForwarder", needs_object_details=False,
             evidence_goal="Compare every ClusterLogForwarder specification.",
         ),
     ))
@@ -351,6 +392,24 @@ def test_exact_cluster_configuration_comparison_detects_structural_differences()
     assert rendered["citations"] == ["central-detail", "east-detail"]
     assert "The specifications differ at 2 field path(s)." in rendered["content"]
     assert "`spec.outputs[0].name`" in rendered["content"]
+
+
+def test_incomplete_exact_configuration_comparison_refuses_inventory_equality() -> None:
+    rendered = _deterministic_configuration_comparison_unavailable_answer(
+        evidence=[
+            {"id": "central-list", "tool": "list_resources"},
+            {"id": "east-list", "tool": "list_resources"},
+            {"id": "central-get", "tool": "get_resource"},
+        ],
+        activity=[{
+            "status": "succeeded",
+            "evidence_ids": ["central-list", "east-list", "central-get"],
+        }],
+    )
+
+    assert rendered["answer_mode"] == "insufficient_evidence"
+    assert rendered["citations"] == ["central-list", "east-list", "central-get"]
+    assert "cannot establish that the specifications are identical" in rendered["content"]
 
 
 def test_resource_analysis_coverage_requires_details_in_final_model_context() -> None:
