@@ -173,7 +173,7 @@ def _read_only_proxy_allows(method: str, remote_path: str) -> bool:
 
 async def _build_delegated_read_only_explorer(
     *, proxy_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
-    telemetry_tls_verify: bool, settings: Settings,
+    telemetry_tls_verify: bool, settings: Settings, telemetry_is_system: bool = False,
 ) -> KubernetesReadOnlyExplorer:
     """Build a brokered explorer without blocking the broker's ASGI event loop."""
 
@@ -184,56 +184,88 @@ async def _build_delegated_read_only_explorer(
         token_provider=token_provider,
         telemetry_tls_verify=telemetry_tls_verify,
         settings=settings,
+        telemetry_is_system=telemetry_is_system,
     )
 
 
 def _remote_observability_adapters(
     *, api_url: str, tls_verify: bool, settings: Settings,
     token: str | None = None, token_provider: Callable[[], str] | None = None,
+    system_cluster: bool = False,
 ) -> dict[str, object]:
-    """Build the same bounded monitoring and logging readers for one remote identity."""
+    """Build bounded telemetry readers using the selected cluster identity."""
 
     credential: dict[str, object] = (
         {"token_provider": token_provider}
         if token_provider is not None else
         {"token": token}
     )
+    if system_cluster:
+        metric_source = ThanosQueryClient(
+            base_url=settings.thanos_url,
+            ca_path=settings.service_ca_path,
+            timeout_seconds=settings.thanos_timeout_seconds,
+            max_series=settings.thanos_max_series,
+            max_points_per_series=settings.adhoc_metrics_max_points_per_series,
+            max_response_bytes=settings.adhoc_metrics_max_response_bytes,
+            **credential,
+        )
+        log_metric_source = LokiQueryClient(
+            base_url=settings.loki_url,
+            ca_path=settings.service_ca_path,
+            timeout_seconds=settings.loki_timeout_seconds,
+            max_series=settings.loki_max_series,
+            **credential,
+        )
+        audit_source = LokiQueryClient(
+            base_url=settings.loki_url,
+            tenant="audit",
+            ca_path=settings.service_ca_path,
+            timeout_seconds=settings.loki_timeout_seconds,
+            max_series=settings.loki_max_series,
+            max_response_bytes=settings.adhoc_audit_max_response_bytes,
+            **credential,
+        )
+    else:
+        metric_source = ThanosQueryClient.for_remote_cluster(
+            api_url=api_url,
+            api_tls_verify=tls_verify,
+            timeout_seconds=settings.thanos_timeout_seconds,
+            max_series=settings.thanos_max_series,
+            max_points_per_series=settings.adhoc_metrics_max_points_per_series,
+            max_response_bytes=settings.adhoc_metrics_max_response_bytes,
+            **credential,
+        )
+        log_metric_source = LokiQueryClient.for_remote_cluster(
+            api_url=api_url,
+            api_tls_verify=tls_verify,
+            route_name=settings.loki_route_name,
+            timeout_seconds=settings.loki_timeout_seconds,
+            max_series=settings.loki_max_series,
+            **credential,
+        )
+        audit_source = LokiQueryClient.for_remote_cluster(
+            api_url=api_url,
+            api_tls_verify=tls_verify,
+            route_name=settings.loki_route_name,
+            tenant="audit",
+            timeout_seconds=settings.loki_timeout_seconds,
+            max_series=settings.loki_max_series,
+            max_response_bytes=settings.adhoc_audit_max_response_bytes,
+            **credential,
+        )
     return {
         "metric_reader": BoundedMetricTrendReader(
-            ThanosQueryClient.for_remote_cluster(
-                api_url=api_url,
-                api_tls_verify=tls_verify,
-                timeout_seconds=settings.thanos_timeout_seconds,
-                max_series=settings.thanos_max_series,
-                max_points_per_series=settings.adhoc_metrics_max_points_per_series,
-                max_response_bytes=settings.adhoc_metrics_max_response_bytes,
-                **credential,
-            ),
+            metric_source,
             max_range_seconds=settings.adhoc_metrics_max_range_seconds,
             max_points_per_series=settings.adhoc_metrics_max_points_per_series,
         ),
         "log_metric_reader": BoundedLogVolumeReader(
-            LokiQueryClient.for_remote_cluster(
-                api_url=api_url,
-                api_tls_verify=tls_verify,
-                route_name=settings.loki_route_name,
-                timeout_seconds=settings.loki_timeout_seconds,
-                max_series=settings.loki_max_series,
-                **credential,
-            ),
+            log_metric_source,
             max_range_seconds=settings.adhoc_logs_max_range_seconds,
         ),
         "audit_reader": BoundedAuditEventReader(
-            LokiQueryClient.for_remote_cluster(
-                api_url=api_url,
-                api_tls_verify=tls_verify,
-                route_name=settings.loki_route_name,
-                tenant="audit",
-                timeout_seconds=settings.loki_timeout_seconds,
-                max_series=settings.loki_max_series,
-                max_response_bytes=settings.adhoc_audit_max_response_bytes,
-                **credential,
-            ),
+            audit_source,
             max_range_seconds=settings.adhoc_audit_max_range_seconds,
         ),
     }
@@ -241,7 +273,7 @@ def _remote_observability_adapters(
 
 def _make_delegated_read_only_explorer(
     *, api_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
-    telemetry_tls_verify: bool, settings: Settings,
+    telemetry_tls_verify: bool, settings: Settings, telemetry_is_system: bool = False,
 ) -> KubernetesReadOnlyExplorer:
     """Build one delegated reader; only its Kubernetes capability varies by mode."""
 
@@ -262,6 +294,7 @@ def _make_delegated_read_only_explorer(
             token_provider=token_provider,
             tls_verify=telemetry_tls_verify,
             settings=settings,
+            system_cluster=telemetry_is_system,
         ),
     )
 
@@ -7517,7 +7550,7 @@ def _normalize_agent_collector_arguments(
         return normalized
 
     operation_aliases = {
-        "*": "all", "any": "all", "all": "all",
+        "*": "all", ".*": "all", "any": "all", "all": "all",
         "delete": "deletes", "deleted": "deletes", "deletion": "deletes",
         "deletions": "deletes", "deletes": "deletes",
         "mutation": "mutations", "mutations": "mutations",
@@ -7525,7 +7558,7 @@ def _normalize_agent_collector_arguments(
         "changes": "mutations",
     }
     outcome_aliases = {
-        "*": "all", "any": "all", "all": "all",
+        "*": "all", ".*": "all", "any": "all", "all": "all",
         "success": "successful", "succeeded": "successful",
         "successful": "successful", "allowed": "successful",
         "failure": "failed", "failures": "failed", "error": "failed",
@@ -10643,6 +10676,7 @@ def create_app(
                                 token_provider=token_provider,
                                 telemetry_tls_verify=cluster.tls_verify,
                                 settings=app_settings,
+                                telemetry_is_system=cluster.is_system,
                             )
                         )
                     # In delegated mode the agent owns discovery from the first action.
@@ -10807,6 +10841,7 @@ def create_app(
                                 token_provider=delegated_token_provider,
                                 telemetry_tls_verify=selected_cluster.tls_verify,
                                 settings=app_settings,
+                                telemetry_is_system=selected_cluster.is_system,
                             )
                         except Exception as exc:
                             diagnostic_ref = uuid4().hex[:12]

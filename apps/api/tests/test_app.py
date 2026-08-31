@@ -25,6 +25,7 @@ from podpilot_api.main import (
     _bind_plan_log_intents,
     _bounded_detail_fanout,
     _build_delegated_read_only_explorer,
+    _make_delegated_read_only_explorer,
     _classify_ad_hoc_inquiry,
     _collection_object_analysis_requested,
     _collect_bounded_cluster_reads,
@@ -869,6 +870,79 @@ def test_delegated_read_only_explorer_discovery_runs_off_event_loop(
 
     assert explorer is not None
     assert constructor_thread and constructor_thread[0] != event_loop_thread
+
+
+def test_delegated_system_telemetry_uses_internal_services(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    constructed: dict[str, list[dict[str, object]]] = {
+        "thanos": [], "loki": [], "explorer": [], "remote": [],
+    }
+
+    class FakeThanosClient:
+        def __init__(self, **kwargs):
+            constructed["thanos"].append(kwargs)
+
+        @classmethod
+        def for_remote_cluster(cls, **kwargs):
+            constructed["remote"].append(kwargs)
+            return cls(**kwargs)
+
+    class FakeLokiClient:
+        def __init__(self, **kwargs):
+            constructed["loki"].append(kwargs)
+
+        @classmethod
+        def for_remote_cluster(cls, **kwargs):
+            constructed["remote"].append(kwargs)
+            return cls(**kwargs)
+
+    def build_explorer(**kwargs):
+        constructed["explorer"].append(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("podpilot_api.main.ThanosQueryClient", FakeThanosClient)
+    monkeypatch.setattr("podpilot_api.main.LokiQueryClient", FakeLokiClient)
+    monkeypatch.setattr(
+        KubernetesReadOnlyExplorer, "for_remote_cluster", build_explorer,
+    )
+    service_ca = tmp_path / "service-ca.crt"
+    token_provider = lambda: "delegated-user-token"
+    settings = Settings(
+        thanos_url="https://thanos.internal.test",
+        loki_url="https://loki.internal.test/api/logs/v1/application",
+        service_ca_path=service_ca,
+    )
+
+    explorer = _make_delegated_read_only_explorer(
+        api_url="http://127.0.0.1:8080/internal/delegated-proxy/capability",
+        telemetry_api_url="in-cluster://service-account",
+        token_provider=token_provider,
+        telemetry_tls_verify=True,
+        telemetry_is_system=True,
+        settings=settings,
+    )
+
+    assert explorer is not None
+    assert constructed["remote"] == []
+    assert constructed["thanos"] == [{
+        "base_url": "https://thanos.internal.test",
+        "ca_path": service_ca,
+        "timeout_seconds": settings.thanos_timeout_seconds,
+        "max_series": settings.thanos_max_series,
+        "max_points_per_series": settings.adhoc_metrics_max_points_per_series,
+        "max_response_bytes": settings.adhoc_metrics_max_response_bytes,
+        "token_provider": token_provider,
+    }]
+    assert [item["base_url"] for item in constructed["loki"]] == [
+        "https://loki.internal.test/api/logs/v1/application",
+        "https://loki.internal.test/api/logs/v1/application",
+    ]
+    assert [item.get("tenant", "application") for item in constructed["loki"]] == [
+        "application", "audit",
+    ]
+    assert all(item["ca_path"] == service_ca for item in constructed["loki"])
+    assert all(item["token_provider"] is token_provider for item in constructed["loki"])
 
 
 def test_delegated_access_question_routes_to_authorization_reviews() -> None:
@@ -9715,12 +9789,19 @@ def test_unrestricted_audit_argument_normalization_is_broad_and_error_safe() -> 
         "audit_outcome": "any",
     })
     defaults = _normalize_agent_collector_arguments("query_audit_events", {})
+    regex_wildcards = _normalize_agent_collector_arguments("query_audit_events", {
+        "audit_operation_scope": ".*", "audit_outcome": ".*",
+    })
 
     assert aliases == {
         "audit_operation_scope": "deletes",
         "audit_outcome": "all",
     }
     assert defaults == {
+        "audit_operation_scope": "all",
+        "audit_outcome": "all",
+    }
+    assert regex_wildcards == {
         "audit_operation_scope": "all",
         "audit_outcome": "all",
     }
