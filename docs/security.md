@@ -156,6 +156,11 @@ read-only proxy capability; Action commands receive the action capability. The r
 never receive the user's token. This makes the behavioral distinction read versus read-write rather
 than guarded planner versus unrestricted agent. Legacy non-delegated deployments may still select
 the older guarded planner with `PODPILOT_AGENT_MODE`, but it is not the deployed delegated workflow.
+The API assigns each shell execution a random runner request ID before dispatch. An owner-requested
+Ask cancellation may send only that identifier over Pod loopback to terminate the matching process
+group; it cannot target another command by cluster name or expose the delegated token. Cancellation
+does not reverse an API write that reached Kubernetes before process termination, so the UI and
+persisted cancellation result state this limitation explicitly.
 
 The shared agent loop exposes registered HTTP-probe, metric, and audit collectors as model-callable
 helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not

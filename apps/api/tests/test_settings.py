@@ -156,6 +156,7 @@ def test_agent_mode_defaults_guarded_and_rejects_unknown_values() -> None:
 
 
 def test_agent_command_timeout_and_heartbeat_are_bounded() -> None:
+    assert Settings(_env_file=None).agent_command_timeout_seconds == 240
     settings = Settings(agent_command_timeout_seconds=120, agent_heartbeat_seconds=5)
     assert settings.agent_command_timeout_seconds == 120
     assert settings.agent_heartbeat_seconds == 5

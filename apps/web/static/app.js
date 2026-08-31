@@ -529,13 +529,29 @@
   const clusterPicker = document.querySelector("[data-cluster-picker]");
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
+  const askLayout = document.querySelector("[data-ask-layout]");
+  const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
+  const composerDraftKey = adhocForm?.dataset.chatUrl
+    ? `podpilot-composer-draft:${adhocForm.dataset.chatUrl}`
+    : null;
+  if (composerTextarea && !composerTextarea.disabled) {
+    const savedDraft = composerDraftKey ? window.sessionStorage.getItem(composerDraftKey) : "";
+    if (!composerTextarea.value && savedDraft) composerTextarea.value = savedDraft;
+    composerTextarea.addEventListener("input", () => {
+      if (!composerDraftKey) return;
+      if (composerTextarea.value) window.sessionStorage.setItem(composerDraftKey, composerTextarea.value);
+      else window.sessionStorage.removeItem(composerDraftKey);
+    });
+    window.requestAnimationFrame(() => composerTextarea.focus({preventScroll: true}));
+  }
   if (executionMode && askSubmit) {
     const updateModeAvailability = () => {
+      askLayout?.classList.toggle("action-session", executionMode.value === "action");
       const ready = executionMode.value === "action"
         ? adhocForm.dataset.actionModelReady === "true"
         : adhocForm.dataset.readOnlyModelReady === "true";
       askSubmit.disabled = !ready;
-      askSubmit.textContent = executionMode.value === "action" ? "Act" : "Investigate";
+      askSubmit.textContent = "Submit";
     };
     executionMode.addEventListener("change", updateModeAvailability);
     updateModeAvailability();
@@ -891,6 +907,34 @@
     let source = null;
     let poll = null;
     let progressStopped = false;
+    const cancelRun = pendingRun.querySelector("[data-run-cancel]");
+    cancelRun?.addEventListener("click", async () => {
+      if (!csrf || !pendingRun.dataset.cancelUrl) return;
+      if (!window.confirm(
+        "Cancel this investigation? PodPilot will attempt to stop the active model request and oc command. Operations that already completed cannot be rolled back."
+      )) return;
+      cancelRun.disabled = true;
+      cancelRun.textContent = "Cancelling…";
+      if (current) current.textContent = "Requesting best-effort cancellation…";
+      try {
+        const response = await fetch(pendingRun.dataset.cancelUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "PodPilot could not cancel this request.");
+        progressStopped = true;
+        source?.close();
+        if (poll) window.clearInterval(poll);
+        window.clearTimeout(progressWatchdog);
+        window.location.assign(payload.location || window.location.pathname);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        cancelRun.disabled = false;
+        cancelRun.textContent = "Cancel request";
+      }
+    });
     const configuredTimeout = Number.parseInt(pendingRun.dataset.runTimeoutMs || "180000", 10);
     const reconcileStatus = async () => {
       if (progressStopped || !pendingRun.dataset.statusUrl) return false;
@@ -899,7 +943,7 @@
         if (!response.ok) return false;
         const payload = await response.json();
         payload.events?.forEach(addProgress);
-        if (!["succeeded", "failed"].includes(payload.status)) return false;
+        if (!["succeeded", "failed", "cancelled"].includes(payload.status)) return false;
         progressStopped = true;
         source?.close();
         if (poll) window.clearInterval(poll);
@@ -952,9 +996,11 @@
       requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
       if (textarea) textarea.value = "";
+      if (composerDraftKey) window.sessionStorage.removeItem(composerDraftKey);
+      textarea?.focus({preventScroll: true});
       if (rawResponseToggle) rawResponseToggle.disabled = true;
       if (reasoningSelect) reasoningSelect.disabled = true;
-      if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
+      if (submit) { submit.disabled = true; submit.textContent = "Submitting…"; }
       try {
         const response = await fetch(adhocForm.dataset.chatUrl, {
           method: "POST",
@@ -972,9 +1018,10 @@
         optimistic?.nodes.forEach((node) => node.remove());
         if (optimistic?.empty) optimistic.empty.hidden = false;
         if (textarea) textarea.value = question;
+        if (composerDraftKey) window.sessionStorage.setItem(composerDraftKey, question);
         if (rawResponseToggle) rawResponseToggle.disabled = false;
         if (reasoningSelect) reasoningSelect.disabled = false;
-        if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
+        if (submit) { submit.disabled = false; submit.textContent = "Submit"; }
       }
     });
     const textarea = adhocForm.querySelector("textarea");

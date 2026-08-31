@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Protocol
+from uuid import uuid4
 
 import httpx
 
@@ -66,7 +67,11 @@ class AgentRunner(Protocol):
         self,
         command: str,
         connection: AgentClusterConnection | None = None,
+        *,
+        request_id: str | None = None,
     ) -> AgentCommandResult: ...
+
+    def cancel(self, request_id: str) -> bool: ...
 
 
 class OcAgentRunnerClient:
@@ -80,9 +85,14 @@ class OcAgentRunnerClient:
         self,
         command: str,
         connection: AgentClusterConnection | None = None,
+        *,
+        request_id: str | None = None,
     ) -> AgentCommandResult:
         try:
-            payload: dict[str, object] = {"command": command}
+            payload: dict[str, object] = {
+                "command": command,
+                "request_id": request_id or str(uuid4()),
+            }
             if connection is not None:
                 payload["cluster"] = connection.to_payload()
             response = httpx.post(
@@ -127,5 +137,34 @@ class OcAgentRunnerClient:
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentRunnerError(
                 "The oc runner returned an invalid response "
+                f"({type(exc).__name__})."
+            ) from exc
+
+    def cancel(self, request_id: str) -> bool:
+        """Request best-effort termination of one correlated runner command."""
+        try:
+            response = httpx.post(
+                f"{self.base_url}/v1/cancel",
+                json={"request_id": request_id},
+                timeout=10.0,
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("status") == "cancellation_requested"
+        except httpx.HTTPStatusError as exc:
+            raise AgentRunnerError(
+                "The oc runner rejected the cancellation request "
+                f"(HTTP {exc.response.status_code})."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise AgentRunnerError(
+                "The oc runner cancellation request failed before a response was received "
+                f"({type(exc).__name__})."
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise AgentRunnerError(
+                "The oc runner returned an invalid cancellation response "
                 f"({type(exc).__name__})."
             ) from exc

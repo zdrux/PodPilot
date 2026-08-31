@@ -734,7 +734,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         def __init__(self) -> None:
             self.calls: list[tuple[str, AgentClusterConnection]] = []
 
-        def execute(self, command, connection=None):
+        def execute(self, command, connection=None, **_kwargs):
             assert connection is not None
             self.calls.append((command, connection))
             return AgentCommandResult(
@@ -8993,7 +8993,7 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         def __init__(self) -> None:
             self.commands: list[str] = []
 
-        def execute(self, command: str, connection=None) -> AgentCommandResult:
+        def execute(self, command: str, connection=None, **_kwargs) -> AgentCommandResult:
             assert connection is None
             self.commands.append(command)
             return AgentCommandResult(
@@ -9405,7 +9405,7 @@ def test_unrestricted_pending_pod_question_is_driven_by_agent_without_collector_
         def __init__(self) -> None:
             self.commands: list[str] = []
 
-        def execute(self, command, connection=None):
+        def execute(self, command, connection=None, **_kwargs):
             self.commands.append(command)
             return AgentCommandResult(
                 command=command, exit_code=0,
@@ -10166,7 +10166,7 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         def __init__(self) -> None:
             self.calls = []
 
-        def execute(self, command, connection=None):
+        def execute(self, command, connection=None, **_kwargs):
             self.calls.append((command, connection))
             if connection.cluster_id == cluster_ids[0]:
                 time.sleep(2.1)
@@ -12929,7 +12929,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert "podpilot_delegated_session" in connected.headers["set-cookie"]
         ask_page = client.get("/ask", headers={"x-forwarded-user": "dana"})
         assert "Investigate · read-only" in ask_page.text
-        assert 'href="/delegated/connect">Cluster sign-ins</a>' in ask_page.text
+        assert 'href="/delegated/connect">Cluster sign-ins</a>' not in ask_page.text
         assert "Find failing workloads" in ask_page.text
         assert "Review recent warnings" in ask_page.text
         assert "Show my access" in ask_page.text
@@ -13411,6 +13411,10 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
             assert conversation is not None
             assert conversation.execution_mode == "action"
             assert conversation.delegated_session_id
+        action_page = client.get(
+            response.headers["location"], headers={"x-forwarded-user": "ada"}
+        )
+        assert 'class="ask-layout action-session"' in action_page.text
     engine.dispose()
 
 
@@ -13741,6 +13745,100 @@ def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path
     engine.dispose()
 
 
+def test_user_cancels_active_ask_run_and_correlated_runner_request(tmp_path: Path) -> None:
+    provider = BlockingAdHocProvider()
+
+    class Runner:
+        def __init__(self) -> None:
+            self.cancelled: list[str] = []
+
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("The synthetic provider should remain in its model call.")
+
+        def cancel(self, request_id: str) -> bool:
+            self.cancelled.append(request_id)
+            return True
+
+    runner = Runner()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        read_explorer=FakeReadExplorer(),
+        agent_runner=runner,
+        settings_overrides={
+            "adhoc_job_worker_enabled": True,
+            "adhoc_worker_concurrency": 1,
+        },
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
+            chat_model="test-model", embedding_model=None, timeout_seconds=30,
+            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    runner_request_id = "00000000-0000-0000-0000-000000000104"
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Inspect the selected cluster."},
+            follow_redirects=False,
+        )
+        assert created.status_code == 303
+        assert provider.answer_started.wait(timeout=2)
+        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            run_id = db_session.scalar(select(AdHocRun.id).where(
+                AdHocRun.conversation_id == conversation_id
+            ))
+        engine.dispose()
+        assert run_id is not None
+        app.state.adhoc_runner_requests[run_id] = {runner_request_id}
+
+        active = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert f'data-cancel-url="/api/v1/adhoc-runs/{run_id}/cancel"' in active.text
+        textarea = re.search(r'<textarea id="adhoc-message"[^>]*>', active.text)
+        assert textarea is not None and "disabled" not in textarea.group(0)
+
+        cancelled = client.post(
+            f"/api/v1/adhoc-runs/{run_id}/cancel",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()["status"] == "cancelled"
+        assert cancelled.json()["runner_cancellation_attempted"] is True
+        assert cancelled.json()["runner_terminations"] == 1
+        assert runner.cancelled == [runner_request_id]
+        provider.release_answer.set()
+
+        status = client.get(
+            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
+        )
+        assert status.status_code == 200
+        assert status.json()["status"] == "cancelled"
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+        assert "Investigation cancelled at your request" in rendered.text
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        event = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "adhoc.cancel"))
+        assert event is not None and event.outcome == "cancelled"
+    engine.dispose()
+
+
 def test_ask_worker_pool_runs_different_users_concurrently(tmp_path: Path) -> None:
     provider = ConcurrentBlockingAdHocProvider()
     app, settings = make_app(
@@ -13837,7 +13935,9 @@ def test_ask_worker_pool_runs_different_users_concurrently(tmp_path: Path) -> No
             assert completed
 
 
-def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(tmp_path: Path) -> None:
+def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     provider = BlockingAdHocProvider()
     app, settings = make_app(
         tmp_path,
@@ -13892,7 +13992,10 @@ def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(tmp_path: 
         assert terminal["events"][-1]["phase"] == "failed"
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "exceeded the execution deadline" in rendered.text
+        assert "last recorded operation was:" in rendered.text
         assert "Working on your question" not in rendered.text
+        assert "last_phase=" in caplog.text
+        assert "last_progress=" in caplog.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -13995,12 +14098,20 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "Enter to send" not in template and "Shift+Enter for a new line" not in template
     assert 'event.key === "Enter" && !event.shiftKey' in script
     assert "adhocForm.requestSubmit()" in script
+    assert "podpilot-composer-draft:" in script
+    assert "focus({preventScroll: true})" in script
+    assert "data-run-cancel" in template
+    assert "/api/v1/adhoc-runs/{{ active_run.id }}/cancel" in template
     assert "appendOptimisticTurn" in script
     assert 'class="boundary-pill caution-summary' in template
-    assert template.count('class="boundary-pill ') == 1
+    assert template.count('class="boundary-pill caution-summary') == 1
+    assert template.count('class="boundary-pill execution-mode-badge"') == 1
     assert "Session cautions" in template
     assert ".agent-mode-pill" in styles
-    assert ".caution-summary::after" in styles
+    assert ".boundary-pill.caution-summary::after" in styles
+    assert "Session cautions:&#10;&#10;" in template
+    assert 'class="boundary-pill execution-mode-badge"' in template
+    assert ".execution-mode-badge { min-height: 34px; padding: 0 11px; border-radius: 7px;" in styles
     assert ".ask-page .ask-session-header" in styles
     assert "padding-inline: 20px" in styles
     assert ".answer-table-result { margin: 10px 0 14px; }" in styles
@@ -14017,6 +14128,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "cluster-picker-selection" in template
     assert "composer-meta-row" in template
     assert "composer-input-wrap" in template
+    assert '>Submit</button>' in template
+    assert 'askSubmit.textContent = "Submit"' in script
+    assert ".ask-layout.action-session .composer-input-wrap > [data-ask-submit]" in styles
+    assert "top: 10px;" in styles
     assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script
     assert 'pickerLabel.replaceChildren()' in script

@@ -107,6 +107,7 @@ from podpilot_openshift.alerts import (
 )
 from podpilot_openshift.agent_runner import (
     AgentClusterConnection,
+    AgentCommandResult,
     AgentRunner,
     AgentRunnerError,
     OcAgentRunnerClient,
@@ -9549,6 +9550,7 @@ def create_app(
                     document.target_cluster_ids_json = json.dumps(migrated_targets, sort_keys=True)
             db_session.commit()
         application.state.adhoc_run_tasks = {}
+        application.state.adhoc_runner_requests = {}
         worker_tasks: list[asyncio.Task[None]] = []
         if app_settings.adhoc_job_worker_enabled:
             with Session(application.state.engine) as db_session:
@@ -10303,16 +10305,22 @@ def create_app(
                     }
                 else:
                     command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
+                    runner_request_id = str(uuid4())
+                    runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
+                    runner_requests.add(runner_request_id)
+                    runner_task: asyncio.Task[AgentCommandResult] | None = None
                     try:
                         LOGGER.info(
                             "podpilot.agentic.command_start actor=%s conversation_id=%s "
-                            "cluster_id=%s cluster=%r tls_verify=%s command_sha256=%s",
+                            "cluster_id=%s cluster=%r tls_verify=%s command_sha256=%s "
+                            "runner_request_id=%s",
                             username,
                             conversation_id,
                             cluster_id,
                             cluster_name,
                             True if connection is None else connection.tls_verify,
                             command_hash,
+                            runner_request_id,
                         )
                         command_started = asyncio.get_running_loop().time()
                         runner_task = asyncio.create_task(
@@ -10320,6 +10328,7 @@ def create_app(
                                 unrestricted_runner.execute,
                                 command,
                                 connection,
+                                request_id=runner_request_id,
                             )
                         )
                         while True:
@@ -10389,6 +10398,12 @@ def create_app(
                             command_diagnostic_ref,
                             _safe_exception_diagnostics(exc),
                         )
+                    finally:
+                        if runner_task is not None and not runner_task.done():
+                            runner_task.cancel()
+                        runner_requests.discard(runner_request_id)
+                        if not runner_requests:
+                            app.state.adhoc_runner_requests.pop(run_id, None)
                 safe_result = redact_text(json.dumps(result_payload, sort_keys=True, default=str))
                 messages.append({
                     "role": "tool",
@@ -11354,6 +11369,33 @@ def create_app(
             run.progress_json = json.dumps(events[-40:], sort_keys=True)
             db_session.commit()
 
+    def _latest_adhoc_run_progress(engine, run_id: str) -> tuple[str | None, str | None]:
+        """Return the last already-redacted progress event for timeout diagnostics."""
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None:
+                return None, None
+            try:
+                events = list(json.loads(run.progress_json))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return run.phase, None
+            if not events:
+                return run.phase, None
+            latest = events[-1]
+            return (
+                str(latest.get("phase") or run.phase or "") or None,
+                str(latest.get("message") or "") or None,
+            )
+
+    def _adhoc_timeout_answer(last_progress: str | None) -> str:
+        answer = (
+            "PodPilot stopped this investigation because it exceeded the execution deadline. "
+            "No cluster changes were attempted."
+        )
+        if last_progress:
+            answer += f" The last recorded operation was: {last_progress}"
+        return answer + " Retry the question or review the application logs."
+
     def _fail_adhoc_run(
         engine,
         run_id: str,
@@ -11436,16 +11478,14 @@ def create_app(
         if elapsed < app_settings.adhoc_run_timeout_seconds:
             return False
         seconds = int(app_settings.adhoc_run_timeout_seconds)
+        _last_phase, last_progress = _latest_adhoc_run_progress(engine, run_id)
         return _fail_adhoc_run(
             engine,
             run_id,
             error_type="RunTimeout",
             error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
             progress_message="The investigation reached its execution deadline.",
-            answer=(
-                "PodPilot stopped this investigation because it exceeded the execution deadline. "
-                "No cluster changes were attempted. Retry the question or review the application logs."
-            ),
+            answer=_adhoc_timeout_answer(last_progress),
         )
 
     def _claim_adhoc_run(engine, run_id: str | None = None) -> str | None:
@@ -11482,6 +11522,107 @@ def create_app(
             )
             db_session.commit()
             return selected if claimed.rowcount == 1 else None
+
+    def _cancel_adhoc_run(engine, run_id: str, username: str) -> str | None:
+        """Persist an operator-requested terminal cancellation exactly once."""
+        now = datetime.now(timezone.utc)
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if (
+                run is None
+                or run.created_by != username
+                or run.status not in {"queued", "running"}
+            ):
+                return None
+            conversation = db_session.get(AdHocConversation, run.conversation_id)
+            if conversation is None or conversation.created_by != username:
+                return None
+            events = list(json.loads(run.progress_json))
+            events.append({
+                "seq": (int(events[-1]["seq"]) + 1) if events else 0,
+                "phase": "cancelled",
+                "message": "Cancellation requested by the operator.",
+                "at": now.isoformat(),
+            })
+            assistant_message_id = str(uuid4())
+            claimed = db_session.execute(
+                update(AdHocRun)
+                .where(
+                    AdHocRun.id == run_id,
+                    AdHocRun.created_by == username,
+                    AdHocRun.status.in_(("queued", "running")),
+                )
+                .values(
+                    status="cancelled",
+                    phase="cancelled",
+                    progress_json=json.dumps(events[-40:], sort_keys=True),
+                    error_detail="Investigation cancelled by the operator.",
+                    assistant_message_id=assistant_message_id,
+                    completed_at=now,
+                )
+            )
+            if claimed.rowcount != 1:
+                db_session.rollback()
+                return None
+            conversation.updated_at = now
+            db_session.add(AdHocMessage(
+                id=assistant_message_id,
+                conversation_id=conversation.id,
+                role="assistant",
+                actor=None,
+                content=(
+                    "Investigation cancelled at your request. PodPilot attempted to stop any "
+                    "active model and cluster command. Cancellation is best-effort: operations "
+                    "that completed before the request are not rolled back."
+                ),
+                answer_mode="insufficient_evidence",
+                citations_json="[]",
+                tool_activity_json=json.dumps({
+                    "reads": [],
+                    "limitations": [
+                        "The investigation was cancelled before it produced a complete answer."
+                    ],
+                }, sort_keys=True),
+                provider_status="cancelled",
+            ))
+            db_session.add(AuditEvent(
+                actor=username,
+                action="adhoc.cancel",
+                outcome="cancelled",
+                details_json=json.dumps({
+                    "conversation_id": conversation.id,
+                    "run_id": run_id,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+            return conversation.id
+
+    async def _cancel_active_adhoc_execution(
+        application: FastAPI, run_id: str
+    ) -> tuple[int, int]:
+        """Stop the correlated runner commands, then cancel the owning asyncio task."""
+        request_ids = list(application.state.adhoc_runner_requests.get(run_id, set()))
+        attempted = len(request_ids)
+        terminated = 0
+        cancel_runner = getattr(unrestricted_runner, "cancel", None)
+        if callable(cancel_runner):
+            for request_id in request_ids:
+                try:
+                    if await run_in_threadpool(cancel_runner, request_id):
+                        terminated += 1
+                except AgentRunnerError as exc:
+                    LOGGER.warning(
+                        "podpilot.agentic.command_cancel_failed run_id=%s "
+                        "runner_request_id=%s exception_chain=%s",
+                        run_id,
+                        request_id,
+                        _safe_exception_diagnostics(exc),
+                    )
+        application.state.adhoc_runner_requests.pop(run_id, None)
+        run_task = application.state.adhoc_run_tasks.get(run_id)
+        if run_task is not None and not run_task.done():
+            run_task.cancel()
+        return attempted, terminated
 
     async def _run_persisted_adhoc_job(application: FastAPI, run_id: str) -> None:
         engine = application.state.engine
@@ -11525,12 +11666,16 @@ def create_app(
                         )
                         db_session.commit()
         except TimeoutError:
+            last_phase, last_progress = _latest_adhoc_run_progress(engine, run_id)
             LOGGER.warning(
-                "podpilot.adhoc.run_timed_out actor=%s conversation_id=%s run_id=%s timeout=%s",
+                "podpilot.adhoc.run_timed_out actor=%s conversation_id=%s run_id=%s "
+                "timeout=%s last_phase=%s last_progress=%r",
                 username,
                 conversation_id,
                 run_id,
                 app_settings.adhoc_run_timeout_seconds,
+                last_phase,
+                last_progress,
             )
             seconds = int(app_settings.adhoc_run_timeout_seconds)
             _fail_adhoc_run(
@@ -11539,10 +11684,7 @@ def create_app(
                 error_type="RunTimeout",
                 error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
                 progress_message="The investigation reached its execution deadline.",
-                answer=(
-                    "PodPilot stopped this investigation because it exceeded the execution deadline. "
-                    "No cluster changes were attempted. Retry the question or review the application logs."
-                ),
+                answer=_adhoc_timeout_answer(last_progress),
             )
         except Exception as exc:
             LOGGER.error(
@@ -12021,9 +12163,7 @@ def create_app(
                 )
                 db_session.commit()
         for run_id in active_run_ids:
-            run_task = request.app.state.adhoc_run_tasks.get(run_id)
-            if run_task is not None and not run_task.done():
-                run_task.cancel()
+            await _cancel_active_adhoc_execution(request.app, run_id)
         for connection in connections:
             cluster = cluster_by_id.get(connection.cluster_id)
             if cluster is not None:
@@ -12676,7 +12816,7 @@ def create_app(
                         "event: progress\n"
                         f"data: {json.dumps(event, sort_keys=True)}\n\n"
                     )
-                if status_value in {"succeeded", "failed"}:
+                if status_value in {"succeeded", "failed", "cancelled"}:
                     yield (
                         "event: complete\n"
                         f"data: {json.dumps({'status': status_value, 'location': location})}\n\n"
@@ -12696,6 +12836,47 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.post("/api/v1/adhoc-runs/{run_id}/cancel")
+    async def cancel_adhoc_run(
+        run_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        _verify_csrf(request)
+        with Session(request.app.state.engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot run does not exist.")
+            if run.status not in {"queued", "running"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail="That PodPilot run has already finished.",
+                )
+        conversation_id = _cancel_adhoc_run(
+            request.app.state.engine, run_id, user.username
+        )
+        if conversation_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="That PodPilot run finished before it could be cancelled.",
+            )
+        runner_attempts, runner_terminations = await _cancel_active_adhoc_execution(
+            request.app, run_id
+        )
+        LOGGER.info(
+            "podpilot.adhoc.run_cancel_requested actor=%s conversation_id=%s run_id=%s "
+            "runner_attempts=%s runner_terminations=%s",
+            user.username,
+            conversation_id,
+            run_id,
+            runner_attempts,
+            runner_terminations,
+        )
+        return JSONResponse({
+            "status": "cancelled",
+            "location": f"/ask/{conversation_id}",
+            "runner_cancellation_attempted": runner_attempts > 0,
+            "runner_terminations": runner_terminations,
+        })
 
     @app.post("/api/v1/adhoc-conversations/{conversation_id}/delete")
     async def delete_adhoc_conversation(
@@ -12731,9 +12912,7 @@ def create_app(
             ))
             db_session.commit()
         for run_id in cancelled_run_ids:
-            run_task = request.app.state.adhoc_run_tasks.get(run_id)
-            if run_task is not None and not run_task.done():
-                run_task.cancel()
+            await _cancel_active_adhoc_execution(request.app, run_id)
         if cancelled_run_ids:
             LOGGER.info(
                 "podpilot.adhoc.delete_cancelled_runs actor=%s conversation_id=%s count=%s",

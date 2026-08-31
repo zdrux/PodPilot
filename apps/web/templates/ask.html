@@ -2,17 +2,16 @@
 {% block title %}Ask PodPilot{% endblock %}
 {% block body_class %}ask-page{% endblock %}
 {% block content %}
-<div class="ask-layout">
+<div class="ask-layout{% if conversation and conversation.execution_mode in ['action', 'delegated_unrestricted'] %} action-session{% endif %}" data-ask-layout>
   <section class="panel ask-panel">
     <div class="panel-header ask-session-header">
       <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
       <div class="panel-header-actions">
         {% if is_delegated_mode %}
-        <a class="button secondary compact-button" href="/delegated/connect">Cluster sign-ins</a>
         {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
         {% endif %}
         <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
-          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' and is_delegated_mode %}• Delegated unrestricted mode — The agent may create, patch, apply, or delete objects without PodPilot approval. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC applies as you.&#10;{% elif agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode != 'unrestricted' %} PodPilot remains read-only.{% endif %}"
+          data-tooltip="Session cautions:&#10;&#10;{% if agent_mode == 'unrestricted' and is_delegated_mode %}• Delegated unrestricted mode — The agent may create, patch, apply, or delete objects without PodPilot approval. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC applies as you.&#10;&#10;{% elif agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval.&#10;&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode != 'unrestricted' %} PodPilot remains read-only.{% endif %}"
           aria-label="Session cautions. {% if agent_mode == 'unrestricted' and is_delegated_mode %}Delegated unrestricted mode: the model can change selected clusters using your OpenShift identity and RBAC. {% elif agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary shell and oc commands. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
           <span class="boundary-pill-icon" aria-hidden="true">!</span>
           <span>Session cautions</span>
@@ -289,11 +288,12 @@
       </article>
       {% endfor %}
       {% if active_run %}
-      <article class="chat-message chat-assistant chat-pending" data-adhoc-run-id="{{ active_run.id }}" data-events-url="/api/v1/adhoc-runs/{{ active_run.id }}/events" data-status-url="/api/v1/adhoc-runs/{{ active_run.id }}" data-run-timeout-ms="{{ (adhoc_run_timeout_seconds * 1000) | int }}">
+      <article class="chat-message chat-assistant chat-pending" data-adhoc-run-id="{{ active_run.id }}" data-events-url="/api/v1/adhoc-runs/{{ active_run.id }}/events" data-status-url="/api/v1/adhoc-runs/{{ active_run.id }}" data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" data-run-timeout-ms="{{ (adhoc_run_timeout_seconds * 1000) | int }}">
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>
           <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+          <button class="button secondary compact-button cancel-run-button" type="button" data-run-cancel>Cancel request</button>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
           {% set progress = namespace(phases=[], seen_messages=[]) %}
@@ -413,7 +413,7 @@
               </select>
             </label>
             {% elif conversation and is_delegated_mode %}
-            <span class="boundary-pill"><strong>{{ 'Action' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'Investigate · read-only' }}</strong></span>
+            <span class="boundary-pill execution-mode-badge"><strong>{{ 'Action' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'Investigate · read-only' }}</strong></span>
             {% endif %}
             <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
               <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>
@@ -429,8 +429,8 @@
           </div>
         </div>
         <div class="composer-input-wrap">
-          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}></textarea>
-          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
+          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>
+          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or active_run or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
         </div>
       </form>
       {% else %}

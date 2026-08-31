@@ -163,7 +163,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert runtime["data"]["delegated_access_enabled"] == "true"
     assert runtime["data"]["delegated_session_lifetime_seconds"] == "86400"
     assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
-    assert runtime["data"]["agent_command_timeout_seconds"] == "300"
+    assert runtime["data"]["agent_command_timeout_seconds"] == "240"
     assert runtime["data"]["agent_command_max_output_bytes"] == "262144"
     assert runtime["data"]["agent_heartbeat_seconds"] == "10"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")

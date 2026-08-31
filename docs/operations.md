@@ -663,9 +663,18 @@ include a diagnostic reference plus a bounded redacted exception chain and trace
 locations. Use the diagnostic reference shown in Ask to find the matching API log entry; neither
 log stream records cluster credentials or complete command output. The API
 publishes changing model/command elapsed-time messages to Ask without periodic runtime, model-wait,
-or command heartbeat log entries. A command is
-bounded by the runner's 300-second process-group timeout, while the complete Ask job remains bounded
-by `adhoc_run_timeout_seconds`.
+or command heartbeat log entries. A command is bounded by
+`agent_command_timeout_seconds` (240 seconds by default), while the complete Ask job remains bounded
+by `adhoc_run_timeout_seconds` (300 seconds by default). Keep the command timeout lower than the Ask
+deadline so the runner can return its redacted timeout details and the agent has time to finalize and
+persist an answer.
+While a durable Ask run is queued or running, its owner can request cancellation from the live
+progress card. PodPilot records the run as cancelled, sends the correlated runner request ID to the
+loopback sidecar, terminates that command's process group when it is still active, and cancels the
+owning model task. Cancellation is best-effort and does not roll back Kubernetes operations that
+completed before the request. The composer remains available for drafting the next message; the
+browser retains that draft across the run-completion refresh, but does not submit it until the
+current run reaches a terminal state.
 See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
 authorization-audit, and rollback instructions.
 

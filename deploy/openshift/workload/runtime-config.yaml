@@ -38,7 +38,7 @@ data:
   delegated_session_lifetime_seconds: "86400"
   delegated_login_attempts_per_minute: "5"
   agent_runner_url: "http://127.0.0.1:8090"
-  agent_command_timeout_seconds: "300"
+  agent_command_timeout_seconds: "240"
   agent_command_max_output_bytes: "262144"
   agent_heartbeat_seconds: "10"
   model_timeout_max_seconds: "240"

@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -39,13 +40,19 @@ def test_agent_runner_client_returns_unbounded_command_result(monkeypatch) -> No
         )
 
     monkeypatch.setattr(httpx, "post", fake_post)
-    result = OcAgentRunnerClient("http://127.0.0.1:8090/").execute("oc get pods")
+    result = OcAgentRunnerClient("http://127.0.0.1:8090/").execute(
+        "oc get pods",
+        request_id="00000000-0000-0000-0000-000000000101",
+    )
 
     assert result.exit_code == 0
     assert result.stdout == "pod-a\n"
     assert captured == {
         "url": "http://127.0.0.1:8090/v1/execute",
-        "json": {"command": "oc get pods"},
+        "json": {
+            "command": "oc get pods",
+            "request_id": "00000000-0000-0000-0000-000000000101",
+        },
         "timeout": 310.0,
     }
 
@@ -73,11 +80,13 @@ def test_agent_runner_client_brokers_one_remote_cluster_credential(monkeypatch) 
     result = OcAgentRunnerClient("http://127.0.0.1:8090").execute(
         "oc get kafka -A",
         connection,
+        request_id="00000000-0000-0000-0000-000000000102",
     )
 
     assert result.stdout == "kafka-a\n"
     assert captured["json"] == {
         "command": "oc get kafka -A",
+        "request_id": "00000000-0000-0000-0000-000000000102",
         "cluster": {
             "id": "cluster-east",
             "name": "East DEV",
@@ -86,6 +95,72 @@ def test_agent_runner_client_brokers_one_remote_cluster_credential(monkeypatch) 
             "tls_verify": False,
         },
     }
+
+
+def test_agent_runner_client_requests_correlated_command_cancellation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_post(url, *, json, timeout):
+        captured.update({"url": url, "json": json, "timeout": timeout})
+        return httpx.Response(
+            202,
+            request=httpx.Request("POST", url),
+            json={
+                "status": "cancellation_requested",
+                "request_id": json["request_id"],
+            },
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    cancelled = OcAgentRunnerClient("http://127.0.0.1:8090").cancel(
+        "00000000-0000-0000-0000-000000000103"
+    )
+
+    assert cancelled is True
+    assert captured == {
+        "url": "http://127.0.0.1:8090/v1/cancel",
+        "json": {"request_id": "00000000-0000-0000-0000-000000000103"},
+        "timeout": 10.0,
+    }
+
+
+def test_runner_cancel_endpoint_marks_only_the_correlated_command() -> None:
+    runner = _runner_module()
+    request_id = "00000000-0000-0000-0000-000000000105"
+    other_request_id = "00000000-0000-0000-0000-000000000106"
+    runner.ACTIVE_COMMANDS[request_id] = {
+        "cluster_id": "cluster-east",
+        "cluster_name": "East DEV",
+        "started": time.monotonic(),
+        "process": None,
+        "cancel_requested": False,
+    }
+    runner.ACTIVE_COMMANDS[other_request_id] = {
+        "cluster_id": "cluster-central",
+        "cluster_name": "Central DEV",
+        "started": time.monotonic(),
+        "process": None,
+        "cancel_requested": False,
+    }
+    server = runner.ThreadingHTTPServer(("127.0.0.1", 0), runner.RunnerHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    try:
+        host, port = server.server_address
+        response = httpx.post(
+            f"http://{host}:{port}/v1/cancel",
+            json={"request_id": request_id},
+            timeout=2,
+        )
+        assert response.status_code == 202
+        assert response.json()["status"] == "cancellation_requested"
+        assert runner.ACTIVE_COMMANDS[request_id]["cancel_requested"] is True
+        assert runner.ACTIVE_COMMANDS[other_request_id]["cancel_requested"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=2)
+        runner.ACTIVE_COMMANDS.clear()
 
 
 def test_agent_runner_client_sends_capability_without_delegated_token(monkeypatch) -> None:

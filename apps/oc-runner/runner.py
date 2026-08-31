@@ -10,12 +10,12 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 KUBECONFIG_PATH = Path("/tmp/podpilot-agent-kubeconfig")
 RUNNER_STARTED_AT = time.monotonic()
-ACTIVE_COMMANDS: dict[str, tuple[str, str, float]] = {}
+ACTIVE_COMMANDS: dict[str, dict[str, object]] = {}
 ACTIVE_COMMANDS_LOCK = threading.Lock()
 
 
@@ -150,6 +150,12 @@ def _terminate_process_group(process: subprocess.Popen[bytes], request_id: str) 
         process.wait()
 
 
+def _cancel_requested(request_id: str) -> bool:
+    with ACTIVE_COMMANDS_LOCK:
+        state = ACTIVE_COMMANDS.get(request_id)
+        return bool(state and state.get("cancel_requested"))
+
+
 def _run_command(
     command: str,
     env: dict[str, str],
@@ -164,6 +170,15 @@ def _run_command(
         env=env,
         start_new_session=True,
     )
+    with ACTIVE_COMMANDS_LOCK:
+        state = ACTIVE_COMMANDS.get(request_id)
+        if state is not None:
+            state["process"] = process
+            cancel_immediately = bool(state.get("cancel_requested"))
+        else:
+            cancel_immediately = False
+    if cancel_immediately:
+        _terminate_process_group(process, request_id)
     assert process.stdout is not None and process.stderr is not None
     stdout_collector = _BoundedStreamCollector(name="stdout", limit=MAX_OUTPUT_BYTES)
     stderr_collector = _BoundedStreamCollector(name="stderr", limit=MAX_OUTPUT_BYTES)
@@ -200,13 +215,17 @@ def _run_command(
         collector_thread.join(timeout=5)
     stdout = stdout_collector.text()
     stderr = stderr_collector.text()
-    exit_code = 124 if timed_out else process.returncode
+    cancelled = _cancel_requested(request_id)
+    exit_code = 130 if cancelled else (124 if timed_out else process.returncode)
     if timed_out:
         timeout_detail = (
             f"PodPilot oc-runner terminated the command after "
             f"{COMMAND_TIMEOUT_SECONDS:g} seconds."
         )
         stderr = f"{stderr.rstrip()}\n{timeout_detail}\n" if stderr else timeout_detail + "\n"
+    elif cancelled:
+        cancel_detail = "PodPilot oc-runner cancelled the command at the operator's request."
+        stderr = f"{stderr.rstrip()}\n{cancel_detail}\n" if stderr else cancel_detail + "\n"
     return (
         exit_code,
         stdout,
@@ -235,6 +254,9 @@ class RunnerHandler(BaseHTTPRequestHandler):
         })
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/v1/cancel":
+            self._cancel_command()
+            return
         if self.path != "/v1/execute":
             self.send_error(404)
             return
@@ -244,6 +266,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             command = payload["command"]
             if not isinstance(command, str) or not command.strip():
                 raise ValueError("command must be a non-empty string")
+            request_id = str(UUID(str(payload.get("request_id") or uuid4())))
             cluster_payload = payload["cluster"]
             if cluster_payload is None:
                 raise ValueError("a brokered remote cluster connection is required")
@@ -266,10 +289,20 @@ class RunnerHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": str(exc)})
             return
         env["KUBECONFIG"] = str(kubeconfig_path)
-        request_id = str(uuid4())
         started = time.monotonic()
         with ACTIVE_COMMANDS_LOCK:
-            ACTIVE_COMMANDS[request_id] = (cluster_id, cluster_name, started)
+            if request_id in ACTIVE_COMMANDS:
+                if temporary_kubeconfig:
+                    kubeconfig_path.unlink(missing_ok=True)
+                self._send_json(409, {"error": "request_id is already active"})
+                return
+            ACTIVE_COMMANDS[request_id] = {
+                "cluster_id": cluster_id,
+                "cluster_name": cluster_name,
+                "started": started,
+                "process": None,
+                "cancel_requested": False,
+            }
         _event(
             "command_start",
             request_id=request_id,
@@ -302,6 +335,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             if temporary_kubeconfig:
                 kubeconfig_path.unlink(missing_ok=True)
         duration_ms = round((time.monotonic() - started) * 1000)
+        cancelled = exit_code == 130
         _event(
             "command_complete",
             request_id=request_id,
@@ -309,6 +343,7 @@ class RunnerHandler(BaseHTTPRequestHandler):
             cluster_name=cluster_name,
             exit_code=exit_code,
             timed_out=timed_out,
+            cancelled=cancelled,
             duration_ms=duration_ms,
             stdout_bytes=stdout_bytes,
             stderr_bytes=stderr_bytes,
@@ -324,10 +359,41 @@ class RunnerHandler(BaseHTTPRequestHandler):
                 "stdout": stdout,
                 "stderr": stderr,
                 "timed_out": timed_out,
+                "cancelled": cancelled,
                 "stdout_truncated": stdout_bytes > MAX_OUTPUT_BYTES,
                 "stderr_truncated": stderr_bytes > MAX_OUTPUT_BYTES,
             },
         )
+
+    def _cancel_command(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length))
+            request_id = str(UUID(str(payload["request_id"])))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self._send_json(400, {"error": "request_id must be a UUID"})
+            return
+        with ACTIVE_COMMANDS_LOCK:
+            state = ACTIVE_COMMANDS.get(request_id)
+            if state is None:
+                self._send_json(404, {"status": "not_found", "request_id": request_id})
+                return
+            state["cancel_requested"] = True
+            process = state.get("process")
+            cluster_id = str(state.get("cluster_id") or "")
+            cluster_name = str(state.get("cluster_name") or "")
+        _event(
+            "command_cancel_requested",
+            request_id=request_id,
+            cluster_id=cluster_id,
+            cluster_name=cluster_name,
+        )
+        if isinstance(process, subprocess.Popen) and process.poll() is None:
+            _terminate_process_group(process, request_id)
+        self._send_json(202, {
+            "status": "cancellation_requested",
+            "request_id": request_id,
+        })
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
