@@ -12948,6 +12948,11 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
             assert conversation.execution_mode == "read_only"
             assert conversation.delegated_session_id
             assert json.loads(conversation.cluster_ids_json) == [cluster_id]
+        conversation_page = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "dana"}
+        )
+        assert "execution-mode-read-only" in conversation_page.text
+        assert "execution-mode-read-write" not in conversation_page.text
         client.cookies.delete("podpilot_delegated_session")
         ended_page = client.get(
             f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
@@ -13415,6 +13420,8 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
             response.headers["location"], headers={"x-forwarded-user": "ada"}
         )
         assert 'class="ask-layout action-session"' in action_page.text
+        assert "execution-mode-read-write" in action_page.text
+        assert "execution-mode-read-only" not in action_page.text
     engine.dispose()
 
 
@@ -14112,13 +14119,16 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "appendOptimisticTurn" in script
     assert 'class="boundary-pill caution-summary' in template
     assert template.count('class="boundary-pill caution-summary') == 1
-    assert template.count('class="boundary-pill execution-mode-badge"') == 1
+    assert template.count('class="boundary-pill execution-mode-badge ') == 1
     assert "Session cautions" in template
     assert ".agent-mode-pill" in styles
     assert ".boundary-pill.caution-summary::after" in styles
     assert "Session cautions:&#10;&#10;" in template
-    assert 'class="boundary-pill execution-mode-badge"' in template
+    assert "execution-mode-read-write" in template
+    assert "execution-mode-read-only" in template
     assert ".execution-mode-badge { min-height: 34px; padding: 0 11px; border-radius: 7px;" in styles
+    assert ".execution-mode-badge.execution-mode-read-only" in styles
+    assert ".execution-mode-badge.execution-mode-read-write" in styles
     assert ".ask-page .ask-session-header" in styles
     assert "padding-inline: 20px" in styles
     assert ".answer-table-result { margin: 10px 0 14px; }" in styles

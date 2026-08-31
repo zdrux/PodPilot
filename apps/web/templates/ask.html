@@ -412,7 +412,7 @@
               </select>
             </label>
             {% elif conversation and is_delegated_mode %}
-            <span class="boundary-pill execution-mode-badge"><strong>{{ 'Action' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'Investigate · read-only' }}</strong></span>
+            <span class="boundary-pill execution-mode-badge {{ 'execution-mode-read-write' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'execution-mode-read-only' }}"><strong>{{ 'Action' if conversation.execution_mode in ['action', 'delegated_unrestricted'] else 'Investigate · read-only' }}</strong></span>
             {% endif %}
             <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
               <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>

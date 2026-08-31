@@ -2,6 +2,11 @@ FROM quay.io/openshift/origin-cli@sha256:64ecbe0b472c5a311ce0a5f1606fdac1842aeaf
 
 FROM registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355
 
+USER 0
+RUN dnf install -y jq \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
 COPY --from=cli /usr/bin/oc /usr/local/bin/oc
 COPY apps/oc-runner/runner.py /opt/app-root/src/runner.py
 
