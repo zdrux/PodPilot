@@ -1,6 +1,6 @@
 # PodPilot Decisions
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-31
 Update when: a durable architecture or product-engineering decision is made or superseded.
 
 ## 2026-08-27 - Model calls use separate minimal selection and narrative contracts
@@ -1260,3 +1260,22 @@ PodPilot application roles without restoring broad service-account reads, and do
 previous base-only apply. Release checks require Group GET to succeed, require ordinary workload
 reads through the runtime identity to fail, and audit that no active binding references
 `cluster-reader`.
+
+## 2026-08-31 - Model connection testing is a compatibility smoke test
+
+Context: The model profile probe had grown into a synthetic end-to-end quality gate. It required a
+particular inquiry classification, discovery path, exact grounded action choice, and citation result.
+Models that performed well in real operations could fail those preferred synthetic choices and leave
+every Ask session with a persistent degraded-capability warning.
+
+Decision: Keep connection testing focused on endpoint reachability, transport, authentication,
+selected-model access, core structured output, configured embeddings, and parseable production
+workflow schemas. Do not grade the semantic content of synthetic inquiry, action-selection, answer,
+or log-analysis responses. Treat workflow-schema results as informational rather than a readiness
+requirement. Continue enforcing all typed schemas, broker policy, grounding, budgets, and deterministic
+fallbacks on every real request.
+
+Consequences: A compatible endpoint is not marked degraded merely because it chooses a different
+synthetic troubleshooting path. Probe diagnostics remain available for debugging, while practical
+model quality is assessed through normal chat and operational use. Connection testing is not a
+substitute for production evaluation.

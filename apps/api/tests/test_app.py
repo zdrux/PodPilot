@@ -7486,10 +7486,12 @@ class FakeModelProvider:
         fail_interpretation: bool = False,
         fail_chat: bool = False,
         chat_answer: InvestigationChatAnswer | None = None,
+        ask_schemas: bool = True,
     ) -> None:
         self.fail_interpretation = fail_interpretation
         self.fail_chat = fail_chat
         self.chat_answer = chat_answer
+        self.ask_schemas = ask_schemas
         self.interpret_calls: list[dict[str, object]] = []
         self.chat_calls: list[dict[str, object]] = []
         self.adhoc_plan_calls: list[dict[str, object]] = []
@@ -7506,7 +7508,7 @@ class FakeModelProvider:
             streaming=True,
             tool_calls=True,
             structured_output=True,
-            ask_schemas=True,
+            ask_schemas=self.ask_schemas,
             embeddings=True,
         )
 
@@ -15489,7 +15491,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
 
 def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_path: Path) -> None:
     credentials = MemoryCredentialStore()
-    provider = FakeModelProvider()
+    provider = FakeModelProvider(ask_schemas=False)
     app, settings = make_app(
         tmp_path,
         assignments={"ada": Role.APPROVER},
@@ -15544,7 +15546,7 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
 
         probe = client.post(f"/api/v1/model-profiles/{second_id}/probe", headers=headers, data={})
         assert probe.json()["status"] == "ready"
-        assert probe.json()["capabilities"]["ask_schemas"] is True
+        assert probe.json()["capabilities"]["ask_schemas"] is False
         rendered = client.get(
             f"/settings/model?profile_id={second_id}", headers={"x-forwarded-user": "ada"}
         )

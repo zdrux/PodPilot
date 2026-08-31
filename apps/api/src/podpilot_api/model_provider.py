@@ -126,7 +126,6 @@ class CapabilityReport:
             self.authenticated,
             self.model_available,
             self.structured_output,
-            self.ask_schemas,
         )
         return all(required) and self.embeddings is not False
 
@@ -1622,55 +1621,11 @@ class OpenAIResponsesProvider:
                     "clusters": ["probe-cluster"],
                 },
             )
-            if (
-                inquiry.mode != "logs"
-                or inquiry.operation != "logs"
-                or inquiry.namespace != "payments"
-                or inquiry.object_name is not None
-            ):
-                raise ModelProviderError(
-                    "The model did not preserve the namespace-scoped log request without "
-                    "inventing a Pod name."
-                )
         except ModelProviderError as exc:
             return False, f"InquirySemantics probe failed. {exc}"
 
-        resource_catalog = [{
-            "resource": "pods", "apiVersion": "v1", "kind": "Pod",
-            "namespaced": True, "verbs": ["get", "list"],
-        }]
         try:
-            discovery = self.plan_ad_hoc(
-                profile,
-                api_key,
-                {
-                    "capability_probe": True,
-                    "question": question,
-                    "inquiry": inquiry.model_dump(),
-                    "conversation": [],
-                    "facts": [],
-                    "observations": [],
-                    "completed_reads": [],
-                    "read_candidates": [],
-                    "resource_catalog": resource_catalog,
-                    "investigation_round": 1,
-                    "tool_policy": {
-                        "mode": "candidate_selection",
-                        "direct_intents_allowed": True,
-                        "direct_intent_tools": [
-                            "discover_resources", "get_resource", "search_resources",
-                        ],
-                        "remaining_reads": 2,
-                    },
-                },
-            )
-            if (
-                any(intent.tool in {"list_resources", "pod_logs"} for intent in discovery.intents)
-            ):
-                raise ModelProviderError(
-                    "The model requested an unavailable LIST or ungrounded Pod log read."
-                )
-            followup = self.plan_ad_hoc(
+            self.plan_ad_hoc(
                 profile,
                 api_key,
                 {
@@ -1706,34 +1661,20 @@ class OpenAIResponsesProvider:
                         "supporting_evidence_ids": ["probe-pods"],
                         "investigation_units": 2,
                     }],
-                    "resource_catalog": resource_catalog,
-                    "investigation_round": 2,
+                    "resource_catalog": [],
+                    "investigation_round": 1,
                     "tool_policy": {
                         "mode": "candidate_selection",
                         "direct_intents_allowed": False,
-                        "available": [
-                            "discover_resources", "get_resource", "search_resources",
-                            "watch_resources", "pod_logs", "http_probe", "query_metrics",
-                        ],
                         "resource_catalog": [],
-                        "pod_log_candidates": [{
-                            "id": "podlog-probe-candidate", "evidence_id": "probe-pods",
-                            "namespace": "payments", "pod": "api-probe-1",
-                            "container": "api", "phase": "Running", "ready": True,
-                            "restart_count": 1,
-                        }],
                         "remaining_reads": 1,
                     },
                 },
             )
-            if followup.candidate_ids != ["read-0123456789abcdefabcd"]:
-                raise ModelProviderError(
-                    "The model did not select the exact grounded read candidate."
-                )
         except ModelProviderError as exc:
             return False, f"ActionSelection probe failed. {exc}"
         try:
-            answer = self.answer_ad_hoc(
+            self.answer_ad_hoc(
                 profile,
                 api_key,
                 {
@@ -1760,12 +1701,6 @@ class OpenAIResponsesProvider:
                     "collection_limitations": [],
                 },
             )
-            if not set(answer.cited_evidence_ids).intersection(
-                {"probe-pods", "probe-log"}
-            ):
-                raise ModelProviderError(
-                    "The model did not cite supplied evidence in its final answer."
-                )
         except ModelProviderError as exc:
             return False, f"AdHocAnswer probe failed. {exc}"
         try:

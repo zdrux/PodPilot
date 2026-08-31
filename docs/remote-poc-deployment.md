@@ -219,14 +219,10 @@ test "$(oc get secret podpilot-oauth-cookie -n ai-ops \
   -o jsonpath='{.data.session_secret}' | base64 -d | wc -c)" -eq 32
 ```
 
-Create the empty, fixed-name model credential Secret. Configuration administrators
-add model endpoints later through the GUI. Remote-cluster credentials are user-delegated
-and are not stored in PodPilot Secrets:
-
-```bash
-oc get secret podpilot-model-credentials -n ai-ops >/dev/null 2>&1 || \
-  oc create -f deploy/openshift/workload/model-credentials.yaml
-```
+The workload manifest creates the empty, fixed-name model credential Secret during
+the overlay apply. It contains no token in source control. Configuration administrators
+add model endpoints later through the GUI, which patches only the profile's credential key.
+Remote-cluster credentials are user-delegated and are not stored in PodPilot Secrets.
 
 ## 6. Verify existing LDAP-synchronized elevated-role groups
 
@@ -251,6 +247,16 @@ Breakglass remains an application role only; it does not grant OpenShift
 `cluster-admin`.
 
 ## 7. Validate and apply the manifests
+
+On an existing installation where the model Secret was previously created with
+`oc create ... -o yaml | oc apply -f -`, remove that object's old client-side apply annotation
+once before applying this version. This prevents the old declaration from treating credential
+keys as fields to remove when the new empty manifest takes ownership of the Secret metadata:
+
+```bash
+oc annotate secret podpilot-model-credentials -n ai-ops \
+  kubectl.kubernetes.io/last-applied-configuration- --overwrite
+```
 
 Run a server-side dry run, inspect the diff, and then apply the same overlay:
 
@@ -299,11 +305,13 @@ The overlay applies, in dependency-safe form:
 - `auth/group-rbac/ui-access-rbac.yaml`, admitting `system:authenticated` to the
   exact PodPilot Service;
 - `workload/runtime-config.yaml` and `workload/persistentvolumeclaim.yaml`;
+- the empty `workload/model-credentials.yaml` Secret and
 - `workload/model-credentials-rbac.yaml`;
 - `workload/deployment.yaml`, `service.yaml`, `route.yaml`, and
   `network-policy.yaml`.
 
-The OAuth cookie and model credential Secret values remain out-of-band.
+The OAuth cookie value remains out-of-band. Model token values are absent from the manifests
+and are written only after deployment through the configuration UI.
 
 ## 8. Verify access before inviting users
 

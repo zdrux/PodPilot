@@ -316,19 +316,22 @@ code fences. A response that tells the operator to run
 `oc` or `kubectl` receives one model correction attempt; if it remains unsafe, PodPilot replaces it
 with a deterministic evidence summary. Declarative configuration guidance remains allowed.
 
-**Test connection** persists the latest bounded synthetic-probe trace on the model profile. The
+**Test connection** is a compatibility smoke test, not a quality benchmark. It verifies the
+endpoint, authentication, selected model, required transport capabilities, and that the production
+workflow schemas can be parsed. It does not grade the model's synthetic investigation choices,
+candidate selection, or citation strategy; practical quality is evaluated through normal Ask usage.
+The test persists the latest bounded synthetic-probe trace on the model profile. The
 collapsed **Request diagnostics** section includes the probe operation/schema, endpoint path, HTTP
 status, duration, request ID, token usage, and a redacted response preview. It never stores request
 bodies, authorization headers, API tokens, or complete HTTP headers. Response previews are enabled
 only for the fixed synthetic capability probes, capped at 4,000 characters per response, and passed
 through normal secret redaction.
 
-A `reduced_capability` probe result does not automatically disable AI workflows. PodPilot
-allows the profile when the recorded probe still proves an accepted transport, endpoint
-reachability, authentication, model availability, and structured output. Failures of the
-more demanding semantic Ask schema probe remain visible in Ask and Model Settings, while
-normal code continues to validate typed read plans and use deterministic fallbacks. Profiles
-missing any of those core capabilities remain unavailable.
+Workflow-schema smoke-test failures remain informational and do not put an otherwise compatible
+profile into `reduced_capability` or display a persistent degraded-model warning in Ask. Normal code
+still validates every typed response and uses deterministic fallbacks during real conversations.
+Profiles missing a required transport, endpoint, authentication, model, structured-output, or
+configured embedding capability remain `reduced_capability` and may be unavailable.
 
 ### Multi-cluster Ask and curated memory
 
@@ -726,15 +729,10 @@ commands.
    That stores a 44-byte string, while the OAuth proxy requires the mounted file
    to contain exactly 16, 24, or 32 raw bytes when cookie refresh is enabled.
 
-   Create or replace the model Secret directly from the local OpenAI key
-   without printing it or writing it to disk:
-
-   ```powershell
-   if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "OPENAI_API_KEY is not set" }
-   oc -n ai-ops create secret generic podpilot-model-credentials --from-literal=api_key=$env:OPENAI_API_KEY --dry-run=client -o yaml | oc apply -f -
-   ```
-
-   Open `/settings/model` as an Approver to add one or more endpoints. Choose
+   The workload overlay creates an empty `podpilot-model-credentials` Secret without embedding
+   any token in source control. Do not create or populate it before the overlay apply in step 5.
+   After deployment, open `/settings/model` as a configuration administrator to add one or more
+   endpoints. Choose
    **Responses** for providers implementing `/responses`, or **Chat Completions**
    for gateways implementing `/chat/completions`; enter the token on first save,
    then run **Test connection** and activate a ready profile. A blank token field
@@ -752,17 +750,16 @@ commands.
    success or failure notification after the test and lists **Ask PodPilot
    schemas** separately. A reachable model that cannot satisfy those operational
    schemas remains reduced-capability and cannot be activated as ready.
-   The Ask probe exercises two planning rounds: Pod discovery without a fabricated
-   log target, followed by selection of an exact synthetic Pod/container candidate.
-   This catches endpoints that produce schema-valid JSON but substitute literal
-   instructions or placeholders for values that should come from earlier evidence.
+   The Ask compatibility smoke test exercises classification, one compact action-selection call,
+   final-answer formatting, and bounded log-analysis formatting. It verifies schema exchange only;
+   it does not grade whether the model chose PodPilot's preferred synthetic troubleshooting path.
    For Chat Completions endpoints, PodPilot makes one bounded correction attempt
    when a response fails schema validation. The retry includes only validation
    field locations/types and never echoes the rejected model response.
    Ask-schema probes cap their synthetic final-answer budget at 1,400 tokens even
    when the profile permits larger operational answers. This reduces probe load
    on slower on-premises models without changing the configured live-answer cap.
-   Approvers can delete any model from its edit page, including the active model.
+   Configuration administrators can delete any model from its edit page, including the active model.
    Deleting a profile also removes its opaque credential key. If the deleted
    profile was active, PodPilot activates the most recently probed ready profile;
    when none exists, it continues safely without AI until another model is tested
@@ -771,14 +768,26 @@ commands.
    only for a disposable PoC endpoint. Rotate the provider key if it ever appears
    in terminal or application output.
 
-   `model-credentials.yaml` documents the fixed model Secret identity but is deliberately
-   excluded from the workload kustomization so a later manifest apply cannot erase the
-   provider token. Remote-cluster credentials are not stored in a Kubernetes Secret.
+   `model-credentials.yaml` is included in the workload Kustomization but deliberately declares
+   no `data` or `stringData`. A fresh deployment therefore creates the required Secret container,
+   while later applies preserve credential keys added through the UI. Before the first upgrade of
+   an installation whose Secret was created with client-side `oc apply`, remove its
+   `kubectl.kubernetes.io/last-applied-configuration` annotation so the earlier declaration cannot
+   remove credential keys. Remote-cluster credentials are not stored in a Kubernetes Secret.
 
 5. Validate and deploy the complete SNO overlay. Optionally retain the separate
    PoC cluster-admin binding for the `ai-observer` development/break-glass identity;
    the application does not run as that identity. The SNO overlay now includes `base/`, so a
    fresh apply creates `podpilot-role-reader` and its binding without a separate prerequisite:
+
+   Before the first upgrade of an existing installation whose model Secret was created with
+   client-side `oc apply`, remove the old apply annotation so the empty manifest cannot remove
+   credential keys owned by that earlier declaration:
+
+   ```powershell
+   oc annotate secret podpilot-model-credentials -n ai-ops `
+     kubectl.kubernetes.io/last-applied-configuration- --overwrite
+   ```
 
    ```powershell
    oc apply --dry-run=server -k deploy/openshift/overlays/sno-milestone-one

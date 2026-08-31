@@ -233,8 +233,11 @@ or an explicitly insecure TLS mode can be selected per endpoint; insecure mode i
 reported as accepted rather than verified.
 
 Only a profile that passes endpoint, TLS acceptance, authentication, model,
-structured-output, and configured embedding checks is usable. Streaming and tool
-calling are recorded capabilities but are not required because the current agent
+structured-output, and configured embedding checks is ready. The workflow-schema probe is an
+informational compatibility smoke test: it verifies schema parsing without grading synthetic
+investigation choices, and it does not degrade an otherwise ready profile. Runtime code still
+validates every model-authored structure and retains deterministic fallback behavior. Streaming and
+tool calling are recorded capabilities but are not required because the current agent
 loop exchanges schema-validated read plans rather than provider-native tool calls.
 Schema-validated interpretation is displayed separately from deterministic facts.
 Provider failure preserves the deterministic investigation and records a bounded,

@@ -801,8 +801,11 @@ current repository and cluster state.
 - Explicit reasoning uses the profile's full maximum-output budget because hidden reasoning tokens
   count against that allowance. Migration `0017_user_reasoning_preferences` adds the supported-level
   metadata, queued-run snapshot, and per-user/per-model preference.
-- Reduced-capability profiles now remain usable when their probe proves the core safe text contract;
-  semantic Ask-probe failures are shown as warnings and continue through typed validation and fallback.
+- Model connection testing treats workflow-schema checks as an informational compatibility smoke
+  test rather than a synthetic quality benchmark. It no longer grades inquiry classification,
+  grounded action choice, or citations, and a workflow-smoke failure does not degrade an otherwise
+  ready profile or display a persistent warning in Ask. Runtime typed validation and deterministic
+  fallback remain authoritative during real conversations.
 - The model-free suite and a fresh SQLite migration through the new head pass locally; this change
   has not yet been rolled out to the SNO workload.
 

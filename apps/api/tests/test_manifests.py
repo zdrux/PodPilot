@@ -113,6 +113,20 @@ def test_user_delegated_access_has_no_cluster_credential_secret_or_rbac() -> Non
     assert all(item["name"] != "PODPILOT_CLUSTER_CREDENTIAL_STORE" for item in env)
 
 
+def test_workload_preprovisions_empty_model_credential_secret() -> None:
+    workload = ROOT / "deploy" / "openshift" / "workload"
+    kustomization = yaml.safe_load((workload / "kustomization.yaml").read_text())
+    secret = yaml.safe_load((workload / "model-credentials.yaml").read_text())
+
+    assert "model-credentials.yaml" in kustomization["resources"]
+    assert secret["kind"] == "Secret"
+    assert secret["metadata"]["name"] == "podpilot-model-credentials"
+    assert secret["metadata"]["namespace"] == "ai-ops"
+    assert secret["type"] == "Opaque"
+    assert "data" not in secret
+    assert "stringData" not in secret
+
+
 def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     workload = ROOT / "deploy" / "openshift" / "workload"
     runtime = yaml.safe_load((workload / "runtime-config.yaml").read_text())
