@@ -907,9 +907,9 @@
     let source = null;
     let poll = null;
     let progressStopped = false;
-    const cancelRun = pendingRun.querySelector("[data-run-cancel]");
+    const cancelRun = askSubmit?.matches("[data-run-cancel]") ? askSubmit : null;
     cancelRun?.addEventListener("click", async () => {
-      if (!csrf || !pendingRun.dataset.cancelUrl) return;
+      if (!csrf || !cancelRun.dataset.cancelUrl) return;
       if (!window.confirm(
         "Cancel this investigation? PodPilot will attempt to stop the active model request and oc command. Operations that already completed cannot be rolled back."
       )) return;
@@ -917,7 +917,7 @@
       cancelRun.textContent = "Cancelling…";
       if (current) current.textContent = "Requesting best-effort cancellation…";
       try {
-        const response = await fetch(pendingRun.dataset.cancelUrl, {
+        const response = await fetch(cancelRun.dataset.cancelUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -932,7 +932,7 @@
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         cancelRun.disabled = false;
-        cancelRun.textContent = "Cancel request";
+        cancelRun.textContent = "Cancel";
       }
     });
     const configuredTimeout = Number.parseInt(pendingRun.dataset.runTimeoutMs || "180000", 10);
@@ -1027,6 +1027,7 @@
     const textarea = adhocForm.querySelector("textarea");
     textarea?.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        if (askSubmit?.matches("[data-run-cancel]")) return;
         event.preventDefault();
         if (adhocForm.checkValidity()) adhocForm.requestSubmit();
       }

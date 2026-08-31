@@ -13807,7 +13807,11 @@ def test_user_cancels_active_ask_run_and_correlated_runner_request(tmp_path: Pat
         app.state.adhoc_runner_requests[run_id] = {runner_request_id}
 
         active = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert f'data-cancel-url="/api/v1/adhoc-runs/{run_id}/cancel"' in active.text
+        assert (
+            f'data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{run_id}/cancel"'
+            in active.text
+        )
+        assert "Cancel request</button>" not in active.text
         textarea = re.search(r'<textarea id="adhoc-message"[^>]*>', active.text)
         assert textarea is not None and "disabled" not in textarea.group(0)
 
@@ -14102,6 +14106,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "focus({preventScroll: true})" in script
     assert "data-run-cancel" in template
     assert "/api/v1/adhoc-runs/{{ active_run.id }}/cancel" in template
+    assert 'data-ask-submit data-run-cancel' in template
+    assert '>Cancel</button>' in template
+    assert 'pendingRun.querySelector("[data-run-cancel]")' not in script
     assert "appendOptimisticTurn" in script
     assert 'class="boundary-pill caution-summary' in template
     assert template.count('class="boundary-pill caution-summary') == 1
