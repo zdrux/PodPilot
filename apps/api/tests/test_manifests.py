@@ -113,6 +113,52 @@ def test_user_delegated_access_has_no_cluster_credential_secret_or_rbac() -> Non
     assert all(item["name"] != "PODPILOT_CLUSTER_CREDENTIAL_STORE" for item in env)
 
 
+def test_oauth_proxy_restarts_when_its_projected_client_token_rotates() -> None:
+    deployment = yaml.safe_load(
+        (ROOT / "deploy" / "openshift" / "workload" / "deployment.yaml").read_text()
+    )
+    pod_spec = deployment["spec"]["template"]["spec"]
+    oauth_proxy = next(
+        container for container in pod_spec["containers"]
+        if container["name"] == "oauth-proxy"
+    )
+    api = next(
+        container for container in pod_spec["containers"]
+        if container["name"] == "api"
+    )
+    projected = next(
+        volume for volume in pod_spec["volumes"]
+        if volume["name"] == "podpilot-service-account"
+    )
+    token_projection = next(
+        source["serviceAccountToken"]
+        for source in projected["projected"]["sources"]
+        if "serviceAccountToken" in source
+    )
+    runtime = next(
+        volume for volume in pod_spec["volumes"]
+        if volume["name"] == "oauth-runtime"
+    )
+    supervisor = oauth_proxy["command"][2]
+
+    assert token_projection == {"path": "token", "expirationSeconds": 28800}
+    assert runtime["emptyDir"] == {"medium": "Memory", "sizeLimit": "1Mi"}
+    assert oauth_proxy["command"][:2] == ["/bin/sh", "-ec"]
+    assert oauth_proxy["command"][3] == "oauth-proxy"
+    assert "cp /var/run/secrets/kubernetes.io/serviceaccount/token" in supervisor
+    assert '$(cat /var/run/podpilot-oauth/client-secret)' in supervisor
+    assert '$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)' in supervisor
+    assert "kill -TERM 1" in supervisor
+    assert 'exec /usr/bin/oauth-proxy "$@"' in supervisor
+    assert "--client-secret-file=/var/run/podpilot-oauth/client-secret" in oauth_proxy["args"]
+    assert any(
+        mount["name"] == "oauth-runtime"
+        and mount["mountPath"] == "/var/run/podpilot-oauth"
+        for mount in oauth_proxy["volumeMounts"]
+    )
+    assert all(mount["name"] != "oauth-runtime" for mount in api["volumeMounts"])
+
+
 def test_workload_preprovisions_empty_model_credential_secret() -> None:
     workload = ROOT / "deploy" / "openshift" / "workload"
     kustomization = yaml.safe_load((workload / "kustomization.yaml").read_text())

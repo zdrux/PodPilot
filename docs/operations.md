@@ -133,6 +133,16 @@ backend. Every authenticated user receives Viewer. Lab groups map the three
 elevated roles; the remote overlay accepts arrays of existing LDAP-synchronized
 groups for those roles.
 
+The OAuth proxy uses the `podpilot-investigator` projected service-account token as its
+OpenShift OAuth client secret. The workload requests an eight-hour token and snapshots the exact
+value used by each proxy process into a proxy-only memory volume. Because the pinned proxy reads
+its client secret only at startup, a background comparison checks the projected file every 30
+seconds. When kubelet rotates it, only the `oauth-proxy` container exits and restarts; the API,
+SQLite state, and OAuth cookie key remain in place. A periodic increase in that container's restart
+count accompanied by `Projected OAuth client token rotated` is expected. Repeated
+`unauthorized_client` callback failures without that message indicate that this rotation supervisor
+is absent or unhealthy.
+
 ### Troubleshoot an interactive login loop
 
 OpenShift OAuth can reuse an existing browser SSO session. If the PodPilot access

@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-30
+Last reviewed: 2026-08-31
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -39,6 +39,11 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- The pending workload requests an eight-hour projected service-account token for the OAuth client
+  and supervises the pinned proxy's startup-only client-secret cache. Token rotation restarts only
+  `oauth-proxy`, retaining the API process, SQLite state, and stable OAuth cookie key so later fresh
+  browser logins do not fail with `unauthorized_client`.
 
 - Ask now redirects every authorized role through user-owned cluster connections. Investigator is
   read-only; Read-Write chooses read-only or Action at conversation creation. Configuration

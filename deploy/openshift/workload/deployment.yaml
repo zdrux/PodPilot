@@ -307,9 +307,27 @@ spec:
         - name: oauth-proxy
           image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:22fe71990d4e40d2a353116767ce543d0a2e40acd4f068043ae83bc1c2e04f0d
           imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              cp /var/run/secrets/kubernetes.io/serviceaccount/token /var/run/podpilot-oauth/client-secret
+              (
+                while sleep 30; do
+                  if [ "$(cat /var/run/podpilot-oauth/client-secret)" != "$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" ]; then
+                    echo "Projected OAuth client token rotated; restarting oauth-proxy." >&2
+                    kill -TERM 1
+                    exit 0
+                  fi
+                done
+              ) &
+              exec /usr/bin/oauth-proxy "$@"
+            - oauth-proxy
           args:
             - --provider=openshift
             - --openshift-service-account=podpilot-investigator
+            - --client-secret-file=/var/run/podpilot-oauth/client-secret
             - --http-address=0.0.0.0:4180
             - --https-address=
             - --upstream=http://127.0.0.1:8080
@@ -360,6 +378,8 @@ spec:
             - name: podpilot-service-account
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
+            - name: oauth-runtime
+              mountPath: /var/run/podpilot-oauth
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -377,7 +397,7 @@ spec:
             sources:
               - serviceAccountToken:
                   path: token
-                  expirationSeconds: 3600
+                  expirationSeconds: 28800
               - configMap:
                   name: kube-root-ca.crt
                   items:
@@ -393,3 +413,7 @@ spec:
                     - path: namespace
                       fieldRef:
                         fieldPath: metadata.namespace
+        - name: oauth-runtime
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi

@@ -43,6 +43,9 @@ the same result shape across repeated runs.
   and rollback instructions.
 - Confirm the mounted OAuth `session_secret` decodes to exactly 16, 24, or 32
   raw bytes; Base64 text passed through `--from-literal` is not valid key material.
+- Confirm the OAuth proxy uses its proxy-only memory-backed client-secret snapshot and that changing
+  the projected service-account token terminates and restarts only the proxy container. A fresh
+  browser login must complete after the restart without an `unauthorized_client` callback failure.
 - For a remote PoC, confirm the rendered overlay contains no static PV,
   `storageClassName`, node selector, lab hostname, cluster-admin binding, or
   credential value; verify the target has exactly one suitable default

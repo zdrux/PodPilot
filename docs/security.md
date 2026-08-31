@@ -133,6 +133,13 @@ cluster-admin rights. The API service account retains its read roles for guarded
 group resolution, but its projected credential is mounted only into the API and OAuth-proxy
 containers—not the unrestricted runner.
 
+The OAuth proxy receives its OAuth client secret through a projected, expiring service-account
+token rather than a static token Secret. The pinned proxy does not reload that file itself, so its
+container snapshots the startup credential into a private memory-backed volume and watches the
+projection for rotation. A changed token terminates and restarts only the proxy container, which
+loads the new credential. Neither the snapshot nor either token value is logged, persisted, mounted
+into the runner, or included in a manifest.
+
 PodPilot removes delegated tokens after two hours by default and attempts remote OAuth token
 revocation on expiry, replacement, cluster disable, logout, and graceful shutdown. The remote
 cluster's standard OAuth token TTL remains authoritative (normally 24 hours). Because no token is

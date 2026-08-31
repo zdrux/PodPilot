@@ -14214,6 +14214,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'data-cluster-filter="all">All</button>' in template
     assert 'let clusterFilter = filterTabs.find' in script
     assert 'const matchesStatus = clusterFilter === "all" || checkbox?.dataset.connected === "true"' in script
+    assert 'document.addEventListener("pointerdown"' in script
+    assert "clusterPicker.open && !clusterPicker.contains(event.target)" in script
+    assert "clusterPicker.open = false" in script
     assert ".cluster-filter-tabs > button[aria-selected=\"true\"]" in styles
     assert "composer-meta-row" in template
     assert "composer-input-wrap" in template

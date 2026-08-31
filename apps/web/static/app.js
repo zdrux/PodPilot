@@ -572,6 +572,11 @@
     const filterTabs = Array.from(clusterPicker.querySelectorAll("[data-cluster-filter]"));
     let clusterFilter = filterTabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.clusterFilter || "all";
     const maxSelected = Number.parseInt(clusterPicker.dataset.maxSelected || "10", 10);
+    document.addEventListener("pointerdown", (event) => {
+      if (clusterPicker.open && !clusterPicker.contains(event.target)) {
+        clusterPicker.open = false;
+      }
+    });
     const applyClusterFilters = () => {
       const query = clusterSearch?.value.trim().toLowerCase() || "";
       clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
