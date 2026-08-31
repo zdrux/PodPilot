@@ -380,6 +380,10 @@
                 <small data-cluster-picker-count></small>
               </summary>
               <div class="cluster-picker-menu">
+                <div class="cluster-filter-tabs" role="tablist" aria-label="Filter clusters by sign-in status">
+                  <button type="button" role="tab" aria-selected="true" data-cluster-filter="connected">Signed-In</button>
+                  <button type="button" role="tab" aria-selected="false" data-cluster-filter="all">All</button>
+                </div>
                 <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
                 <div class="cluster-options">
                 {% for cluster in clusters %}

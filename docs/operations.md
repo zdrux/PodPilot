@@ -350,6 +350,15 @@ access. PodPilot reduces Kubernetes client exceptions to actionable messages and
 headers or authorization material to the browser. Disabling TLS verification changes certificate
 and hostname validation only; it does not remove or alter bearer authentication.
 
+Kubernetes normally exposes API discovery to authenticated non-admin users through its default
+discovery roles, but clusters may customize that access. In unrestricted Ask, PodPilot exposes a
+bounded `discover_resources` helper through the delegated read-only broker. It searches a
+five-minute, policy-filtered catalog using exact aliases, normalized compound names, and lexical
+overlap before the agent uses an unfamiliar operator or CRD name. A discovery match confirms only
+that the API type is advertised; it does not prove the delegated identity may read its objects.
+Discovery denial or failure remains a non-blocking limitation, and the full catalog is never placed
+in the model prompt.
+
 Remote namespace log-volume questions additionally require the standard `logging-loki` Route,
 `cluster-logging-application-view`, and cluster-wide LokiStack OpenShift authorization for the
 registered identity. The base runtime identity is also bound to
@@ -396,9 +405,11 @@ PodPilot suppresses urllib3's identical per-request `InsecureRequestWarning` for
 accepted connections to avoid log spam; this does not suppress connection failures or remove the
 operator-visible session indicator and audited TLS warning.
 
-An Investigator selects one to ten enabled clusters beside the Ask composer. The selection
-is pinned when the first question is submitted; **Change** opens a new conversation while
-the prior session remains in history. All selected clusters share the 25-unit weighted turn
+An Investigator selects one to ten enabled clusters beside the Ask composer. The cluster drawer
+defaults to signed-in targets, while **All** also shows targets that still require authentication;
+text search applies within the active filter. The selection is pinned when the first question is
+submitted; **Change** opens a new conversation while the prior session remains in history. All
+selected clusters share the 25-unit weighted turn
 budget. Typed metric reads are executed independently for every selected cluster by
 discovering its Thanos Querier Route and authenticating with that cluster's registered
 bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,

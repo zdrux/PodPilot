@@ -224,7 +224,11 @@ class ResourceCatalog:
         def score(item: ResourceDescriptor) -> tuple[int, int, str, str]:
             aliases = (item.name, item.kind, item.singular_name or "", *item.short_names)
             exact = any(
-                alias and _normalized_words(alias) in normalized_query for alias in aliases
+                alias and (
+                    _normalized_words(alias) in normalized_query
+                    or normalized_query in _normalized_words(alias)
+                )
+                for alias in aliases
             )
             overlap = len(query_terms.intersection(
                 term for alias in aliases for term in _search_terms(alias)

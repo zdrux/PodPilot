@@ -9778,6 +9778,10 @@ def create_app(
                 "request, or expand it deliberately in bounded increments instead of dumping the "
                 "entire log. "
                 "The generic typed list_resources and search_resources helpers are unavailable. Use "
+                "discover_resources before guessing an unfamiliar operator or CRD resource name, "
+                "and after any `oc get` NoMatch error. Search using the operator's original concept "
+                "when possible, then use only exact resource coordinates returned by discovery. "
+                "API discovery does not prove the delegated identity may read matching objects. Use "
                 "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. Never dump Secrets or credentials. "
@@ -10056,7 +10060,7 @@ def create_app(
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
                 if tool_call.name in {
-                    "pod_health_summary",
+                    "discover_resources", "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
                 }:
                     collector_cluster_id = ""

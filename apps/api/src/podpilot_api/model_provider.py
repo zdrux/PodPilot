@@ -2207,6 +2207,17 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ("namespace", "label_selector", "limit"),
             (),
         )
+        discovery_tool = collector_tool(
+            "discover_resources",
+            "Search the selected cluster's authoritative Kubernetes API discovery catalog for "
+            "an unfamiliar resource concept or failed resource name. Use this before guessing "
+            "an operator or CRD resource name, and after an oc command reports that the server "
+            "does not have a resource type. Supply the operator's original concept when possible. "
+            "Returned entries are exact discovered API coordinates, but discovery does not prove "
+            "the delegated user is authorized to read objects of that type.",
+            ("discovery_query", "limit"),
+            ("discovery_query",),
+        )
         http_probe_tool = collector_tool(
             "http_probe",
             "Run a bounded, unauthenticated HTTP(S) connectivity, TLS, and response probe from "
@@ -2255,6 +2266,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         )
         tools = [
             shell_tool,
+            discovery_tool,
             pod_health_tool,
             http_probe_tool,
             audit_tool,

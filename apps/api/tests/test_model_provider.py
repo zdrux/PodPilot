@@ -405,7 +405,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "pod_health_summary", "http_probe",
+        "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
         "query_audit_events", "query_metrics",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
@@ -432,6 +432,12 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert "label_selector" in health_tool["parameters"]["properties"]
     assert "complete zero-anomaly result" in health_tool["description"]
     assert "search_resources" not in tools_by_name
+    discovery_tool = tools_by_name["discover_resources"]
+    assert discovery_tool["parameters"]["required"] == [
+        "cluster_id", "discovery_query",
+    ]
+    assert "before guessing" in discovery_tool["description"]
+    assert "does not prove" in discovery_tool["description"]
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]

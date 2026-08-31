@@ -567,6 +567,9 @@ def _agent_final_step(content: str = "The agent interpreted the collected eviden
 
 
 def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
+    assert _read_only_proxy_allows("GET", "/api") is True
+    assert _read_only_proxy_allows("GET", "/apis") is True
+    assert _read_only_proxy_allows("GET", "/apis/apps/v1") is True
     assert _read_only_proxy_allows("GET", "/api/v1/pods") is True
     assert _read_only_proxy_allows("GET", "/api/v1/secrets") is False
     assert _read_only_proxy_allows(
@@ -601,6 +604,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     constructor_threads: list[int] = []
     event_loop_threads: set[int] = set()
     explorer_kwargs: list[dict[str, object]] = []
+    explorer_intents: list[ReadIntent] = []
     telemetry_calls: list[tuple[str, str, str]] = []
     telemetry_token_providers: list[Callable[[], str]] = []
 
@@ -609,6 +613,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
             return None
 
         def execute(self, intent) -> ReadResult:
+            explorer_intents.append(intent)
             return ReadResult((AdHocObservation(
                 id=f"delegated-{intent.tool}",
                 tool=intent.tool,
@@ -665,6 +670,27 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
             if self.calls == 1:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
+                    "discovery_query": "cluster log forwarder",
+                    "limit": 5,
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "discover-clf", "type": "function",
+                            "function": {
+                                "name": "discover_resources", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="discover-clf", name="discover_resources", arguments=arguments,
+                    ),),
+                )
+            if self.calls == 2:
+                arguments = json.dumps({
+                    "cluster_id": cluster_id,
                     "metric": "top_log_volume_by_namespace",
                     "metric_scope": "cluster",
                     "metric_operation": "rank",
@@ -685,7 +711,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="rank-logs", name="query_metrics", arguments=arguments,
                     ),),
                 )
-            if self.calls == 2:
+            if self.calls == 3:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
                     "audit_operation_scope": "deletes",
@@ -707,7 +733,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="audit-deletes", name="query_audit_events", arguments=arguments,
                     ),),
                 )
-            if self.calls == 3:
+            if self.calls == 4:
                 arguments = json.dumps({
                     "command": (
                         "oc get clusterlogforwarders.observability.openshift.io "
@@ -808,6 +834,10 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     assert explorer_kwargs[0]["metric_reader"] is not None
     assert explorer_kwargs[0]["log_metric_reader"] is not None
     assert explorer_kwargs[0]["audit_reader"] is not None
+    assert [intent.tool for intent in explorer_intents] == [
+        "discover_resources", "query_metrics", "query_audit_events",
+    ]
+    assert explorer_intents[0].discovery_query == "cluster log forwarder"
     assert telemetry_calls == [
         ("metrics", "https://api.central-dev.example:6443", "delegated-token"),
         ("application", "https://api.central-dev.example:6443", "delegated-token"),
@@ -837,6 +867,8 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "delegated read-write mode" in system_prompt
     assert "same investigation tools" in system_prompt
     assert "search_resources helpers are unavailable" in system_prompt
+    assert "discover_resources before guessing" in system_prompt
+    assert "API discovery does not prove" in system_prompt
     assert "Inspect all IngressController resources" in system_prompt
     assert "rather than assuming one named default" in system_prompt
     assert "http_probe originates from the PodPilot application Pod" in system_prompt
@@ -14165,6 +14197,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "rawResponseToggle.disabled = false" in script
     assert "data-cluster-picker" in template
     assert "cluster-picker-selection" in template
+    assert 'data-cluster-filter="connected">Signed-In</button>' in template
+    assert 'data-cluster-filter="all">All</button>' in template
+    assert 'let clusterFilter = filterTabs.find' in script
+    assert 'const matchesStatus = clusterFilter === "all" || checkbox?.dataset.connected === "true"' in script
+    assert ".cluster-filter-tabs > button[aria-selected=\"true\"]" in styles
     assert "composer-meta-row" in template
     assert "composer-input-wrap" in template
     assert '>Submit</button>' in template

@@ -1429,7 +1429,7 @@ class KubernetesReadOnlyExplorer:
             id=f"cluster-discovery-{uuid4()}",
             tool="discover_resources",
             summary=(
-                f"Discovered {len(entries)} readable API resource type"
+                f"Discovered {len(entries)} policy-filtered API resource type"
                 f"{'s' if len(entries) != 1 else ''} relevant to "
                 f"{str(intent.discovery_query or 'the investigation')[:120]}."
             ),
@@ -1439,7 +1439,10 @@ class KubernetesReadOnlyExplorer:
                 "query": str(intent.discovery_query or "")[:253],
                 "resources": entries,
                 "count": len(entries),
-                "policy": "dynamic discovery with sensitive resource types excluded",
+                "policy": (
+                    "dynamic API discovery with sensitive resource types excluded; "
+                    "object authorization is not implied"
+                ),
             },
         ),))
 

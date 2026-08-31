@@ -561,7 +561,19 @@
     const hidden = document.querySelector("[data-cluster-ids]");
     const pickerLabel = clusterPicker.querySelector("[data-cluster-picker-label]");
     const pickerCount = clusterPicker.querySelector("[data-cluster-picker-count]");
+    const clusterSearch = clusterPicker.querySelector("[data-cluster-search]");
+    const filterTabs = Array.from(clusterPicker.querySelectorAll("[data-cluster-filter]"));
+    let clusterFilter = filterTabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.clusterFilter || "all";
     const maxSelected = Number.parseInt(clusterPicker.dataset.maxSelected || "10", 10);
+    const applyClusterFilters = () => {
+      const query = clusterSearch?.value.trim().toLowerCase() || "";
+      clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
+        const checkbox = option.querySelector("[data-cluster-checkbox]");
+        const matchesStatus = clusterFilter === "all" || checkbox?.dataset.connected === "true";
+        const matchesSearch = !query || option.dataset.search.toLowerCase().includes(query);
+        option.hidden = !matchesStatus || !matchesSearch;
+      });
+    };
     const updatePicker = (changed) => {
       const selected = checkboxes.filter((item) => item.checked);
       if (selected.length > maxSelected && changed) changed.checked = false;
@@ -620,12 +632,15 @@
       }
       updatePicker(checkbox);
     }));
-    clusterPicker.querySelector("[data-cluster-search]")?.addEventListener("input", (event) => {
-      const query = event.target.value.trim().toLowerCase();
-      clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
-        option.hidden = Boolean(query) && !option.dataset.search.toLowerCase().includes(query);
+    clusterSearch?.addEventListener("input", applyClusterFilters);
+    filterTabs.forEach((tab) => tab.addEventListener("click", () => {
+      clusterFilter = tab.dataset.clusterFilter || "all";
+      filterTabs.forEach((item) => {
+        item.setAttribute("aria-selected", String(item === tab));
       });
-    });
+      applyClusterFilters();
+    }));
+    applyClusterFilters();
     updatePicker();
   }
   starterButtons.forEach((button) => {

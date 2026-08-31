@@ -192,6 +192,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   identity or connection.
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
+  The picker defaults to a Signed-In tab and offers All for clusters that still need authentication;
+  text search composes with either filter.
+- Unrestricted Ask now exposes the existing policy-filtered Kubernetes discovery catalog as a
+  delegated typed tool. The agent is directed to search it before guessing unfamiliar CRD names or
+  after a NoMatch error; deterministic matching recognizes compound fragments such as
+  `logforwarder` while returning only exact, discovered API coordinates. Discovery remains
+  session-user scoped and does not imply object authorization.
   One shared 25-unit weighted investigation budget fans out across selected clusters, partial failures remain
   scoped limitations, and all evidence/citations identify their source cluster. Alert,
   investigation, dashboard, remote metrics, and remediation routing are unchanged.
