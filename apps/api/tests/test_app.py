@@ -837,6 +837,10 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "delegated read-write mode" in system_prompt
     assert "same investigation tools" in system_prompt
     assert "search_resources helpers are unavailable" in system_prompt
+    assert "Inspect all IngressController resources" in system_prompt
+    assert "rather than assuming one named default" in system_prompt
+    assert "http_probe originates from the PodPilot application Pod" in system_prompt
+    assert "never describe it as bidirectional inter-cluster connectivity" in system_prompt
     assert "delegated-token" not in json.dumps(provider.agent_messages)
     assert telemetry_token_providers
     # TestClient shutdown clears the in-memory delegated session; retained
