@@ -138,8 +138,9 @@ Milestone 10 adds gates for Investigator-only standalone chat, schema-valid
 multi-round read plans, a ten-round and 25-unit weighted investigation budget, duplicate
 suppression, discovery-followed-by-exact-container-log collection, ConfigMap and bounded-log evidence, Secret/subresource
 denial, recursive redaction, persisted provenance, and withholding of uncited
-cluster-specific answers. Audit both `cluster-reader` effective permissions and
-the application broker deny tests before release.
+cluster-specific answers. Current delegated-release RBAC gates must prove the runtime has
+`podpilot-role-reader`, has no `cluster-reader` binding, can GET OpenShift Groups, and cannot
+read ordinary workload objects through that identity. Retain the application broker deny tests.
 
 HTTP-probe gates must cover arbitrary destinations, HEAD/GET-only enforcement,
 SNI and Host preservation across connection overrides, TLS verification, no redirect

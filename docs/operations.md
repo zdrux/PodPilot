@@ -332,24 +332,18 @@ missing any of those core capabilities remain unavailable.
 
 ### Multi-cluster Ask and curated memory
 
-Approvers and Breakglass users manage remote OpenShift entries at
-`/settings/clusters`. Each entry has an HTTPS API origin, opaque Secret key, exact
-key/value tags, enabled state, and per-cluster TLS verification setting. The runtime
-cluster is added automatically and uses its projected service-account identity. Remote
-tokens are never stored in SQLite or returned by the API. Disabling an entry removes its
-Secret value but keeps metadata for historical conversations.
+Configuration administrators manage shared OpenShift entries at `/settings/clusters`; authorized
+users manage their own private entries separately. Each entry stores an HTTPS API origin, exact
+key/value tags, enabled state, and per-cluster TLS verification setting, but no bearer token. The
+runtime cluster is registered automatically. Users sign in to selected clusters and PodPilot keeps
+their OAuth tokens only in API-process memory for the delegated session.
 
-**Test connection** performs remote Kubernetes API discovery with the stored identity.
-HTTP 401 means the bearer token must be replaced; HTTP 403 means the identity needs API
-discovery and read-only `cluster-reader` access on the remote cluster. Remote Ask metrics
-also require `cluster-monitoring-view` and permission to get the
-`openshift-monitoring/thanos-querier` Route. PodPilot reduces
-Kubernetes client exceptions to these actionable messages and never returns raw response
-headers or authorization material to the browser. The remote adapter sends tokens through
-the Kubernetes client's `BearerToken` authentication setting, producing an
-`Authorization: Bearer …` header whether TLS verification is enabled or explicitly
-disabled. Disabling verification changes certificate and hostname validation only; it
-does not remove or alter bearer authentication.
+**Test connection** and Ask Kubernetes requests use the signed-in user's identity. HTTP 401 means
+that delegated connection must be established again; HTTP 403 means the user lacks the requested
+API permission. Remote Ask metrics require the same user to have the relevant monitoring and Route
+access. PodPilot reduces Kubernetes client exceptions to actionable messages and never returns raw
+headers or authorization material to the browser. Disabling TLS verification changes certificate
+and hostname validation only; it does not remove or alter bearer authentication.
 
 Remote namespace log-volume questions additionally require the standard `logging-loki` Route,
 `cluster-logging-application-view`, and cluster-wide LokiStack OpenShift authorization for the
@@ -636,12 +630,13 @@ Verify the deployed boundary:
 ```powershell
 . .\scripts\connect-sno.ps1
 oc get pod -n ai-ops -l app.kubernetes.io/name=podpilot -o jsonpath='{.items[0].spec.serviceAccountName}{"`n"}'
+oc auth can-i get groups.user.openshift.io --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc auth can-i patch deployments --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc get deployment podpilot -n ai-ops -o jsonpath='{.spec.template.spec.containers[*].name}{"`n"}'
 ```
 
-Expected results are `podpilot-investigator`, `yes`, `no`, and a container list containing
+Expected results are `podpilot-investigator`, `yes`, `no`, `no`, and a container list containing
 `oc-runner`. Do not apply `deploy/openshift/overlays/poc-cluster-admin` to this simulation.
 
 ### Delegated Action mode
@@ -782,7 +777,8 @@ commands.
 
 5. Validate and deploy the complete SNO overlay. Optionally retain the separate
    PoC cluster-admin binding for the `ai-observer` development/break-glass identity;
-   the application does not run as that identity:
+   the application does not run as that identity. The SNO overlay now includes `base/`, so a
+   fresh apply creates `podpilot-role-reader` and its binding without a separate prerequisite:
 
    ```powershell
    oc apply --dry-run=server -k deploy/openshift/overlays/sno-milestone-one
@@ -795,6 +791,8 @@ commands.
 
    ```powershell
    oc auth can-i --list --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i get groups.user.openshift.io --as=system:serviceaccount:ai-ops:podpilot-investigator
+   oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
    oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
    oc auth can-i get configmaps --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
    oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
@@ -818,9 +816,10 @@ Review `deploy/openshift/base/rbac.yaml` whenever a diagnostic adds a new API de
 Production packaging must omit both SNO overlays, use a supported storage class,
 and pin an immutable application image digest.
 
-Milestone 10 binds the normal `podpilot-investigator` runtime to OpenShift
-`cluster-reader`. The application broker supports ConfigMaps and bounded Pod logs
-but denies Secrets, access-review resources, arbitrary subresources, and mutations.
+The current delegated runtime binds `podpilot-investigator` only to the custom
+`podpilot-role-reader` ClusterRole for exact OpenShift Group GETs; it is not a
+`cluster-reader`. ConfigMaps, Pod logs, and other Ask Kubernetes evidence are read with
+the signed-in user's brokered capability, which denies Secrets and mutations in read-only mode.
 For well-known built-in resources, the broker canonicalizes plural/case variants
 and their authoritative apiVersion (for example, `pods` becomes `v1`/`Pod`) before
 validation. This prevents model syntax variation from becoming a failed cluster
@@ -1563,14 +1562,17 @@ still active, creates a durable `recommendation_ready` investigation and audit
 event, and displays only deterministic triage. Viewer users can see results but
 cannot start analysis.
 
-### Verify Milestone 3 workload evidence
+### Historical Milestone 3 workload-evidence gate
 
-Run the unit and sanitized evaluation suite, then confirm the deployed identity's
-read ceiling and application readiness:
+This pre-delegation gate is retained for history only. It expected the runtime ServiceAccount to
+read workloads and must not be used to validate a current deployment. Current release checks expect
+Group GET to succeed and ordinary Pod, Pod-log, ConfigMap, Secret, and mutation access to fail for
+`podpilot-investigator`; the signed-in user's delegated capability owns Ask evidence access.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --cov --cov-report=term-missing
 . .\scripts\connect-sno.ps1
+oc auth can-i get groups.user.openshift.io --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc auth can-i get pods --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc auth can-i get pods/log --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
 oc auth can-i get configmaps --all-namespaces --as=system:serviceaccount:ai-ops:podpilot-investigator
@@ -1578,12 +1580,8 @@ oc auth can-i get secrets --all-namespaces --as=system:serviceaccount:ai-ops:pod
 oc -n ai-ops rollout status deployment/podpilot --timeout=180s
 ```
 
-The investigator identity should allow Pod, event, controller, node, ConfigMap,
-and Pod-log reads but not Secret reads. The separate disposable PoC cluster-admin
-overlay affects only the `ai-observer` development identity. A workload investigation must persist collection failures,
-not silently fall back to an empty evidence set. Crash-loop log collection is
-limited to the alert-selected container's current and previous streams; image and
-scheduling investigations do not collect logs.
+Expected results are `yes`, then `no` for every ordinary Kubernetes data read. The separate
+disposable PoC cluster-admin overlay affects only the `ai-observer` development identity.
 
 ## Runbooks
 

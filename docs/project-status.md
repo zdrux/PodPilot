@@ -573,9 +573,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe
   link schemes are not activated.
-- The application runs as `ai-ops/podpilot-investigator`, bound to OpenShift
-  `cluster-reader`. The separate `ai-observer` identity retains cluster-admin only
-  as disposable-lab development and break-glass access.
+- The application runs as `ai-ops/podpilot-investigator`, bound only to the custom
+  `podpilot-role-reader` for OpenShift Group lookup plus explicit supporting platform views.
+  It has no `cluster-reader` binding. The separate `ai-observer` identity retains cluster-admin
+  only as disposable-lab development and break-glass access.
 - The monitoring check submits only fixed `ALERTS` and `up` instant-query shapes
   to the TLS-validated, authenticated in-cluster Thanos endpoint. Exact alert
   labels are escaped, responses are capped at 64 KiB and 20 retained series, and
@@ -687,9 +688,9 @@ current repository and cluster state.
 
 ## Important Safety State
 
-- The normal runtime is `podpilot-investigator` with `cluster-reader`. Live audit
-  confirmed Pod-log and ConfigMap reads and denied Secrets, `pods/exec`, and
-  Deployment patch. `ai-observer` has cluster-admin only through the explicit
+- The normal runtime is `podpilot-investigator` with `podpilot-role-reader`, not
+  `cluster-reader`. Ask Pod-log, ConfigMap, and other Kubernetes reads use delegated-user
+  broker capabilities. `ai-observer` has cluster-admin only through the explicit
   `poc-cluster-admin` overlay and is not the application identity.
 - Model output, alert text, events, logs, annotations, and retrieved memory are
   untrusted evidence and cannot define executable operations.

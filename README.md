@@ -63,8 +63,9 @@ overlay. Every product mutation still requires a preview
 and fresh user approval.
 
 The remote PoC overlay deliberately excludes that lab identity and cluster-admin
-binding. It runs the application with read-only `cluster-reader` plus narrow
-monitoring access. Every authenticated OpenShift user receives the Viewer role;
+binding. It gives the application identity only `podpilot-role-reader` access to
+OpenShift Group objects plus narrow supporting platform views; Ask cluster operations
+use the signed-in user's delegated capability. Every authenticated OpenShift user receives the Viewer role;
 existing LDAP-synchronized Groups are mapped only to elevated PodPilot roles,
 without PodPilot managing their membership.
 

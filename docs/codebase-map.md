@@ -83,8 +83,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/diagnostics/src/podpilot_diagnostics/checks.py`: portable diagnostic
   plan, result, and executor contracts.
 - `evals/fixtures/`: synthetic CrashLooping, image-waiting, and scheduling cases.
-- `deploy/openshift/base/rbac.yaml`: read-only cluster, Thanos, and explicit
-  namespaced Alertmanager API permissions.
+- `deploy/openshift/base/rbac.yaml`: narrow OpenShift Group lookup, supporting platform
+  views, and explicit namespaced Alertmanager API permissions; no `cluster-reader` binding.
 - `deploy/openshift/overlays/remote-poc/`: portable remote-cluster Kustomize entry
   point with an internal-registry ImageStreamTag deployment.
 - `docs/remote-poc-deployment.md`: ordered build, authorization, install,

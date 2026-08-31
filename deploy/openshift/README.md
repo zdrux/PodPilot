@@ -2,8 +2,8 @@
 
 Use `overlays/remote-poc/` for a remote OpenShift proof of concept. It composes:
 
-- `base/`: namespace, runtime ServiceAccount, legacy dashboard read access,
-  and explicit Alertmanager API RBAC in `openshift-monitoring`;
+- `base/`: namespace, runtime ServiceAccount, narrow OpenShift Group lookup,
+  supporting platform views, and explicit Alertmanager API RBAC in `openshift-monitoring`;
 - `auth/group-rbac/`: namespace-local GUI admission for OpenShift's built-in
   `system:authenticated` group;
 - `workload/`: SQLite PVC, runtime configuration, Deployment, OAuth proxy,
@@ -28,3 +28,9 @@ The standard remote overlay includes the shared `components/agentic-runner/` sid
 cluster mutation RBAC. Commands receive only a random loopback broker capability; the API injects
 the selected user's memory-only token. `overlays/remote-poc-agentic/` remains as a compatibility
 wrapper for longer Action deadlines. TLS verification is selected per cluster entry.
+
+Upgrades from a pre-delegated manifest must remove the obsolete
+`podpilot-investigator` ClusterRoleBinding after applying the current overlay; Kustomize does not
+prune an object removed from its resource list. The replacement binding is
+`podpilot-role-reader`, and `oc auth can-i get groups.user.openshift.io
+--as=system:serviceaccount:ai-ops:podpilot-investigator` must return `yes` before rollout.

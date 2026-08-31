@@ -1241,3 +1241,22 @@ PodPilot can only reduce permissions in read-only mode. Process loss requires re
 does not destroy conversation history. User-provided private endpoints expand the trusted private
 network surface and therefore retain strict HTTPS-origin parsing, bounded responses, exact-origin
 OAuth redirects, audit events, redaction, and visible TLS warnings.
+
+## 2026-08-30 - Runtime role resolution uses a narrow OpenShift Group reader
+
+Context: User-delegated Ask removed the runtime ServiceAccount from the Kubernetes evidence path,
+but FastAPI still resolves oauth-proxy usernames against configured OpenShift Group objects. Removing
+the former `cluster-reader` binding without replacing that one dependency causes role resolution to
+fail closed with HTTP 503 after successful OAuth login.
+
+Decision: Replace the `cluster-reader` binding on `ai-ops/podpilot-investigator` with the custom
+`podpilot-role-reader` ClusterRole. It permits only `get` on `groups.user.openshift.io`; it does not
+grant list, watch, workload, Secret, subresource, or mutation access. Active Kustomize overlays inherit
+the role and binding from `base/`. Ask Kubernetes requests continue to use the conversation owner's
+memory-only delegated capability.
+
+Consequences: Fresh remote and SNO overlay deployments inherit the base role and binding, resolve
+PodPilot application roles without restoring broad service-account reads, and do not depend on a
+previous base-only apply. Release checks require Group GET to succeed, require ordinary workload
+reads through the runtime identity to fail, and audit that no active binding references
+`cluster-reader`.

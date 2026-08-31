@@ -222,19 +222,17 @@ a production cluster or compose it with `poc-cluster-admin`.
 - Production packaging must not install the PoC overlay. It should use separate
   read and action identities with a small action allowlist.
 
-Milestone 10 separates the normal runtime from the break-glass exception. The
-`ai-ops/podpilot-investigator` ServiceAccount runs the application and is bound to
-OpenShift `cluster-reader`; `ai-ops/ai-observer` retains the disposable lab
-cluster-admin overlay only for development access. Ask PodPilot permits bounded
-resource, ConfigMap, and Pod-log reads through an application broker, while denying
-Secrets, access-review resources, exec/attach/port-forward/proxy paths, and every
-mutation. Because `cluster-reader` is aggregated, release checks audit its effective
-permissions as well as the broker policy.
+The normal runtime and break-glass identities are separate. The
+`ai-ops/podpilot-investigator` ServiceAccount runs the application and receives the custom
+`podpilot-role-reader` ClusterRole, which permits only `get` on OpenShift Group objects for
+application-role resolution. It is not bound to `cluster-reader`. Ask Kubernetes requests use
+the signed-in user's memory-only delegated token through a read-only or Action broker capability.
+`ai-ops/ai-observer` retains the disposable lab cluster-admin overlay only for development access.
 
-Cluster audit queries use the same Ask authorization boundary: Investigator, Approver, and
-Breakglass roles may request them; Viewer may not. Human application roles do not receive direct
-Loki credentials or RBAC. The runtime ServiceAccount performs the read through its existing
-`cluster-logging-audit-view` binding.
+Cluster audit queries use the same Ask authorization boundary: Investigator and Read-Write users
+may request them; Viewer may not. Human application roles receive no direct Loki credentials from
+PodPilot. Delegated adapters authenticate as the signed-in user; supporting platform-view bindings
+on the runtime identity do not authorize Ask Kubernetes reads.
 
 Model diagnostics follow the existing conversation and model-management authorization boundaries.
 An Ask turn stores only normalized call metadata and token counts; it does not store provider request

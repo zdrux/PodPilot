@@ -7,8 +7,8 @@ Own namespace-scoped workload configuration, service identity, RBAC, network pol
 ## Key Rules
 
 - Keep the base manifests read-only. The `overlays/poc-cluster-admin/` exception is for the disposable SNO lab only.
-- `base/` owns portable namespace, service identity, and read-only cluster and
-  monitoring RBAC. `overlays/remote-poc/` is the methodical remote installation path.
+- `base/` owns portable namespace, service identity, narrow OpenShift Group lookup,
+  and supporting monitoring RBAC. `overlays/remote-poc/` is the methodical remote installation path.
 - Never include the PoC cluster-admin overlay in a production installation path.
 - Keep `storage/sno-local/` separate from the base; it is a single-node lab fixture, not a production default.
 - Keep `auth/poc-htpasswd/` separate from the base. Group membership expresses

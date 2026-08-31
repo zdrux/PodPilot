@@ -6,6 +6,33 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_runtime_has_only_narrow_application_role_group_access() -> None:
+    documents = list(yaml.safe_load_all(
+        (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()
+    ))
+    role = next(
+        item for item in documents
+        if item.get("kind") == "ClusterRole"
+        and item["metadata"]["name"] == "podpilot-role-reader"
+    )
+    assert role["rules"] == [{
+        "apiGroups": ["user.openshift.io"],
+        "resources": ["groups"],
+        "verbs": ["get"],
+    }]
+    bindings = {
+        item["roleRef"]["name"]: item
+        for item in documents
+        if item.get("kind") == "ClusterRoleBinding"
+    }
+    assert "cluster-reader" not in bindings
+    assert bindings["podpilot-role-reader"]["subjects"] == [{
+        "kind": "ServiceAccount",
+        "name": "podpilot-investigator",
+        "namespace": "ai-ops",
+    }]
+
+
 def test_investigator_has_monitoring_and_logging_view_bindings() -> None:
     documents = list(yaml.safe_load_all(
         (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()
@@ -234,6 +261,7 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
 
     assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
+    assert "../../base" in kustomization["resources"]
     assert "../../../overlays/poc-cluster-admin" not in kustomization["resources"]
     assert kustomization["components"] == ["../../components/agentic-runner"]
     assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == (
@@ -303,6 +331,9 @@ def test_oc_runner_build_pins_cli_image_and_uses_separate_image_stream() -> None
 def test_agentic_deploy_restarts_latest_tag_workload_after_build() -> None:
     script = (ROOT / "scripts" / "deploy-agentic-sno.ps1").read_text()
 
+    assert "oc apply -k deploy/openshift/base" in script
+    assert "oc auth can-i get groups.user.openshift.io" in script
+    assert "podpilot-investigator can read workload Pods" in script
     assert "--from-archive=$buildArchive" in script
     assert "oc rollout restart deployment/podpilot -n ai-ops" in script
     assert "oc rollout status deployment/podpilot -n ai-ops --timeout=600s" in script
@@ -313,6 +344,7 @@ def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> No
     kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
     image_stream = yaml.safe_load((overlay / "image-stream.yaml").read_text())
 
+    assert "../../base" in kustomization["resources"]
     assert "image-stream.yaml" in kustomization["resources"]
     assert {item["name"] for item in kustomization["images"]} == {
         "podpilot", "podpilot-oc-runner"

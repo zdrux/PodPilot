@@ -17,13 +17,15 @@ Treat them as a snapshot and re-verify live state before relying on them.
 - Lab cluster name/domain: `sno.192-168-0-200.sslip.io`.
 - Kubernetes API: `https://api.sno.192-168-0-200.sslip.io:6443`.
 - Application wildcard: `*.apps.sno.192-168-0-200.sslip.io`.
-- Application namespace and identity: `ai-ops/podpilot-investigator`, bound to
-  OpenShift `cluster-reader`.
+- Application namespace and identity: `ai-ops/podpilot-investigator`, bound to the narrow
+  `podpilot-role-reader` ClusterRole for OpenShift Group lookup, not `cluster-reader`.
+- Both the remote and SNO workload overlays inherit this role and binding from
+  `deploy/openshift/base`; a fresh overlay deployment does not depend on pre-existing runtime RBAC.
 - Development/break-glass identity: `ai-ops/ai-observer`, with `cluster-admin`
   through the explicitly labeled `podpilot-poc-cluster-admin` binding.
-- The unrestricted-agent simulation does not use that identity. Its `oc-runner` sidecar shares
-  `ai-ops/podpilot-investigator`, which remains `cluster-reader` plus monitoring/logging views;
-  `scripts/deploy-agentic-sno.ps1` refuses to deploy if it can patch Deployments.
+- The unrestricted-agent simulation uses a tokenless `oc-runner`; each cluster command receives a
+  delegated-user broker capability. `scripts/deploy-agentic-sno.ps1` verifies application-role
+  lookup and refuses to deploy if `podpilot-investigator` can patch Deployments.
 
 The MAC address, installer files, kubeconfig, administrator credentials, and pull
 secret are intentionally omitted. They do not belong in this repository.

@@ -184,13 +184,13 @@ for one environment at a time and passwords are discarded after OAuth exchange. 
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
 the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
 
-In legacy feature-flag-off compatibility mode, the sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
-agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
-separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
-the standard remote identity and grants no additional RBAC. Consequently the model may ask for
-any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
-current workload and remote overlays enable delegated access and deploy the runner. No active
-deployment reads a remote cluster-token Secret; TLS policy is stored per cluster entry.
+Active workload and remote overlays enable delegated access and deploy a tokenless runner. The
+Pod-level `podpilot-investigator` service account is not bound to `cluster-reader`; its custom
+`podpilot-role-reader` ClusterRole permits only exact OpenShift Group GETs for application-role
+resolution. Each runner command receives a conversation capability, and Kubernetes RBAC and
+admission evaluate the signed-in user. Legacy feature-flag-off agent mode therefore requires an
+explicit separately reviewed cluster-read identity and is not furnished by the active overlays.
+No active deployment reads a remote cluster-token Secret; TLS policy is stored per cluster entry.
 
 The current Pod contains the API, OAuth proxy, and tokenless runner. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on

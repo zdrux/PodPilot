@@ -1,16 +1,16 @@
 # Remote OpenShift PoC Deployment
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-30
 
 This runbook installs one read-only PodPilot replica on an existing OpenShift
 cluster with real workloads. It uses the cluster's existing OAuth identities,
 default dynamic storage, Cluster Monitoring stack, and an externally pushed
 PodPilot image. It does not grant PodPilot mutation rights.
 
-The guarded `remote-poc` overlay is the default. The optional
-`remote-poc-agentic` overlay inherits that configuration and adds the unrestricted
-localhost `oc-runner` sidecar. It does not add RBAC; every command still runs as
-`ai-ops/podpilot-investigator` with the permissions already granted by the base.
+The `remote-poc` overlay is the default and includes the tokenless localhost
+`oc-runner` sidecar. The compatibility `remote-poc-agentic` wrapper changes only the
+Action deadline. Neither grants the runtime workload-read RBAC; each Ask command uses
+the signed-in user's broker capability.
 
 ## 1. Understand the authorization boundaries
 
@@ -22,18 +22,23 @@ There are two separate authorization paths:
    built-in `system:authenticated` group. FastAPI assigns Viewer by default and
    reads configured LDAP-synchronized groups only to grant an elevated role.
    Human users do not receive `cluster-reader` or workload permissions.
-2. **Cluster investigation access** belongs to the
-`ai-ops/podpilot-investigator` ServiceAccount. ClusterRoleBindings attach the
-built-in `cluster-reader`, `cluster-monitoring-view`,
-`cluster-logging-application-view`, `cluster-logging-infrastructure-view`, and
-`cluster-logging-audit-view` ClusterRoles. A narrow
+2. **Application-role lookup** belongs to the `ai-ops/podpilot-investigator`
+   ServiceAccount. The custom `podpilot-role-reader` ClusterRole permits only `get`
+   on `groups.user.openshift.io`, allowing FastAPI to map the oauth-proxy username
+   to configured PodPilot roles. It is not `cluster-reader`. Supporting bindings retain
+   `cluster-monitoring-view`, `cluster-logging-application-view`,
+   `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. A narrow
    Role in `openshift-monitoring` grants `get`/`list` on only
    `monitoring.coreos.com` `alertmanagers/api` named `main`. A separate Role can
    read and patch only `ai-ops/podpilot-model-credentials`.
 
+Ask cluster investigation access belongs to the signed-in user. The API keeps that user's token
+only in memory and injects it behind a random read-only or Action loopback capability. The runner
+receives neither that token nor a projected service-account token.
+
 Platform Alertmanager runs in `openshift-monitoring`, not `openshift-logging`.
 No logging-namespace Role is required for Alertmanager. Ordinary container logs
-are read through the Kubernetes `pods/log` subresource under `cluster-reader`.
+in Ask are read through the delegated user's read-only broker capability.
 Aggregate Loki application-log analytics are implemented for registered namespace, Pod, and Node
 volume queries. They use only server-owned LogQL and retain no log lines. The installation must
 expose a standard `openshift-logging/logging-loki` Route and
@@ -45,8 +50,8 @@ and audit logging views. Arbitrary LogQL and raw Log Store queries remain unavai
 
 - A cluster administrator performs the installation because it creates
   ClusterRoleBindings and RBAC in `openshift-monitoring`.
-- The target has Cluster Monitoring with the built-in `cluster-reader` and
-  `cluster-monitoring-view` ClusterRoles.
+- The target has Cluster Monitoring with the built-in `cluster-monitoring-view` ClusterRole
+  and supports the OpenShift `user.openshift.io/v1` Group API.
 - Exactly one suitable default StorageClass can dynamically provision a 5 GiB
   `ReadWriteOnce` volume.
 - Cluster nodes can pull from the selected image registry.
@@ -59,7 +64,7 @@ Confirm the cluster and storage before changing anything:
 ```bash
 oc whoami
 oc get clusterversion
-oc get clusterrole cluster-reader cluster-monitoring-view
+oc get clusterrole cluster-monitoring-view
 oc get storageclass
 oc get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}'
 ```
@@ -256,6 +261,17 @@ oc apply -k deploy/openshift/overlays/remote-poc
 oc -n ai-ops rollout status deployment/podpilot --timeout=300s
 ```
 
+When upgrading an installation that previously applied the broad binding, remove that stale object
+after the new role-reader binding is present. Kustomize does not automatically prune resources that
+were deleted from an earlier resource list:
+
+```bash
+oc get clusterrolebinding podpilot-role-reader
+oc delete clusterrolebinding podpilot-investigator --ignore-not-found
+```
+
+Do not delete `podpilot-role-reader`; the API needs it to resolve application roles after OAuth.
+
 To install the optional unrestricted variant, substitute the additive overlay
 in all three commands:
 
@@ -278,7 +294,8 @@ oc -n ai-ops rollout status deployment/podpilot --timeout=300s
 
 The overlay applies, in dependency-safe form:
 
-- `base/namespace.yaml`, `base/service-account.yaml`, and `base/rbac.yaml`;
+- `base/namespace.yaml`, `base/service-account.yaml`, and `base/rbac.yaml`, including
+  the `podpilot-role-reader` ClusterRole and binding but no `cluster-reader` binding;
 - `auth/group-rbac/ui-access-rbac.yaml`, admitting `system:authenticated` to the
   exact PodPilot Service;
 - `workload/runtime-config.yaml` and `workload/persistentvolumeclaim.yaml`;
@@ -309,10 +326,11 @@ oc -n ai-ops logs deployment/podpilot -c migrate
 oc -n ai-ops logs deployment/podpilot -c api --since=10m
 ```
 
-Expected results are `yes` for Pods, Pod logs, ConfigMaps, Groups, the exact model
-credential Secret, and the named Alertmanager API. Expect `no` for cluster-wide
-Secrets, the unrelated Secret, and Deployment patch. PodPilot has `get`/`patch`
-only on its exact model credential Secret in `ai-ops`.
+Expected results are `no` for Pods, Pod logs, ConfigMaps, cluster-wide Secrets, the unrelated
+Secret, and Deployment patch. Expect `yes` for Groups, the exact model credential Secret, and the
+named Alertmanager API. PodPilot has `get`/`patch` only on its exact model credential Secret in
+`ai-ops`. If an installed supporting platform view happens to aggregate an ordinary workload
+permission, treat that as a release-review finding; never restore `cluster-reader` to satisfy it.
 The PVC must be `Bound`, the Deployment `1/1 Available`, and the migration log
 must end at the repository's current Alembic head.
 
