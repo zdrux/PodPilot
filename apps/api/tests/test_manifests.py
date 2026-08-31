@@ -133,6 +133,12 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
+    assert runtime["data"]["chat_max_chars"] == "4000"
+    chat_limit = next(item for item in env if item["name"] == "PODPILOT_CHAT_MAX_CHARS")
+    assert chat_limit["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "chat_max_chars",
+    }
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
     assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"
     assert runtime["data"]["adhoc_max_payload_bytes"] == "96000"

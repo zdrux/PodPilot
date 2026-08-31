@@ -12673,7 +12673,7 @@ def test_ask_typed_cluster_operator_health_overrides_model_refusal(
     assert explorer.calls == []
 
 
-def test_ask_uses_safely_reduced_active_profile_and_shows_warning(
+def test_ask_uses_safely_reduced_active_profile_without_chat_warning(
     tmp_path: Path,
 ) -> None:
     provider = FailingAdHocProvider()
@@ -12713,8 +12713,8 @@ def test_ask_uses_safely_reduced_active_profile_and_shows_warning(
         assert created.status_code == 303
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert rendered.status_code == 200
-        assert "Model running with reduced capability" in rendered.text
-        assert "ReadPlan probe failed. Synthetic semantic mismatch." in rendered.text
+        assert "Model running with reduced capability" not in rendered.text
+        assert "ReadPlan probe failed. Synthetic semantic mismatch." not in rendered.text
         assert "Model profile not ready" not in rendered.text
 
     engine = build_engine(settings)
@@ -14544,7 +14544,7 @@ def test_investigation_chat_cites_evidence_and_proposes_registered_checks(tmp_pa
         assert client.post(
             chat_url,
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "x" * 1001},
+            data={"message": "x" * 4001},
         ).status_code == 422
         asked = client.post(
             chat_url,

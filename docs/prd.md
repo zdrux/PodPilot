@@ -333,7 +333,7 @@ which re-enters the role, CSRF, claim-once, scope, and audit gates. Read-plan
 output is advisory data validated and executed by the API; chat cannot directly
 submit Kubernetes calls, query text, shell, YAML, credentials, or cluster
 mutations. Messages are attributed, redacted before persistence/model use, capped
-at 1,000 characters each and 20 messages per investigation, and audited without
+at 4,000 characters each and 20 messages per investigation, and audited without
 copying message content into the audit record.
 
 ### 5.11 Standalone Ask PodPilot

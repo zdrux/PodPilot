@@ -9,6 +9,7 @@ metadata:
 data:
   environment: openshift-poc
   cluster_name: configure-cluster-name
+  chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"
   adhoc_detail_fanout_max_objects: "10"
   adhoc_max_payload_bytes: "96000"

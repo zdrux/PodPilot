@@ -4,6 +4,10 @@ from pydantic import ValidationError
 from podpilot_api.settings import Settings
 
 
+def test_chat_message_limit_defaults_to_supported_maximum() -> None:
+    assert Settings(_env_file=None).chat_max_chars == 4000
+
+
 def test_role_groups_are_loaded_from_json_environment_lists(monkeypatch) -> None:
     monkeypatch.setenv(
         "PODPILOT_ROLE_INVESTIGATOR_GROUPS",

@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     workload_max_log_bytes: int = Field(default=16_384, ge=1024, le=65_536)
     diagnostic_max_checks: int = Field(default=4, ge=1, le=10)
     chat_max_messages: int = Field(default=20, ge=2, le=50)
-    chat_max_chars: int = Field(default=1000, ge=100, le=4000)
+    chat_max_chars: int = Field(default=4000, ge=100, le=4000)
     adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
     adhoc_max_rounds: int = Field(default=10, ge=1, le=12)
     adhoc_max_reads_per_turn: int = Field(default=25, ge=1, le=50)

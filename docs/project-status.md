@@ -806,6 +806,9 @@ current repository and cluster state.
   grounded action choice, or citations, and a workflow-smoke failure does not degrade an otherwise
   ready profile or display a persistent warning in Ask. Runtime typed validation and deterministic
   fallback remain authoritative during real conversations.
+- Ask no longer shows reduced-capability warnings for usable profiles; detailed connection-test
+  status remains on Model settings. Operator messages now default to the supported 4,000-character
+  ceiling, including the OpenShift runtime configuration.
 - The model-free suite and a fresh SQLite migration through the new head pass locally; this change
   has not yet been rolled out to the SNO workload.
 

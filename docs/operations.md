@@ -245,7 +245,7 @@ The current deployment uses these variables:
   `1` through `10`
 - `PODPILOT_CHAT_MAX_MESSAGES`, default `20`, counting both operator and assistant
   messages, with a hard accepted range of `2` through `50`
-- `PODPILOT_CHAT_MAX_CHARS`, default `1000` characters per operator message, with
+- `PODPILOT_CHAT_MAX_CHARS`, default `4000` characters per operator message, with
   a hard accepted range of `100` through `4000`
 - `PODPILOT_MODEL_CREDENTIAL_STORE`, `environment` for local development or
   `kubernetes` in the OpenShift workload
@@ -328,10 +328,12 @@ only for the fixed synthetic capability probes, capped at 4,000 characters per r
 through normal secret redaction.
 
 Workflow-schema smoke-test failures remain informational and do not put an otherwise compatible
-profile into `reduced_capability` or display a persistent degraded-model warning in Ask. Normal code
-still validates every typed response and uses deterministic fallbacks during real conversations.
-Profiles missing a required transport, endpoint, authentication, model, structured-output, or
-configured embedding capability remain `reduced_capability` and may be unavailable.
+profile into `reduced_capability`. Ask does not display degraded-model warnings; connection-test
+status and diagnostic details remain on Model settings for configuration administrators. Normal
+code still validates every typed response and uses deterministic fallbacks during real
+conversations. Profiles missing a required transport, endpoint, authentication, model,
+structured-output, or configured embedding capability remain `reduced_capability` and may be
+unavailable.
 
 ### Multi-cluster Ask and curated memory
 
