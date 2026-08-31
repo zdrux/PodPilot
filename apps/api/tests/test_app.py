@@ -13193,6 +13193,12 @@ def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
         assert 'aria-label="Available clusters"' in ask_page.text
         assert 'aria-label="Add a personal cluster"' in ask_page.text
         assert 'href="/clusters/personal?new=1"' in ask_page.text
+        assert "Select cluster(s) first" in ask_page.text
+        ask_checkboxes = re.findall(
+            r'<input[^>]+data-cluster-checkbox[^>]+>', ask_page.text
+        )
+        assert ask_checkboxes
+        assert all("checked" not in item for item in ask_checkboxes)
 
         east_start = client.get(
             f"/clusters/{east_id}/ask",
@@ -14197,6 +14203,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "rawResponseToggle.disabled = false" in script
     assert "data-cluster-picker" in template
     assert "cluster-picker-selection" in template
+    assert "data-cluster-selection-required" in template
+    assert "Select cluster(s) first" in template
+    assert "updateAskSubmitAvailability" in script
+    assert 'clusterPicker?.querySelector("[data-cluster-checkbox]:checked")' in script
     assert 'data-cluster-filter="connected">Signed-In</button>' in template
     assert 'data-cluster-filter="all">All</button>' in template
     assert 'let clusterFilter = filterTabs.find' in script

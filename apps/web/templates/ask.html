@@ -427,12 +427,13 @@
             </label>
           </div>
         </div>
+        {% if not conversation %}<div class="chat-budget" data-cluster-selection-required {% if selected_cluster_ids %}hidden{% endif %}><strong>Select cluster(s) first</strong><p>Choose one or more clusters from "Send requests to" before submitting a question.</p></div>{% endif %}
         <div class="composer-input-wrap">
           <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>
           {% if active_run %}
           <button class="button primary" type="button" data-ask-submit data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" aria-label="Cancel current request">Cancel</button>
           {% else %}
-          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
+          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or not selected_cluster_ids or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
           {% endif %}
         </div>
       </form>

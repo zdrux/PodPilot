@@ -193,7 +193,9 @@ records remain, but execution now awaits a separate approval-gated action servic
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
   The picker defaults to a Signed-In tab and offers All for clusters that still need authentication;
-  text search composes with either filter.
+  text search composes with either filter. Generic new-chat links start with an empty selection and
+  keep Submit disabled until the user chooses at least one cluster; a sidebar cluster-name link
+  remains an explicit single-cluster preselection.
 - Unrestricted Ask now exposes the existing policy-filtered Kubernetes discovery catalog as a
   delegated typed tool. The agent is directed to search it before guessing unfamiliar CRD names or
   after a NoMatch error; deterministic matching recognizes compound fragments such as

@@ -12251,10 +12251,7 @@ def create_app(
         ):
             selected_cluster_ids = requested_cluster_ids
         else:
-            selected_cluster_ids = (
-                delegated_cluster_ids[:app_settings.adhoc_max_clusters_per_conversation]
-                if delegated_connections else [SYSTEM_CLUSTER_ID]
-            )
+            selected_cluster_ids = []
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},

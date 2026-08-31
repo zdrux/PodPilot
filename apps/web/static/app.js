@@ -530,7 +530,19 @@
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
+  const clusterSelectionNotice = adhocForm?.querySelector("[data-cluster-selection-required]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
+  const updateAskSubmitAvailability = () => {
+    if (!askSubmit || askSubmit.type !== "submit") return;
+    const ready = executionMode?.value === "action"
+      ? adhocForm.dataset.actionModelReady === "true"
+      : adhocForm.dataset.readOnlyModelReady === "true";
+    const hasSelectedCluster = Boolean(
+      clusterPicker?.querySelector("[data-cluster-checkbox]:checked")
+    );
+    askSubmit.disabled = !ready || !hasSelectedCluster;
+    askSubmit.textContent = "Submit";
+  };
   const composerDraftKey = adhocForm?.dataset.chatUrl
     ? `podpilot-composer-draft:${adhocForm.dataset.chatUrl}`
     : null;
@@ -547,11 +559,7 @@
   if (executionMode && askSubmit) {
     const updateModeAvailability = () => {
       askLayout?.classList.toggle("action-session", executionMode.value === "action");
-      const ready = executionMode.value === "action"
-        ? adhocForm.dataset.actionModelReady === "true"
-        : adhocForm.dataset.readOnlyModelReady === "true";
-      askSubmit.disabled = !ready;
-      askSubmit.textContent = "Submit";
+      updateAskSubmitAvailability();
     };
     executionMode.addEventListener("change", updateModeAvailability);
     updateModeAvailability();
@@ -608,6 +616,8 @@
         pickerLabel.setAttribute("aria-label", names.length ? `Selected clusters: ${names.join(", ")}` : "No clusters selected");
       }
       if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
+      if (clusterSelectionNotice) clusterSelectionNotice.hidden = bounded.length > 0;
+      updateAskSubmitAvailability();
       starterActions.forEach((button) => {
         button.disabled = button.dataset.starterAvailable !== "true" || bounded.length === 0;
       });

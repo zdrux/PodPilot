@@ -405,11 +405,13 @@ PodPilot suppresses urllib3's identical per-request `InsecureRequestWarning` for
 accepted connections to avoid log spam; this does not suppress connection failures or remove the
 operator-visible session indicator and audited TLS warning.
 
-An Investigator selects one to ten enabled clusters beside the Ask composer. The cluster drawer
-defaults to signed-in targets, while **All** also shows targets that still require authentication;
-text search applies within the active filter. The selection is pinned when the first question is
-submitted; **Change** opens a new conversation while the prior session remains in history. All
-selected clusters share the 25-unit weighted turn
+An Investigator selects one to ten enabled clusters beside the Ask composer. A generic new-chat
+link starts with no preselected clusters and requires an explicit choice; selecting a cluster name
+in the sidebar intentionally starts a new chat with only that cluster preselected. The cluster
+drawer defaults to signed-in targets, while **All** also shows targets that still require
+authentication; text search applies within the active filter. The selection is pinned when the
+first question is submitted; **Change** opens a blank new conversation while the prior session
+remains in history. All selected clusters share the 25-unit weighted turn
 budget. Typed metric reads are executed independently for every selected cluster by
 discovering its Thanos Querier Route and authenticating with that cluster's registered
 bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,
