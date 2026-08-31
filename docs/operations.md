@@ -405,8 +405,10 @@ discovering its Thanos Querier Route and authenticating with that cluster's regi
 bearer token; failures remain attributed to that cluster. Alert, investigation, dashboard,
 and remediation workflows continue to use only the runtime cluster.
 
-The empty Ask view offers read-only starter actions for failing workloads and recent warning
-events, plus a scoped workload troubleshooter that collects a namespace and resource name.
+The empty Ask view offers a read-only starter action for failing workloads plus a scoped workload
+troubleshooter that collects a namespace and resource name. The former broad recent-warning starter
+is intentionally absent because unprojected cluster-wide Event output can exhaust a provider's
+context window; operators may still ask a specifically scoped warning-event question.
 Delegated sessions additionally offer effective-access and visible-project summaries.
 Each button remains disabled until a cluster is selected and the model/session is ready, then
 submits its bounded prompt through the normal new-conversation endpoint with the current cluster

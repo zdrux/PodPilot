@@ -60,9 +60,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   the read-only proxy capability and Action receives the read-write capability.
 
 - New Ask sessions replace fictional prompt examples with real read-only starter actions. All
-  eligible users can start failing-workload or recent-warning investigations against the selected
-  clusters or open a namespace/resource workload troubleshooter; delegated sessions also expose
-  effective-access and visible-project checks. Starters
+  eligible users can start a failing-workload investigation against the selected clusters or open
+  a namespace/resource workload troubleshooter; the broad recent-warning starter is omitted to
+  avoid placing unprojected cluster-wide Event output into model context. Delegated sessions also
+  expose effective-access and visible-project checks. Starters
   use the normal conversation API and stay disabled until cluster, model, and session prerequisites
   are satisfied.
 

@@ -12824,7 +12824,8 @@ def test_new_ask_renders_real_read_only_starter_actions(tmp_path: Path) -> None:
 
     assert page.status_code == 200
     assert 'data-starter-prompt="Find currently failing or unhealthy workloads' in page.text
-    assert 'data-starter-prompt="Review Kubernetes warning events from the last hour' in page.text
+    assert 'data-starter-prompt="Review Kubernetes warning events from the last hour' not in page.text
+    assert "Review recent warnings" not in page.text
     assert "data-workload-starter-open" in page.text
     assert "data-workload-starter-form" in page.text
     assert "Why is pod api-7d9 pending" not in page.text
@@ -12931,7 +12932,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert "Investigate · read-only" in ask_page.text
         assert 'href="/delegated/connect">Cluster sign-ins</a>' not in ask_page.text
         assert "Find failing workloads" in ask_page.text
-        assert "Review recent warnings" in ask_page.text
+        assert "Review recent warnings" not in ask_page.text
         assert "Show my access" in ask_page.text
         assert "List my projects" in ask_page.text
         created = client.post(

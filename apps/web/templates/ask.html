@@ -332,10 +332,6 @@
           data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
           <strong>Find failing workloads</strong><small>Pending, crashing, image-pull, and unavailable workloads</small>
         </button>
-        <button type="button" data-starter-prompt="Review Kubernetes warning events from the last hour across the selected clusters. Group recurring reasons by cluster and namespace, identify affected objects, rank the most frequent or recent warnings, cite observed evidence, and do not make changes."
-          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
-          <strong>Review recent warnings</strong><small>Recurring warning events from the last hour</small>
-        </button>
         <button type="button" data-workload-starter-open
           data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
           <strong>Troubleshoot a workload…</strong><small>Inspect a specific namespace and resource</small>
