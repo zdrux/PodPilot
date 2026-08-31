@@ -8794,6 +8794,19 @@ def crashloop_evidence() -> WorkloadEvidence:
     )
 
 
+class StaticCapabilityRoleResolver(StaticRoleResolver):
+    def __init__(
+        self,
+        assignments: dict[str, Role],
+        configuration_admins: set[str],
+    ) -> None:
+        super().__init__(assignments)
+        self._configuration_admins = configuration_admins
+
+    def can_manage(self, username: str) -> bool:
+        return username in self._configuration_admins
+
+
 def make_app(
     tmp_path: Path,
     *,
@@ -8809,6 +8822,7 @@ def make_app(
     remote_read_explorer_factory=None,
     agent_runner=None,
     settings_overrides: dict[str, object] | None = None,
+    configuration_admins: set[str] | None = None,
 ):
     test_settings = {"adhoc_job_worker_enabled": False}
     test_settings.update(settings_overrides or {})
@@ -8825,10 +8839,15 @@ def make_app(
     engine = build_engine(settings)
     Base.metadata.create_all(engine)
     engine.dispose()
+    role_resolver = (
+        StaticCapabilityRoleResolver(assignments, configuration_admins)
+        if configuration_admins is not None
+        else StaticRoleResolver(assignments)
+    )
     return (
         create_app(
             settings,
-            StaticRoleResolver(assignments),
+            role_resolver,
             source,
             workload_source,
             credential_store or MemoryCredentialStore(),
@@ -15723,6 +15742,35 @@ def test_management_sections_require_approver_or_breakglass(tmp_path: Path) -> N
             assert home.text.count('<p class="nav-label section-gap">Manage</p>') == 1
             for href in ('/settings/clusters', '/settings/model', '/memory'):
                 assert f'href="{href}"' in home.text
+
+
+def test_investigator_configuration_admin_can_edit_management_forms(tmp_path: Path) -> None:
+    app, _ = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        configuration_admins={"ivy"},
+        source=FakeAlertSource(),
+    )
+
+    with TestClient(app) as client:
+        headers = {"x-forwarded-user": "ivy"}
+        home = client.get("/", headers=headers)
+        assert home.status_code == 200
+        for href in ('/settings/clusters', '/settings/model', '/memory'):
+            assert f'href="{href}"' in home.text
+
+        model_page = client.get("/settings/model?new=1", headers=headers)
+        assert model_page.status_code == 200
+        assert 'id="model-settings-form"' in model_page.text
+        assert 'id="model-settings-form" class="settings-form" data-save-url="/api/v1/model-profile" aria-disabled="true"' not in model_page.text
+        assert re.search(r'<input name="provider_label"[^>]* disabled', model_page.text) is None
+        assert '<button class="button primary" type="submit">Save model</button>' in model_page.text
+        assert "Configuration-administrator access is required" not in model_page.text
+
+        memory_page = client.get("/memory", headers=headers)
+        assert memory_page.status_code == 200
+        assert 'id="knowledge-form"' in memory_page.text
+        assert "Read-only access" not in memory_page.text
 
 
 def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: Path) -> None:
