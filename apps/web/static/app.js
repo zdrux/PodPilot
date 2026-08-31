@@ -530,7 +530,6 @@
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
-  const clusterSelectionNotice = adhocForm?.querySelector("[data-cluster-selection-required]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
   const updateAskSubmitAvailability = () => {
     if (!askSubmit || askSubmit.type !== "submit") return;
@@ -608,15 +607,34 @@
             pickerLabel.append(chip);
           });
         } else {
-          const placeholder = document.createElement("span");
-          placeholder.className = "cluster-picker-placeholder";
-          placeholder.textContent = "Select clusters";
-          pickerLabel.append(placeholder);
+          if (clusterPicker.hasAttribute("data-cluster-selection-required")) {
+            const required = document.createElement("span");
+            required.className = "cluster-picker-required";
+            const icon = document.createElement("span");
+            icon.className = "cluster-picker-required-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.textContent = "!";
+            const label = document.createElement("span");
+            label.textContent = "Select cluster(s) first";
+            required.append(icon, label);
+            pickerLabel.append(required);
+          } else {
+            const placeholder = document.createElement("span");
+            placeholder.className = "cluster-picker-placeholder";
+            placeholder.textContent = "Select clusters";
+            pickerLabel.append(placeholder);
+          }
         }
-        pickerLabel.setAttribute("aria-label", names.length ? `Selected clusters: ${names.join(", ")}` : "No clusters selected");
+        pickerLabel.setAttribute(
+          "aria-label",
+          names.length
+            ? `Selected clusters: ${names.join(", ")}`
+            : clusterPicker.hasAttribute("data-cluster-selection-required")
+              ? "Select cluster(s) first"
+              : "No clusters selected",
+        );
       }
       if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
-      if (clusterSelectionNotice) clusterSelectionNotice.hidden = bounded.length > 0;
       updateAskSubmitAvailability();
       starterActions.forEach((button) => {
         button.disabled = button.dataset.starterAvailable !== "true" || bounded.length === 0;

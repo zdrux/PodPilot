@@ -14205,6 +14205,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "cluster-picker-selection" in template
     assert "data-cluster-selection-required" in template
     assert "Select cluster(s) first" in template
+    assert 'Choose one or more clusters from "Send requests to"' not in template
+    assert "cluster-picker-required-icon" in template
+    assert ".cluster-picker-required-icon" in styles
     assert "updateAskSubmitAvailability" in script
     assert 'clusterPicker?.querySelector("[data-cluster-checkbox]:checked")' in script
     assert 'data-cluster-filter="connected">Signed-In</button>' in template

@@ -48,3 +48,51 @@ No actionable P0, P1, or P2 differences remain.
 - [x] Source/implementation comparison image reviewed.
 
 final result: passed
+
+---
+
+# Cluster Selector Empty-state QA
+
+## Comparison target
+
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-969c7c4f-8133-4803-a449-d3f6648d20a4.png` plus the requested removal of its full-width notice row.
+- Browser-rendered implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-implementation-cluster-selector.png`.
+- Combined focused comparison: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-comparison-cluster-selector.png`.
+- Compact implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-compact-cluster-selector.png`.
+- State: local new Ask conversation with no cluster preselected; the model profile is intentionally unavailable in the QA fixture.
+
+## Viewports and normalization
+
+- Source crop: 1867 × 123 pixels at its supplied density.
+- Desktop implementation: 1867 × 900 pixels at a 1867 × 900 CSS viewport and device scale factor 1.
+- Focused implementation crop: 1619 × 180 pixels, preserving its native pixels and centered beneath the source crop in the combined comparison.
+- Compact check: 700 × 900 CSS pixels at device scale factor 1.
+- Full-view evidence confirms the composer remains one continuous region; the focused comparison is used because the source contains only the composer controls.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: the existing Inter/system stack, uppercase field labels, weights, and compact control copy are preserved.
+- Spacing and layout rhythm: the full-width notification row is removed. The yellow caution sits inside the existing 40-pixel selector frame, and the textarea moves back to its original adjacent position.
+- Colors and visual tokens: the caution uses a visible yellow `#f4c04a` treatment against the existing dark selector surface; surrounding product tokens are unchanged.
+- Image and icon fidelity: no raster product imagery is involved. The caution follows PodPilot's existing circular exclamation status treatment at the selector's smaller scale.
+- Copy and content: `Select cluster(s) first` remains visible in the empty selector, while the `Choose one or more clusters from…` tagline is absent.
+- Responsive behavior: at 700 pixels wide, the selector occupies its own existing control row without overflow or an added notification row.
+- Interaction and accessibility: selecting the local cluster replaces the caution with the selected cluster chip and updates the accessible label; clearing the selection restores the caution. Submit remains disabled while no cluster is selected. Browser console warnings and errors: none.
+
+## Comparison history
+
+- Pass 1: the warning was correctly positioned but inherited an undefined warning token, leaving the intended yellow fill absent.
+- Fix: assigned the selector caution an explicit yellow foreground, border, and fill.
+- Final pass: desktop and compact captures show the caution inside the frame, stable row height, no tagline, and no overflow.
+
+## Implementation checklist
+
+- [x] Keep generic new chats unselected.
+- [x] Move the empty-selection warning into the cluster selector.
+- [x] Remove the full-width notice and instructional tagline.
+- [x] Preserve Submit gating and cluster-chip behavior.
+- [x] Verify desktop and compact layouts and browser console.
+
+final result: passed
