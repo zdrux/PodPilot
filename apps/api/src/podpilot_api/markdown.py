@@ -18,6 +18,18 @@ _ESCAPED_HTML_BREAK = re.compile(r"&lt;br[ \t]*/?&gt;", re.IGNORECASE)
 _CODE_ONLY_ESCAPED_HTML_BREAK = re.compile(
     r"<code>[ \t]*&lt;br[ \t]*/?&gt;[ \t]*</code>", re.IGNORECASE,
 )
+_TABLE_CELL_BOUNDARY = re.compile(
+    r"^[ \t]*(?:`?<br[ \t]*/?>`?|\n|•|$)", re.IGNORECASE,
+)
+_TABLE_PLACEHOLDER_PREFIX = re.compile(
+    r"^[ \t]*`?(?:\"?(?:unknown|null|none|n/?a)\"?)`?[ \t]*"
+    r"(?:`?<br[ \t]*/?>`?[ \t]*|\n+[ \t]*|(?=•))",
+    re.IGNORECASE,
+)
+_TABLE_PLACEHOLDER_ONLY = re.compile(
+    r"^[ \t]*`?\"?(?P<value>unknown|null|none|n/?a)\"?`?[ \t]*$",
+    re.IGNORECASE,
+)
 
 
 def _render_text_with_safe_breaks(_renderer, tokens, index, _options, _env) -> str:
@@ -75,10 +87,50 @@ def render_safe_markdown(value: object) -> Markup:
     return Markup(_renderer.render(_pretty_json_markdown(str(value or ""))))
 
 
+def _normalize_table_cell(value: str) -> str:
+    """Remove bounded structured-output debris without altering balanced cell data."""
+
+    unmatched_closing: set[int] = set()
+    opening: list[int] = []
+    escaped = False
+    for index, character in enumerate(value):
+        if character == "\\" and not escaped:
+            escaped = True
+            continue
+        if character == "{" and not escaped:
+            opening.append(index)
+        elif character == "}" and not escaped:
+            if opening:
+                opening.pop()
+            else:
+                unmatched_closing.add(index)
+        escaped = False
+
+    unmatched = unmatched_closing | set(opening)
+    if unmatched:
+        value = "".join(
+            character
+            for index, character in enumerate(value)
+            if not (
+                index in unmatched
+                and _TABLE_CELL_BOUNDARY.match(value[index + 1:]) is not None
+            )
+        )
+
+    # A few strict-JSON models leak their placeholder value before the real list,
+    # for example: `unknown`} `<br>` **first filter**. Keep a cell that contains
+    # only "unknown", but discard the placeholder when substantive content follows.
+    value = _TABLE_PLACEHOLDER_PREFIX.sub("", value, count=1)
+    placeholder = _TABLE_PLACEHOLDER_ONLY.fullmatch(value)
+    if placeholder is not None:
+        return placeholder.group("value").lower()
+    return value.strip()
+
+
 def render_safe_table_markdown(value: object) -> Markup:
     """Render a table cell while repairing model-authored encoded break tags."""
 
-    rendered = str(render_safe_markdown(value))
+    rendered = str(render_safe_markdown(_normalize_table_cell(str(value or ""))))
     rendered = _CODE_ONLY_ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
     rendered = _ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
     return Markup(rendered)
@@ -140,7 +192,9 @@ def split_markdown_tables(
             elif nested.type == "inline" and current_cell is not None:
                 current_cell = nested.content[:max_cell_chars]
             elif nested.type in {"th_close", "td_close"} and current_row is not None:
-                current_row.append((current_cell or "")[:max_cell_chars])
+                current_row.append(
+                    _normalize_table_cell((current_cell or "")[:max_cell_chars])
+                )
                 current_cell = None
             elif nested.type == "tr_close" and current_row is not None:
                 bounded_row = current_row[:max_columns]

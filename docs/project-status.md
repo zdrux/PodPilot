@@ -40,6 +40,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
+- Dynamic answer tables now use a stricter equal-cell prompt contract and bounded display cleanup
+  for strict-JSON leakage. Redundant leading `unknown` placeholders and unmatched boundary braces
+  are removed while balanced `{}` and OpenShift Logging templates remain literal.
+
 - The pending workload requests an eight-hour projected service-account token for the OAuth client
   and supervises the pinned proxy's startup-only client-secret cache. Token rotation restarts only
   `oauth-proxy`, retaining the API process, SQLite state, and stable OAuth cookie key so later fresh

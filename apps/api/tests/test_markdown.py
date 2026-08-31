@@ -123,9 +123,11 @@ def test_table_cells_repair_break_tags_wrapped_in_model_code_spans() -> None:
         "`unknown`} `<br>` **tm-vault-output**<BR />`next<br/>line`"
     ))
 
+    assert "unknown" not in rendered
+    assert "}" not in rendered
     assert "&lt;br" not in rendered.lower()
     assert "<code><br>" not in rendered
-    assert rendered.count("<br>") == 3
+    assert rendered.count("<br>") == 2
     assert "<strong>tm-vault-output</strong>" in rendered
     assert "<code>next<br>\nline</code>" in rendered
 
@@ -140,3 +142,31 @@ def test_table_cell_break_repair_does_not_enable_other_raw_html() -> None:
     assert "&lt;script&gt;" in rendered
     assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
     assert rendered.count("<br>") == 1
+
+
+def test_table_cells_remove_unmatched_serialization_braces_but_keep_templates() -> None:
+    table = split_markdown_tables(
+        "| Filters defined |\n|---|\n"
+        "| `\"unknown\"`} `<br>` • **forward-syslog** – `tcp://logs:10517`{<br>"
+        "• topic `logs-{kubernetes.namespace_name}`<br>• literal `{}`<br>"
+        "• JSON `{\"mode\":\"strict\"}` |"
+    )[0]
+    cell = table["rows"][0]["cells"][0]
+    rendered = str(render_safe_table_markdown(cell))
+
+    assert "unknown" not in cell
+    assert "10517{" not in cell
+    assert "{kubernetes.namespace_name}" in cell
+    assert "`{}`" in cell
+    assert '`{\"mode\":\"strict\"}`' in cell
+    assert "unknown" not in rendered
+    assert "10517{" not in rendered
+    assert "{kubernetes.namespace_name}" in rendered
+    assert "<code>{}</code>" in rendered
+    assert '<code>{&quot;mode&quot;:&quot;strict&quot;}</code>' in rendered
+
+
+def test_table_cell_keeps_unknown_when_it_is_the_only_value() -> None:
+    rendered = str(render_safe_table_markdown('"unknown"'))
+
+    assert rendered == '<p>unknown</p>\n'

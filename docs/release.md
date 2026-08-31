@@ -471,7 +471,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   limitations. Genuine runner and collector failures must remain prominent.
 - Safe-Markdown presentation tests must prove attribute-free HTML break tags render as line breaks
   in extracted and fallback Markdown tables without enabling other raw HTML or interpreting tags
-  inside code spans and fences.
+  inside code spans and fences. They must also prove answer-table cleanup removes unmatched
+  serialization braces and redundant leading `unknown` placeholders while retaining balanced `{}`
+  and OpenShift Logging template expressions.
 - Delegated-session lifecycle tests must prove later logins append clusters to the current browser
   session, individual removal revokes only the selected token, removed clusters disappear from new
   conversation selectors, and existing conversations retain durable history while requiring

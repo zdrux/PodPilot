@@ -9815,7 +9815,10 @@ def create_app(
                 "A collector's complete flag refers only to that bounded collection. Interpret every result, "
                 "decide whether further investigation is useful, and write the operator-facing conclusion "
                 "yourself. When presenting multiple comparable items, use a concise GitHub-flavored "
-                "Markdown table with a header row; keep explanatory conclusions outside the table.\n\n"
+                "Markdown table with a header row and exactly the same number of cells in every row. "
+                "Use <br> for multiple items inside a cell; never put a raw pipe, JSON braces, quoted JSON "
+                "placeholder, or schema syntax in a cell. Use plain unknown or an em dash when needed. "
+                "Keep explanatory conclusions outside the table.\n\n"
                 "Selected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),

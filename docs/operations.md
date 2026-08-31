@@ -487,6 +487,11 @@ native dynamic-column tables with collapsing and CSV export. Their surrounding p
 place and the UI labels them as answer-derived; this presentation conversion does not make their
 contents authoritative evidence. Extraction is bounded to eight tables, 24 columns, 1,000 rows per
 table, and 4,096 characters per cell. Tables beyond those bounds remain in the safe Markdown fallback.
+The final-answer contract requires equal cell counts and `<br>` item separators and forbids raw
+cell pipes or JSON/schema decoration. As a defensive display repair, extraction removes only
+unmatched braces at cell-item boundaries and drops a leading quoted or code-formatted `unknown`
+placeholder when substantive content follows. Balanced values such as `{}`, JSON snippets, and
+OpenShift Logging templates like `{kubernetes.namespace_name}` remain unchanged.
 The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
 The generic `list_resources` helper has been removed from guarded planning, authored object-read
 schemas, runtime configuration, and unrestricted tool schemas. Existing persisted LIST evidence and

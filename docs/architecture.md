@@ -52,7 +52,10 @@ Purpose-built legacy collectors may still use bounded projected object reads int
 log tails remain available to the final agent instead of being replaced by a separate server-side
 log interpretation. Safe-Markdown rendering recognizes attribute-free `<br>`, `<br/>`, and
 `<br />` tags as line breaks in ordinary text and table cells. All other raw HTML remains escaped,
-and break-like text inside inline or fenced code remains literal.
+and break-like text inside inline or fenced code remains literal. Answer-table cells also receive a
+bounded structured-output cleanup: unmatched braces are removed only at item boundaries, and a
+leading `unknown` placeholder is discarded only when real cell content follows. Balanced object and
+OpenShift template braces are preserved.
 
 ## Current Runtime
 
