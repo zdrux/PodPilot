@@ -14149,6 +14149,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '>Submit</button>' in template
     assert 'askSubmit.textContent = "Submit"' in script
     assert ".ask-layout.action-session .composer-input-wrap > [data-ask-submit]" in styles
+    assert ".composer-input-wrap > [data-run-cancel]" not in styles
     assert "top: 10px;" in styles
     assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script

@@ -312,11 +312,6 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   color: #180d0b;
   background: linear-gradient(135deg, #e9a379, #c86455);
 }
-.composer-input-wrap > [data-run-cancel] {
-  border-color: rgba(233, 163, 121, .78);
-  color: #180d0b;
-  background: linear-gradient(135deg, #e9a379, #c86455);
-}
 .cluster-picker { position: relative; flex: 0 1 520px; width: min(520px, 42vw); min-width: 260px; }
 .cluster-picker > summary { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #08101b; cursor: pointer; list-style: none; }
 .cluster-picker > summary::-webkit-details-marker { display: none; }
