@@ -201,6 +201,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   after a NoMatch error; deterministic matching recognizes compound fragments such as
   `logforwarder` while returning only exact, discovered API coordinates. Discovery remains
   session-user scoped and does not imply object authorization.
+- Answer-derived table cells now normalize model-authored HTML break variants, including breaks
+  accidentally wrapped in inline-code spans, without enabling raw HTML. This keeps multi-line
+  summaries readable while every other tag remains escaped by the Markdown trust boundary.
   One shared 25-unit weighted investigation budget fans out across selected clusters, partial failures remain
   scoped limitations, and all evidence/citations identify their source cluster. Alert,
   investigation, dashboard, remote metrics, and remediation routing are unchanged.

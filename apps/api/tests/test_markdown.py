@@ -1,4 +1,8 @@
-from podpilot_api.markdown import render_safe_markdown, split_markdown_tables
+from podpilot_api.markdown import (
+    render_safe_markdown,
+    render_safe_table_markdown,
+    split_markdown_tables,
+)
 
 
 def test_chat_markdown_renders_tables_and_common_prose() -> None:
@@ -112,3 +116,27 @@ def test_extracted_markdown_table_cells_render_safe_html_breaks() -> None:
     rendered = str(render_safe_markdown(cell))
 
     assert rendered == "<p>Kafka<br>\nSyslog<br>\nLoki</p>\n"
+
+
+def test_table_cells_repair_break_tags_wrapped_in_model_code_spans() -> None:
+    rendered = str(render_safe_table_markdown(
+        "`unknown`} `<br>` **tm-vault-output**<BR />`next<br/>line`"
+    ))
+
+    assert "&lt;br" not in rendered.lower()
+    assert "<code><br>" not in rendered
+    assert rendered.count("<br>") == 3
+    assert "<strong>tm-vault-output</strong>" in rendered
+    assert "<code>next<br>\nline</code>" in rendered
+
+
+def test_table_cell_break_repair_does_not_enable_other_raw_html() -> None:
+    rendered = str(render_safe_table_markdown(
+        "`<script>alert(1)</script>` <img src=x onerror=alert(1)> `<br>`"
+    ))
+
+    assert "<script>" not in rendered
+    assert "<img" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
+    assert rendered.count("<br>") == 1

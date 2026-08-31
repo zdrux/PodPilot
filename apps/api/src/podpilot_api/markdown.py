@@ -14,6 +14,10 @@ _renderer = MarkdownIt(
 ).enable("table")
 
 _HTML_BREAK = re.compile(r"<br[ \t]*/?>", re.IGNORECASE)
+_ESCAPED_HTML_BREAK = re.compile(r"&lt;br[ \t]*/?&gt;", re.IGNORECASE)
+_CODE_ONLY_ESCAPED_HTML_BREAK = re.compile(
+    r"<code>[ \t]*&lt;br[ \t]*/?&gt;[ \t]*</code>", re.IGNORECASE,
+)
 
 
 def _render_text_with_safe_breaks(_renderer, tokens, index, _options, _env) -> str:
@@ -69,6 +73,15 @@ def render_safe_markdown(value: object) -> Markup:
     """Render CommonMark while keeping raw HTML escaped."""
 
     return Markup(_renderer.render(_pretty_json_markdown(str(value or ""))))
+
+
+def render_safe_table_markdown(value: object) -> Markup:
+    """Render a table cell while repairing model-authored encoded break tags."""
+
+    rendered = str(render_safe_markdown(value))
+    rendered = _CODE_ONLY_ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
+    rendered = _ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
+    return Markup(rendered)
 
 
 def split_markdown_tables(

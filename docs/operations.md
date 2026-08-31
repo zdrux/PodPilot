@@ -359,6 +359,11 @@ that the API type is advertised; it does not prove the delegated identity may re
 Discovery denial or failure remains a non-blocking limitation, and the full catalog is never placed
 in the model prompt.
 
+Answer-derived Markdown tables render through the same raw-HTML-disabled boundary as chat prose.
+Within table headers and cells only, PodPilot normalizes model-authored `<br>`, `<br/>`, and `<br />`
+variants into safe line breaks even when the model mistakenly wraps the tag in an inline-code span.
+All other raw HTML remains escaped and visible as text rather than becoming browser markup.
+
 Remote namespace log-volume questions additionally require the standard `logging-loki` Route,
 `cluster-logging-application-view`, and cluster-wide LokiStack OpenShift authorization for the
 registered identity. The base runtime identity is also bound to
