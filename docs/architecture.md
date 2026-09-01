@@ -127,6 +127,10 @@ The standing agent instructions require initial Pod and container log reads to u
 when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
 The agent may narrow or expand subsequent reads in bounded increments when that sample is
 insufficient, rather than placing an arbitrary full log stream into every later model request.
+Successful `oc get ... -o yaml` shell results are parsed before model reinjection and have
+`metadata.managedFields` removed recursively from objects and list items. The executed command and
+cluster response semantics remain unchanged; non-YAML output and YAML-producing non-GET commands
+are left untouched.
 If a Chat Completions turn returns neither content nor a tool call, or serializes tool arguments as
 the final answer, the API issues up to two bounded finalization attempts using the command results
 already in context. Successful commands are not automatically repeated. If both attempts remain

@@ -1,16 +1,58 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import uuid4
 
 import httpx
+import yaml
 
 from podpilot_diagnostics.redaction import redact_text
 
 
 class AgentRunnerError(RuntimeError):
     pass
+
+
+_YAML_GET_OUTPUT = re.compile(
+    r"(?is)(?:^|[;&|])\s*(?:oc|kubectl)\s+get\b(?:(?![;&|]).)*?"
+    r"(?:-o(?:=|\s*)yaml\b|--output(?:=|\s+)yaml\b)"
+)
+
+
+def strip_managed_fields_from_yaml_output(command: str, output: str) -> str:
+    """Remove server-side apply ownership history before YAML reaches the model."""
+
+    if not output or not _YAML_GET_OUTPUT.search(command):
+        return output
+    try:
+        documents = list(yaml.safe_load_all(output))
+    except yaml.YAMLError:
+        return output
+
+    changed = False
+
+    def strip(value: object) -> None:
+        nonlocal changed
+        if isinstance(value, dict):
+            metadata = value.get("metadata")
+            if isinstance(metadata, dict) and "managedFields" in metadata:
+                del metadata["managedFields"]
+                changed = True
+            for item in value.values():
+                strip(item)
+        elif isinstance(value, list):
+            for item in value:
+                strip(item)
+
+    for document in documents:
+        strip(document)
+    if not changed:
+        return output
+    if len(documents) == 1:
+        return yaml.safe_dump(documents[0], sort_keys=False)
+    return yaml.safe_dump_all(documents, sort_keys=False, explicit_start=True)
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,7 @@ from podpilot_openshift.agent_runner import (
     AgentClusterConnection,
     AgentRunnerError,
     OcAgentRunnerClient,
+    strip_managed_fields_from_yaml_output,
 )
 
 
@@ -55,6 +56,43 @@ def test_agent_runner_client_returns_unbounded_command_result(monkeypatch) -> No
         },
         "timeout": 310.0,
     }
+
+
+def test_yaml_get_output_strips_managed_fields_from_objects_and_list_items() -> None:
+    output = """apiVersion: v1
+kind: List
+metadata:
+  managedFields:
+  - manager: cluster
+items:
+- apiVersion: v1
+  kind: Pod
+  metadata:
+    name: pod-a
+    managedFields:
+    - manager: kubelet
+  status:
+    phase: Running
+"""
+
+    compact = strip_managed_fields_from_yaml_output(
+        "oc get pods -n payments -o yaml", output,
+    )
+
+    assert "managedFields" not in compact
+    assert "name: pod-a" in compact
+    assert "phase: Running" in compact
+
+
+@pytest.mark.parametrize("command", [
+    "oc get pods -o json",
+    "oc create configmap example --dry-run=client -o yaml",
+    "printf 'metadata: managedFields'",
+])
+def test_non_get_yaml_output_is_not_rewritten(command: str) -> None:
+    output = "metadata:\n  managedFields:\n  - manager: retained\n"
+
+    assert strip_managed_fields_from_yaml_output(command, output) == output
 
 
 def test_agent_runner_client_brokers_one_remote_cluster_credential(monkeypatch) -> None:

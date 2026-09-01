@@ -115,6 +115,7 @@ from podpilot_openshift.agent_runner import (
     AgentRunner,
     AgentRunnerError,
     OcAgentRunnerClient,
+    strip_managed_fields_from_yaml_output,
 )
 from podpilot_openshift.credentials import (
     CredentialStore,
@@ -10430,6 +10431,11 @@ def create_app(
                             )
                             if runner_task in done:
                                 result = runner_task.result()
+                                compact_stdout = strip_managed_fields_from_yaml_output(
+                                    command, result.stdout,
+                                )
+                                if compact_stdout != result.stdout:
+                                    result = replace(result, stdout=compact_stdout)
                                 break
                             elapsed_seconds = round(
                                 asyncio.get_running_loop().time() - command_started
