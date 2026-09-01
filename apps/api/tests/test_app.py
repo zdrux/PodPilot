@@ -28,6 +28,7 @@ from podpilot_api.main import (
     _agent_duplicate_command_issue,
     _agent_final_answer_quality_issue,
     _agent_premature_deferral_issue,
+    _bounded_agent_provider_result,
     _bind_plan_log_intents,
     _bounded_detail_fanout,
     _build_delegated_read_only_explorer,
@@ -1279,6 +1280,22 @@ def test_investigation_budget_weights_high_volume_operations() -> None:
         tool="watch_resources", resource="pods", namespace="payments", watch_seconds=5,
     )) == 3
     assert _investigation_unit_cost(ReadIntent(tool="pod_health_summary")) == 2
+
+
+def test_agent_provider_result_compacts_large_shell_output() -> None:
+    rendered = _bounded_agent_provider_result({
+        "command": "oc get routes -A -o json",
+        "exit_code": 0,
+        "stdout": "x" * 500_000,
+        "stderr": "",
+        "stdout_truncated": True,
+    })
+
+    payload = json.loads(rendered)
+    assert payload["provider_payload_compacted"] is True
+    assert payload["provider_payload_original_bytes"] > 400_000
+    assert "compacted stdout" in payload["stdout"]
+    assert len(rendered.encode()) <= 48 * 1024
 
 
 def test_deterministic_pod_health_answer_reports_running_phase_crashloop() -> None:
@@ -16612,7 +16629,14 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "cached_tokens": 10000,
                     "total_tokens": 51200,
                 },
-                "calls": [],
+                "calls": [{
+                    "operation": "workflow.unrestricted_agent",
+                    "http_status": 400,
+                    "request_id": "provider-request-400",
+                    "error_preview": (
+                        "context_length_exceeded: request exceeds the model context window"
+                    ),
+                }],
                 "failure_count": 1,
                 "failures": [{
                     "operation": "workflow.ActionSelection.schema_retry",
@@ -16649,6 +16673,9 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "Model request failures" in rendered.text
     assert "schema validation · ActionSelection · attempt 2" in rendered.text
     assert "object_reads.0.resource" in rendered.text
+    assert "Provider HTTP error · 400" in rendered.text
+    assert "provider-request-400" in rendered.text
+    assert "context_length_exceeded" in rendered.text
 
 
 def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:

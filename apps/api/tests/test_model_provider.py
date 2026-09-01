@@ -28,6 +28,7 @@ from podpilot_api.model_provider import (
     _model_request_context,
     _minimal_action_payload,
     _minimal_answer_payload,
+    _prepare_chat_input,
     _record_model_failure,
     _validation_failure_details,
     capture_model_diagnostics,
@@ -669,6 +670,76 @@ def test_model_diagnostics_omit_response_content_for_normal_ask_turns() -> None:
 
     assert calls[0]["usage"]["total_tokens"] == 12
     assert "response_preview" not in calls[0]
+
+
+def test_model_diagnostics_always_capture_bounded_redacted_http_error() -> None:
+    request = httpx.Request("POST", "https://models.example.test/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"content-type": "application/json"},
+        json={"error": {
+            "code": "context_length_exceeded",
+            "message": "Input is too large; token=provider-secret-value",
+        }},
+    )
+
+    with capture_model_diagnostics() as calls:
+        _model_http_response_hook(response)
+
+    assert calls[0]["http_status"] == 400
+    assert "context_length_exceeded" in calls[0]["error_preview"]
+    assert "provider-secret-value" not in calls[0]["error_preview"]
+    assert "[REDACTED]" in calls[0]["error_preview"]
+    assert "response_preview" not in calls[0]
+
+
+def test_chat_input_budget_compacts_large_tool_results_before_provider_call() -> None:
+    messages = [
+        {"role": "system", "content": "Agent instructions."},
+        {"role": "user", "content": "Inspect Routes."},
+        {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "execute_shell", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "x" * 300_000},
+    ]
+
+    prepared = _prepare_chat_input(profile(max_input_tokens=20_000), messages)
+
+    tool_content = str(prepared[-1]["content"])
+    assert "compacted this message" in tool_content
+    assert len(json.dumps({"messages": prepared}).encode()) <= 20_000
+
+
+def test_chat_input_budget_stops_request_when_fixed_context_exceeds_limit() -> None:
+    with pytest.raises(ModelProviderError) as failure:
+        _prepare_chat_input(
+            profile(max_input_tokens=1_024),
+            [{"role": "system", "content": "s" * 5_000}],
+        )
+
+    assert failure.value.failure_type == "input_limit"
+    assert "before transmission" in str(failure.value)
+
+
+def test_safe_provider_error_includes_bounded_redacted_response_detail() -> None:
+    class BadRequestError(Exception):
+        status_code = 400
+        body = {"error": {
+            "code": "context_length_exceeded",
+            "message": "Too many tokens; api_key=must-not-leak",
+        }}
+
+    detail = OpenAIResponsesProvider._safe_error(BadRequestError())
+
+    assert "HTTP 400" in detail
+    assert "context_length_exceeded" in detail
+    assert "must-not-leak" not in detail
+    assert "[REDACTED]" in detail
 
 
 def test_model_diagnostics_capture_responses_incomplete_reason() -> None:

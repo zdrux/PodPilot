@@ -48,7 +48,8 @@
             {% if call.response_model or call.response_id or call.request_id %}<small>Response:{% if call.response_model %} model {{ call.response_model }}{% endif %}{% if call.response_id %} · ID {{ call.response_id }}{% endif %}{% if call.request_id %} · request {{ call.request_id }}{% endif %}</small>{% endif %}
             {% if call.usage %}<small>Tokens: {{ call.usage.input_tokens or 0 }} in · {{ call.usage.output_tokens or 0 }} out{% if call.usage.reasoning_tokens %} · {{ call.usage.reasoning_tokens }} reasoning{% endif %}</small>{% endif %}
             {% if call.error %}<p class="probe-error">{{ call.error }}</p>{% endif %}
-            {% if call.response_preview %}<details{% if call.failed %} open{% endif %}><summary>Redacted response preview</summary><pre><code>{{ call.response_preview }}</code></pre></details>{% endif %}
+            {% if call.error_preview %}<details open><summary>Redacted provider error</summary><pre><code>{{ call.error_preview }}</code></pre></details>{% endif %}
+            {% if call.response_preview and not call.error_preview %}<details{% if call.failed %} open{% endif %}><summary>Redacted response preview</summary><pre><code>{{ call.response_preview }}</code></pre></details>{% endif %}
           </li>{% endfor %}
         </ol>
       </details>

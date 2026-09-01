@@ -177,6 +177,12 @@ The API's delegated Kubernetes proxy records the actual OpenShift API status; 4x
 are represented only by a redacted 2 KiB preview, truncation flag, and full-body digest while the
 original response streams unchanged to `oc`. Successful response bodies and full error pages are
 not logged.
+Model-provider diagnostics follow the same bounded-error principle. Successful response content
+remains excluded from ordinary Ask diagnostics, but every provider HTTP 4xx/5xx records a redacted
+2,000-character error preview when a body is present. The normalized exception may expose that same
+bounded redacted provider message to the operator; authorization headers, request messages, and
+unbounded response bodies are never retained. A 4xx is categorized as a rejected request rather
+than a provider outage.
 
 The shared agent loop exposes registered HTTP-probe, audit, and metric collectors as model-callable
 helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not
@@ -218,6 +224,9 @@ projected token. Output redaction is defense in depth, not a guarantee against a
 transforming secret bytes. Command text, target cluster, and exit status are
 audited. A bounded redacted stderr summary is retained only for failed commands; full shell output
 is secret-pattern redacted before it is returned to the provider and is not persisted as evidence.
+Provider reinjection applies a smaller 48 KiB shell-result ceiling and the configured model-input
+ceiling independently of the runner's transport/output ceiling. Exceeding the input ceiling fails
+locally before credentials or request content are transmitted to the provider.
 Normalized deterministic enrichment is persisted as
 evidence under the existing policy. Cluster output remains untrusted data and may contain
 prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root

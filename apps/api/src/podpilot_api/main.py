@@ -150,6 +150,9 @@ DELEGATED_SESSION_COOKIE = "podpilot_delegated_session"
 LOGGER = logging.getLogger("uvicorn.error")
 DELEGATED_PROXY_ERROR_PREVIEW_BYTES = 2_048
 DELEGATED_PROXY_ERROR_CAPTURE_BYTES = 8_192
+AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES = 48 * 1024
+AGENT_PROVIDER_STDOUT_MAX_BYTES = 32 * 1024
+AGENT_PROVIDER_STDERR_MAX_BYTES = 8 * 1024
 
 
 async def _stream_delegated_upstream(
@@ -7872,6 +7875,46 @@ def _agent_premature_deferral_issue(
     return None
 
 
+def _bounded_utf8_text(value: object, limit: int, *, label: str) -> str:
+    text = str(value or "")
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= limit:
+        return text
+    marker = f"\n[PodPilot compacted {label} from {len(raw)} bytes to protect model context.]"
+    marker_bytes = marker.encode()
+    prefix = raw[:max(0, limit - len(marker_bytes))]
+    return prefix.decode("utf-8", errors="ignore").rstrip() + marker
+
+
+def _bounded_agent_provider_result(payload: dict[str, object]) -> str:
+    """Bound a shell result before it becomes provider conversation state."""
+
+    safe_payload = dict(payload)
+    rendered = redact_text(json.dumps(safe_payload, sort_keys=True, default=str))
+    if len(rendered.encode("utf-8", errors="replace")) <= AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES:
+        return rendered
+    stdout = str(safe_payload.get("stdout") or "")
+    stderr = str(safe_payload.get("stderr") or "")
+    command = str(safe_payload.get("command") or "")
+    safe_payload["stdout"] = _bounded_utf8_text(
+        stdout, AGENT_PROVIDER_STDOUT_MAX_BYTES, label="stdout"
+    )
+    safe_payload["stderr"] = _bounded_utf8_text(
+        stderr, AGENT_PROVIDER_STDERR_MAX_BYTES, label="stderr"
+    )
+    safe_payload["command"] = _bounded_utf8_text(command, 4_096, label="command")
+    safe_payload["provider_payload_compacted"] = True
+    safe_payload["provider_payload_original_bytes"] = len(
+        rendered.encode("utf-8", errors="replace")
+    )
+    compacted = redact_text(json.dumps(safe_payload, sort_keys=True, default=str))
+    if len(compacted.encode("utf-8", errors="replace")) > AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES:
+        safe_payload["stdout"] = _bounded_utf8_text(stdout, 16_384, label="stdout")
+        safe_payload["stderr"] = _bounded_utf8_text(stderr, 4_096, label="stderr")
+        compacted = redact_text(json.dumps(safe_payload, sort_keys=True, default=str))
+    return compacted
+
+
 def _agent_duplicate_command_issue(
     *, previous_executions: int, repeat_reason: str | None,
 ) -> str | None:
@@ -10883,7 +10926,7 @@ def create_app(
                         runner_requests.discard(runner_request_id)
                         if not runner_requests:
                             app.state.adhoc_runner_requests.pop(run_id, None)
-                safe_result = redact_text(json.dumps(result_payload, sort_keys=True, default=str))
+                safe_result = _bounded_agent_provider_result(result_payload)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -11682,8 +11725,16 @@ def create_app(
                     isinstance(exc, ModelProviderError)
                     and getattr(exc, "failure_type", "") == "agent_contract"
                 )
+                provider_failure_type = (
+                    getattr(exc, "failure_type", "")
+                    if isinstance(exc, ModelProviderError) else ""
+                )
+                request_rejected = provider_failure_type in {
+                    "input_limit", "request_rejected",
+                }
                 contract_failure = isinstance(exc, ModelProviderError) and (
                     agent_contract_failure
+                    or request_rejected
                     or any(
                         marker in str(exc).lower()
                         for marker in ("schema", "does not match", "structured response")
@@ -11708,6 +11759,7 @@ def create_app(
                         )
                     )
                     failure_kind = (
+                        "rejected or over-budget model request" if request_rejected else
                         "invalid structured response" if contract_failure
                         else "provider failure"
                     )
@@ -11744,6 +11796,10 @@ def create_app(
                                 "The agent could not produce a valid final answer, so PodPilot could not "
                                 "complete this investigation. No cluster changes were attempted."
                                 if agent_contract_failure else
+                                "PodPilot stopped or the provider rejected the model request because its "
+                                "input was invalid or exceeded the configured context budget. No cluster "
+                                "changes were attempted."
+                                if request_rejected else
                                 "The model returned an invalid structured response, so PodPilot could not "
                                 "complete this investigation. No cluster changes were attempted."
                             )

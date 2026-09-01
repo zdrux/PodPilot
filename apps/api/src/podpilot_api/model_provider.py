@@ -30,6 +30,9 @@ from podpilot_diagnostics.redaction import redact_text
 
 
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+_MODEL_ERROR_PREVIEW_CHARS = 2_000
+_COMPACTED_TOOL_MESSAGE_BYTES = 8_192
+_COMPACTED_HISTORY_MESSAGE_BYTES = 2_048
 
 
 def validate_model_endpoint(
@@ -109,6 +112,110 @@ def _output_limit(profile: ModelProfileConfig, concise_limit: int) -> int:
     if profile.reasoning_effort not in {None, "none"}:
         return profile.max_output_tokens
     return min(profile.max_output_tokens, concise_limit)
+
+
+def _utf8_prefix(value: str, limit: int) -> str:
+    """Return a valid UTF-8 prefix bounded by bytes, with an explicit marker."""
+
+    raw = value.encode("utf-8", errors="replace")
+    if len(raw) <= limit:
+        return value
+    marker = b"\n[PodPilot compacted this message to protect the model input budget.]"
+    retained = raw[:max(0, limit - len(marker))]
+    return retained.decode("utf-8", errors="ignore").rstrip() + marker.decode()
+
+
+def _chat_input_token_upper_bound(
+    messages: list[dict[str, object]],
+    *,
+    tools: list[dict[str, object]] | None = None,
+    request_fields: dict[str, object] | None = None,
+) -> int:
+    """Return a tokenizer-independent conservative token upper bound.
+
+    OpenAI-compatible gateways can front models with different tokenizers. Every
+    UTF-8 byte can be represented by at most one byte-fallback token, so the
+    serialized request byte count is a deliberately conservative upper bound.
+    """
+
+    payload: dict[str, object] = {"messages": messages}
+    if tools is not None:
+        payload["tools"] = tools
+    if request_fields:
+        payload.update(request_fields)
+    return len(
+        json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode(
+            "utf-8", errors="replace"
+        )
+    )
+
+
+def _prepare_chat_input(
+    profile: ModelProfileConfig,
+    messages: list[dict[str, object]],
+    *,
+    tools: list[dict[str, object]] | None = None,
+    request_fields: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """Compact provider-bound messages and enforce the configured input ceiling."""
+
+    prepared = deepcopy(messages)
+    if _chat_input_token_upper_bound(
+        prepared, tools=tools, request_fields=request_fields,
+    ) <= profile.max_input_tokens:
+        return prepared
+
+    # Shell and collector results are the largest and least durable part of an
+    # agent conversation. Keep their leading evidence and explicit truncation
+    # marker while preserving assistant/tool-call ordering required by the API.
+    for message in prepared:
+        if message.get("role") != "tool":
+            continue
+        message["content"] = _utf8_prefix(
+            str(message.get("content") or ""), _COMPACTED_TOOL_MESSAGE_BYTES
+        )
+        if _chat_input_token_upper_bound(
+            prepared, tools=tools, request_fields=request_fields,
+        ) <= profile.max_input_tokens:
+            return prepared
+
+    latest_user_index = max(
+        (index for index, item in enumerate(prepared) if item.get("role") == "user"),
+        default=-1,
+    )
+    for index, message in enumerate(prepared):
+        if message.get("role") == "system" or index == latest_user_index:
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or not content:
+            continue
+        message["content"] = _utf8_prefix(content, _COMPACTED_HISTORY_MESSAGE_BYTES)
+        if _chat_input_token_upper_bound(
+            prepared, tools=tools, request_fields=request_fields,
+        ) <= profile.max_input_tokens:
+            return prepared
+
+    if latest_user_index >= 0:
+        latest = prepared[latest_user_index]
+        latest["content"] = _utf8_prefix(str(latest.get("content") or ""), 16_384)
+
+    upper_bound = _chat_input_token_upper_bound(
+        prepared, tools=tools, request_fields=request_fields,
+    )
+    if upper_bound > profile.max_input_tokens:
+        raise ModelProviderError(
+            "PodPilot stopped the model request before transmission because its conservative "
+            f"input-token upper bound ({upper_bound}) exceeds the configured maximum "
+            f"({profile.max_input_tokens}). Narrow the collected evidence or increase the model "
+            "profile limit only when the provider model supports it.",
+            failure_type="input_limit",
+            failure={
+                "failure_type": "input_limit",
+                "estimated_input_tokens_upper_bound": upper_bound,
+                "configured_input_tokens": profile.max_input_tokens,
+            },
+        )
+    return prepared
 
 
 @dataclass(frozen=True)
@@ -935,6 +1042,19 @@ def _bounded_response_preview(payload: object) -> str | None:
     return redact_text(rendered)[:4000]
 
 
+def _bounded_error_preview(payload: object) -> str | None:
+    """Render a bounded redacted provider error without request headers or bodies."""
+
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        rendered = payload
+    else:
+        rendered = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False)
+    compact = " ".join(redact_text(rendered).split())
+    return compact[:_MODEL_ERROR_PREVIEW_CHARS] or None
+
+
 def _model_http_request_hook(request: httpx.Request) -> None:
     request.extensions["podpilot_diagnostic_started"] = time.monotonic()
     try:
@@ -987,6 +1107,8 @@ def _model_http_response_hook(response: httpx.Response) -> None:
     if request_id:
         diagnostic["request_id"] = request_id[:200]
     content_type = response.headers.get("content-type", "").casefold()
+    payload: object | None = None
+    response_text: str | None = None
     if "json" in content_type:
         try:
             response.read()
@@ -1020,6 +1142,18 @@ def _model_http_response_hook(response: httpx.Response) -> None:
                 preview = _bounded_response_preview(payload)
                 if preview:
                     diagnostic["response_preview"] = preview
+    elif response.status_code >= 400:
+        try:
+            response.read()
+            response_text = response.text
+        except httpx.HTTPError:
+            response_text = None
+    if response.status_code >= 400:
+        error_preview = _bounded_error_preview(payload if payload is not None else response_text)
+        if error_preview:
+            # Error bodies are operational diagnostics, not model answers. Capture
+            # them for every 4xx/5xx even when normal answer-content capture is off.
+            diagnostic["error_preview"] = error_preview
     capture.append(diagnostic)
 
 
@@ -1062,8 +1196,43 @@ def _record_model_failure(
 
 
 def _provider_failure_type(exc: Exception) -> str:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return "rate_limited"
+    if isinstance(status_code, int) and 400 <= status_code < 500:
+        return "request_rejected"
+    if isinstance(status_code, int) and status_code >= 500:
+        return "provider_error"
     name = type(exc).__name__.casefold()
     return "timeout" if "timeout" in name else "provider_error"
+
+
+def _provider_exception_detail(exc: Exception) -> str | None:
+    """Extract a bounded safe message from OpenAI-compatible HTTP exceptions."""
+
+    body = getattr(exc, "body", None)
+    if body is None:
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                body = response.json()
+            except (ValueError, httpx.HTTPError):
+                try:
+                    body = response.text
+                except httpx.HTTPError:
+                    body = None
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            code = error.get("code") or error.get("type")
+            if message:
+                body = f"{code}: {message}" if code else message
+        elif error is not None:
+            body = error
+        elif body.get("message"):
+            body = body.get("message")
+    return _bounded_error_preview(body)
 
 
 def summarize_model_diagnostics(
@@ -2118,7 +2287,9 @@ class OpenAIResponsesProvider:
         name = type(exc).__name__
         status_code = getattr(exc, "status_code", None)
         if status_code:
-            return f"Provider request failed ({name}, HTTP {status_code})."
+            detail = _provider_exception_detail(exc)
+            suffix = f" {detail}" if detail else ""
+            return f"Provider request failed ({name}, HTTP {status_code}).{suffix}"
         return f"Provider request failed ({name})."
 
 
@@ -2348,19 +2519,38 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "Requested metric period in seconds. Use 300 when the operator supplies no period; "
             "do not invent a wide range."
         )
+        prepared_messages = _prepare_chat_input(profile, messages, tools=tools)
+        capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
+        request_start = len(capture) if capture is not None else 0
         try:
             with _model_request_context("workflow.unrestricted_agent"):
                 response = self._client(profile, api_key).chat.completions.create(
                     model=profile.chat_model,
-                    messages=messages,
+                    messages=prepared_messages,
                     tools=tools,
                     tool_choice="auto",
                     parallel_tool_calls=False,
                     max_tokens=profile.max_output_tokens,
                     **_chat_reasoning(profile),
                 )
+        except ModelProviderError:
+            raise
         except Exception as exc:
-            raise ModelProviderError(self._safe_error(exc)) from exc
+            failure_type = _provider_failure_type(exc)
+            _record_model_failure(
+                {
+                    "failure_type": failure_type,
+                    "schema": "AgentStep",
+                    "attempt": 1,
+                    "fields": [],
+                },
+                operation="workflow.unrestricted_agent",
+                schema="AgentStep",
+                since=request_start,
+            )
+            raise ModelProviderError(
+                self._safe_error(exc), failure_type=failure_type
+            ) from exc
         message = response.choices[0].message
         calls = tuple(
             AgentToolCall(
@@ -2400,16 +2590,35 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     ) -> AgentStep:
         """Request the bounded final answer without exposing another shell tool call."""
 
+        prepared_messages = _prepare_chat_input(profile, messages)
+        capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
+        request_start = len(capture) if capture is not None else 0
         try:
             with _model_request_context("workflow.unrestricted_agent_finalization"):
                 response = self._client(profile, api_key).chat.completions.create(
                     model=profile.chat_model,
-                    messages=messages,
+                    messages=prepared_messages,
                     max_tokens=profile.max_output_tokens,
                     **_chat_reasoning(profile),
                 )
+        except ModelProviderError:
+            raise
         except Exception as exc:
-            raise ModelProviderError(self._safe_error(exc)) from exc
+            failure_type = _provider_failure_type(exc)
+            _record_model_failure(
+                {
+                    "failure_type": failure_type,
+                    "schema": "AgentStep",
+                    "attempt": 1,
+                    "fields": [],
+                },
+                operation="workflow.unrestricted_agent_finalization",
+                schema="AgentStep",
+                since=request_start,
+            )
+            raise ModelProviderError(
+                self._safe_error(exc), failure_type=failure_type
+            ) from exc
         message = response.choices[0].message
         return AgentStep(
             assistant_message={"role": "assistant", "content": message.content},
@@ -2431,6 +2640,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             {"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(payload, sort_keys=True, default=str)},
         ]
+        messages = _prepare_chat_input(
+            profile, messages, request_fields={"response_format": response_format},
+        )
         capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
         parse_start = len(capture) if capture is not None else 0
         try:
@@ -2460,9 +2672,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 with _model_request_context(
                     f"workflow.{schema.__name__}.empty_retry", schema=schema.__name__
                 ):
-                    response = client.chat.completions.create(
-                        model=profile.chat_model,
-                        messages=[
+                    retry_messages = _prepare_chat_input(
+                        profile,
+                        [
                             *messages,
                             {
                                 "role": "system",
@@ -2472,6 +2684,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                                 ),
                             },
                         ],
+                        request_fields={"response_format": response_format},
+                    )
+                    response = client.chat.completions.create(
+                        model=profile.chat_model,
+                        messages=retry_messages,
                         response_format=response_format,
                         max_tokens=limit or profile.max_output_tokens,
                         **_chat_reasoning(profile),
@@ -2519,9 +2736,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 with _model_request_context(
                     f"workflow.{schema.__name__}.schema_retry", schema=schema.__name__
                 ):
-                    correction = client.chat.completions.create(
-                        model=profile.chat_model,
-                        messages=[
+                    correction_messages = _prepare_chat_input(
+                        profile,
+                        [
                             *messages,
                             {
                                 "role": "system",
@@ -2532,6 +2749,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                                 ),
                             },
                         ],
+                        request_fields={"response_format": response_format},
+                    )
+                    correction = client.chat.completions.create(
+                        model=profile.chat_model,
+                        messages=correction_messages,
                         response_format=response_format,
                         max_tokens=limit or profile.max_output_tokens,
                         **_chat_reasoning(profile),

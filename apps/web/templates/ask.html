@@ -84,6 +84,15 @@
               </ul>
             </div>
             {% endif %}
+            {% for call in message.model_diagnostics.calls %}
+              {% if call.error_preview %}
+              <div class="message-model-failures">
+                <strong>Provider HTTP error{% if call.http_status %} · {{ call.http_status }}{% endif %}</strong>
+                <small>{{ call.operation or 'model request' }}{% if call.request_id %} · request {{ call.request_id }}{% endif %}</small>
+                <pre><code>{{ call.error_preview }}</code></pre>
+              </div>
+              {% endif %}
+            {% endfor %}
           </details>
           {% endif %}
         </div>

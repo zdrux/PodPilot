@@ -446,6 +446,9 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Provider tests must prove `openai/gpt-oss-120b` is sent through Chat Completions with
   `tool_choice=auto`, sequential tool calls, assistant tool-call preservation, and correlated
   `role=tool` results.
+- Provider-input tests must prove oversized shell results are compacted before reinjection, the
+  complete messages-plus-tools request stays below `max_input_tokens`, irreducible requests fail
+  locally without provider transmission, and bounded redacted 4xx/5xx error details are retained.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
