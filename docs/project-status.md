@@ -927,8 +927,9 @@ current repository and cluster state.
 - Investigation chat is limited to one investigation, a 20-message history, one
   non-executing safe-check intent, and non-streaming responses. Standalone Ask
   PodPilot conversations are unlimited and use rolling context, but responses
-  remain non-streaming. Curated memory can now be managed and searched, but is not
-  yet retrieved into investigation or chat model context.
+  remain non-streaming. Curated memory is retrieved into standalone Ask guarded answers and
+  delegated-agent context as bounded untrusted guidance; it does not enter investigation-chat or
+  remediation prompts.
 - The first executable plan is fixed to scoped `TargetDown` passive monitoring
   signals, Service topology, and Pod events. It does not inspect full rule
   definitions or perform an active DNS, TCP, TLS, or HTTP probe.
@@ -945,8 +946,8 @@ current repository and cluster state.
 
 No next milestone is formally selected. The highest-value candidates are:
 
-1. Add bounded answer-time memory retrieval and a server-validated knowledge
-   citation contract without allowing memory to influence tool or action policy.
+1. Add a server-validated knowledge citation contract without allowing memory to authorize tools,
+   actions, or current-state claims.
 2. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
 3. Design an administrator-owned probe-target registry and dedicated no-token,

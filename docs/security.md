@@ -334,10 +334,10 @@ applies global, explicit-cluster, required-tag, and namespace filters before ran
 restricted entries require
 the Approver role. Search text is converted to a bounded quoted FTS expression,
 so operators and cluster-derived text cannot supply SQLite FTS instructions.
-Retrieved memory remains untrusted guidance rather than live evidence. Ask planning
-and answering receive eligible internal chunks annotated with their applicable cluster;
-memory cannot define a tool, authorize a read, support a live-state citation, or enter
-investigation/remediation workflows in this release.
+Retrieved memory remains untrusted guidance rather than live evidence. Standalone Ask guarded
+answers and delegated-agent context receive eligible internal chunks annotated with their
+applicable clusters; memory cannot define a tool, authorize a read, support a live-state citation,
+or enter investigation-chat/remediation workflows in this release.
 
 ## OpenShift Authentication And Application Roles
 

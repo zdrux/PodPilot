@@ -67,6 +67,11 @@ normalization, redaction, provenance, and cluster attribution. Every helper resu
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
+Before the first delegated-agent decision, normal code performs the same reviewed, enabled,
+unexpired, non-restricted lexical memory retrieval used by standalone Ask. It de-duplicates matches
+across selected clusters and supplies at most four 1,200-character chunks with applicable-cluster
+labels. The chunks are a separate untrusted data message: they cannot define tools, authorize an
+operation, replace live evidence, or prove current cluster state.
 The generic LIST and SEARCH helpers are absent from every unified-agent schema. Enumeration and
 general object-field filtering use bounded `oc get` commands in both conversation modes. The agent
 must project or filter large responses in the runner before returning them to model context.

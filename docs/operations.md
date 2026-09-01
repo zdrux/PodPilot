@@ -544,8 +544,10 @@ The `0011_cluster_memory` migration creates the relational metadata/chunk tables
 and the SQLite FTS5 virtual table. The application verifies that the FTS table is
 available at startup. `0012_multi_cluster_ask` adds the cluster registry, immutable
 conversation selections, and knowledge target fields. Eligible internal chunks are supplied
-only to standalone Ask planning and answers as guidance; they are not live evidence and do
-not enter investigation or remediation prompts. `0013_raw_model_responses` adds the
+to standalone Ask guarded answers and delegated-agent context as guidance; they are not live
+evidence and do not enter investigation-chat or remediation prompts. Delegated-agent retrieval is
+bounded to four de-duplicated chunks of at most 1,200 characters each and labels their applicable
+clusters. `0013_raw_model_responses` adds the
 default-off per-run capture choice and bounded redacted answer bodies stored with the
 assistant message. No new environment variable or credential permission is required.
 
@@ -691,7 +693,11 @@ PodPilot Pod. For multi-cluster conversations the model supplies one selected cl
 ID per shell call. The API brokers only that cluster's in-memory delegated user token
 to the loopback runner, which deletes its temporary kubeconfig after the command.
 The conversation's immutable mode determines whether the broker exposes read-only
-typed access or the user's full cluster authorization. **Cluster sign-ins** manages the current
+typed access or the user's full cluster authorization. Investigation mode blocks mutations and
+other prohibited operations at the broker. Action mode forwards operations directly under the
+signed-in user's OpenShift RBAC and admission controls; there is no PodPilot preview or approval
+step. The Ask session-cautions disclosure reflects this persisted conversation mode rather than
+the internal agent-loop mode. **Cluster sign-ins** manages the current
 browser session independently of chat history: select unconnected clusters to add them, use
 **Remove** to revoke one cluster token, or **Remove all sign-ins** to revoke the complete set.
 Removing a cluster used by an existing conversation makes that conversation require reconnection;

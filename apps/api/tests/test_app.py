@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
+from podpilot_api.knowledge import index_document
 from podpilot_api.main import (
     _adhoc_answer_quality_issue,
     _adhoc_answer_advisories,
@@ -31,6 +32,7 @@ from podpilot_api.main import (
     _collection_object_analysis_requested,
     _collect_bounded_cluster_reads,
     _clean_adhoc_markdown,
+    _compact_agent_knowledge,
     _compact_answer_evidence,
     _compile_grounded_candidate_plan,
     _current_reads_are_metric_rankings,
@@ -598,6 +600,36 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
 
 
+def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> None:
+    knowledge = [
+        {
+            "chunk_id": f"chunk-{index}",
+            "title": f"Runbook {index}",
+            "content": "x" * 1600,
+            "source": "Platform runbook",
+            "rank": float(index),
+            "applicable_cluster": {
+                "id": f"cluster-{index}", "name": f"Cluster {index}",
+            },
+        }
+        for index in range(6)
+    ]
+    knowledge.insert(1, {
+        **knowledge[0],
+        "applicable_cluster": {"id": "cluster-east", "name": "East"},
+    })
+
+    compact = _compact_agent_knowledge(knowledge)
+
+    assert len(compact) == 4
+    assert len(str(compact[0]["content"])) == 1200
+    assert compact[0]["applicable_clusters"] == [
+        {"id": "cluster-0", "name": "Cluster 0"},
+        {"id": "cluster-east", "name": "East"},
+    ]
+    assert all("instructions" in str(item["trust"]) for item in compact)
+
+
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str,
@@ -805,6 +837,37 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                 embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
                 status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
             ))
+            knowledge = KnowledgeDocument(
+                id="30500000-0000-0000-0000-000000000101",
+                logical_id="30500000-0000-0000-0000-000000000102",
+                version=1,
+                created_at=now,
+                created_by="ivy",
+                title="ClusterLogForwarder configuration guidance",
+                content=(
+                    "Inspect the exact ClusterLogForwarder status and configured output "
+                    "references before drawing a health conclusion."
+                ),
+                source="Reviewed platform runbook",
+                source_type="runbook",
+                cluster_id=cluster_id,
+                target_cluster_ids_json=json.dumps([cluster_id]),
+                target_tags_json="{}",
+                namespace=None,
+                resource_kind="ClusterLogForwarder",
+                resource_name=None,
+                owner="platform-team",
+                verification_state="reviewed",
+                sensitivity="internal",
+                review_at=now,
+                expires_at=None,
+                is_enabled=True,
+                is_current=True,
+                content_sha256="a" * 64,
+            )
+            db_session.add(knowledge)
+            db_session.flush()
+            index_document(db_session, knowledge)
             db_session.commit()
 
         session_id = app.state.delegated_vault.new_session_id()
@@ -831,6 +894,18 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         )
 
     assert "configuration was inspected" in rendered.text
+    knowledge_message = next(
+        str(item.get("content") or "")
+        for item in provider.agent_messages[0]
+        if "PodPilot curated-knowledge context" in str(item.get("content") or "")
+    )
+    assert "Reviewed platform runbook" in knowledge_message
+    assert "exact ClusterLogForwarder status" in knowledge_message
+    assert any(
+        item.get("role") == "system"
+        and "untrusted, non-executable guidance" in str(item.get("content") or "")
+        for item in provider.agent_messages[0]
+    )
     assert constructor_threads
     assert constructor_threads[0] not in event_loop_threads
     assert explorer_kwargs[0]["metric_reader"] is not None
@@ -8964,7 +9039,7 @@ def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Pat
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
         assert page.status_code == 200
-        assert "Investigation mode cannot change the cluster" in page.text
+        assert "The agent cannot change the cluster selection" in page.text
         assert '<section class="notice"' not in page.text
         assert "Read-only cluster assistant" not in page.text
         assert 'class="panel-header ask-session-header"' in page.text
@@ -13145,6 +13220,11 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         )
         assert "execution-mode-read-only" in conversation_page.text
         assert "execution-mode-read-write" not in conversation_page.text
+        assert "Delegated read-only mode" in conversation_page.text
+        assert "broker blocks Kubernetes mutations" in conversation_page.text
+        assert "This conversation remains read-only" in conversation_page.text
+        assert "Delegated Action mode" not in conversation_page.text
+        assert "agent-mode-pill" not in conversation_page.text
         client.cookies.delete("podpilot_delegated_session")
         ended_page = client.get(
             f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
@@ -13620,6 +13700,11 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert 'class="ask-layout action-session"' in action_page.text
         assert "execution-mode-read-write" in action_page.text
         assert "execution-mode-read-only" not in action_page.text
+        assert "Delegated Action mode" in action_page.text
+        assert "may create, patch, apply, or delete objects directly" in action_page.text
+        assert "There is no PodPilot preview or approval step" in action_page.text
+        assert "change selected clusters using your OpenShift identity" not in action_page.text
+        assert "agent-mode-pill" in action_page.text
     engine.dispose()
 
 
