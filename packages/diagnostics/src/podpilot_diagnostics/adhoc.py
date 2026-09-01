@@ -134,7 +134,8 @@ def looks_like_deferred_target(value: str | None) -> bool:
 PUBLIC_METRICS = (
     "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
     "memory_working_set", "memory_requests", "memory_limits",
-    "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+    "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+    "application_log_volume",
     "node_cpu_utilization", "node_memory_utilization",
     "kafka_topic_disk_utilization", "kafka_consumer_lag",
 )
@@ -177,7 +178,8 @@ class ReadIntent(BaseModel):
         "memory_working_set", "memory_requests", "memory_limits",
         "network_receive", "network_transmit", "container_restarts",
         "persistent_volume_usage", "pod_readiness",
-        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
         "kafka_topic_disk_utilization", "kafka_consumer_lag",
         "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
@@ -305,6 +307,7 @@ class ReadIntent(BaseModel):
                 "memory_limits": {"cluster", "namespace", "pod", "node"},
                 "top_cpu_consumers": {"cluster", "namespace", "node"},
                 "top_memory_consumers": {"cluster", "namespace", "node"},
+                "top_log_volume_by_namespace": {"cluster"},
                 "application_log_volume": {"cluster", "namespace", "pod", "node"},
                 "node_cpu_utilization": {"cluster", "node", "node_role"},
                 "node_memory_utilization": {"cluster", "node", "node_role"},
@@ -325,6 +328,15 @@ class ReadIntent(BaseModel):
             } and self.metric_scope not in {"cluster", "namespace", "node"}:
                 raise ValueError(
                     "the selected top-consumer metric requires cluster, namespace, or node scope"
+                )
+            if self.metric == "top_log_volume_by_namespace" and (
+                self.metric_scope != "cluster"
+                or self.metric_operation != "rank"
+                or tuple(self.metric_group_by) != ("namespace",)
+            ):
+                raise ValueError(
+                    "top_log_volume_by_namespace requires cluster scope, rank operation, "
+                    "and namespace grouping"
                 )
             if self.metric == "application_log_volume":
                 grouping = tuple(self.metric_group_by)
@@ -1903,7 +1915,7 @@ def plan_known_read(
                 ),
                 intents=[ReadIntent(
                     tool="query_metrics",
-                    metric="application_log_volume",
+                    metric="top_log_volume_by_namespace",
                     metric_scope="cluster",
                     metric_operation="rank",
                     metric_group_by=["namespace"],

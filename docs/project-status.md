@@ -40,9 +40,10 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
-- The model-facing metric catalog is reduced to 14 CPU, memory, node-utilization, application-log,
-  and Kafka signals. `application_log_volume` provides independent cluster, namespace, pod, and node
-  scopes from aggregate Loki byte counts without reading log lines. Kafka topic disk utilization
+- The model-facing metric catalog is reduced to 15 CPU, memory, node-utilization, application-log,
+  and Kafka signals. `top_log_volume_by_namespace` again provides the dedicated cluster-level Loki
+  namespace ranking, while `application_log_volume` provides scoped namespace and Pod reads from
+  aggregate byte counts without reading log lines. Kafka topic disk utilization
   compares replicated topic bytes with the shared allocated broker-PVC capacity, and Kafka consumer
   lag remains available. Legacy server-side templates remain readable for persisted evidence but are
   no longer advertised to the model.

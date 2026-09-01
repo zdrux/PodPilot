@@ -2811,7 +2811,8 @@ def _deterministic_metric_ranking_answer(
         and item.get("tool") == "query_metrics"
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") in {
-            "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+            "top_cpu_consumers", "top_memory_consumers",
+            "top_log_volume_by_namespace", "application_log_volume",
         }
     ]
     if not observations:
@@ -2847,6 +2848,7 @@ def _deterministic_metric_ranking_answer(
     title = {
         "top_cpu_consumers": "CPU",
         "top_memory_consumers": "memory",
+        "top_log_volume_by_namespace": "application-log volume",
         "application_log_volume": "application-log volume",
     }[metric]
     rows: list[str] = []
@@ -2873,7 +2875,7 @@ def _deterministic_metric_ranking_answer(
         for rank, item in enumerate(ranked, 1):
             labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
             namespace = str(labels.get("namespace") or "—")
-            if metric == "application_log_volume":
+            if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
                 identity_keys = (
                     [str(value) for value in data.get("groupBy")]
                     if isinstance(data.get("groupBy"), list) and data.get("groupBy")
@@ -2895,9 +2897,13 @@ def _deterministic_metric_ranking_answer(
             )
 
     qualifier = f"top {requested_limit} " if requested_limit else ""
-    if metric == "application_log_volume":
-        target_label = "Target"
-        target_phrase = "target"
+    if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
+        target_label = (
+            "Namespace" if metric == "top_log_volume_by_namespace" else "Target"
+        )
+        target_phrase = (
+            "namespace" if metric == "top_log_volume_by_namespace" else "target"
+        )
         content = (
             f"## {qualifier}{title} by {target_phrase} and cluster\n\n"
             f"| OpenShift cluster | Rank | {target_label} | Payload volume | Average rate |\n"
@@ -2946,7 +2952,8 @@ def _deterministic_metric_summary_answer(
         and item.get("tool") == "query_metrics"
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") not in {
-            "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+            "top_cpu_consumers", "top_memory_consumers",
+            "top_log_volume_by_namespace", "application_log_volume",
         }
     ]
     if not observations:
@@ -4603,7 +4610,9 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         return None
     unit = str(data.get("unit") or "")
     metric_name = str(data.get("metric") or "metric")
-    log_volume_metric = metric_name == "application_log_volume"
+    log_volume_metric = metric_name in {
+        "top_log_volume_by_namespace", "application_log_volume",
+    }
     average_unit = (
         "bytes_per_second"
         if log_volume_metric
@@ -4759,6 +4768,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     metric_title = {
         "top_cpu_consumers": "Top CPU Consumers",
         "top_memory_consumers": "Top Memory Consumers",
+        "top_log_volume_by_namespace": "Top Application-Log Volume by Namespace",
         "application_log_volume": "Application-Log Volume",
         "node_cpu_utilization": "Node CPU Utilization",
         "node_memory_utilization": "Node Memory Utilization",
@@ -4821,7 +4831,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
             if "namespace" in group_by else
             f"Application-Log Volume for {scope}"
         )
-    namespace_only = False
+    namespace_only = metric_name == "top_log_volume_by_namespace"
     return {
         "title": metric_title,
         "unit": unit,
@@ -6399,7 +6409,8 @@ def _latest_metric_query_semantics(
     """Recover a recent registered ranking so elliptical period follow-ups stay typed."""
 
     supported = {
-        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "top_cpu_consumers", "top_memory_consumers",
+        "top_log_volume_by_namespace", "application_log_volume",
     }
     for item in reversed(evidence):
         if item.get("tool") != "query_metrics" or not isinstance(item.get("data"), dict):
@@ -6824,6 +6835,7 @@ def _resolve_metric_inquiry(
         return inquiry
     prior_metric = str(prior_metric_query.get("metric") or "")
     category = {
+        "top_log_volume_by_namespace": "log",
         "application_log_volume": "log",
         "top_cpu_consumers": "cpu",
         "top_memory_consumers": "memory",
@@ -6903,6 +6915,19 @@ def _resolve_metric_inquiry(
                 ),
             )
     if category == "log":
+        if prior_metric == "top_log_volume_by_namespace":
+            return InquirySemantics(
+                mode="metrics", operation="metrics", cardinality="collection",
+                resource_query="Namespace", needs_object_details=True,
+                evidence_goal="Repeat the namespace application-log volume ranking.",
+                metric_query="top_log_volume_by_namespace",
+                metric_scope="cluster",
+                result_limit=int(prior_metric_query.get("limit") or 10),
+                metric_range_seconds=int(
+                    requested_range or prior_metric_query.get("range_seconds")
+                    or DEFAULT_METRIC_RANGE_SECONDS
+                ),
+            )
         scope = str(prior_metric_query.get("scope") or "cluster")
         target_kind = {
             "cluster": "Cluster", "namespace": "Namespace",
@@ -7620,12 +7645,11 @@ def _normalize_agent_collector_arguments(
             str(normalized.get("metric_scope") or "").strip().casefold(),
         ).strip("_")
         metric_aliases = {
-            "top_log_volume_by_namespace": "application_log_volume",
-            "application_log_volume_by_namespace": "application_log_volume",
-            "log_volume_by_namespace": "application_log_volume",
-            "namespace_log_volume": "application_log_volume",
-            "top_log_namespaces": "application_log_volume",
-            "top_logs_by_namespace": "application_log_volume",
+            "application_log_volume_by_namespace": "top_log_volume_by_namespace",
+            "log_volume_by_namespace": "top_log_volume_by_namespace",
+            "namespace_log_volume": "top_log_volume_by_namespace",
+            "top_log_namespaces": "top_log_volume_by_namespace",
+            "top_logs_by_namespace": "top_log_volume_by_namespace",
             "log_volume": "application_log_volume",
             "application_logs_volume": "application_log_volume",
             "pod_log_volume": "application_log_volume",
@@ -7664,14 +7688,23 @@ def _normalize_agent_collector_arguments(
                 scope = "cluster"
                 normalized["metric_group_by"] = ["node"]
             else:
-                metric = "application_log_volume"
+                metric = "top_log_volume_by_namespace"
                 scope = "cluster"
                 normalized["metric_group_by"] = ["namespace"]
         normalized["metric"] = metric
         normalized["metric_scope"] = scope
         if metric not in PUBLIC_METRICS:
             raise ValueError(f"The metric {metric or '<empty>'} is not in the focused catalog.")
-        if metric == "application_log_volume":
+        if metric == "top_log_volume_by_namespace" or (
+            metric == "application_log_volume"
+            and scope == "cluster"
+            and tuple(normalized.get("metric_group_by") or ()) == ("namespace",)
+        ):
+            normalized["metric"] = "top_log_volume_by_namespace"
+            normalized["metric_scope"] = "cluster"
+            normalized["metric_operation"] = "rank"
+            normalized["metric_group_by"] = ["namespace"]
+        elif metric == "application_log_volume":
             raw_metric = str(arguments.get("metric") or "").casefold()
             ranking_alias = "top" in raw_metric or "_by_" in raw_metric
             implied_dimension = (
@@ -8006,6 +8039,13 @@ def _semantic_metric_read_plan(
         scope = target.scope
         name = target.role if scope == "node_role" else target.name
         signals = list(request.signals)
+        if (
+            signals == ["application_log_volume"]
+            and scope == "cluster"
+            and request.operation == "rank"
+            and tuple(request.group_by) == ("namespace",)
+        ):
+            signals = ["top_log_volume_by_namespace"]
         if scope in {"node", "node_role"}:
             signals = [
                 "node_cpu_utilization" if signal == "cpu_usage" else
@@ -8043,7 +8083,8 @@ def _semantic_metric_read_plan(
                     "memory_working_set": "top_memory_consumers",
                 }
                 rankable_domain_signals = {
-                    "application_log_volume", "kafka_topic_disk_utilization",
+                    "top_log_volume_by_namespace", "application_log_volume",
+                    "kafka_topic_disk_utilization",
                     "kafka_consumer_lag",
                 }
                 if any(
@@ -8065,6 +8106,13 @@ def _semantic_metric_read_plan(
             for signal in signals
         ) and scope not in {"node", "node_role"} and not node_ranking:
             return None
+        if "top_log_volume_by_namespace" in signals and (
+            len(signals) != 1
+            or scope != "cluster"
+            or request.operation != "rank"
+            or tuple(request.group_by) != ("namespace",)
+        ):
+            return None
         if "application_log_volume" in signals:
             if len(signals) != 1 or scope not in {"cluster", "namespace", "pod", "node"}:
                 return None
@@ -8084,6 +8132,7 @@ def _semantic_metric_read_plan(
         ) and "application_log_volume" not in signals:
             return None
         signal_scopes = {
+            "top_log_volume_by_namespace": {"cluster"},
             "application_log_volume": {"cluster", "namespace", "pod", "node"},
             "kafka_topic_disk_utilization": {"kafka_cluster"},
             "kafka_consumer_lag": {"kafka_cluster"},
@@ -8094,6 +8143,7 @@ def _semantic_metric_read_plan(
         ):
             return None
         grouping_support = {
+            "top_log_volume_by_namespace": {"namespace"},
             "application_log_volume": {"namespace", "pod", "node"},
             "kafka_topic_disk_utilization": {"topic", "partition"},
             "kafka_consumer_lag": {"topic", "partition", "consumer_group"},
@@ -8158,7 +8208,8 @@ def _semantic_metric_read_plan(
         inquiry is None
         or inquiry.mode != "metrics"
         or inquiry.metric_query not in {
-            "top_cpu_consumers", "top_memory_consumers", "node_cpu_memory_utilization",
+            "top_cpu_consumers", "top_memory_consumers",
+            "top_log_volume_by_namespace", "node_cpu_memory_utilization",
         }
         or inquiry.metric_scope not in {
             "cluster", "namespace", "deployment", "node", "node_role"
@@ -8178,6 +8229,7 @@ def _semantic_metric_read_plan(
     metric_label = {
         "top_cpu_consumers": "pod CPU consumers",
         "top_memory_consumers": "pod memory consumers",
+        "top_log_volume_by_namespace": "namespaces by application-log volume",
         "node_cpu_memory_utilization": "CPU and memory utilization by node",
     }[inquiry.metric_query]
     if inquiry.metric_query == "node_cpu_memory_utilization":
@@ -8220,6 +8272,13 @@ def _semantic_metric_read_plan(
                 name=inquiry.object_name,
                 range_seconds=range_seconds,
                 limit=limit,
+                metric_operation=(
+                    "rank" if inquiry.metric_query == "top_log_volume_by_namespace" else "show"
+                ),
+                metric_group_by=(
+                    ["namespace"]
+                    if inquiry.metric_query == "top_log_volume_by_namespace" else []
+                ),
             )],
         ),
         True,

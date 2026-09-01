@@ -1481,6 +1481,11 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
 
 
 def test_application_log_volume_supports_exact_targets_and_bounded_rankings() -> None:
+    cluster_namespaces = ReadIntent(
+        tool="query_metrics", metric="top_log_volume_by_namespace",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace"],
+    )
     exact_namespace = ReadIntent(
         tool="query_metrics", metric="application_log_volume",
         metric_scope="namespace", namespace="payments",
@@ -1512,6 +1517,7 @@ def test_application_log_volume_supports_exact_targets_and_bounded_rankings() ->
         metric_scope="cluster",
     )
 
+    assert cluster_namespaces.metric == "top_log_volume_by_namespace"
     assert exact_namespace.metric_scope == "namespace"
     assert exact_pod.name == "api-1"
     assert exact_node.name == "worker-0"
@@ -1529,6 +1535,12 @@ def test_application_log_volume_supports_exact_targets_and_bounded_rankings() ->
         ReadIntent(
             tool="query_metrics", metric="application_log_volume",
             metric_scope="cluster", metric_operation="rank", metric_group_by=["pod"],
+        )
+    with pytest.raises(ValidationError, match="does not support namespace scope"):
+        ReadIntent(
+            tool="query_metrics", metric="top_log_volume_by_namespace",
+            metric_scope="namespace", namespace="payments",
+            metric_operation="rank", metric_group_by=["namespace"],
         )
 
 
@@ -1571,7 +1583,7 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(
     assert terminal is True
     assert plan.intents == [ReadIntent(
         tool="query_metrics",
-        metric="application_log_volume",
+        metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         metric_operation="rank",
         metric_group_by=["namespace"],
@@ -1590,7 +1602,7 @@ def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> N
     assert terminal is True
     assert plan.intents == [ReadIntent(
         tool="query_metrics",
-        metric="application_log_volume",
+        metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         metric_operation="rank",
         metric_group_by=["namespace"],

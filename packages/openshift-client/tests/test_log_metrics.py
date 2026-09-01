@@ -51,7 +51,7 @@ def test_reader_uses_server_owned_logql_and_returns_only_aggregates() -> None:
 
     result = reader.execute(ReadIntent(
         tool="query_metrics",
-        metric="application_log_volume",
+        metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         metric_operation="rank",
         metric_group_by=["namespace"],
@@ -64,7 +64,7 @@ def test_reader_uses_server_owned_logql_and_returns_only_aggregates() -> None:
         '(bytes_over_time({log_type="application"}[3600s])))'
     ]
     observation = result.observations[0]
-    assert observation.source == "loki:application/query/application_log_volume"
+    assert observation.source == "loki:application/query/top_log_volume_by_namespace"
     assert observation.data["ranking"][0] == {
         "labels": {"namespace": "catalog"},
         "current": 8192,

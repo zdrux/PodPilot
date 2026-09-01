@@ -484,9 +484,10 @@ summary must preserve the complete-coverage rule before confirming absence.
   conversation selectors, and existing conversations retain durable history while requiring
   reconnection when one of their selected clusters is removed.
 - Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
-  `application_log_volume` reader with cluster scope and namespace grouping, supplies Loki evidence to the agent, preserves the
+  `top_log_volume_by_namespace` reader with cluster scope and namespace grouping, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.
-- Scoped log-volume tests must prove exact cluster, namespace, Pod, and Node totals; Pod rankings within a
+- Scoped log-volume tests must prove the dedicated cluster namespace ranking, exact cluster,
+  namespace, Pod, and Node totals; Pod rankings within a
   namespace; cluster-wide Pod and Node rankings; server-owned selectors/groupings; and that no
   matching log lines or model-authored LogQL cross the evidence boundary.
 - Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and

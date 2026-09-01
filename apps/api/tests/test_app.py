@@ -4467,7 +4467,7 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
     assert terminal is True
     assert plan.intents == [ReadIntent(
         tool="query_metrics",
-        metric="application_log_volume",
+        metric="top_log_volume_by_namespace",
         metric_scope="cluster",
         metric_operation="rank",
         metric_group_by=["namespace"],
@@ -4557,7 +4557,7 @@ def test_metric_period_followup_reuses_prior_log_volume_ranking() -> None:
     compiled = _semantic_metric_read_plan(resolved)
     assert compiled is not None
     assert compiled[0].intents == [ReadIntent(
-        tool="query_metrics", metric="application_log_volume",
+        tool="query_metrics", metric="top_log_volume_by_namespace",
         metric_scope="cluster", metric_operation="rank",
         metric_group_by=["namespace"], range_seconds=259_200, limit=10,
     )]
@@ -10098,7 +10098,7 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
         question="Show me the namespaces that produce the most logs",
     )
 
-    assert normalized["metric"] == "application_log_volume"
+    assert normalized["metric"] == "top_log_volume_by_namespace"
     assert normalized["metric_scope"] == "cluster"
     assert normalized["metric_operation"] == "rank"
     assert normalized["metric_group_by"] == ["namespace"]
@@ -10112,9 +10112,19 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
         },
         question="Which namespaces generated the most logs in the last 2 hours?",
     )
-    assert explicit_period["metric"] == "application_log_volume"
+    assert explicit_period["metric"] == "top_log_volume_by_namespace"
     assert explicit_period["metric_scope"] == "cluster"
     assert explicit_period["range_seconds"] == 7200
+
+    generic_cluster_ranking = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "application_log_volume", "metric_scope": "cluster",
+            "metric_operation": "rank", "metric_group_by": ["namespace"],
+        },
+        question="Rank namespaces by application log volume",
+    )
+    assert generic_cluster_ranking["metric"] == "top_log_volume_by_namespace"
 
     with pytest.raises(ValueError, match="not in the focused catalog"):
         _normalize_agent_collector_arguments(

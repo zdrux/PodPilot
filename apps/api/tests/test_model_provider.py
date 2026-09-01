@@ -462,7 +462,8 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert metric_tool["parameters"]["properties"]["metric"]["anyOf"][0]["enum"] == [
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
         "memory_working_set", "memory_requests", "memory_limits",
-        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
         "kafka_topic_disk_utilization", "kafka_consumer_lag",
     ]
@@ -488,7 +489,8 @@ def test_inquiry_schema_advertises_only_focused_metric_semantics() -> None:
     assert definitions["MetricRequestSemantics"]["properties"]["signals"]["items"]["enum"] == [
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
         "memory_working_set", "memory_requests", "memory_limits",
-        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
         "kafka_topic_disk_utilization", "kafka_consumer_lag",
     ]

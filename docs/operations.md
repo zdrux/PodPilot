@@ -661,7 +661,9 @@ requests are reduced to that bound and reported as limited.
 
 The unrestricted metric helper canonicalizes harmless metric and scope spelling variants before
 validating a typed request. A question that explicitly ranks namespaces by generated log volume is
-bound to `application_log_volume` with cluster scope, rank operation, and namespace grouping.
+bound to the dedicated `top_log_volume_by_namespace` contract with cluster scope, rank operation,
+and namespace grouping. Exact namespace and Pod totals, plus Pod rankings within a namespace, use
+the separate scoped `application_log_volume` contract.
 When the operator supplies no period, this Loki query uses the bounded five-minute default instead
 of accepting a model-invented wider range; explicit numeric periods remain authoritative. Invalid
 metric arguments return compact field-level feedback to the agent so it can correct its next tool
@@ -1414,10 +1416,11 @@ dimensions such as Kafka topic, partition, and consumer group. Unknown safe labe
 rendered generically, up to six identity columns, so new registered metrics do not require a bespoke
 table template.
 
-`application_log_volume` is the single registered LokiStack application-volume metric. It supports
-an ungrouped cluster total; namespaces ranked within a cluster; an exact namespace total; Pods
-ranked within an exact namespace; an exact Pod or Node total; cluster-wide Pod rankings identified
-by namespace and Pod; and cluster-wide Node rankings. These
+LokiStack application-volume reads use two model-visible contracts.
+`top_log_volume_by_namespace` is the dedicated cluster-scope namespace ranking;
+`application_log_volume` supports scoped namespace and Pod totals and Pod rankings within an exact
+namespace. Legacy cluster totals and Node-oriented variants remain readable for persisted/internal
+compatibility but are not the advertised namespace-ranking path. These
 queries use the reviewed OpenShift log labels `kubernetes_namespace_name`, `kubernetes_pod_name`,
 and `kubernetes_host`. Their average is bytes per second; the total is not compressed object-store
 consumption, and the tool returns no log lines. Explicit relative
@@ -1438,8 +1441,11 @@ series/response ceilings, and access failures are returned as explicit limitatio
 The model-visible metric catalog is intentionally focused on CPU, memory, numeric application-log
 volume, Kafka consumer lag, and Kafka topic disk utilization. Legacy server-owned templates remain
 readable for persisted evidence but are not advertised to the model. Kafka topic disk utilization
-requires Strimzi JMX log-size metrics plus kubelet Kafka-PVC capacity metrics; consumer lag requires
-Kafka Exporter metrics. A
+supports the current Strimzi `kafka_log_log_size` JMX profile and the legacy
+`kafka_log_log_size_value` spelling. It uses the exact cluster label when present and otherwise
+matches only broker Pods belonging to the requested Kafka resource; broker-PVC capacity matching
+supports both legacy `kafka` and named KafkaNodePool Pods. The capability still requires kubelet
+Kafka-PVC capacity metrics, while consumer lag requires Kafka Exporter metrics. A
 successful Kubernetes object read does not imply
 that telemetry exists. If the registered query returns no samples, PodPilot names the expected
 exporter/profile rather than treating the object as idle or allowing the model to invent PromQL.

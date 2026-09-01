@@ -229,6 +229,26 @@ def _metric_selector(**values: str | None) -> str:
     )
 
 
+def _kafka_broker_metric(
+    metric_names: tuple[str, ...], intent: ReadIntent, *, extra_selector: str,
+) -> str:
+    """Select one exact Strimzi cluster across supported scrape profiles."""
+    namespace = json.dumps(intent.namespace)
+    cluster = json.dumps(intent.name)
+    cluster_pattern = re.escape(str(intent.name)).replace(r"\-", "-")
+    pod_pattern = json.dumps(rf"{cluster_pattern}-.+-[0-9]+")
+    expressions: list[str] = []
+    for metric_name in metric_names:
+        expressions.extend([
+            f"{metric_name}{{namespace={namespace},strimzi_io_cluster={cluster},{extra_selector}}}",
+            (
+                f"{metric_name}{{namespace={namespace},strimzi_io_cluster=\"\","
+                f"pod=~{pod_pattern},{extra_selector}}}"
+            ),
+        ])
+    return f"({' or '.join(expressions)})"
+
+
 def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
     metric = intent.metric
     container = _selector(intent, container=True)
@@ -417,15 +437,19 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             intent, default_labels=("topic",),
         )
     if metric == "kafka_topic_disk_utilization":
-        selector = _metric_selector(
-            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+        log_size = _kafka_broker_metric(
+            ("kafka_log_log_size", "kafka_log_log_size_value"), intent,
+            extra_selector='topic!=""',
         )
         usage = _domain_aggregate(
-            f"kafka_log_log_size_value{{{selector},topic!=\"\"}}", intent,
+            log_size, intent,
             default_labels=("topic",), apply_rank=False,
         )
-        cluster_name = str(intent.name).replace(".", r"\.")
-        pvc_pattern = rf"data(?:-[0-9]+)?-{cluster_name}-kafka-[0-9]+"
+        cluster_name = re.escape(str(intent.name)).replace(r"\-", "-")
+        pvc_pattern = (
+            rf"data(?:-[0-9]+)?-{cluster_name}-"
+            r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-[0-9]+"
+        )
         capacity_selector = _metric_selector(
             namespace=intent.namespace, persistentvolumeclaim=f"~{pvc_pattern}",
         ).replace("persistentvolumeclaim=\"~", "persistentvolumeclaim=~\"")

@@ -1286,13 +1286,18 @@ Context: The metric tool advertised platform internals such as HPA, PV, PVC, Pro
 and control-plane signals alongside the small set operators normally use in Ask. That enlarged every
 tool definition and made metric selection less reliable. Log-volume ranking also had overlapping
 metric names, while Kafka storage did not express the desired topic-consumption-to-capacity risk.
+The initial consolidation of cluster namespace rankings and scoped Loki reads under one generic
+metric subsequently made the model coordinate too many scope/grouping fields and reduced reliability.
 
 Decision: Advertise only CPU, memory, node utilization, application log volume, Kafka topic disk
-utilization, and Kafka consumer lag through the model-facing metric schema. Consolidate log volume
-under `application_log_volume`; its scope and grouping independently select cluster totals,
-namespace rankings, pod rankings, namespace totals, exact pods, or nodes. This metric uses aggregate
-Loki byte counts and never fetches log lines. Define `kafka_topic_disk_utilization` as replicated
-topic log bytes divided by aggregate allocated Kafka broker PVC capacity. Keep older metric
+utilization, and Kafka consumer lag through the model-facing metric schema. Keep the Loki surface
+split between the dedicated cluster-level `top_log_volume_by_namespace` ranking and scoped
+`application_log_volume` namespace/Pod reads; both use aggregate byte counts and never fetch log
+lines. Define `kafka_topic_disk_utilization` as replicated
+topic log bytes divided by aggregate allocated Kafka broker PVC capacity. Accept the current
+Strimzi `kafka_log_log_size` metric and legacy `_value` spelling, preserve exact cluster scoping
+through either the scrape label or broker-Pod identity, and recognize named KafkaNodePool PVCs.
+Keep older metric
 templates readable inside the server so persisted evidence and deterministic internal code do not
 break, but do not expose them to the model.
 

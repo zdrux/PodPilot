@@ -269,9 +269,14 @@ def test_cluster_node_utilization_ranking_uses_topk_grouped_by_node(metric, need
                 metric_operation="rank", metric_group_by=["topic"], limit=5,
             ),
             (
-                "topk(5", "kafka_log_log_size_value", "by (topic)",
+                "topk(5", "kafka_log_log_size{", "kafka_log_log_size_value{",
+                'strimzi_io_cluster="vc-cluster"', 'strimzi_io_cluster=""',
+                'pod=~"vc-cluster-.+-[0-9]+"', "by (topic)",
                 "kubelet_volume_stats_capacity_bytes",
-                'persistentvolumeclaim=~"data(?:-[0-9]+)?-vc-cluster-kafka-[0-9]+"',
+                (
+                    'persistentvolumeclaim=~"data(?:-[0-9]+)?-vc-cluster-'
+                    '[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-[0-9]+"'
+                ),
                 "group_left",
             ),
         ),
