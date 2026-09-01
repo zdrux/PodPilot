@@ -343,7 +343,10 @@ spec:
             - --upstream-timeout=300s
             - --cookie-secret-file=/etc/oauth-cookie/session_secret
             - --cookie-name=_podpilot_oauth
-            - --cookie-refresh=1h
+            # OpenShift's oauth-proxy provider cannot renew its access token. A non-zero
+            # refresh interval only revalidates that original token and clears the signed
+            # cookie when clusters use a shorter (commonly one-hour) OAuth token TTL.
+            - --cookie-refresh=0
             - --cookie-expire=8h
             - --cookie-samesite=lax
             - --skip-provider-button=true

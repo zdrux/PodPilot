@@ -156,6 +156,9 @@ def test_oauth_proxy_restarts_when_its_projected_client_token_rotates() -> None:
     assert 'kill -TERM "$proxy_pid"' in supervisor
     assert 'wait "$proxy_pid"' in supervisor
     assert "--client-secret-file=/var/run/podpilot-oauth/client-secret" in oauth_proxy["args"]
+    assert "--cookie-refresh=0" in oauth_proxy["args"]
+    assert "--cookie-refresh=1h" not in oauth_proxy["args"]
+    assert "--cookie-expire=8h" in oauth_proxy["args"]
     assert any(
         mount["name"] == "oauth-runtime"
         and mount["mountPath"] == "/var/run/podpilot-oauth"

@@ -140,7 +140,7 @@ projection for rotation. A changed token terminates and restarts only the proxy 
 loads the new credential. Neither the snapshot nor either token value is logged, persisted, mounted
 into the runner, or included in a manifest.
 
-PodPilot removes delegated tokens after two hours by default and attempts remote OAuth token
+PodPilot removes delegated tokens after 24 hours by default and attempts remote OAuth token
 revocation on expiry, replacement, cluster disable, logout, and graceful shutdown. The remote
 cluster's standard OAuth token TTL remains authoritative (normally 24 hours). Because no token is
 persisted, an API-process or node crash destroys PodPilot's only copy before it can revoke it; the
@@ -378,6 +378,14 @@ access tokens or bearer tokens upstream, uses secure same-site cookies, and
 performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
 granting access. The API reads only configured elevated-role Group objects; no
 Group lookup is required to assign Viewer.
+
+The front-door proxy cookie has a fixed eight-hour lifetime and uses a stable Secret-backed signing
+key so it remains readable across Pod restarts. Cookie refresh is disabled because the OpenShift
+provider in the pinned proxy cannot renew the original OAuth access token; enabling refresh merely
+revalidates that token and can turn a cluster's one-hour access-token policy into an unintended
+one-hour PodPilot logout. This means front-door OAuth token revocation is not observed by the proxy
+until the bounded cookie expires or the user explicitly logs out. Current OpenShift Group membership
+is still resolved by FastAPI for application-role authorization.
 
 OpenShift usernames may contain colons, including virtual users and service-account
 identities. PodPilot accepts that identity syntax. A valid proxy-authenticated

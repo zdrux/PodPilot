@@ -133,6 +133,15 @@ backend. Every authenticated user receives Viewer. Lab groups map the three
 elevated roles; the remote overlay accepts arrays of existing LDAP-synchronized
 groups for those roles.
 
+The proxy issues a fixed eight-hour signed browser cookie and sets
+`--cookie-refresh=0`. OpenShift's provider in the pinned proxy does not implement token renewal;
+a non-zero cookie-refresh interval only revalidates the original access token. A one-hour refresh
+therefore logs users out after approximately one hour on clusters whose OAuth access-token lifetime
+is also one hour. Disabling that ineffective refresh keeps the browser session valid for its bounded
+eight-hour lifetime and allows it to survive Pod or proxy restarts as long as the
+`podpilot-oauth-cookie` Secret is unchanged. Explicit logout still clears the cookie. FastAPI
+continues to resolve application roles from current configured Group membership.
+
 The OAuth proxy uses the `podpilot-investigator` projected service-account token as its
 OpenShift OAuth client secret. The workload requests an eight-hour token and snapshots the exact
 value used by each proxy process into a proxy-only memory volume. Because the pinned proxy reads
@@ -786,8 +795,9 @@ unresolved message instead of the malformed model output.
    ```
 
    Do not Base64-encode the random bytes before passing them to `--from-literal`.
-   That stores a 44-byte string, while the OAuth proxy requires the mounted file
-   to contain exactly 16, 24, or 32 raw bytes when cookie refresh is enabled.
+   That stores a 44-byte string instead of the required raw key material. Keep the mounted file
+   at exactly 16, 24, or 32 raw bytes (the documented deployment uses 32 bytes) so it remains a
+   valid stable signing/encryption key across proxy and Pod restarts.
 
    The workload overlay creates an empty `podpilot-model-credentials` Secret without embedding
    any token in source control. Do not create or populate it before the overlay apply in step 5.

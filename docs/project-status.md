@@ -57,6 +57,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   `oauth-proxy`, retaining the API process, SQLite state, and stable OAuth cookie key so later fresh
   browser logins do not fail with `unauthorized_client`.
 
+- The front-door OAuth proxy now uses a fixed eight-hour signed cookie with refresh disabled. The
+  pinned OpenShift provider cannot renew access tokens, so the former one-hour refresh only
+  revalidated the original token and forced relogin on clusters with a one-hour OAuth token TTL.
+
 - Ask now redirects every authorized role through user-owned cluster connections. Investigator is
   read-only; Read-Write chooses read-only or Action at conversation creation. Configuration
   administration is orthogonal. Cluster Health is removed from active navigation.
@@ -69,7 +73,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   outside every configured PodPilot role group. The delegated picker uses the same enabled cluster
   registry as cluster management, including the runtime system cluster. Approvers register additional
   DEV cluster API origins and optional custom CA bundles; users multi-select clusters, complete one-time username/password
-  challenge logins, and receive two-hour memory-only delegated sessions. New conversations lock
+  challenge logins, and receive up to 24-hour memory-only delegated sessions. New conversations lock
   their cluster set and execution mode. All agent-selected `oc` requests traverse a random loopback API
   capability whose broker injects the user's token; the runner receives neither that token nor the
   Pod service-account token. Logout, expiry, replacement, disable, and graceful shutdown attempt
