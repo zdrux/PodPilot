@@ -660,7 +660,7 @@ requests are reduced to that bound and reported as limited.
 
 The unrestricted metric helper canonicalizes harmless metric and scope spelling variants before
 validating a typed request. A question that explicitly ranks namespaces by generated log volume is
-bound to `top_log_volume_by_namespace` with cluster scope, rank operation, and namespace grouping.
+bound to `application_log_volume` with cluster scope, rank operation, and namespace grouping.
 When the operator supplies no period, this Loki query uses the bounded five-minute default instead
 of accepting a model-invented wider range; explicit numeric periods remain authoritative. Invalid
 metric arguments return compact field-level feedback to the agent so it can correct its next tool
@@ -1413,10 +1413,10 @@ dimensions such as Kafka topic, partition, and consumer group. Unknown safe labe
 rendered generically, up to six identity columns, so new registered metrics do not require a bespoke
 table template.
 
-`top_log_volume_by_namespace` queries the LokiStack application tenant and ranks namespaces by
-payload bytes observed during the bounded period. The registered `application_log_volume` variant
-also supports totals for an exact namespace, Pod, or Node; Pod rankings within an exact namespace;
-cluster-wide Pod rankings identified by namespace and Pod; and cluster-wide Node rankings. These
+`application_log_volume` is the single registered LokiStack application-volume metric. It supports
+an ungrouped cluster total; namespaces ranked within a cluster; an exact namespace total; Pods
+ranked within an exact namespace; an exact Pod or Node total; cluster-wide Pod rankings identified
+by namespace and Pod; and cluster-wide Node rankings. These
 queries use the reviewed OpenShift log labels `kubernetes_namespace_name`, `kubernetes_pod_name`,
 and `kubernetes_host`. Their average is bytes per second; the total is not compressed object-store
 consumption, and the tool returns no log lines. Explicit relative
@@ -1434,10 +1434,11 @@ failure identifies the configured timeout instead of reporting generic gateway u
 requested step to stay within the point ceiling. Thanos retention, unavailable metrics,
 series/response ceilings, and access failures are returned as explicit limitations.
 
-Domain packs depend on the cluster's installed scrape profile. Kafka broker topic throughput and
-storage require Strimzi JMX Exporter metrics; consumer lag requires Kafka Exporter metrics. Router,
-machine-config, kube-state-metrics/openshift-state-metrics, API server, scheduler, etcd, Prometheus,
-Alertmanager, and LokiStack series must be present in Thanos for their corresponding packs. A
+The model-visible metric catalog is intentionally focused on CPU, memory, numeric application-log
+volume, Kafka consumer lag, and Kafka topic disk utilization. Legacy server-owned templates remain
+readable for persisted evidence but are not advertised to the model. Kafka topic disk utilization
+requires Strimzi JMX log-size metrics plus kubelet Kafka-PVC capacity metrics; consumer lag requires
+Kafka Exporter metrics. A
 successful Kubernetes object read does not imply
 that telemetry exists. If the registered query returns no samples, PodPilot names the expected
 exporter/profile rather than treating the object as idle or allowing the model to invent PromQL.
@@ -1451,11 +1452,12 @@ volume is a Loki tenant query rather than a Thanos metric; its denial names
 LokiStack Route separately from query authorization, while transport and TLS failures remain
 reported as availability failures rather than being mislabeled as RBAC denials.
 
-In unrestricted agent mode, a recognized Kafka topic-storage request remains on this registered
+In unrestricted agent mode, a recognized Kafka topic-disk-utilization request remains on this registered
 metrics path even when Thanos or the required exporter is unavailable. PodPilot reports the
 authoritative collection failure and does not fall through to a broker Pod shell or recommend
-granting `pods/exec`. Broker log-size telemetry is the supported topic-level source; PVC usage can
-show broker-level capacity but cannot accurately attribute bytes to one topic.
+granting `pods/exec`. The result compares replicated topic log bytes with aggregate allocated Kafka
+broker-PVC capacity. Kafka topics share broker disks rather than owning private allocations, so the
+evidence always states that broker-local headroom is still required when partition placement is skewed.
 
 Unknown CRDs use the generic safe resource path: live API discovery resolves the served resource,
 bounded LIST/GET reads expose redacted spec/status evidence, and opaque observed relationships can

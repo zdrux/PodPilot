@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-31
+Last reviewed: 2026-09-01
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -39,6 +39,13 @@ interpretation when the provider is available. Registered remediation lifecycle
 records remain, but execution now awaits a separate approval-gated action service.
 
 ## Implemented
+
+- The model-facing metric catalog is reduced to 14 CPU, memory, node-utilization, application-log,
+  and Kafka signals. `application_log_volume` provides independent cluster, namespace, pod, and node
+  scopes from aggregate Loki byte counts without reading log lines. Kafka topic disk utilization
+  compares replicated topic bytes with the shared allocated broker-PVC capacity, and Kafka consumer
+  lag remains available. Legacy server-side templates remain readable for persisted evidence but are
+  no longer advertised to the model.
 
 - Dynamic answer tables now use a stricter equal-cell prompt contract and bounded display cleanup
   for strict-JSON leakage. Redundant leading `unknown` placeholders and unmatched boundary braces

@@ -341,20 +341,12 @@ class BoundedLogVolumeReader:
         self._clock = clock
 
     def execute(self, intent: ReadIntent) -> ReadResult:
-        legacy_namespace_ranking = (
-            intent.metric == "top_log_volume_by_namespace"
-            and intent.metric_scope == "cluster"
-        )
-        if intent.tool != "query_metrics" or not (
-            legacy_namespace_ranking or intent.metric == "application_log_volume"
-        ):
+        if intent.tool != "query_metrics" or intent.metric != "application_log_volume":
             raise ValueError(
                 "BoundedLogVolumeReader requires a registered application-log volume intent."
             )
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
-        dimensions = (
-            ("namespace",) if legacy_namespace_ranking else tuple(intent.metric_group_by)
-        )
+        dimensions = tuple(intent.metric_group_by)
         loki_dimensions = {
             "namespace": "kubernetes_namespace_name",
             "pod": "kubernetes_pod_name",

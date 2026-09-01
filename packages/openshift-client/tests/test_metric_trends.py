@@ -80,26 +80,6 @@ def test_metric_resolution_is_increased_to_bound_points() -> None:
     assert "increased to 873 seconds" in result.limitations[0]
 
 
-def test_pvc_usage_uses_exact_namespace_and_claim() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics",
-        metric="persistent_volume_usage",
-        metric_scope="persistent_volume_claim",
-        namespace="payments",
-        name="database-data",
-    ))
-
-    assert source.calls[0]["promql"] == (
-        '100 * sum(kubelet_volume_stats_used_bytes{namespace="payments",'
-        'persistentvolumeclaim="database-data"}) / '
-        'clamp_min(sum(kubelet_volume_stats_capacity_bytes{namespace="payments",'
-        'persistentvolumeclaim="database-data"}), 1)'
-    )
-
-
 @pytest.mark.parametrize(("metric", "needle"), [
     ("cpu_requests", "kube_pod_container_resource_requests"),
     ("cpu_limits", "kube_pod_container_resource_limits"),
@@ -107,10 +87,6 @@ def test_pvc_usage_uses_exact_namespace_and_claim() -> None:
     ("memory_working_set", "container_memory_working_set_bytes"),
     ("memory_requests", 'resource="memory",unit="byte"'),
     ("memory_limits", "kube_pod_container_resource_limits"),
-    ("network_receive", "container_network_receive_bytes_total"),
-    ("network_transmit", "container_network_transmit_bytes_total"),
-    ("container_restarts", "kube_pod_container_status_restarts_total"),
-    ("pod_readiness", "kube_pod_status_ready"),
 ])
 def test_registered_pod_and_namespace_templates_are_server_owned(metric, needle) -> None:
     source = FakeRangeSource()
@@ -125,25 +101,6 @@ def test_registered_pod_and_namespace_templates_are_server_owned(metric, needle)
 
     assert needle in source.calls[0]["promql"]
     assert 'namespace="payments"' in source.calls[0]["promql"]
-
-
-def test_deployment_scope_joins_replicaset_and_pod_ownership() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics",
-        metric="cpu_usage",
-        metric_scope="deployment",
-        namespace="payments",
-        name="api",
-    ))
-
-    query = source.calls[0]["promql"]
-    assert "kube_pod_owner" in query
-    assert "kube_replicaset_owner" in query
-    assert 'owner_kind="Deployment",owner_name="api"' in query
-    assert "on(namespace, pod)" in query
 
 
 def test_node_top_cpu_ranks_monitored_pods() -> None:
@@ -242,24 +199,6 @@ def test_cluster_top_cpu_honors_limit_and_aggregates_by_pod() -> None:
     assert len(observation.data["ranking"]) == 5
 
 
-def test_deployment_top_consumers_use_owner_membership() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics",
-        metric="top_cpu_consumers",
-        metric_scope="deployment",
-        namespace="payments",
-        name="api",
-    ))
-
-    query = source.calls[0]["promql"]
-    assert "topk(20" in query
-    assert "kube_pod_owner" in query
-    assert 'owner_kind="Deployment",owner_name="api"' in query
-
-
 @pytest.mark.parametrize(("metric", "needles"), [
     ("node_cpu_utilization", ("node_cpu_seconds_total", 'node_uname_info{nodename="worker-2"}')),
     ("node_memory_utilization", ("node_memory_MemAvailable_bytes", "node_memory_MemTotal_bytes")),
@@ -324,12 +263,17 @@ def test_cluster_node_utilization_ranking_uses_topk_grouped_by_node(metric, need
     [
         (
             ReadIntent(
-                tool="query_metrics", metric="kafka_topic_messages_in",
+                tool="query_metrics", metric="kafka_topic_disk_utilization",
                 metric_scope="kafka_cluster", kind="Kafka",
                 namespace="vc-streams", name="vc-cluster",
                 metric_operation="rank", metric_group_by=["topic"], limit=5,
             ),
-            ("topk(5", "kafka_server_brokertopicmetrics_messagesin_total", "by (topic)"),
+            (
+                "topk(5", "kafka_log_log_size_value", "by (topic)",
+                "kubelet_volume_stats_capacity_bytes",
+                'persistentvolumeclaim=~"data(?:-[0-9]+)?-vc-cluster-kafka-[0-9]+"',
+                "group_left",
+            ),
         ),
         (
             ReadIntent(
@@ -339,116 +283,6 @@ def test_cluster_node_utilization_ranking_uses_topk_grouped_by_node(metric, need
                 metric_group_by=["topic", "consumer_group"],
             ),
             ("kafka_consumergroup_lag", "by (topic, consumergroup)"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="ingress_error_rate",
-                metric_scope="route", kind="Route",
-                namespace="payments", name="api",
-            ),
-            ("haproxy_server_http_responses_total", 'route="api"', 'code=~"5.."'),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="machineconfigpool_updated",
-                metric_scope="machine_config_pool", kind="MachineConfigPool", name="worker",
-            ),
-            ("mco_updated_machine_count", "mco_machine_count", 'pool="worker"'),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="hpa_desired_replicas",
-                metric_scope="horizontal_pod_autoscaler", kind="HorizontalPodAutoscaler",
-                namespace="payments", name="api",
-            ),
-            ("kube_horizontalpodautoscaler_status_desired_replicas",),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="workload_availability",
-                metric_scope="workload", kind="Deployment",
-                namespace="payments", name="api",
-            ),
-            ("kube_deployment_status_replicas_available", "kube_deployment_spec_replicas"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="persistent_volume_inode_usage",
-                metric_scope="persistent_volume_claim",
-                namespace="payments", name="data",
-            ),
-            ("kubelet_volume_stats_inodes_used", "kubelet_volume_stats_inodes"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="cluster_operator_degraded",
-                metric_scope="cluster_operator", kind="ClusterOperator", name="network",
-            ),
-            ("cluster_operator_conditions", 'condition="Degraded"', 'name="network"'),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="apiserver_latency",
-                metric_scope="control_plane",
-            ),
-            ("histogram_quantile(0.99", "apiserver_request_duration_seconds_bucket"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="etcd_fsync_latency",
-                metric_scope="control_plane",
-            ),
-            ("histogram_quantile(0.99", "etcd_disk_wal_fsync_duration_seconds_bucket"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="apiserver_inflight_requests",
-                metric_scope="control_plane", metric_group_by=["request_kind"],
-            ),
-            ("apiserver_current_inflight_requests", "by (request_kind)"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="scheduler_pending_pods",
-                metric_scope="control_plane", metric_group_by=["queue"],
-            ),
-            ("scheduler_pending_pods", "by (queue)"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="scheduler_latency",
-                metric_scope="control_plane", metric_group_by=["result"],
-            ),
-            ("histogram_quantile(0.99", "scheduler_scheduling_attempt_duration_seconds_bucket"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="monitoring_targets_down",
-                metric_scope="monitoring", metric_operation="rank",
-                metric_group_by=["job", "instance"], limit=10,
-            ),
-            ("topk(10", "1 - (max by (job, instance)", "openshift-monitoring"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="prometheus_ingestion_rate",
-                metric_scope="monitoring",
-            ),
-            ("openshift:prometheus_tsdb_head_samples_appended_total:sum", "rate("),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="logging_ingestion_rate",
-                metric_scope="logging", metric_group_by=["tenant"],
-            ),
-            ("loki_distributor_bytes_received_total", "by (tenant)"),
-        ),
-        (
-            ReadIntent(
-                tool="query_metrics", metric="logging_query_latency",
-                metric_scope="logging", metric_group_by=["job"],
-            ),
-            ("loki_logql_querystats_latency_seconds_bucket", "by (le, job)"),
         ),
     ],
 )
@@ -476,24 +310,21 @@ def test_exporter_dependent_metric_explains_missing_prerequisite() -> None:
     assert "requires Strimzi Kafka Exporter metrics" in result.limitations[0]
 
 
-@pytest.mark.parametrize("kind", ["StatefulSet", "DaemonSet", "Job"])
-def test_workload_scope_joins_direct_controller_owned_pods(kind) -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+def test_kafka_topic_disk_utilization_exposes_shared_capacity_semantics() -> None:
+    reader = BoundedMetricTrendReader(FakeRangeSource(), clock=lambda: NOW)
 
-    reader.execute(ReadIntent(
-        tool="query_metrics",
-        metric="cpu_usage",
-        metric_scope="workload",
-        kind=kind,
-        namespace="payments",
-        name="worker",
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+        metric_group_by=["topic"],
     ))
 
-    query = source.calls[0]["promql"]
-    assert "kube_pod_owner" in query
-    assert f'owner_kind="{kind}"' in query
-    assert 'owner_name="worker"' in query
+    observation = result.observations[0]
+    assert observation.data["unit"] == "percent"
+    assert observation.data["consumptionBasis"] == "replicated_topic_log_bytes"
+    assert observation.data["capacityBasis"] == "aggregate_kafka_broker_pvc_capacity"
+    assert "topics share broker PVCs" in result.limitations[0]
 
 
 def test_namespace_cpu_can_be_grouped_by_pod_and_container() -> None:
@@ -511,54 +342,6 @@ def test_namespace_cpu_can_be_grouped_by_pod_and_container() -> None:
     query = source.calls[0]["promql"]
     assert "sum by (pod, container)" in query
     assert 'namespace="payments"' in query
-
-
-def test_cluster_ingress_bandwidth_uses_frontend_counters() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics", metric="ingress_bytes_out", metric_scope="cluster",
-        metric_operation="trend", range_seconds=259_200,
-    ))
-
-    query = source.calls[0]["promql"]
-    assert "haproxy_frontend_bytes_out_total" in query
-    assert 'namespace="openshift-ingress"' in query
-    assert "clamp_min(rate(" in query
-    assert "haproxy_backend" not in query
-
-
-def test_route_ingress_bandwidth_uses_backend_exported_namespace_labels() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics", metric="ingress_bytes_in", metric_scope="route",
-        kind="Route", namespace="payments", name="api", metric_operation="trend",
-    ))
-
-    query = source.calls[0]["promql"]
-    assert "haproxy_backend_bytes_in_total" in query
-    assert 'exported_namespace="payments"' in query
-    assert 'route="api"' in query
-    assert 'label_replace(' in query
-    assert '"namespace", "$1", "exported_namespace"' in query
-
-
-def test_existing_route_request_pack_uses_exported_namespace() -> None:
-    source = FakeRangeSource()
-    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
-
-    reader.execute(ReadIntent(
-        tool="query_metrics", metric="ingress_request_rate", metric_scope="route",
-        kind="Route", namespace="payments", name="api",
-    ))
-
-    query = source.calls[0]["promql"]
-    assert 'exported_namespace="payments"' in query
-    assert 'namespace="openshift-ingress"' in query
-    assert 'label_replace(' in query
 
 
 def test_exact_pod_container_metric_adds_server_owned_container_selector() -> None:

@@ -3920,23 +3920,11 @@ def test_health_summary_object_reference_retains_source_cluster() -> None:
     assert _inquiry_reference_cluster_ids(inquiry, evidence) == {"cluster-central"}
 
 
-def test_control_plane_metric_rejects_cross_component_signal() -> None:
-    compiled = _semantic_metric_read_plan(InquirySemantics(
-        mode="metrics", evidence_goal="Read etcd data from the API server.",
-        metric_request=MetricRequestSemantics(
-            signals=["etcd_db_size"],
-            target=MetricTargetSemantics(scope="control_plane", kind="APIServer"),
-        ),
-    ))
-
-    assert compiled is None
-
-
 def test_kafka_metric_rank_preserves_top_n_and_topic_grouping() -> None:
     compiled = _semantic_metric_read_plan(InquirySemantics(
-        mode="metrics", evidence_goal="Rank topics by incoming bytes.",
+        mode="metrics", evidence_goal="Rank topics by disk utilization.",
         metric_request=MetricRequestSemantics(
-            signals=["kafka_topic_bytes_in"],
+            signals=["kafka_topic_disk_utilization"],
             target=MetricTargetSemantics(
                 scope="kafka_cluster", kind="Kafka",
                 namespace="vc-streams", name="vc-cluster",
@@ -3950,16 +3938,16 @@ def test_kafka_metric_rank_preserves_top_n_and_topic_grouping() -> None:
     assert compiled[0].intents[0].metric_operation == "rank"
 
 
-def test_kafka_broker_topic_rate_rejects_partition_grouping() -> None:
+def test_kafka_disk_utilization_rejects_consumer_grouping() -> None:
     compiled = _semantic_metric_read_plan(InquirySemantics(
-        mode="metrics", evidence_goal="Read partition message rates.",
+        mode="metrics", evidence_goal="Read disk utilization by consumer group.",
         metric_request=MetricRequestSemantics(
-            signals=["kafka_topic_messages_in"],
+            signals=["kafka_topic_disk_utilization"],
             target=MetricTargetSemantics(
                 scope="kafka_cluster", kind="Kafka",
                 namespace="vc-streams", name="vc-cluster",
             ),
-            group_by=["partition"],
+            group_by=["consumer_group"],
         ),
     ))
 
@@ -4463,10 +4451,12 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
         resource_query="Namespace",
         needs_object_details=False,
         evidence_goal="Rank namespaces by application-log volume.",
-        metric_query="top_log_volume_by_namespace",
-        metric_scope="cluster",
-        result_limit=10,
-        metric_range_seconds=300,
+        metric_request=MetricRequestSemantics(
+            signals=["application_log_volume"],
+            target=MetricTargetSemantics(scope="cluster", kind="Cluster"),
+            operation="rank", group_by=["namespace"], result_limit=10,
+            range_seconds=300,
+        ),
     ))
 
     assert compiled is not None
@@ -4474,8 +4464,10 @@ def test_semantic_log_volume_plan_uses_registered_cluster_metric() -> None:
     assert terminal is True
     assert plan.intents == [ReadIntent(
         tool="query_metrics",
-        metric="top_log_volume_by_namespace",
+        metric="application_log_volume",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=300,
         limit=10,
     )]
@@ -4535,7 +4527,8 @@ def test_semantic_log_volume_plan_reads_exact_pod_and_node() -> None:
 def test_metric_period_followup_reuses_prior_log_volume_ranking() -> None:
     prior = _latest_metric_query_semantics([{
         "id": "log-volume-old", "tool": "query_metrics", "data": {
-            "metric": "top_log_volume_by_namespace", "scope": "cluster",
+            "metric": "application_log_volume", "scope": "cluster",
+            "operation": "rank", "groupBy": ["namespace"],
             "rangeSeconds": 300, "limit": 10,
         },
     }])
@@ -4555,15 +4548,15 @@ def test_metric_period_followup_reuses_prior_log_volume_ranking() -> None:
     )
 
     assert resolved is not None
-    assert resolved.metric_request is None
-    assert resolved.metric_query == "top_log_volume_by_namespace"
-    assert resolved.metric_scope == "cluster"
-    assert resolved.metric_range_seconds == 259_200
+    assert resolved.metric_request is not None
+    assert resolved.metric_request.signals == ["application_log_volume"]
+    assert resolved.metric_request.range_seconds == 259_200
     compiled = _semantic_metric_read_plan(resolved)
     assert compiled is not None
     assert compiled[0].intents == [ReadIntent(
-        tool="query_metrics", metric="top_log_volume_by_namespace",
-        metric_scope="cluster", range_seconds=259_200, limit=10,
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace"], range_seconds=259_200, limit=10,
     )]
 
 
@@ -4581,11 +4574,8 @@ def test_metric_period_followup_reuses_ingress_bandwidth_as_both_directions() ->
         prior_metric_query=prior,
     )
 
-    assert resolved is not None
-    assert resolved.metric_request is not None
-    assert resolved.metric_request.signals == ["ingress_bytes_in", "ingress_bytes_out"]
-    assert resolved.metric_request.operation == "trend"
-    assert resolved.metric_request.range_seconds == 259_200
+    assert prior is None
+    assert resolved is None
 
 
 def test_metric_period_followup_does_not_reuse_a_different_metric() -> None:
@@ -4597,8 +4587,11 @@ def test_metric_period_followup_does_not_reuse_a_different_metric() -> None:
     inquiry = InquirySemantics(
         mode="metrics", operation="metrics", resource_query="Namespace",
         needs_object_details=True, evidence_goal="Show log volume.",
-        metric_query="top_log_volume_by_namespace", metric_scope="cluster",
-        metric_range_seconds=259_200,
+        metric_request=MetricRequestSemantics(
+            signals=["application_log_volume"],
+            target=MetricTargetSemantics(scope="cluster", kind="Cluster"),
+            range_seconds=259_200,
+        ),
     )
 
     assert _resolve_metric_inquiry(
@@ -4612,9 +4605,10 @@ def test_log_volume_evidence_view_and_deterministic_answer() -> None:
     evidence = [{
         "id": "log-metric-central", "tool": "query_metrics",
         "cluster_id": "central", "cluster_name": "Central DEV",
-        "source": "loki:application/query/top_log_volume_by_namespace",
+        "source": "loki:application/query/application_log_volume",
         "data": {
-            "metric": "top_log_volume_by_namespace", "scope": "cluster",
+            "metric": "application_log_volume", "scope": "cluster",
+            "groupBy": ["namespace"],
             "unit": "bytes", "limit": 10, "complete": True,
             "rangeSeconds": 3600,
             "ranking": [{
@@ -4631,10 +4625,10 @@ def test_log_volume_evidence_view_and_deterministic_answer() -> None:
     view = _adhoc_evidence_view(evidence[0])
     answer = _deterministic_metric_ranking_answer(evidence=evidence, activity=activity)
 
-    assert view["metric_ranking"]["namespace_only"] is True
+    assert view["metric_ranking"]["namespace_only"] is False
     assert view["metric_ranking"]["rows"][0]["average"] == "1.00 KiB/s"
     assert answer is not None
-    assert "application-log volume by namespace and cluster" in answer["content"]
+    assert "application-log volume by target and cluster" in answer["content"]
     assert "1.00 MiB" in answer["content"]
     assert "1.00 KiB/s" in answer["content"]
     assert "not compressed storage consumption" in answer["content"]
@@ -4918,10 +4912,11 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         "cluster_id": SYSTEM_CLUSTER_ID,
         "cluster_name": "Runtime cluster",
         "summary": "Ranked namespaces by application-log volume.",
-        "source": "loki:application/query/top_log_volume_by_namespace",
-        "data": {
-            "metric": "top_log_volume_by_namespace",
-            "scope": "cluster",
+            "source": "loki:application/query/application_log_volume",
+            "data": {
+                "metric": "application_log_volume",
+                "scope": "cluster",
+                "groupBy": ["namespace"],
             "unit": "bytes",
             "limit": 10,
             "complete": True,
@@ -9493,11 +9488,12 @@ def test_unrestricted_agent_is_not_forced_through_registered_log_volume_enrichme
                 id=f"log-volume-enrichment-{len(self.calls)}",
                 tool="query_metrics",
                 summary="Ranked namespaces by application-log payload volume.",
-                source="loki:application/query/top_log_volume_by_namespace",
+                source="loki:application/query/application_log_volume",
                 collected_at=datetime.now(timezone.utc),
                 data={
-                    "metric": "top_log_volume_by_namespace",
+                    "metric": "application_log_volume",
                     "scope": "cluster",
+                    "groupBy": ["namespace"],
                     "unit": "bytes",
                     "averageUnit": "bytes_per_second",
                     "rangeSeconds": intent.range_seconds,
@@ -10099,7 +10095,7 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
         question="Show me the namespaces that produce the most logs",
     )
 
-    assert normalized["metric"] == "top_log_volume_by_namespace"
+    assert normalized["metric"] == "application_log_volume"
     assert normalized["metric_scope"] == "cluster"
     assert normalized["metric_operation"] == "rank"
     assert normalized["metric_group_by"] == ["namespace"]
@@ -10113,16 +10109,16 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
         },
         question="Which namespaces generated the most logs in the last 2 hours?",
     )
-    assert explicit_period["metric"] == "top_log_volume_by_namespace"
+    assert explicit_period["metric"] == "application_log_volume"
     assert explicit_period["metric_scope"] == "cluster"
     assert explicit_period["range_seconds"] == 7200
 
-    unrelated = _normalize_agent_collector_arguments(
-        "query_metrics",
-        {"metric": "log_entries_total", "metric_scope": "logging"},
-        question="Show the total logs for this workload",
-    )
-    assert unrelated["metric"] == "log_entries_total"
+    with pytest.raises(ValueError, match="not in the focused catalog"):
+        _normalize_agent_collector_arguments(
+            "query_metrics",
+            {"metric": "log_entries_total", "metric_scope": "logging"},
+            question="Show the total logs for this workload",
+        )
 
     namespace_pods = _normalize_agent_collector_arguments(
         "query_metrics",

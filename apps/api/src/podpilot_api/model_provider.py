@@ -17,7 +17,15 @@ import httpx
 from openai import OpenAI
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
-from podpilot_diagnostics.adhoc import CandidateReadPlan, InvestigationGap, ReadIntent, ReadPlan
+from podpilot_diagnostics.adhoc import (
+    PUBLIC_METRICS,
+    PUBLIC_METRIC_GROUPINGS,
+    PUBLIC_METRIC_SCOPES,
+    CandidateReadPlan,
+    InvestigationGap,
+    ReadIntent,
+    ReadPlan,
+)
 from podpilot_diagnostics.redaction import redact_text
 
 
@@ -274,8 +282,7 @@ class MetricTargetSemantics(BaseModel):
         "Cluster", "Namespace", "Pod", "Deployment", "StatefulSet", "DaemonSet",
         "Job", "Node", "PersistentVolumeClaim", "Kafka", "Route",
         "IngressController", "MachineConfigPool", "HorizontalPodAutoscaler",
-        "ClusterOperator", "APIServer", "Etcd",
-        "Scheduler", "Prometheus", "LokiStack",
+        "ClusterOperator", "APIServer", "Etcd", "Scheduler", "Prometheus", "LokiStack",
     ]
     namespace: str | None = Field(default=None, max_length=253)
     name: str | None = Field(default=None, max_length=253)
@@ -284,6 +291,14 @@ class MetricTargetSemantics(BaseModel):
     )
     role: Literal["worker", "master", "infra"] | None = None
     container: str | None = Field(default=None, max_length=253)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        properties = schema.get("properties", {})
+        properties["scope"]["enum"] = list(PUBLIC_METRIC_SCOPES)
+        properties["kind"]["enum"] = ["Cluster", "Namespace", "Pod", "Node", "Kafka"]
+        return schema
 
     @field_validator("namespace", "name", "container")
     @classmethod
@@ -313,9 +328,8 @@ class MetricTargetSemantics(BaseModel):
         if self.scope != "node_role" and self.role:
             raise ValueError("role is valid only for a node-role metric target")
         if self.scope in {
-            "cluster", "node", "node_role", "ingress_controller",
-            "machine_config_pool", "cluster_operator", "control_plane",
-            "monitoring", "logging",
+            "cluster", "node", "node_role", "ingress_controller", "machine_config_pool",
+            "cluster_operator", "control_plane", "monitoring", "logging",
         } and self.namespace:
             raise ValueError("the selected metric target does not accept a namespace")
         if self.scope in {
@@ -353,39 +367,45 @@ class MetricRequestSemantics(BaseModel):
     signals: list[Literal[
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
         "memory_working_set", "memory_requests", "memory_limits",
-        "network_receive", "network_transmit", "container_restarts",
-        "pod_readiness", "persistent_volume_usage", "node_cpu_utilization",
-        "node_memory_utilization", "application_log_volume",
-        "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
-        "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
-        "ingress_request_rate", "ingress_error_rate",
-        "ingress_bytes_in", "ingress_bytes_out",
-        "machineconfigpool_updated", "machineconfigpool_degraded",
-        "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
-        "workload_availability", "persistent_volume_inode_usage",
-        "cluster_operator_available", "cluster_operator_degraded",
-        "cluster_operator_progressing", "apiserver_request_rate",
-        "apiserver_error_rate", "apiserver_latency", "etcd_db_size",
-        "etcd_fsync_latency", "apiserver_inflight_requests",
+        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
+        "network_receive", "network_transmit", "container_restarts", "pod_readiness",
+        "persistent_volume_usage", "kafka_topic_messages_in", "kafka_topic_bytes_in",
+        "kafka_topic_bytes_out", "kafka_topic_storage", "kafka_under_replicated_partitions",
+        "ingress_request_rate", "ingress_error_rate", "ingress_bytes_in", "ingress_bytes_out",
+        "machineconfigpool_updated", "machineconfigpool_degraded", "hpa_current_replicas",
+        "hpa_desired_replicas", "hpa_max_replicas", "workload_availability",
+        "persistent_volume_inode_usage", "cluster_operator_available",
+        "cluster_operator_degraded", "cluster_operator_progressing",
+        "apiserver_request_rate", "apiserver_error_rate", "apiserver_latency",
+        "etcd_db_size", "etcd_fsync_latency", "apiserver_inflight_requests",
         "scheduler_pending_pods", "scheduler_attempt_rate", "scheduler_error_rate",
         "scheduler_latency", "etcd_has_leader", "etcd_leader_changes",
-        "monitoring_targets_up", "monitoring_targets_down",
-        "prometheus_head_series", "prometheus_ingestion_rate",
-        "prometheus_rule_evaluation_failures", "alertmanager_active_alerts",
-        "logging_ingestion_rate", "logging_query_latency",
+        "monitoring_targets_up", "monitoring_targets_down", "prometheus_head_series",
+        "prometheus_ingestion_rate", "prometheus_rule_evaluation_failures",
+        "alertmanager_active_alerts", "logging_ingestion_rate", "logging_query_latency",
     ]] = Field(min_length=1, max_length=4)
     target: MetricTargetSemantics
     operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
     statistic: Literal["current", "average", "maximum", "minimum"] = "current"
     group_by: list[Literal[
-        "cluster", "namespace", "pod", "container", "node", "topic", "partition",
-        "consumer_group", "route", "pool", "operator", "code",
+        "namespace", "pod", "container", "node", "topic", "partition",
+        "consumer_group", "cluster", "route", "pool", "operator", "code",
         "job", "instance", "queue", "result", "component", "tenant", "request_kind",
     ]] = Field(default_factory=list, max_length=3)
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
     threshold_value: float | None = None
     range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
     result_limit: int | None = Field(default=None, ge=1, le=100)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        properties = schema.get("properties", {})
+        properties["signals"]["items"]["enum"] = list(PUBLIC_METRICS)
+        properties["group_by"]["items"]["enum"] = list(PUBLIC_METRIC_GROUPINGS)
+        return schema
 
     @field_validator("signals", "group_by")
     @classmethod
@@ -469,8 +489,7 @@ class InquirySemantics(BaseModel):
     needs_object_details: bool = False
     evidence_goal: str = Field(min_length=1, max_length=300)
     metric_query: Literal[
-        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
-        "node_cpu_memory_utilization",
+        "top_cpu_consumers", "top_memory_consumers", "node_cpu_memory_utilization",
     ] | None = None
     metric_scope: Literal[
         "cluster", "namespace", "deployment", "node", "node_role"
@@ -661,8 +680,7 @@ class CapabilitySelection(BaseModel):
     needs_object_details: bool = False
     evidence_goal: str = Field(min_length=1, max_length=300)
     metric_query: Literal[
-        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
-        "node_cpu_memory_utilization",
+        "top_cpu_consumers", "top_memory_consumers", "node_cpu_memory_utilization",
     ] | None = None
     metric_scope: Literal[
         "cluster", "namespace", "deployment", "node", "node_role"
@@ -1842,10 +1860,8 @@ class OpenAIResponsesProvider:
                     "with exact namespace and name, metric_scope=namespace with namespace, or "
                     "metric_scope=cluster without coordinates for top-consumer rankings or Node utilization "
                     "rankings grouped by node across the cluster, "
-                    "metric_scope=deployment with exact namespace/name to aggregate owned ReplicaSet Pods, "
-                    "metric_scope=node with exact node name, or metric_scope=persistent_volume_claim with "
-                    "namespace/name only for persistent_volume_usage. For questions about the largest CPU or "
-                    "memory consumers in a cluster, namespace, Deployment, or node, use top_cpu_consumers or "
+                    "or metric_scope=node with an exact node name. For questions about the largest CPU or "
+                    "memory consumers in a cluster, namespace, or node, use top_cpu_consumers or "
                     "top_memory_consumers with that scope. These rank "
                     "monitored Kubernetes containers, not host operating-system processes; never claim process-level visibility. "
                     "Use node_cpu_utilization or node_memory_utilization for overall node pressure; a cluster-wide "
@@ -1854,8 +1870,10 @@ class OpenAIResponsesProvider:
                     "so unaccounted host/kernel usage remains visible as a limitation. "
                     "Convert the operator's requested period and resolution to bounded range_seconds and step_seconds. "
                     "Never author PromQL or send metrics through http_probe; normal code owns query templates and "
-                    "authenticated Thanos access. CPU and memory requests/limits are configured gauges; usage, "
-                    "throttling, and network metrics are measured trends. "
+                    "authenticated Thanos access. CPU and memory requests/limits are configured gauges; usage "
+                    "and throttling are measured trends. application_log_volume returns only numeric Loki "
+                    "payload-byte aggregates: cluster grouped by namespace ranks namespaces, namespace grouped "
+                    "by pod ranks Pods, and ungrouped cluster, namespace, pod, or node scopes return totals. "
                     "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL with HEAD or a "
                     "bounded GET. The URL hostname is always the HTTP Host and HTTPS SNI name. To test a passthrough "
                     "Route against a specific router address, keep the Route hostname in url and put the router IP "
@@ -1981,26 +1999,19 @@ class OpenAIResponsesProvider:
                     "For metric questions, prefer metric_request: select one to four "
                     "registered signals, an exact typed target, show/trend/rank/compare/threshold operation, "
                     "current/average/maximum/minimum statistic, requested grouping, threshold, period, and "
-                    "result limit. Use workload scope for an exact Deployment, StatefulSet, DaemonSet, or Job; "
-                    "use node_role only when the operator explicitly names worker, master, or infra Nodes. "
+                    "result limit. Use node_role only when the operator explicitly names worker, master, or infra Nodes. "
                     "For node CPU or memory utilization select node_cpu_utilization or "
                     "node_memory_utilization, not container usage. To rank Nodes across a cluster, use a "
                     "Cluster target, the corresponding node utilization signal, operation=rank, group_by=node, "
-                    "and the requested result limit. For pod or workload ranking use cpu_usage or "
+                    "and the requested result limit. For pod ranking use cpu_usage or "
                     "memory_working_set; application-log ranking uses application_log_volume. Normal code maps "
                     "these to registered bounded rankings. Never invent omitted target coordinates. "
                     "For Strimzi topic utilization use kafka_cluster scope with the exact Kafka namespace/name; "
                     "for an elliptical follow-up, put the intended supplied ref-/rel- id in the metric target's "
                     "reference_id instead of reconstructing its coordinates. "
-                    "Select topic message/byte rates, storage, lag, or under-replicated partitions and group by "
-                    "topic, partition, or consumer_group as requested. Route/IngressController, MachineConfigPool, "
-                    "Ingress bandwidth uses ingress_bytes_in and ingress_bytes_out together: select a Cluster "
-                    "target for total router traffic, a Namespace or Route target for application traffic, or an "
-                    "IngressController target for one router fleet. Use operation=trend when the operator asks for "
-                    "a period or a spike, and group by namespace or route only when that breakdown is requested. "
-                    "HorizontalPodAutoscaler, workload availability, PVC inode usage, ClusterOperator, API server, "
-                    "scheduler, etcd, OpenShift Prometheus/Alertmanager, and LokiStack questions use their "
-                    "corresponding typed targets and registered signals. Unknown or third-party CRDs must use "
+                    "Select kafka_topic_disk_utilization for replicated topic log bytes as a percentage of "
+                    "aggregate Kafka broker PVC capacity, or kafka_consumer_lag for committed-offset lag; group "
+                    "by topic, partition, or consumer_group as supported. Unknown or third-party CRDs must use "
                     "inventory/configuration plus supplied opaque object/relationship references unless an explicit "
                     "registered metric target exists; never infer metric names from a Kind. "
                     "Exporter-dependent metrics may legitimately return no samples. The legacy metric_query "
@@ -2011,12 +2022,9 @@ class OpenAIResponsesProvider:
                     "For overall CPU and memory utilization of worker/compute nodes, set "
                     "metric_query=node_cpu_memory_utilization, metric_scope=node_role, and "
                     "object_name=worker. This is node utilization, not a pod-consumer ranking. "
-                    "For namespace application-log volume or logging-throughput rankings, set "
-                    "metric_query=top_log_volume_by_namespace and metric_scope=cluster. "
-                    "For application-log volume of an exact Namespace, Pod, or Node, or to rank "
-                    "Pods within a Namespace or Nodes across a Cluster, use metric_request with "
-                    "signal application_log_volume, exact target coordinates, and group_by pod or "
-                    "node only when a ranking was requested. "
+                    "For application-log volume use metric_request with application_log_volume. A Cluster target "
+                    "grouped by namespace ranks namespaces, a Namespace target grouped by pod ranks its Pods, "
+                    "and ungrouped Cluster, Namespace, Pod, or Node targets return one numeric payload-byte total. "
                     "When the operator supplies a metric period, convert it exactly to "
                     "metric_range_seconds; for example 5m is 300 and 2h is 7200. "
                     "For cluster_audit_events, extract an exact supplied username into audit_username; leave it "
@@ -2245,20 +2253,17 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         )
         metric_tool = collector_tool(
             "query_metrics",
-            "Query a registered bounded metric through PodPilot's Thanos or Loki metric "
-            "adapter. Use this before improvising raw PromQL or LogQL; the helper selects the "
-            "correct backend for the metric. For a namespace application-log-volume ranking, use "
-            "metric=top_log_volume_by_namespace, metric_scope=cluster, metric_operation=rank, "
-            "and metric_group_by=[namespace]. For application-log volume of one exact namespace, "
-            "Pod, or Node, use metric=application_log_volume with the corresponding namespace, "
-            "pod, or node scope and no grouping. To rank Pods within one namespace, use namespace "
-            "scope with metric_group_by=[pod]; to rank Pods cluster-wide, group by [namespace,pod]; "
-            "to rank Nodes cluster-wide, group by [node]. Rankings use metric_operation=rank and "
-            "exact targets use metric_operation=show. Do not invent a wider period when the operator did "
-            "not supply one; the default is 300 seconds. Its result returns to you and never ends "
-            "the investigation.",
+            "Query a bounded CPU, memory, application-log-volume, Kafka consumer-lag, or Kafka "
+            "topic-disk-utilization metric through PodPilot's registered Thanos or Loki adapter. "
+            "application_log_volume returns numeric bytes only, never log lines: use cluster scope "
+            "with group_by=[namespace] for top namespaces, namespace scope with group_by=[pod] for "
+            "top Pods, or ungrouped cluster, namespace, pod, or node scope for an exact total. "
+            "Kafka metrics require kafka_cluster scope plus exact Kafka kind, namespace, and name. "
+            "Rankings use metric_operation=rank; exact totals use show. The default period is 300 "
+            "seconds when the operator supplies none. Results return as evidence and never end the "
+            "investigation.",
             (
-                "metric", "metric_scope", "api_version", "kind", "namespace", "name",
+                "metric", "metric_scope", "kind", "namespace", "name",
                 "container", "metric_operation", "metric_statistic", "metric_group_by",
                 "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
                 "limit",
@@ -2765,16 +2770,17 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "For OpenShift Route TLS, edge sends HTTP after router termination, reencrypt creates backend TLS, "
                 "and passthrough requires the backend to terminate the original TLS stream. Route spec.to.name is "
                 "an observed backend Service name that may be used for an exact follow-up read. "
-                "Use query_metrics with a metric from tool_policy.metric_catalog for bounded cluster, pod, "
-                "namespace, deployment, node, or persistent-volume-claim trends. Cluster scope needs no coordinates "
-                "and is allowed for top-consumer rankings or Node utilization rankings grouped by node. Deployment "
-                "scope aggregates Pods through "
-                "Deployment/ReplicaSet ownership. Cluster, Namespace, Deployment, or node top_cpu_consumers and "
+                "Use query_metrics with a registered metric for bounded cluster, pod, namespace, node, node-role, "
+                "or Kafka trends. Cluster scope needs no coordinates and is allowed for top-consumer rankings or "
+                "Node utilization rankings grouped by node. Cluster, Namespace, or node top_cpu_consumers and "
                 "top_memory_consumers rank monitored pods, not host processes; node_cpu_utilization "
                 "and node_memory_utilization measure overall node "
                 "pressure. For resource-exhaustion questions collect both overall and top-consumer metrics. Convert "
                 "requested time to range_seconds/step_seconds; never author "
                 "PromQL or use http_probe for monitoring because server code owns authenticated Thanos queries. "
+                "application_log_volume returns numeric Loki payload bytes, never log lines: group a Cluster by "
+                "namespace for top namespaces, a Namespace by pod for top Pods, or leave Cluster, Namespace, Pod, "
+                "or Node ungrouped for its total. Kafka exposes only consumer lag and topic disk utilization. "
                 "For a comprehensive inventory, set the list limit to "
                 "tool_policy.max_list_objects; otherwise choose a deliberately bounded limit for the "
                 "diagnostic goal. A cluster-wide LIST is allowed for inventory when no namespace "
@@ -2867,8 +2873,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "continues analysis. Configuration, behavior, and investigation require object details. "
                 "For metric questions, prefer "
                 "metric_request with one to four registered signals, a typed exact target, operation, statistic, "
-                "grouping, threshold, period, and result limit. Workload targets may be Deployment, StatefulSet, "
-                "DaemonSet, or Job. Node-role targets require an explicitly requested worker, master, or infra "
+                "grouping, threshold, period, and result limit. Node-role targets require an explicitly requested worker, master, or infra "
                 "role. Use node_cpu_utilization/node_memory_utilization for Node pressure and use cpu_usage/"
                 "memory_working_set for container-backed workload use. To rank Nodes cluster-wide, use a Cluster "
                 "target with the corresponding node utilization signal, operation=rank, group_by=node, and the "
@@ -2876,13 +2881,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "ranking template. Never invent omitted coordinates. "
                 "For Strimzi topic utilization use kafka_cluster with the exact Kafka namespace/name and registered "
                 "topic signals; an elliptical target may select a supplied ref-/rel- id in target.reference_id. "
-                "Use topic throughput, storage, lag, or replication-health signals. Route/IngressController, "
-                "Ingress bandwidth uses ingress_bytes_in and ingress_bytes_out together with a Cluster, Namespace, "
-                "Route, or IngressController target; use trend for a period or spike question and group by namespace "
-                "or route only for a requested breakdown. "
-                "MachineConfigPool, HorizontalPodAutoscaler, workload availability, PVC inode usage, ClusterOperator, "
-                "API server, scheduler, etcd, OpenShift Prometheus/Alertmanager, and LokiStack questions use their "
-                "corresponding typed targets and signals. Route unknown CRDs through inventory/configuration and "
+                "Use kafka_topic_disk_utilization for topic log bytes versus aggregate broker-PVC capacity and "
+                "kafka_consumer_lag for committed-offset lag. Route unknown CRDs through inventory/configuration and "
                 "supplied opaque relationships unless a registered metric target exists; never infer PromQL from "
                 "the Kind. Leave the "
                 "legacy metric fields null when metric_request is complete. For pod CPU or "
@@ -2891,11 +2891,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "For overall CPU and memory utilization of worker/compute nodes, return "
                 "metric_query=node_cpu_memory_utilization, metric_scope=node_role, and "
                 "object_name=worker; do not classify it as a pod ranking. "
-                "For namespace application-log volume rankings, return "
-                "metric_query=top_log_volume_by_namespace with cluster scope. "
-                "For application-log volume of an exact Namespace, Pod, or Node, or a Pod/Node "
-                "ranking, use metric_request with application_log_volume and the exact target; "
-                "group by pod or node only for a ranking. "
+                "For application-log volume use metric_request with application_log_volume: group Cluster by "
+                "namespace or Namespace by pod for rankings, and use no grouping for exact totals. "
                 "Convert an explicitly requested metric period to metric_range_seconds. "
                 "For cluster_audit_events, extract the exact supplied username and namespace, put an explicitly "
                 "requested Kubernetes resource kind in resource_query, select deletes for delete-only "

@@ -75,6 +75,7 @@ from podpilot_api.settings import Settings, get_settings
 from podpilot_diagnostics.alerts import AlertEvidence, analyze_alert
 from podpilot_diagnostics.adhoc import (
     DEFAULT_METRIC_RANGE_SECONDS,
+    PUBLIC_METRICS,
     AdHocObservation,
     InvestigationGap,
     PodLogCandidate,
@@ -2810,8 +2811,7 @@ def _deterministic_metric_ranking_answer(
         and item.get("tool") == "query_metrics"
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") in {
-            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
-            "application_log_volume",
+            "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
         }
     ]
     if not observations:
@@ -2847,7 +2847,6 @@ def _deterministic_metric_ranking_answer(
     title = {
         "top_cpu_consumers": "CPU",
         "top_memory_consumers": "memory",
-        "top_log_volume_by_namespace": "application-log volume",
         "application_log_volume": "application-log volume",
     }[metric]
     rows: list[str] = []
@@ -2874,7 +2873,7 @@ def _deterministic_metric_ranking_answer(
         for rank, item in enumerate(ranked, 1):
             labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
             namespace = str(labels.get("namespace") or "—")
-            if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
+            if metric == "application_log_volume":
                 identity_keys = (
                     [str(value) for value in data.get("groupBy")]
                     if isinstance(data.get("groupBy"), list) and data.get("groupBy")
@@ -2896,13 +2895,9 @@ def _deterministic_metric_ranking_answer(
             )
 
     qualifier = f"top {requested_limit} " if requested_limit else ""
-    if metric in {"top_log_volume_by_namespace", "application_log_volume"}:
-        target_label = (
-            "Namespace" if metric == "top_log_volume_by_namespace" else "Target"
-        )
-        target_phrase = (
-            "namespace" if metric == "top_log_volume_by_namespace" else "target"
-        )
+    if metric == "application_log_volume":
+        target_label = "Target"
+        target_phrase = "target"
         content = (
             f"## {qualifier}{title} by {target_phrase} and cluster\n\n"
             f"| OpenShift cluster | Rank | {target_label} | Payload volume | Average rate |\n"
@@ -2951,8 +2946,7 @@ def _deterministic_metric_summary_answer(
         and item.get("tool") == "query_metrics"
         and isinstance(item.get("data"), dict)
         and item["data"].get("metric") not in {
-            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
-            "application_log_volume",
+            "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
         }
     ]
     if not observations:
@@ -4609,9 +4603,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         return None
     unit = str(data.get("unit") or "")
     metric_name = str(data.get("metric") or "metric")
-    log_volume_metric = metric_name in {
-        "top_log_volume_by_namespace", "application_log_volume",
-    }
+    log_volume_metric = metric_name == "application_log_volume"
     average_unit = (
         "bytes_per_second"
         if log_volume_metric
@@ -4767,7 +4759,6 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     metric_title = {
         "top_cpu_consumers": "Top CPU Consumers",
         "top_memory_consumers": "Top Memory Consumers",
-        "top_log_volume_by_namespace": "Top Application-Log Volume by Namespace",
         "application_log_volume": "Application-Log Volume",
         "node_cpu_utilization": "Node CPU Utilization",
         "node_memory_utilization": "Node Memory Utilization",
@@ -4781,7 +4772,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
         "kafka_topic_messages_in": "Kafka Topic Message Rate",
         "kafka_topic_bytes_in": "Kafka Topic Ingress Rate",
         "kafka_topic_bytes_out": "Kafka Topic Egress Rate",
-        "kafka_topic_storage": "Kafka Topic Storage",
+        "kafka_topic_disk_utilization": "Kafka Topic Disk Utilization",
         "kafka_consumer_lag": "Kafka Consumer Lag",
         "kafka_under_replicated_partitions": "Kafka Under-Replicated Partitions",
         "ingress_request_rate": "Ingress Request Rate",
@@ -4830,7 +4821,7 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
             if "namespace" in group_by else
             f"Application-Log Volume for {scope}"
         )
-    namespace_only = metric_name == "top_log_volume_by_namespace"
+    namespace_only = False
     return {
         "title": metric_title,
         "unit": unit,
@@ -6408,9 +6399,7 @@ def _latest_metric_query_semantics(
     """Recover a recent registered ranking so elliptical period follow-ups stay typed."""
 
     supported = {
-        "top_cpu_consumers", "top_memory_consumers",
-        "top_log_volume_by_namespace", "application_log_volume",
-        "ingress_bytes_in", "ingress_bytes_out",
+        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
     }
     for item in reversed(evidence):
         if item.get("tool") != "query_metrics" or not isinstance(item.get("data"), dict):
@@ -6419,7 +6408,7 @@ def _latest_metric_query_semantics(
         metric = str(data.get("metric") or "")
         scope = str(data.get("scope") or "")
         if metric not in supported or scope not in {
-            "cluster", "namespace", "deployment", "node", "node_role",
+            "cluster", "namespace", "pod", "node", "node_role",
         }:
             continue
         try:
@@ -6835,12 +6824,9 @@ def _resolve_metric_inquiry(
         return inquiry
     prior_metric = str(prior_metric_query.get("metric") or "")
     category = {
-        "top_log_volume_by_namespace": "log",
         "application_log_volume": "log",
         "top_cpu_consumers": "cpu",
         "top_memory_consumers": "memory",
-        "ingress_bytes_in": "ingress_bandwidth",
-        "ingress_bytes_out": "ingress_bandwidth",
     }.get(prior_metric)
     if category is None:
         return inquiry
@@ -6909,6 +6895,50 @@ def _resolve_metric_inquiry(
                 ),
                 operation="trend",
                 group_by=list(prior_metric_query.get("group_by") or []),
+                range_seconds=int(
+                    requested_range or prior_metric_query.get("range_seconds")
+                    or DEFAULT_METRIC_RANGE_SECONDS
+                ),
+                result_limit=int(prior_metric_query.get("limit") or 10),
+                ),
+            )
+    if category == "log":
+        scope = str(prior_metric_query.get("scope") or "cluster")
+        target_kind = {
+            "cluster": "Cluster", "namespace": "Namespace",
+            "pod": "Pod", "node": "Node",
+        }.get(scope)
+        if target_kind is None:
+            return inquiry
+        group_by = list(prior_metric_query.get("group_by") or [])
+        return InquirySemantics(
+            mode="metrics", operation="metrics", cardinality="collection",
+            resource_query=target_kind,
+            object_name=(
+                str(prior_metric_query.get("name"))
+                if prior_metric_query.get("name") else None
+            ),
+            namespace=(
+                str(prior_metric_query.get("namespace"))
+                if prior_metric_query.get("namespace") else None
+            ),
+            needs_object_details=True,
+            evidence_goal="Repeat application-log volume over the requested period.",
+            metric_request=MetricRequestSemantics(
+                signals=["application_log_volume"],
+                target=MetricTargetSemantics(
+                    scope=scope, kind=target_kind,
+                    namespace=(
+                        str(prior_metric_query.get("namespace"))
+                        if prior_metric_query.get("namespace") else None
+                    ),
+                    name=(
+                        str(prior_metric_query.get("name"))
+                        if prior_metric_query.get("name") else None
+                    ),
+                ),
+                operation="rank" if group_by else "show",
+                group_by=group_by,
                 range_seconds=int(
                     requested_range or prior_metric_query.get("range_seconds")
                     or DEFAULT_METRIC_RANGE_SECONDS
@@ -7590,11 +7620,12 @@ def _normalize_agent_collector_arguments(
             str(normalized.get("metric_scope") or "").strip().casefold(),
         ).strip("_")
         metric_aliases = {
-            "application_log_volume_by_namespace": "top_log_volume_by_namespace",
-            "log_volume_by_namespace": "top_log_volume_by_namespace",
-            "namespace_log_volume": "top_log_volume_by_namespace",
-            "top_log_namespaces": "top_log_volume_by_namespace",
-            "top_logs_by_namespace": "top_log_volume_by_namespace",
+            "top_log_volume_by_namespace": "application_log_volume",
+            "application_log_volume_by_namespace": "application_log_volume",
+            "log_volume_by_namespace": "application_log_volume",
+            "namespace_log_volume": "application_log_volume",
+            "top_log_namespaces": "application_log_volume",
+            "top_logs_by_namespace": "application_log_volume",
             "log_volume": "application_log_volume",
             "application_logs_volume": "application_log_volume",
             "pod_log_volume": "application_log_volume",
@@ -7607,10 +7638,7 @@ def _normalize_agent_collector_arguments(
         scope_aliases = {
             "all": "cluster", "cluster_wide": "cluster", "clusterwide": "cluster",
             "clusters": "cluster", "namespaces": "namespace", "pods": "pod",
-            "deployments": "deployment", "workloads": "workload", "nodes": "node",
-            "node_roles": "node_role", "pvc": "persistent_volume_claim",
-            "pvcs": "persistent_volume_claim", "kafka": "kafka_cluster",
-            "routes": "route", "logs": "logging",
+            "nodes": "node", "node_roles": "node_role", "kafka": "kafka_cluster",
         }
         metric = metric_aliases.get(metric, metric)
         scope = scope_aliases.get(scope, scope)
@@ -7636,19 +7664,20 @@ def _normalize_agent_collector_arguments(
                 scope = "cluster"
                 normalized["metric_group_by"] = ["node"]
             else:
-                metric = "top_log_volume_by_namespace"
+                metric = "application_log_volume"
+                scope = "cluster"
+                normalized["metric_group_by"] = ["namespace"]
         normalized["metric"] = metric
         normalized["metric_scope"] = scope
-        if metric == "top_log_volume_by_namespace":
-            normalized["metric_scope"] = "cluster"
-            normalized["metric_operation"] = "rank"
-            normalized["metric_group_by"] = ["namespace"]
-        elif metric == "application_log_volume":
+        if metric not in PUBLIC_METRICS:
+            raise ValueError(f"The metric {metric or '<empty>'} is not in the focused catalog.")
+        if metric == "application_log_volume":
             raw_metric = str(arguments.get("metric") or "").casefold()
             ranking_alias = "top" in raw_metric or "_by_" in raw_metric
             implied_dimension = (
                 "pod" if ranking_alias and "pod" in raw_metric else
                 "node" if ranking_alias and "node" in raw_metric else
+                "namespace" if ranking_alias and "namespace" in raw_metric else
                 None
             )
             if implied_dimension == "pod":
@@ -7661,6 +7690,9 @@ def _normalize_agent_collector_arguments(
             elif implied_dimension == "node":
                 normalized["metric_scope"] = "cluster"
                 normalized["metric_group_by"] = ["node"]
+            elif implied_dimension == "namespace":
+                normalized["metric_scope"] = "cluster"
+                normalized["metric_group_by"] = ["namespace"]
             normalized["metric_operation"] = (
                 "rank" if normalized.get("metric_group_by") else "show"
             )
@@ -7950,21 +7982,8 @@ def _semantic_metric_read_plan(
                     "memory_working_set": "top_memory_consumers",
                 }
                 rankable_domain_signals = {
-                    "application_log_volume",
-                    "persistent_volume_usage", "persistent_volume_inode_usage",
-                    "kafka_topic_messages_in", "kafka_topic_bytes_in",
-                    "kafka_topic_bytes_out", "kafka_topic_storage",
-                    "kafka_consumer_lag", "kafka_under_replicated_partitions",
-                    "ingress_request_rate", "ingress_error_rate",
-                    "ingress_bytes_in", "ingress_bytes_out",
-                    "cluster_operator_available", "cluster_operator_degraded",
-                    "cluster_operator_progressing", "apiserver_request_rate",
-                    "apiserver_error_rate", "apiserver_latency",
-                    "apiserver_inflight_requests", "scheduler_pending_pods",
-                    "scheduler_attempt_rate", "scheduler_error_rate", "scheduler_latency",
-                    "etcd_leader_changes", "monitoring_targets_up", "monitoring_targets_down",
-                    "prometheus_rule_evaluation_failures", "logging_ingestion_rate",
-                    "logging_query_latency",
+                    "application_log_volume", "kafka_topic_disk_utilization",
+                    "kafka_consumer_lag",
                 }
                 if any(
                     signal not in rank_signals
@@ -7975,15 +7994,6 @@ def _semantic_metric_read_plan(
                 signals = [rank_signals.get(signal, signal) for signal in signals]
         if len(signals) != len(set(signals)):
             signals = list(dict.fromkeys(signals))
-        volume_signals = {"persistent_volume_usage", "persistent_volume_inode_usage"}
-        if scope == "persistent_volume_claim" and any(
-            signal not in volume_signals for signal in signals
-        ):
-            return None
-        if any(signal in volume_signals for signal in signals) and scope not in {
-            "persistent_volume_claim", "namespace", "cluster"
-        }:
-            return None
         if scope == "node_role" and any(
             signal not in {"node_cpu_utilization", "node_memory_utilization"}
             for signal in signals
@@ -7994,16 +8004,12 @@ def _semantic_metric_read_plan(
             for signal in signals
         ) and scope not in {"node", "node_role"} and not node_ranking:
             return None
-        if "top_log_volume_by_namespace" in signals and (
-            scope != "cluster" or len(signals) != 1
-        ):
-            return None
         if "application_log_volume" in signals:
             if len(signals) != 1 or scope not in {"cluster", "namespace", "pod", "node"}:
                 return None
             grouping = tuple(request.group_by)
             valid_groupings = {
-                "cluster": {("namespace",), ("node",), ("namespace", "pod")},
+                "cluster": {(), ("namespace",), ("node",), ("namespace", "pod")},
                 "namespace": {(), ("pod",)},
                 "pod": {()},
                 "node": {()},
@@ -8016,134 +8022,24 @@ def _semantic_metric_read_plan(
             grouping not in {"cluster", "node"} for grouping in request.group_by
         ) and "application_log_volume" not in signals:
             return None
-        if scope == "persistent_volume_claim" and request.group_by:
-            return None
         signal_scopes = {
             "application_log_volume": {"cluster", "namespace", "pod", "node"},
-            "kafka_topic_messages_in": {"kafka_cluster"},
-            "kafka_topic_bytes_in": {"kafka_cluster"},
-            "kafka_topic_bytes_out": {"kafka_cluster"},
-            "kafka_topic_storage": {"kafka_cluster"},
+            "kafka_topic_disk_utilization": {"kafka_cluster"},
             "kafka_consumer_lag": {"kafka_cluster"},
-            "kafka_under_replicated_partitions": {"kafka_cluster"},
-            "ingress_request_rate": {"route", "ingress_controller"},
-            "ingress_error_rate": {"route", "ingress_controller"},
-            "ingress_bytes_in": {
-                "cluster", "namespace", "route", "ingress_controller",
-            },
-            "ingress_bytes_out": {
-                "cluster", "namespace", "route", "ingress_controller",
-            },
-            "machineconfigpool_updated": {"machine_config_pool"},
-            "machineconfigpool_degraded": {"machine_config_pool"},
-            "hpa_current_replicas": {"horizontal_pod_autoscaler"},
-            "hpa_desired_replicas": {"horizontal_pod_autoscaler"},
-            "hpa_max_replicas": {"horizontal_pod_autoscaler"},
-            "workload_availability": {"workload"},
-            "cluster_operator_available": {"cluster_operator", "cluster"},
-            "cluster_operator_degraded": {"cluster_operator", "cluster"},
-            "cluster_operator_progressing": {"cluster_operator", "cluster"},
-            "apiserver_request_rate": {"control_plane"},
-            "apiserver_error_rate": {"control_plane"},
-            "apiserver_latency": {"control_plane"},
-            "etcd_db_size": {"control_plane"},
-            "etcd_fsync_latency": {"control_plane"},
-            "apiserver_inflight_requests": {"control_plane"},
-            "scheduler_pending_pods": {"control_plane"},
-            "scheduler_attempt_rate": {"control_plane"},
-            "scheduler_error_rate": {"control_plane"},
-            "scheduler_latency": {"control_plane"},
-            "etcd_has_leader": {"control_plane"},
-            "etcd_leader_changes": {"control_plane"},
-            "monitoring_targets_up": {"monitoring"},
-            "monitoring_targets_down": {"monitoring"},
-            "prometheus_head_series": {"monitoring"},
-            "prometheus_ingestion_rate": {"monitoring"},
-            "prometheus_rule_evaluation_failures": {"monitoring"},
-            "alertmanager_active_alerts": {"monitoring"},
-            "logging_ingestion_rate": {"logging"},
-            "logging_query_latency": {"logging"},
         }
         if any(
             signal in signal_scopes and scope not in signal_scopes[signal]
             for signal in signals
         ):
             return None
-        if "workload_availability" in signals and target.kind not in {
-            "Deployment", "StatefulSet", "DaemonSet"
-        }:
-            return None
-        if scope == "control_plane":
-            api_signals = {
-                "apiserver_request_rate", "apiserver_error_rate", "apiserver_latency",
-            }
-            etcd_signals = {"etcd_db_size", "etcd_fsync_latency"}
-            etcd_signals.update({"etcd_has_leader", "etcd_leader_changes"})
-            scheduler_signals = {
-                "scheduler_pending_pods", "scheduler_attempt_rate",
-                "scheduler_error_rate", "scheduler_latency",
-            }
-            api_signals.add("apiserver_inflight_requests")
-            if target.kind == "APIServer" and any(
-                signal in etcd_signals | scheduler_signals for signal in signals
-            ):
-                return None
-            if target.kind == "Etcd" and any(
-                signal in api_signals | scheduler_signals for signal in signals
-            ):
-                return None
-            if target.kind == "Scheduler" and any(
-                signal in api_signals | etcd_signals for signal in signals
-            ):
-                return None
         grouping_support = {
             "application_log_volume": {"namespace", "pod", "node"},
-            "kafka_topic_messages_in": {"topic"},
-            "kafka_topic_bytes_in": {"topic"},
-            "kafka_topic_bytes_out": {"topic"},
-            "kafka_topic_storage": {"topic", "partition"},
+            "kafka_topic_disk_utilization": {"topic", "partition"},
             "kafka_consumer_lag": {"topic", "partition", "consumer_group"},
-            "kafka_under_replicated_partitions": {"topic", "partition"},
-            "ingress_request_rate": {"namespace", "route", "code"},
-            "ingress_error_rate": {"namespace", "route", "code"},
-            "ingress_bytes_in": {"namespace", "route"},
-            "ingress_bytes_out": {"namespace", "route"},
-            "cluster_operator_available": {"operator"},
-            "cluster_operator_degraded": {"operator"},
-            "cluster_operator_progressing": {"operator"},
-            "apiserver_request_rate": {"verb", "resource", "code"},
-            "apiserver_error_rate": {"verb", "resource", "code"},
-            "apiserver_latency": {"verb", "resource"},
-            "apiserver_inflight_requests": {"request_kind"},
-            "scheduler_pending_pods": {"queue"},
-            "scheduler_attempt_rate": {"result"},
-            "scheduler_error_rate": {"result"},
-            "scheduler_latency": {"result"},
-            "etcd_leader_changes": {"instance"},
-            "monitoring_targets_up": {"namespace", "job", "instance"},
-            "monitoring_targets_down": {"namespace", "job", "instance"},
-            "prometheus_rule_evaluation_failures": {"namespace", "pod"},
-            "logging_ingestion_rate": {"tenant"},
-            "logging_query_latency": {"job", "component", "tenant"},
-            "etcd_has_leader": set(),
-            "prometheus_head_series": set(),
-            "prometheus_ingestion_rate": set(),
-            "alertmanager_active_alerts": set(),
         }
         if request.group_by and any(
             signal in grouping_support
             and any(value not in grouping_support[signal] for value in request.group_by)
-            for signal in signals
-        ):
-            return None
-        if "pod_readiness" in signals and "container" in request.group_by:
-            return None
-        if any(
-            signal in {"network_receive", "network_transmit"} for signal in signals
-        ) and "container" in request.group_by:
-            return None
-        if target.container and any(
-            signal in {"network_receive", "network_transmit", "pod_readiness"}
             for signal in signals
         ):
             return None
@@ -8154,7 +8050,7 @@ def _semantic_metric_read_plan(
             and "application_log_volume" not in signals
         ):
             return None
-        metric_scope = "workload" if scope == "workload" else scope
+        metric_scope = scope
         range_seconds = (
             request.range_seconds
             or inquiry.metric_range_seconds
@@ -8168,8 +8064,7 @@ def _semantic_metric_read_plan(
             kind=(
                 target.kind if scope in {
                     "workload", "kafka_cluster", "route", "ingress_controller",
-                    "machine_config_pool", "horizontal_pod_autoscaler",
-                    "cluster_operator",
+                    "machine_config_pool", "horizontal_pod_autoscaler", "cluster_operator",
                 } else None
             ),
             namespace=target.namespace,
@@ -8202,8 +8097,7 @@ def _semantic_metric_read_plan(
         inquiry is None
         or inquiry.mode != "metrics"
         or inquiry.metric_query not in {
-            "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
-            "node_cpu_memory_utilization",
+            "top_cpu_consumers", "top_memory_consumers", "node_cpu_memory_utilization",
         }
         or inquiry.metric_scope not in {
             "cluster", "namespace", "deployment", "node", "node_role"
@@ -8223,7 +8117,6 @@ def _semantic_metric_read_plan(
     metric_label = {
         "top_cpu_consumers": "pod CPU consumers",
         "top_memory_consumers": "pod memory consumers",
-        "top_log_volume_by_namespace": "namespaces by application-log volume",
         "node_cpu_memory_utilization": "CPU and memory utilization by node",
     }[inquiry.metric_query]
     if inquiry.metric_query == "node_cpu_memory_utilization":

@@ -1279,3 +1279,24 @@ Consequences: A compatible endpoint is not marked degraded merely because it cho
 synthetic troubleshooting path. Probe diagnostics remain available for debugging, while practical
 model quality is assessed through normal chat and operational use. Connection testing is not a
 substitute for production evaluation.
+
+## 2026-09-01 - The model-facing metric catalog is intentionally narrow
+
+Context: The metric tool advertised platform internals such as HPA, PV, PVC, Prometheus, ingress,
+and control-plane signals alongside the small set operators normally use in Ask. That enlarged every
+tool definition and made metric selection less reliable. Log-volume ranking also had overlapping
+metric names, while Kafka storage did not express the desired topic-consumption-to-capacity risk.
+
+Decision: Advertise only CPU, memory, node utilization, application log volume, Kafka topic disk
+utilization, and Kafka consumer lag through the model-facing metric schema. Consolidate log volume
+under `application_log_volume`; its scope and grouping independently select cluster totals,
+namespace rankings, pod rankings, namespace totals, exact pods, or nodes. This metric uses aggregate
+Loki byte counts and never fetches log lines. Define `kafka_topic_disk_utilization` as replicated
+topic log bytes divided by aggregate allocated Kafka broker PVC capacity. Keep older metric
+templates readable inside the server so persisted evidence and deterministic internal code do not
+break, but do not expose them to the model.
+
+Consequences: Every retained metric accepts a bounded period. Kafka topic disk utilization is a
+shared-pool pressure indicator, not a per-topic quota: topics share broker PVCs, so broker-local
+headroom and replica skew still require inspection. Adding a metric to the public catalog now
+requires an explicit product decision rather than merely registering an internal query template.

@@ -169,9 +169,11 @@ The registered Loki audit reader and Strimzi Kafka inventory are grounded capabi
 routes. Their success, timeout, denial, or API-missing result is returned to the agent with exact
 cluster attribution. Candidate validation prevents misspelled or invented resource types, while the
 agent remains free to select another safe read or explain the limitation.
-Namespace-scoped Kafka topic-storage requests are a registered two-stage read. PodPilot first lists
+Namespace-scoped Kafka topic-disk-utilization requests are a registered two-stage read. PodPilot first lists
 exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
-`kafka_topic_storage` query per observed CR and groups the result by topic. An empty namespace,
+`kafka_topic_disk_utilization` query per observed CR and groups the result by topic. The query
+compares replicated topic log bytes with aggregate capacity from that Kafka cluster's broker PVCs.
+An empty namespace,
 partial metric failure, or denied monitoring read remains visible evidence. This resolves the Kafka
 name from observed API evidence instead of requiring the model or operator to supply it, without
 forcing the agent to stop.

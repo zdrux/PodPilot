@@ -451,10 +451,16 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",
     ]
-    assert "metric=top_log_volume_by_namespace" in metric_tool["description"]
-    assert "metric=application_log_volume" in metric_tool["description"]
-    assert "rank Pods within one namespace" in metric_tool["description"]
-    assert "default is 300 seconds" in metric_tool["description"]
+    assert "application_log_volume" in metric_tool["description"]
+    assert "namespace scope with group_by=[pod]" in metric_tool["description"]
+    assert "default period is 300 seconds" in metric_tool["description"]
+    assert metric_tool["parameters"]["properties"]["metric"]["anyOf"][0]["enum"] == [
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
+    ]
 
 
 def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
@@ -469,6 +475,21 @@ def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
     OpenAIResponsesProvider._client(profile(max_retries=5), "secret-token")
 
     assert captured["max_retries"] == 5
+
+
+def test_inquiry_schema_advertises_only_focused_metric_semantics() -> None:
+    definitions = InquirySemantics.model_json_schema()["$defs"]
+
+    assert definitions["MetricRequestSemantics"]["properties"]["signals"]["items"]["enum"] == [
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "top_cpu_consumers", "top_memory_consumers", "application_log_volume",
+        "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
+    ]
+    assert definitions["MetricTargetSemantics"]["properties"]["scope"]["enum"] == [
+        "cluster", "pod", "namespace", "node", "node_role", "kafka_cluster",
+    ]
 
 
 def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:
@@ -1090,12 +1111,11 @@ def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:
 def test_metric_capability_preserves_composable_multi_signal_contract() -> None:
     selected = CapabilitySelection(
         capability="cluster_metrics",
-        evidence_goal="Compare CPU and memory for the supplied StatefulSet.",
+        evidence_goal="Compare CPU and memory for the supplied Pod.",
         metric_request=MetricRequestSemantics(
             signals=["cpu_usage", "memory_working_set"],
             target=MetricTargetSemantics(
-                scope="workload", kind="StatefulSet",
-                namespace="kafka", name="broker",
+                scope="pod", kind="Pod", namespace="kafka", name="broker-0",
             ),
             operation="compare",
             statistic="maximum",
@@ -1109,7 +1129,7 @@ def test_metric_capability_preserves_composable_multi_signal_contract() -> None:
     assert inquiry.operation == "metrics"
     assert inquiry.metric_request is not None
     assert inquiry.metric_request.signals == ["cpu_usage", "memory_working_set"]
-    assert inquiry.metric_request.target.kind == "StatefulSet"
+    assert inquiry.metric_request.target.kind == "Pod"
 
 
 def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> None:

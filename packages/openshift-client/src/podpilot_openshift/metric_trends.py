@@ -36,7 +36,7 @@ _UNITS = {
     "kafka_topic_messages_in": "messages_per_second",
     "kafka_topic_bytes_in": "bytes_per_second",
     "kafka_topic_bytes_out": "bytes_per_second",
-    "kafka_topic_storage": "bytes",
+    "kafka_topic_disk_utilization": "percent",
     "kafka_consumer_lag": "records",
     "kafka_under_replicated_partitions": "partitions",
     "ingress_request_rate": "requests_per_second",
@@ -79,7 +79,9 @@ _PREREQUISITES = {
     "kafka_topic_messages_in": "Strimzi broker JMX Prometheus metrics",
     "kafka_topic_bytes_in": "Strimzi broker JMX Prometheus metrics",
     "kafka_topic_bytes_out": "Strimzi broker JMX Prometheus metrics",
-    "kafka_topic_storage": "Strimzi broker JMX Prometheus metrics",
+    "kafka_topic_disk_utilization": (
+        "Strimzi broker JMX log-size metrics and kubelet Kafka PVC capacity metrics"
+    ),
     "kafka_consumer_lag": "Strimzi Kafka Exporter metrics",
     "kafka_under_replicated_partitions": "Strimzi Kafka Exporter metrics",
     "ingress_request_rate": "OpenShift router HAProxy metrics",
@@ -414,14 +416,26 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
             f"rate({source_metric}{{{selector},topic!=\"\"}}[{window}])",
             intent, default_labels=("topic",),
         )
-    if metric == "kafka_topic_storage":
+    if metric == "kafka_topic_disk_utilization":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
         )
-        return _domain_aggregate(
-            f"kafka_log_log_size_value{{{selector},topic!=\"\"}}",
-            intent, default_labels=("topic",),
+        usage = _domain_aggregate(
+            f"kafka_log_log_size_value{{{selector},topic!=\"\"}}", intent,
+            default_labels=("topic",), apply_rank=False,
         )
+        cluster_name = str(intent.name).replace(".", r"\.")
+        pvc_pattern = rf"data(?:-[0-9]+)?-{cluster_name}-kafka-[0-9]+"
+        capacity_selector = _metric_selector(
+            namespace=intent.namespace, persistentvolumeclaim=f"~{pvc_pattern}",
+        ).replace("persistentvolumeclaim=\"~", "persistentvolumeclaim=~\"")
+        ratio = (
+            f"100 * ({usage}) / ignoring(topic, partition) group_left "
+            "clamp_min(sum("
+            f"kubelet_volume_stats_capacity_bytes{{{capacity_selector}}}"
+            "), 1)"
+        )
+        return f"topk({intent.limit}, {ratio})" if intent.metric_operation == "rank" else ratio
     if metric == "kafka_consumer_lag":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
@@ -745,6 +759,12 @@ class BoundedMetricTrendReader:
             limitations.append(
                 f"The requested resolution was increased to {step_seconds} seconds to keep the trend bounded."
             )
+        if intent.metric == "kafka_topic_disk_utilization":
+            limitations.append(
+                "Kafka topics share broker PVCs rather than receiving private disk allocations. "
+                "This percentage compares replicated topic log bytes with aggregate allocated "
+                "Kafka broker PVC capacity; inspect broker-local headroom when placement skew matters."
+            )
         target = (
             "cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
@@ -781,6 +801,10 @@ class BoundedMetricTrendReader:
                 "statistics": stats,
                 "complete": snapshot.is_complete,
                 "limit": intent.limit,
+                **({
+                    "capacityBasis": "aggregate_kafka_broker_pvc_capacity",
+                    "consumptionBasis": "replicated_topic_log_bytes",
+                } if intent.metric == "kafka_topic_disk_utilization" else {}),
             },
         ),), limitations=tuple(limitations))
 

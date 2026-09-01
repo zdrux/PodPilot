@@ -51,8 +51,10 @@ def test_reader_uses_server_owned_logql_and_returns_only_aggregates() -> None:
 
     result = reader.execute(ReadIntent(
         tool="query_metrics",
-        metric="top_log_volume_by_namespace",
+        metric="application_log_volume",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=3600,
         limit=10,
     ))
@@ -62,7 +64,7 @@ def test_reader_uses_server_owned_logql_and_returns_only_aggregates() -> None:
         '(bytes_over_time({log_type="application"}[3600s])))'
     ]
     observation = result.observations[0]
-    assert observation.source == "loki:application/query/top_log_volume_by_namespace"
+    assert observation.source == "loki:application/query/application_log_volume"
     assert observation.data["ranking"][0] == {
         "labels": {"namespace": "catalog"},
         "current": 8192,
@@ -81,8 +83,10 @@ def test_reader_caps_requested_period() -> None:
 
     result = reader.execute(ReadIntent(
         tool="query_metrics",
-        metric="top_log_volume_by_namespace",
+        metric="application_log_volume",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=86_400,
     ))
 
@@ -94,13 +98,28 @@ def test_default_log_volume_policy_accepts_three_day_window() -> None:
     source = FakeLogSource()
 
     result = BoundedLogVolumeReader(source, clock=lambda: NOW).execute(ReadIntent(
-        tool="query_metrics", metric="top_log_volume_by_namespace",
-        metric_scope="cluster", range_seconds=259_200, limit=10,
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace"], range_seconds=259_200, limit=10,
     ))
 
     assert "[259200s]" in source.queries[0]
     assert result.observations[0].data["rangeSeconds"] == 259_200
     assert not any("reduced" in item for item in result.limitations)
+
+
+def test_reader_returns_ungrouped_cluster_total() -> None:
+    source = ScopedLogSource(LogVolumeSample(bytes=12_345))
+
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", range_seconds=3600,
+    ))
+
+    assert source.queries == [
+        'sum(bytes_over_time({log_type="application"}[3600s]))'
+    ]
+    assert result.observations[0].data["ranking"][0]["current"] == 12_345
 
 
 def test_reader_ranks_pods_within_one_namespace() -> None:
