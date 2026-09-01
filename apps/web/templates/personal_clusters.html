@@ -33,7 +33,7 @@
         <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
         <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
       </label>
-      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify the Kubernetes API TLS certificate and hostname</span></label>
+      <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify TLS certificates and hostnames for the Kubernetes API and discovered telemetry endpoints</span></label>
       <input type="hidden" name="tls_verify" value="{{ 'true' if (selected and selected.tls_verify) or not selected else 'false' }}">
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
       <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test cluster connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/clusters/personal" data-confirm="Remove this personal cluster from your workspace? Historical conversations will be retained.">Remove</button>{% endif %}</div>

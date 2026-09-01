@@ -108,6 +108,7 @@ class ThanosQueryClient:
         **kwargs: Any,
     ) -> "ThanosQueryClient":
         """Discover and query the supported external Thanos Route on one cluster."""
+        kwargs.setdefault("tls_verify", api_tls_verify)
         return cls(
             base_url="https://thanos-querier.invalid",
             token=token,

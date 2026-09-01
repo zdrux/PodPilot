@@ -288,6 +288,8 @@ def test_remote_client_discovers_standard_lokistack_route() -> None:
         transport=httpx.MockTransport(handler),
     )
 
+    assert client._route_discovery_tls_verify is False
+    assert client._tls_verify is False
     assert client.query_namespace_volume("fixed").samples == ()
 
 
@@ -343,3 +345,20 @@ def test_loki_timeout_reports_configured_deadline(tmp_path: Path) -> None:
 
     with pytest.raises(LogMetricsQueryError, match="configured 17-second timeout"):
         client.query_namespace_volume("fixed")
+
+
+def test_loki_tls_verification_failure_preserves_category(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain",
+            request=request,
+        )
+
+    client = _client(tmp_path, handler)
+
+    with pytest.raises(
+        LogMetricsQueryError, match="TLS certificate verification failed",
+    ) as raised:
+        client.query_namespace_volume("fixed")
+
+    assert raised.value.failure_category == "tls_verification_failed"

@@ -7739,6 +7739,67 @@ def _agent_collector_error_detail(exc: Exception) -> str:
     return redact_text(str(exc))[:2_000]
 
 
+def _agent_collector_failure_category(exc: BaseException) -> str:
+    """Preserve a typed collector failure category through wrapped exceptions."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    fallback_category: str | None = None
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        category = getattr(current, "failure_category", None)
+        if isinstance(category, str) and category.strip():
+            normalized = category.strip()[:80]
+            if normalized not in {"read_failed", "query_failed"}:
+                return normalized
+            fallback_category = fallback_category or normalized
+        current = current.__cause__ or current.__context__
+    if "bounded investigation action budget is exhausted" in str(exc).casefold():
+        return "budget_exhausted"
+    return fallback_category or "read_failed"
+
+
+_AGENT_PREMATURE_DEFERRAL_PATTERNS = (
+    re.compile(r"(?i)\blet me know (?:which|if|whether)\b"),
+    re.compile(r"(?i)\bif you (?:want|wish|would like)(?: me)? to (?:continue|check|inspect|run|query)\b"),
+    re.compile(r"(?i)\bwhich of (?:these|those).{0,80}\b(?:pursue|run|check|inspect)\b"),
+    re.compile(r"(?i)\bnot (?:fetched|checked|inspected|queried) yet\b"),
+    re.compile(r"(?i)\bI can (?:also )?(?:check|inspect|query|fetch|run)\b"),
+)
+
+
+def _agent_premature_deferral_issue(
+    content: str,
+    *,
+    stop_reason: str,
+    unresolved_safe_reads: list[str],
+    action_budget_remaining: int,
+) -> str | None:
+    """Reject a claimed completion that delegates available read-only work."""
+
+    if stop_reason != "complete" or action_budget_remaining <= 0:
+        return None
+    if unresolved_safe_reads:
+        return "declared_unresolved_safe_reads"
+    if any(pattern.search(content) for pattern in _AGENT_PREMATURE_DEFERRAL_PATTERNS):
+        return "premature_operator_deferral"
+    return None
+
+
+def _agent_duplicate_command_issue(
+    *, previous_executions: int, repeat_reason: str | None,
+) -> str | None:
+    """Require an explicit operational reason before repeating an exact command."""
+
+    if previous_executions <= 0 or repeat_reason is not None:
+        return None
+    return (
+        "The exact command already ran on this cluster. Use its existing result, "
+        "choose a materially different read, or provide repeat_reason when a "
+        "state comparison or retry is genuinely required."
+    )
+
+
 def _agent_tool_retry_guidance(
     *, tool_name: str, error: str, selected_cluster_ids: list[str]
 ) -> str:
@@ -9829,7 +9890,12 @@ def create_app(
                 "A typed collector result is an observation returned to you, never a final answer or stop signal. "
                 "A collector's complete flag refers only to that bounded collection. Interpret every result, "
                 "decide whether further investigation is useful, and write the operator-facing conclusion "
-                "yourself. When presenting multiple comparable items, use a concise GitHub-flavored "
+                "yourself. End only through finish_investigation with stop_reason complete, blocked, or "
+                "budget_exhausted. Do not claim complete while safe in-scope reads could materially reduce "
+                "uncertainty, and do not offer those reads back to the operator instead of performing them. "
+                "Do not repeat an identical shell command on the same cluster unless a state change, timed "
+                "comparison, incomplete prior result, or transient failure genuinely requires it; supply the "
+                "matching repeat_reason when it does. When presenting multiple comparable items, use a concise GitHub-flavored "
                 "Markdown table with a header row and exactly the same number of cells in every row. "
                 "Use <br> for multiple items inside a cell; never put a raw pipe, JSON braces, quoted JSON "
                 "placeholder, or schema syntax in a cell. Use plain unknown or an em dash when needed. "
@@ -9898,7 +9964,9 @@ def create_app(
         agent_limitations: list[str] = list(enrichment_limitations or [])
         agent_diagnostics: list[str] = []
         agent_evidence: list[dict[str, object]] = list(enrichment_evidence or [])
-        typed_units_used = 0
+        agent_actions_used = 0
+        seen_shell_commands: dict[tuple[str, str], int] = {}
+        completion_contract_rejections = 0
         finalization_attempts = 0
         while True:
             if progress:
@@ -9945,8 +10013,114 @@ def create_app(
                     raise ModelProviderError(
                         "The agent model call exceeded its configured timeout."
                     )
+            explicit_stop_reason: str | None = None
+            unresolved_safe_reads: list[str] = []
+            finish_calls = [
+                item for item in step.tool_calls
+                if item.name == "finish_investigation"
+            ]
+            if finish_calls:
+                finish_call = finish_calls[0]
+                finish_error: str | None = None
+                finish_answer = ""
+                try:
+                    if len(step.tool_calls) != 1 or len(finish_calls) != 1:
+                        raise ValueError("finish_investigation must be the only tool call")
+                    finish_arguments = json.loads(finish_call.arguments)
+                    if not isinstance(finish_arguments, dict):
+                        raise ValueError("arguments must be an object")
+                    explicit_stop_reason = str(
+                        finish_arguments.get("stop_reason") or ""
+                    ).strip()
+                    if explicit_stop_reason not in {
+                        "complete", "blocked", "budget_exhausted",
+                    }:
+                        raise ValueError(
+                            "stop_reason must be complete, blocked, or budget_exhausted"
+                        )
+                    finish_answer = redact_text(str(
+                        finish_arguments.get("answer") or ""
+                    )).strip()
+                    raw_unresolved = finish_arguments.get("unresolved_safe_reads")
+                    if not isinstance(raw_unresolved, list):
+                        raise ValueError("unresolved_safe_reads must be an array")
+                    unresolved_safe_reads = [
+                        redact_text(str(item)).strip()[:500]
+                        for item in raw_unresolved
+                        if str(item).strip()
+                    ][:12]
+                    if not finish_answer:
+                        raise ValueError("answer must be a non-empty string")
+                    finish_error = _agent_premature_deferral_issue(
+                        finish_answer,
+                        stop_reason=explicit_stop_reason,
+                        unresolved_safe_reads=unresolved_safe_reads,
+                        action_budget_remaining=max(
+                            0, app_settings.adhoc_max_reads_per_turn - agent_actions_used,
+                        ),
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    finish_error = f"invalid_completion_contract: {exc}"
+                if finish_error is not None and completion_contract_rejections < 2:
+                    completion_contract_rejections += 1
+                    messages.append(step.assistant_message)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": finish_call.id,
+                        "content": json.dumps({
+                            "status": "rejected",
+                            "failure_category": finish_error,
+                            "instruction": (
+                                "Continue the investigation using available safe reads. Call "
+                                "finish_investigation again only when the stop contract is true."
+                            ),
+                        }, sort_keys=True),
+                    })
+                    LOGGER.warning(
+                        "podpilot.agentic.completion_rejected actor=%s conversation_id=%s "
+                        "attempt=%s issue=%s",
+                        username, conversation_id, completion_contract_rejections, finish_error,
+                    )
+                    continue
+                if finish_error is not None:
+                    explicit_stop_reason = "blocked"
+                    agent_limitations.append(
+                        "The model could not satisfy the investigation completion contract after "
+                        "two corrections; PodPilot ended the loop as blocked."
+                    )
+                step = AgentStep(
+                    assistant_message={"role": "assistant", "content": finish_answer},
+                    content=finish_answer,
+                    tool_calls=(),
+                )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
+                implicit_deferral_issue = (
+                    _agent_premature_deferral_issue(
+                        agent_content,
+                        stop_reason="complete",
+                        unresolved_safe_reads=[],
+                        action_budget_remaining=max(
+                            0, app_settings.adhoc_max_reads_per_turn - agent_actions_used,
+                        ),
+                    )
+                    if agent_content and explicit_stop_reason is None else None
+                )
+                if (
+                    implicit_deferral_issue is not None
+                    and completion_contract_rejections < 2
+                ):
+                    completion_contract_rejections += 1
+                    messages.append({"role": "assistant", "content": agent_content})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Do not defer safe, in-scope read-only checks to the operator. Continue "
+                            "the investigation now, then end with finish_investigation and an accurate "
+                            "stop_reason."
+                        ),
+                    })
+                    continue
                 answer_issue = (
                     "empty_turn"
                     if not agent_content else
@@ -10014,6 +10188,7 @@ def create_app(
                 agent_conclusion_status = (
                     str(forced_fallback.get("conclusion_status") or "probable")
                     if forced_fallback is not None else
+                    "unresolved" if explicit_stop_reason in {"blocked", "budget_exhausted"} else
                     "agent_reported"
                 )
                 deterministic_health = (
@@ -10106,6 +10281,7 @@ def create_app(
                             "guidance_next_checks": [],
                             "investigation_gaps": [],
                             "conclusion_status": agent_conclusion_status,
+                            "stop_reason": explicit_stop_reason or "complete",
                             "agent_mode": "unrestricted",
                             "preferred_evidence_view": effective_preferred_evidence_view,
                             "presentation": resource_list_presentation,
@@ -10153,6 +10329,7 @@ def create_app(
                     collector_error: str | None = None
                     collector_diagnostic_ref: str | None = None
                     collector_retry_guidance: str | None = None
+                    collector_failure_category: str | None = None
                     intent: ReadIntent | None = None
                     try:
                         raw_arguments = json.loads(tool_call.arguments)
@@ -10182,10 +10359,10 @@ def create_app(
                             **collector_arguments,
                         ))
                         unit_cost = _investigation_unit_cost(intent)
-                        if typed_units_used + unit_cost > app_settings.adhoc_max_reads_per_turn:
+                        if agent_actions_used + unit_cost > app_settings.adhoc_max_reads_per_turn:
                             raise ValueError(
-                                "the bounded typed-read budget is exhausted; use existing "
-                                "observations, the shell escape hatch, or return the best supported answer"
+                                "the bounded investigation action budget is exhausted; return the "
+                                "best supported answer with stop_reason budget_exhausted"
                             )
                         reader_or_factory = agent_readers[collector_cluster_id]
                         try:
@@ -10206,7 +10383,7 @@ def create_app(
                         preflight = getattr(reader, "preflight", None)
                         if callable(preflight):
                             await run_in_threadpool(preflight, intent)
-                        typed_units_used += unit_cost
+                        agent_actions_used += unit_cost
                         result = await run_in_threadpool(reader.execute, intent)
                         for observation in result.observations:
                             attributed = observation.to_dict()
@@ -10221,6 +10398,7 @@ def create_app(
                     except (ReadOnlyExplorerError, TypeError, ValueError, json.JSONDecodeError) as exc:
                         collector_diagnostic_ref = uuid4().hex[:12]
                         collector_error = _agent_collector_error_detail(exc)
+                        collector_failure_category = _agent_collector_failure_category(exc)
                         argument_error = (
                             isinstance(exc, (ValidationError, TypeError, json.JSONDecodeError))
                             or str(exc).startswith("arguments must be an object")
@@ -10285,6 +10463,8 @@ def create_app(
                     }
                     if collector_error:
                         result_payload["error"] = collector_error
+                    if collector_failure_category:
+                        result_payload["failure_category"] = collector_failure_category
                     if collector_diagnostic_ref:
                         result_payload["diagnostic_ref"] = collector_diagnostic_ref
                     if collector_retry_guidance:
@@ -10305,6 +10485,7 @@ def create_app(
                         "observations": len(collector_evidence),
                         "evidence_ids": evidence_ids,
                         "diagnostic_ref": collector_diagnostic_ref,
+                        "failure_category": collector_failure_category,
                     }
                     activity.append(activity_item)
                     with Session(engine) as db_session:
@@ -10332,6 +10513,9 @@ def create_app(
                 tool_error: str | None = None
                 command_diagnostic_ref: str | None = None
                 command_retry_guidance: str | None = None
+                command_failure_category: str | None = None
+                command_hash = ""
+                repeat_reason: str | None = None
                 try:
                     arguments = json.loads(tool_call.arguments)
                     if tool_call.name != "execute_shell":
@@ -10349,8 +10533,34 @@ def create_app(
                         )
                     cluster_id = requested_cluster_id
                     cluster_name, connection = agent_targets[cluster_id]
+                    raw_repeat_reason = arguments.get("repeat_reason")
+                    repeat_reason = (
+                        str(raw_repeat_reason).strip() if raw_repeat_reason is not None else None
+                    )
+                    allowed_repeat_reasons = {
+                        "state_changed", "time_comparison", "previous_result_incomplete",
+                        "transient_retry",
+                    }
+                    if repeat_reason not in allowed_repeat_reasons | {None}:
+                        raise ValueError("repeat_reason is not an allowed retry category")
+                    command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
+                    command_key = (cluster_id, command_hash)
+                    duplicate_issue = _agent_duplicate_command_issue(
+                        previous_executions=seen_shell_commands.get(command_key, 0),
+                        repeat_reason=repeat_reason,
+                    )
+                    if duplicate_issue is not None:
+                        command_failure_category = "duplicate_command"
+                        tool_error = duplicate_issue
+                    elif agent_actions_used >= app_settings.adhoc_max_reads_per_turn:
+                        command_failure_category = "budget_exhausted"
+                        tool_error = (
+                            "The bounded investigation action budget is exhausted. Finish with the "
+                            "best supported answer and stop_reason budget_exhausted."
+                        )
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                     tool_error = f"The tool call arguments were invalid: {exc}"
+                    command_failure_category = "invalid_arguments"
                     command_diagnostic_ref = uuid4().hex[:12]
                     command_retry_guidance = _agent_tool_retry_guidance(
                         tool_name="execute_shell",
@@ -10371,6 +10581,23 @@ def create_app(
                         command_diagnostic_ref,
                         redact_text(tool_error)[:1_000],
                     )
+                if tool_error is not None and command_diagnostic_ref is None:
+                    command_diagnostic_ref = uuid4().hex[:12]
+                    command_retry_guidance = (
+                        "Use the prior command result or choose a different evidence source."
+                        if command_failure_category == "duplicate_command" else
+                        "Call finish_investigation with stop_reason budget_exhausted."
+                    )
+                    agent_diagnostics.append(
+                        f"execute_shell: {tool_error} (diagnostic ref {command_diagnostic_ref})"
+                    )
+                    LOGGER.warning(
+                        "podpilot.agentic.command_rejected actor=%s conversation_id=%s "
+                        "cluster_id=%s cluster=%r diagnostic_ref=%s category=%s error=%r",
+                        username, conversation_id, cluster_id, cluster_name,
+                        command_diagnostic_ref, command_failure_category,
+                        redact_text(tool_error)[:1_000],
+                    )
 
                 if progress:
                     await progress(
@@ -10385,11 +10612,14 @@ def create_app(
                 if tool_error is not None:
                     result_payload = {
                         "error": tool_error,
+                        "failure_category": command_failure_category,
                         "diagnostic_ref": command_diagnostic_ref,
                         "retry_guidance": command_retry_guidance,
                     }
                 else:
-                    command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
+                    command_key = (cluster_id, command_hash)
+                    seen_shell_commands[command_key] = seen_shell_commands.get(command_key, 0) + 1
+                    agent_actions_used += 1
                     runner_request_id = str(uuid4())
                     runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
                     runner_requests.add(runner_request_id)
@@ -10521,9 +10751,14 @@ def create_app(
                     "exit_code": exit_code,
                     "status": (
                         "completed" if exit_code == 0 else
-                        "failed" if exit_code is not None else "invalid"
+                        "failed" if exit_code is not None else
+                        "rejected" if command_failure_category in {
+                            "duplicate_command", "budget_exhausted",
+                        } else "invalid"
                     ),
                     "diagnostic_ref": command_diagnostic_ref,
+                    "failure_category": command_failure_category,
+                    "repeat_reason": repeat_reason,
                     "evidence_ids": [],
                 }
                 activity.append(activity_item)
@@ -10539,6 +10774,8 @@ def create_app(
                             "cluster_name": cluster_name,
                             "exit_code": exit_code,
                             "diagnostic_ref": command_diagnostic_ref,
+                            "failure_category": command_failure_category,
+                            "repeat_reason": repeat_reason,
                         }, sort_keys=True),
                     ))
                     db_session.commit()

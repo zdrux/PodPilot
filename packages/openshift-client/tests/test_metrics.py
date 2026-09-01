@@ -172,6 +172,8 @@ def test_remote_query_discovers_route_and_uses_in_memory_token() -> None:
         api_tls_verify=False,
         transport=httpx.MockTransport(handler),
     )
+    assert query_client._route_discovery_tls_verify is False
+    assert query_client._tls_verify is False
     start = datetime.fromtimestamp(1_777_000_000, tz=timezone.utc)
 
     snapshot = query_client.query_range(

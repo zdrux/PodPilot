@@ -406,10 +406,10 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
         "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
-        "query_audit_events", "query_metrics",
+        "query_audit_events", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
-    assert parameters["required"] == ["command", "cluster_id"]
+    assert parameters["required"] == ["command", "cluster_id", "repeat_reason"]
     assert "cluster_id" in parameters["properties"]
     assert parameters["properties"]["cluster_id"]["enum"] == selected_cluster_ids
     assert "one tool call per cluster" in parameters["properties"]["cluster_id"]["description"]
@@ -420,13 +420,18 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert all(
         "strict" not in item["function"]
         for item in request["tools"]
-        if item["function"]["name"] != "execute_shell"
+        if item["function"]["name"] not in {"execute_shell", "finish_investigation"}
     )
+    assert tools_by_name["finish_investigation"]["strict"] is True
     assert all(
         item["function"]["parameters"]["properties"]["cluster_id"]["enum"]
         == selected_cluster_ids
         for item in request["tools"]
+        if item["function"]["name"] != "finish_investigation"
     )
+    assert tools_by_name["finish_investigation"]["parameters"]["required"] == [
+        "stop_reason", "answer", "unresolved_safe_reads",
+    ]
     health_tool = tools_by_name["pod_health_summary"]
     assert health_tool["parameters"]["required"] == ["cluster_id"]
     assert "label_selector" in health_tool["parameters"]["properties"]

@@ -26,6 +26,10 @@ from podpilot_openshift.metric_trends import BoundedMetricTrendReader, MetricTre
 class ReadOnlyExplorerError(RuntimeError):
     """A safe error from the ad-hoc evidence boundary."""
 
+    def __init__(self, message: str, *, failure_category: str = "read_failed") -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
 _API_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(?:/[A-Za-z0-9][A-Za-z0-9.-]*)?$")
@@ -1106,7 +1110,9 @@ class KubernetesReadOnlyExplorer:
         except MetricTrendError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except LogMetricsQueryError as exc:
-            raise ReadOnlyExplorerError(str(exc)) from exc
+            raise ReadOnlyExplorerError(
+                str(exc), failure_category=exc.failure_category,
+            ) from exc
         except AuditQueryError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:

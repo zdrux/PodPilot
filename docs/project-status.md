@@ -86,8 +86,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
   search/watch projections, catalogs, relationship graphs, findings, and
   enrichment packs can expose grounded candidates and native views but cannot force a read,
-  continue/stop decision, terminal result, or replacement conclusion. Valid agent stops are
-  respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
+  continue/stop decision, terminal result, or replacement conclusion. The agent now terminates
+  through a structured complete/blocked/budget-exhausted contract; a claimed completion is returned
+  to the tool loop when it declares safe reads remaining or defers available read-only work to the
+  operator. Exact same-cluster shell commands require an explicit retry/comparison reason, while
+  the evidence sequence remains model-selected. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
   The generic `list_resources` and `search_resources` helpers are absent from the unified agent
@@ -98,7 +101,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
 - Agent tool schemas now enumerate selected cluster IDs. Rejected model-formatting attempts receive retry guidance and render
   as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
-  and command failures remain visible.
+  and command failures remain visible. Loki transport normalization preserves
+  `tls_verification_failed`, timeout, and transport-unavailable categories rather than reporting
+  certificate failures as generic gateway downtime.
 - Delegated and shared-credential unified-agent conversations expose the same purpose-built HTTP,
   metric, and audit collectors on every model turn. Delegated
   Thanos and Loki reads resolve the current memory-only user
@@ -136,7 +141,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
   byte counts and truncation flags.
-  The model-free suite passes locally with 733 tests and 81% aggregate coverage.
+  The model-free suite passes locally with 767 tests and 80% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.

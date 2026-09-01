@@ -67,6 +67,14 @@ normalization, redaction, provenance, and cluster attribution. Every helper resu
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
+The model ends this loop through a structured `finish_investigation` call with `complete`,
+`blocked`, or `budget_exhausted`. A claimed completion is returned to the loop when it declares
+remaining safe reads or delegates an available read-only check to the operator. Exact shell
+commands are de-duplicated per cluster unless the model supplies a retry, state-change,
+time-comparison, or incomplete-result reason; PodPilot does not prescribe a diagnostic sequence.
+Collector transport failures retain a safe category such as `tls_verification_failed`, `timeout`,
+or `transport_unavailable` so the model does not confuse failed trust verification with backend
+absence.
 Before the first delegated-agent decision, normal code performs the same reviewed, enabled,
 unexpired, non-restricted lexical memory retrieval used by standalone Ask. It de-duplicates matches
 across selected clusters and supplies at most four 1,200-character chunks with applicable-cluster

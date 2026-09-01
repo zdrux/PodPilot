@@ -23,7 +23,10 @@ from podpilot_api.main import (
     _adhoc_capability_wording_issue,
     _adhoc_evidence_view,
     _agent_collector_error_detail,
+    _agent_collector_failure_category,
+    _agent_duplicate_command_issue,
     _agent_final_answer_quality_issue,
+    _agent_premature_deferral_issue,
     _bind_plan_log_intents,
     _bounded_detail_fanout,
     _build_delegated_read_only_explorer,
@@ -144,7 +147,7 @@ from podpilot_openshift.alerts import AlertRecord, AlertSnapshot, AlertSourceErr
 from podpilot_openshift.agent_runner import AgentClusterConnection, AgentCommandResult
 from podpilot_openshift.credentials import CredentialStoreError
 from podpilot_openshift.explorer import KubernetesReadOnlyExplorer, ReadOnlyExplorerError
-from podpilot_openshift.log_metrics import LokiQueryClient
+from podpilot_openshift.log_metrics import LokiQueryClient, LogMetricsQueryError
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.workloads import WorkloadEvidenceError
@@ -10393,8 +10396,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
 
         def next_agent_step(self, profile, api_key, messages):
             self.agent_messages.append(list(messages))
-            if self.steps < 2:
-                cluster_id = cluster_ids[self.steps]
+            if self.steps < 3:
+                cluster_id = cluster_ids[min(self.steps, 1)]
                 call_id = f"call-{self.steps + 1}"
                 self.steps += 1
                 arguments = json.dumps({
@@ -10418,10 +10421,29 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
                         arguments=arguments,
                     ),),
                 )
+            finish_arguments = json.dumps({
+                "stop_reason": "complete",
+                "answer": "Checked both clusters.",
+                "unresolved_safe_reads": [],
+            })
             return AgentStep(
-                assistant_message={"role": "assistant", "content": "Checked both clusters."},
-                content="Checked both clusters.",
-                tool_calls=(),
+                assistant_message={
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "finish", "type": "function",
+                        "function": {
+                            "name": "finish_investigation",
+                            "arguments": finish_arguments,
+                        },
+                    }],
+                },
+                content=None,
+                tool_calls=(AgentToolCall(
+                    id="finish",
+                    name="finish_investigation",
+                    arguments=finish_arguments,
+                ),),
             )
 
     class Runner:
@@ -10519,6 +10541,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
     assert "API TLS verification is disabled" not in rendered.text
     assert "credentials and evidence are vulnerable to interception" not in rendered.text
     assert all("token-" not in str(messages) for messages in provider.agent_messages)
+    duplicate_payload = json.loads(str(provider.agent_messages[3][-1]["content"]))
+    assert duplicate_payload["failure_category"] == "duplicate_command"
     engine = build_engine(settings)
     with Session(engine) as db_session:
         assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
@@ -10526,8 +10550,14 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         assert assistant is not None
         assert run is not None
         activity = json.loads(assistant.tool_activity_json)
+        assert activity["stop_reason"] == "complete"
         command_reads = [item for item in activity["reads"] if item["tool"] == "execute_shell"]
-        assert [item["cluster_id"] for item in command_reads] == cluster_ids
+        assert [item["cluster_id"] for item in command_reads] == [
+            *cluster_ids, cluster_ids[1],
+        ]
+        duplicate_read = command_reads[-1]
+        assert duplicate_read["status"] == "rejected"
+        assert duplicate_read["failure_category"] == "duplicate_command"
         failed_read = next(item for item in command_reads if item["status"] == "failed")
         assert re.fullmatch(r"[0-9a-f]{12}", failed_read["diagnostic_ref"])
         assert any("East DEV" in item for item in activity["limitations"])
@@ -10559,6 +10589,53 @@ def test_safe_exception_diagnostics_redacts_chain_and_includes_frames() -> None:
     ]
     assert diagnostics[1]["detail"] == "request failed token=[REDACTED]"
     assert diagnostics[1]["frames"]
+
+
+def test_agent_completion_gate_rejects_deferred_safe_reads() -> None:
+    assert _agent_premature_deferral_issue(
+        "I found one healthy pod. Let me know which component logs you'd like me to inspect.",
+        stop_reason="complete",
+        unresolved_safe_reads=[],
+        action_budget_remaining=8,
+    ) == "premature_operator_deferral"
+    assert _agent_premature_deferral_issue(
+        "The current evidence identifies the missing Service.",
+        stop_reason="complete",
+        unresolved_safe_reads=["Inspect the LokiStack custom resource status."],
+        action_budget_remaining=8,
+    ) == "declared_unresolved_safe_reads"
+    assert _agent_premature_deferral_issue(
+        "Further API discovery is unavailable to this identity.",
+        stop_reason="blocked",
+        unresolved_safe_reads=["Read the denied resource."],
+        action_budget_remaining=8,
+    ) is None
+
+
+def test_agent_duplicate_command_requires_a_retry_reason() -> None:
+    assert _agent_duplicate_command_issue(
+        previous_executions=1, repeat_reason=None,
+    ) is not None
+    assert _agent_duplicate_command_issue(
+        previous_executions=1, repeat_reason="time_comparison",
+    ) is None
+    assert _agent_duplicate_command_issue(
+        previous_executions=0, repeat_reason=None,
+    ) is None
+
+
+def test_agent_collector_failure_category_survives_wrapping() -> None:
+    source = LogMetricsQueryError(
+        "TLS certificate verification failed while connecting to Loki.",
+        failure_category="tls_verification_failed",
+    )
+    try:
+        try:
+            raise source
+        except LogMetricsQueryError as exc:
+            raise ReadOnlyExplorerError(str(exc)) from exc
+    except ReadOnlyExplorerError as exc:
+        assert _agent_collector_failure_category(exc) == "tls_verification_failed"
 
 
 def test_ask_raw_response_toggle_preserves_the_single_agent_answer_attempt(

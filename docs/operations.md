@@ -364,7 +364,8 @@ that delegated connection must be established again; HTTP 403 means the user lac
 API permission. Remote Ask metrics require the same user to have the relevant monitoring and Route
 access. PodPilot reduces Kubernetes client exceptions to actionable messages and never returns raw
 headers or authorization material to the browser. Disabling TLS verification changes certificate
-and hostname validation only; it does not remove or alter bearer authentication.
+and hostname validation for the registered Kubernetes API and telemetry endpoints discovered from
+that API; it does not remove or alter bearer authentication.
 
 Kubernetes normally exposes API discovery to authenticated non-admin users through its default
 discovery roles, but clusters may customize that access. In unrestricted Ask, PodPilot exposes a

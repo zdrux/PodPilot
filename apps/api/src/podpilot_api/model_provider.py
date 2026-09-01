@@ -2177,8 +2177,23 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                             "description": "The complete bash script to execute.",
                         },
                         "cluster_id": deepcopy(cluster_id_schema),
+                        "repeat_reason": {
+                            "type": ["string", "null"],
+                            "enum": [
+                                None,
+                                "state_changed",
+                                "time_comparison",
+                                "previous_result_incomplete",
+                                "transient_retry",
+                            ],
+                            "description": (
+                                "Required only when deliberately repeating the exact same command "
+                                "on the same cluster. Set null for a first execution; otherwise "
+                                "supply the legitimate retry category."
+                            ),
+                        },
                     },
-                    "required": ["command", "cluster_id"],
+                    "required": ["command", "cluster_id", "repeat_reason"],
                     "additionalProperties": False,
                 },
                 "strict": True,
@@ -2270,6 +2285,42 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ),
             ("metric", "metric_scope"),
         )
+        finish_tool = {
+            "type": "function",
+            "function": {
+                "name": "finish_investigation",
+                "description": (
+                    "End the investigation with the operator-facing answer. Use complete only "
+                    "after performing every safe, in-scope read that could materially resolve "
+                    "the request. Use blocked only when no available safe read can make progress, "
+                    "or budget_exhausted when the enforced action budget prevents another useful read."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "stop_reason": {
+                            "type": "string",
+                            "enum": ["complete", "blocked", "budget_exhausted"],
+                        },
+                        "answer": {
+                            "type": "string",
+                            "description": "The concise operator-facing answer in Markdown.",
+                        },
+                        "unresolved_safe_reads": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Safe in-scope reads that could still materially reduce uncertainty. "
+                                "This must be empty when stop_reason is complete."
+                            ),
+                        },
+                    },
+                    "required": ["stop_reason", "answer", "unresolved_safe_reads"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+        }
         tools = [
             shell_tool,
             discovery_tool,
@@ -2277,6 +2328,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             http_probe_tool,
             audit_tool,
             metric_tool,
+            finish_tool,
         ]
         audit_parameters = audit_tool["function"]["parameters"]["properties"]
         audit_parameters["audit_search_until_limit"]["description"] = (

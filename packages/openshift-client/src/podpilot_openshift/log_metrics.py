@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,31 @@ from podpilot_openshift.audit_logs import AuditLogEntries, AuditQueryError
 
 class LogMetricsQueryError(RuntimeError):
     """A normalized, browser-safe Loki metric-query failure."""
+
+    def __init__(self, message: str, *, failure_category: str = "query_failed") -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+
+
+def _loki_transport_failure_category(exc: BaseException) -> str:
+    """Classify transport failures without exposing endpoint or certificate details."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    details: list[str] = []
+    while current is not None and id(current) not in seen and len(details) < 5:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return "tls_verification_failed"
+        details.append(str(current).casefold())
+        current = current.__cause__ or current.__context__
+    combined = " ".join(details)
+    if any(marker in combined for marker in (
+        "certificate_verify_failed", "certificate verify failed",
+        "self-signed certificate", "hostname mismatch",
+    )):
+        return "tls_verification_failed"
+    return "transport_unavailable"
 
 
 @dataclass(frozen=True)
@@ -97,6 +123,7 @@ class LokiQueryClient:
         **kwargs: Any,
     ) -> "LokiQueryClient":
         """Discover the conventional LokiStack Route on one registered cluster."""
+        kwargs.setdefault("tls_verify", api_tls_verify)
         return cls(
             base_url=f"https://logging-loki.invalid/api/logs/v1/{tenant}",
             token=token,
@@ -253,7 +280,8 @@ class LokiQueryClient:
             raise
         except httpx.TimeoutException as exc:
             raise LogMetricsQueryError(
-                f"The Loki query exceeded the configured {self._timeout_seconds:g}-second timeout."
+                f"The Loki query exceeded the configured {self._timeout_seconds:g}-second timeout.",
+                failure_category="timeout",
             ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
@@ -276,7 +304,15 @@ class LokiQueryClient:
                 message = "The LokiStack gateway returned an HTTP error."
             raise LogMetricsQueryError(message) from exc
         except (OSError, httpx.HTTPError, ValueError) as exc:
-            raise LogMetricsQueryError("The LokiStack gateway is temporarily unavailable.") from exc
+            failure_category = _loki_transport_failure_category(exc)
+            message = (
+                "TLS certificate verification failed while connecting to the LokiStack gateway."
+                if failure_category == "tls_verification_failed" else
+                "The LokiStack gateway transport is unavailable."
+            )
+            raise LogMetricsQueryError(
+                message, failure_category=failure_category,
+            ) from exc
 
     def _resolve_base_url(self, token: str) -> str:
         if self._route_discovery_url is None:

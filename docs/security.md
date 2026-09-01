@@ -176,11 +176,18 @@ Those typed reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
 bounded presentation. The API never invokes them merely because a classifier or enrichment pack
 recognized a request. Their observations return to the model, which alone chooses the next tool or
-the final answer.
+the final answer. The final answer uses a structured stop contract (`complete`, `blocked`, or
+`budget_exhausted`). The API rejects a claimed completion that declares remaining safe reads or
+uses operator-deferral wording while action budget remains. It also blocks an exact same-cluster
+shell-command repeat unless the model supplies one of the reviewed retry/comparison reasons. These
+are loop-safety controls, not a deterministic runbook; the model still selects the evidence path.
 Registered-source failures are authoritative only as failures: the model may not infer that an
 add-on, API, or resource is absent from an unavailable adapter. If neither a registered reader nor
 a successful shell verification produces evidence, normal code replaces the model prose with the
 exact redacted collection failures.
+Normalized failures retain a browser-safe category. In particular, Loki certificate verification
+failures reach the model as `tls_verification_failed` rather than generic service unavailability;
+certificate contents and endpoint secrets remain excluded.
 Conversely, a successful registered observation is authoritative only for its declared scope.
 Collector completion never disconnects, cancels, or terminates the model loop; the model may
 interpret it, correlate it with another helper, verify it through shell, or answer.
@@ -277,9 +284,10 @@ credential-bearing exception: a network attacker can impersonate the API server,
 the bearer token, and alter evidence. The management page warns before use, the registry
 stores the exception, connection tests audit it, and every affected Ask session displays one
 compact connection-boundary indicator instead of repeating a limitation under each answer. The
-The chosen per-cluster setting is used for delegated login, typed reads, and runner
-commands. There is no project-wide remote-cluster TLS override. This does not change
-model-provider or ordinary application TLS policy.
+chosen per-cluster setting is used for delegated login, typed Kubernetes reads, runner commands,
+Route discovery, and the discovered Thanos and Loki endpoints used by registered telemetry tools.
+There is no project-wide remote-cluster TLS override. This does not change model-provider or
+ordinary application TLS policy.
 
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,

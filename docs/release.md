@@ -469,6 +469,11 @@ summary must preserve the complete-coverage rule before confirming absence.
   cannot concatenate multiple targets, generic object inventory/search is performed with bounded
   `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved
   limitations. Genuine runner and collector failures must remain prominent.
+- Agent-loop contract tests must prove finalization records `complete`, `blocked`, or
+  `budget_exhausted`; claimed completion with safe reads remaining returns to the tool loop; exact
+  same-cluster commands require an approved retry/comparison reason; and Loki TLS verification
+  failures retain the `tls_verification_failed` category. These gates must not impose a fixed
+  product-specific diagnostic sequence.
 - Safe-Markdown presentation tests must prove attribute-free HTML break tags render as line breaks
   in extracted and fallback Markdown tables without enabling other raw HTML or interpreting tags
   inside code spans and fences. They must also prove answer-table cleanup removes unmatched
