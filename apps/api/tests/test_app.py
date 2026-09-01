@@ -4967,7 +4967,11 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         )
         assert rendered.status_code == 200
         assert "Observed metric" in rendered.text
-        assert "Top Application-Log Volume by Namespace" in rendered.text
+        assert (
+            "Runtime cluster · Top Application-Log Volume by Namespace"
+            in rendered.text
+        )
+        assert f"{SYSTEM_CLUSTER_ID} · Top Application-Log Volume" not in rendered.text
         assert fallback_text in rendered.text
         assert duplicate_row not in rendered.text
         assert 'class="answer-table-result"' not in rendered.text

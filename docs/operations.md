@@ -1414,7 +1414,9 @@ deterministic Markdown table. Identity columns come from the returned series lab
 show nodes, workload metrics can show namespace/Pod/container, and domain metrics can expose
 dimensions such as Kafka topic, partition, and consumer group. Unknown safe label dimensions are
 rendered generically, up to six identity columns, so new registered metrics do not require a bespoke
-table template.
+table template. Each native metric table remains separate per queried cluster and places that
+cluster's friendly name in the table heading; internal cluster IDs are not displayed as operator
+labels.
 
 LokiStack application-volume reads use two model-visible contracts.
 `top_log_volume_by_namespace` is the dedicated cluster-scope namespace ranking;

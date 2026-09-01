@@ -191,7 +191,7 @@
               <div class="metric-result-heading">
                 <div>
                   <span class="evidence-tool">Observed metric</span>
-                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }}</h3>
+                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{% if cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ cited.metric_ranking.title }}</h3>
                   <p>{{ cited.metric_ranking.description }}</p>
                 </div>
                 <button class="button secondary compact-button" type="button"
