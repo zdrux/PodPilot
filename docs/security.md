@@ -169,8 +169,12 @@ group; it cannot target another command by cluster name or expose the delegated 
 does not reverse an API write that reached Kubernetes before process termination, so the UI and
 persisted cancellation result state this limitation explicitly.
 
-The shared agent loop exposes registered HTTP-probe, metric, and audit collectors as model-callable
-helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not
+The shared agent loop exposes registered HTTP-probe and audit collectors as model-callable helpers
+alongside the arbitrary shell tool. The larger registered metric schema is preloaded only for an
+explicit telemetry question. Other turns expose only a fixed `load_toolset(metrics)` request; a
+successful request adds `query_metrics` to the next model call, performs no cluster read, grants no
+credential or permission, and is audited separately. A guessed `query_metrics` call is rejected
+until that toolset is enabled. Generic object LIST and SEARCH collectors are not
 model-callable; the agent uses bounded brokered `oc get` commands and authors its own presentation.
 Those typed reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and

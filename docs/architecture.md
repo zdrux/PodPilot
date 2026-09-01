@@ -60,9 +60,13 @@ OpenShift template braces are preserved.
 ## Current Runtime
 
 Delegated and shared-credential Investigator and Action conversations share the same agent tool
-contract. The Chat Completions model can select typed `http_probe`, `query_audit_events`, and
-`query_metrics` helpers in the same iterative loop as its brokered
-shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
+contract. The Chat Completions model can select typed `http_probe` and `query_audit_events` helpers
+in the same iterative loop as its brokered shell escape hatch. The larger `query_metrics` schema is
+staged: explicit telemetry questions preload it, while other turns receive a compact
+`load_toolset(metrics)` capability and can add the registered helper on the next model step when
+the investigation develops a material need for usage, rates, trends, rankings, saturation, or
+monitoring signals. Loading a toolset performs no cluster read. The helpers reuse the guarded
+readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit

@@ -2114,6 +2114,40 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     """Strict JSON-schema adapter for OpenAI-compatible Chat Completions APIs."""
 
     @staticmethod
+    def _enabled_agent_toolsets(messages: list[dict[str, object]]) -> set[str]:
+        enabled: set[str] = set()
+        marker = "\nEnabled toolsets:\n"
+        for message in messages:
+            role = message.get("role")
+            content = str(message.get("content") or "")
+            if role == "system" and marker in content:
+                serialized = content.split(marker, 1)[1].splitlines()[0]
+                try:
+                    configured = json.loads(serialized)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    configured = []
+                if isinstance(configured, list):
+                    enabled.update(
+                        str(item).strip() for item in configured if str(item).strip()
+                    )
+            if role != "tool":
+                continue
+            try:
+                activation = json.loads(content)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(activation, dict):
+                continue
+            if (
+                activation.get("podpilot_toolset_activation") is True
+                and activation.get("status") in {"enabled", "already_enabled"}
+            ):
+                toolset = str(activation.get("toolset") or "").strip()
+                if toolset:
+                    enabled.add(toolset)
+        return enabled
+
+    @staticmethod
     def _selected_cluster_ids(messages: list[dict[str, object]]) -> list[str]:
         marker = "\nSelected clusters:\n"
         for message in messages:
@@ -2142,6 +2176,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         messages: list[dict[str, object]],
     ) -> AgentStep:
         selected_cluster_ids = self._selected_cluster_ids(messages)
+        enabled_toolsets = self._enabled_agent_toolsets(messages)
         cluster_id_schema: dict[str, object] = {
             "type": "string",
             "description": (
@@ -2265,14 +2300,41 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ),
             ("metric", "metric_scope"),
         )
+        load_toolset_tool = {
+            "type": "function",
+            "function": {
+                "name": "load_toolset",
+                "description": (
+                    "Enable a staged registered investigation toolset when it would materially "
+                    "help. Load metrics for current or historical resource usage, rates, trends, "
+                    "rankings, saturation, or monitoring signals. Loading adds the bounded "
+                    "query_metrics helper on the next agent step; it performs no cluster read "
+                    "and does not expand credentials or permissions."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "toolset": {
+                            "type": "string",
+                            "enum": ["metrics"],
+                            "description": "The registered toolset to enable.",
+                        },
+                    },
+                    "required": ["toolset"],
+                    "additionalProperties": False,
+                },
+            },
+        }
         tools = [
             shell_tool,
             discovery_tool,
             pod_health_tool,
             http_probe_tool,
             audit_tool,
-            metric_tool,
         ]
+        tools.append(
+            metric_tool if "metrics" in enabled_toolsets else load_toolset_tool
+        )
         audit_parameters = audit_tool["function"]["parameters"]["properties"]
         audit_parameters["audit_search_until_limit"]["description"] = (
             "Set true only when the operator explicitly asks for a last/top N result so the "

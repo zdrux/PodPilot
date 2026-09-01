@@ -406,7 +406,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
         "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
-        "query_audit_events", "query_metrics",
+        "query_audit_events", "load_toolset",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
@@ -426,6 +426,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
         item["function"]["parameters"]["properties"]["cluster_id"]["enum"]
         == selected_cluster_ids
         for item in request["tools"]
+        if item["function"]["name"] != "load_toolset"
     )
     health_tool = tools_by_name["pod_health_summary"]
     assert health_tool["parameters"]["required"] == ["cluster_id"]
@@ -447,6 +448,59 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert audit_tool["parameters"]["required"] == [
         "cluster_id", "audit_operation_scope", "audit_outcome",
     ]
+    load_toolset = tools_by_name["load_toolset"]
+    assert load_toolset["parameters"]["required"] == ["toolset"]
+    assert load_toolset["parameters"]["properties"]["toolset"]["enum"] == ["metrics"]
+    assert "performs no cluster read" in load_toolset["description"]
+
+
+@pytest.mark.parametrize("activation_source", ["system", "tool"])
+def test_chat_completions_agent_exposes_metrics_only_when_enabled(
+    activation_source: str,
+) -> None:
+    completions = ToolCallingCompletions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    provider = OpenAIChatCompletionsProvider()
+    provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
+    messages: list[dict[str, object]] = [{
+        "role": "system",
+        "content": (
+            "Agent instructions.\nEnabled toolsets:\n"
+            + (json.dumps(["metrics"]) if activation_source == "system" else "[]")
+            + "\n\nSelected clusters:\n"
+            + json.dumps([{"cluster_id": "system", "cluster_name": "System"}])
+        ),
+    }, {"role": "user", "content": "Investigate the cluster."}]
+    if activation_source == "tool":
+        messages.extend([{
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "load-metrics",
+                "type": "function",
+                "function": {
+                    "name": "load_toolset",
+                    "arguments": json.dumps({"toolset": "metrics"}),
+                },
+            }],
+        }, {
+            "role": "tool",
+            "tool_call_id": "load-metrics",
+            "content": json.dumps({
+                "podpilot_toolset_activation": True,
+                "status": "enabled",
+                "toolset": "metrics",
+            }),
+        }])
+
+    provider.next_agent_step(profile(), "secret-token", messages)
+
+    tools_by_name = {
+        item["function"]["name"]: item["function"]
+        for item in completions.requests[0]["tools"]
+    }
+    assert "query_metrics" in tools_by_name
+    assert "load_toolset" not in tools_by_name
     metric_tool = tools_by_name["query_metrics"]
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",

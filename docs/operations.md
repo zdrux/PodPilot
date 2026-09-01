@@ -136,10 +136,13 @@ groups for those roles.
 The OAuth proxy uses the `podpilot-investigator` projected service-account token as its
 OpenShift OAuth client secret. The workload requests an eight-hour token and snapshots the exact
 value used by each proxy process into a proxy-only memory volume. Because the pinned proxy reads
-its client secret only at startup, a background comparison checks the projected file every 30
-seconds. When kubelet rotates it, only the `oauth-proxy` container exits and restarts; the API,
-SQLite state, and OAuth cookie key remain in place. A periodic increase in that container's restart
-count accompanied by `Projected OAuth client token rotated` is expected. Repeated
+its client secret only at startup, a foreground supervisor compares the projected file with that
+snapshot every second. The supervisor owns the proxy child process directly, forwards container
+termination signals, and exits as soon as kubelet rotates the token; this keeps the stale-secret
+callback window below one polling interval and lets the container restart policy launch the proxy
+with a fresh snapshot. Only the `oauth-proxy` container restarts; the API, SQLite state, and stable
+OAuth cookie key remain in place. A periodic increase in that container's restart count accompanied
+by `Projected OAuth client token rotated` is expected. Repeated
 `unauthorized_client` callback failures without that message indicate that this rotation supervisor
 is absent or unhealthy.
 
@@ -944,32 +947,29 @@ queries.
 
 ### Unrestricted-agent synthetic challenges
 
-The disposable `test` and `test2` namespaces contain five independent challenges
-for the unrestricted-agent lab: an unmatched node selector, a missing PVC, an
+The disposable `podpilot-test` and `podpilot-test2` namespaces contain five
+independent challenges for the unrestricted-agent lab: an unmatched node selector, a missing PVC, an
 oversized CPU request, a misspelled ConfigMap reference, and cross-namespace
 traffic denied by a NetworkPolicy. The last challenge runs `network-client` in
-`test`; it exits whenever it cannot reach the `network-target` HTTP Deployment in
-`test2`, then remains running once connectivity is restored.
+`podpilot-test`; it exits whenever it cannot reach the `network-target` HTTP
+Deployment in `podpilot-test2`, then remains running once connectivity is restored.
 
-The fixture grants `ai-ops/podpilot-investigator` the built-in `admin` role only
-inside these two disposable namespaces. It does not grant cluster-admin or access
-to mutate other namespaces.
+The fixture creates no RBAC objects. The signed-in delegated user must already
+have the required access to inspect or modify these disposable namespaces.
 
 ```powershell
 . .\scripts\connect-sno.ps1
 oc apply --dry-run=client -f evals/live/agentic-challenges.yaml
 oc apply -f evals/live/agentic-challenges.yaml
 oc apply --dry-run=server -f evals/live/agentic-challenges.yaml
-oc get deployment,pod,pvc -n test
-oc get deployment,pod,service,networkpolicy -n test2
-oc auth can-i patch deployments -n test --as=system:serviceaccount:ai-ops:podpilot-investigator
-oc auth can-i patch deployments -n test2 --as=system:serviceaccount:ai-ops:podpilot-investigator
+oc get deployment,pod,pvc -n podpilot-test
+oc get deployment,pod,service,networkpolicy -n podpilot-test2
 ```
 
 Remove both namespaces to reset the complete challenge set:
 
 ```powershell
-oc delete namespace test test2
+oc delete namespace podpilot-test podpilot-test2
 ```
 
 The in-cluster URL, bearer-token pattern, and `cluster-monitoring-view` binding

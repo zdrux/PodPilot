@@ -313,16 +313,25 @@ spec:
             - |
               umask 077
               cp /var/run/secrets/kubernetes.io/serviceaccount/token /var/run/podpilot-oauth/client-secret
-              (
-                while sleep 30; do
-                  if [ "$(cat /var/run/podpilot-oauth/client-secret)" != "$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" ]; then
-                    echo "Projected OAuth client token rotated; restarting oauth-proxy." >&2
-                    kill -TERM 1
-                    exit 0
-                  fi
-                done
-              ) &
-              exec /usr/bin/oauth-proxy "$@"
+              /usr/bin/oauth-proxy "$@" &
+              proxy_pid=$!
+              shutdown() {
+                trap - TERM INT
+                kill -TERM "$proxy_pid" 2>/dev/null || true
+                wait "$proxy_pid" 2>/dev/null || true
+                exit 0
+              }
+              trap shutdown TERM INT
+              while kill -0 "$proxy_pid" 2>/dev/null; do
+                sleep 1
+                if [ "$(cat /var/run/podpilot-oauth/client-secret)" != "$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" ]; then
+                  echo "Projected OAuth client token rotated; restarting oauth-proxy." >&2
+                  kill -TERM "$proxy_pid" 2>/dev/null || true
+                  wait "$proxy_pid" 2>/dev/null || true
+                  exit 0
+                fi
+              done
+              wait "$proxy_pid"
             - oauth-proxy
           args:
             - --provider=openshift

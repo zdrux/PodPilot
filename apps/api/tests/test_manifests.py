@@ -146,10 +146,15 @@ def test_oauth_proxy_restarts_when_its_projected_client_token_rotates() -> None:
     assert oauth_proxy["command"][:2] == ["/bin/sh", "-ec"]
     assert oauth_proxy["command"][3] == "oauth-proxy"
     assert "cp /var/run/secrets/kubernetes.io/serviceaccount/token" in supervisor
+    assert '/usr/bin/oauth-proxy "$@" &' in supervisor
+    assert "proxy_pid=$!" in supervisor
+    assert "trap shutdown TERM INT" in supervisor
+    assert "while kill -0 \"$proxy_pid\"" in supervisor
+    assert "sleep 1" in supervisor
     assert '$(cat /var/run/podpilot-oauth/client-secret)' in supervisor
     assert '$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)' in supervisor
-    assert "kill -TERM 1" in supervisor
-    assert 'exec /usr/bin/oauth-proxy "$@"' in supervisor
+    assert 'kill -TERM "$proxy_pid"' in supervisor
+    assert 'wait "$proxy_pid"' in supervisor
     assert "--client-secret-file=/var/run/podpilot-oauth/client-secret" in oauth_proxy["args"]
     assert any(
         mount["name"] == "oauth-runtime"

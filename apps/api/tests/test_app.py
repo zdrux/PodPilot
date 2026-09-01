@@ -48,6 +48,7 @@ from podpilot_api.main import (
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
+    _explicit_metric_question,
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _grounded_read_candidates,
@@ -689,6 +690,23 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                     ),),
                 )
             if self.calls == 2:
+                arguments = json.dumps({"toolset": "metrics"})
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant", "content": None,
+                        "tool_calls": [{
+                            "id": "load-metrics", "type": "function",
+                            "function": {
+                                "name": "load_toolset", "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="load-metrics", name="load_toolset", arguments=arguments,
+                    ),),
+                )
+            if self.calls == 3:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
                     "metric": "top_log_volume_by_namespace",
@@ -711,7 +729,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="rank-logs", name="query_metrics", arguments=arguments,
                     ),),
                 )
-            if self.calls == 3:
+            if self.calls == 4:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
                     "audit_operation_scope": "deletes",
@@ -733,7 +751,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="audit-deletes", name="query_audit_events", arguments=arguments,
                     ),),
                 )
-            if self.calls == 4:
+            if self.calls == 5:
                 arguments = json.dumps({
                     "command": (
                         "oc get clusterlogforwarders.observability.openshift.io "
@@ -3706,6 +3724,24 @@ def test_explicit_metric_question_retries_inventory_classification() -> None:
 
     assert provider.calls == 2
     assert inquiry is not None and inquiry.mode == "metrics"
+
+
+@pytest.mark.parametrize("question", [
+    "Show cluster metrics.",
+    "Graph the CPU usage trend.",
+    "Rank namespaces by log volume.",
+    "What was the API request latency over the last hour?",
+])
+def test_explicit_metric_question_preloads_staged_metrics(question: str) -> None:
+    assert _explicit_metric_question(question) is True
+
+
+@pytest.mark.parametrize("question", [
+    "Show me the Pods in namespace payments.",
+    "Describe the ClusterOperator configuration.",
+])
+def test_inventory_question_does_not_preload_staged_metrics(question: str) -> None:
+    assert _explicit_metric_question(question) is False
 
 
 @pytest.mark.parametrize(
@@ -9132,6 +9168,110 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         audits = list(db_session.scalars(select(AuditEvent.action)))
         assert "agentic.command" in audits
     engine.dispose()
+
+
+@pytest.mark.parametrize("preloaded", [False, True])
+def test_unrestricted_agent_stages_metrics_toolset(
+    tmp_path: Path, preloaded: bool,
+) -> None:
+    question = (
+        "Show CPU usage for the selected cluster."
+        if preloaded else
+        "Investigate whether resource saturation explains the slowdown."
+    )
+
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_messages: list[list[dict[str, object]]] = []
+
+        def next_agent_step(self, _profile, _api_key, messages):
+            self.agent_messages.append(list(messages))
+            system_prompt = str(messages[0]["content"])
+            expected_marker = '["metrics"]' if preloaded else "[]"
+            assert f"Enabled toolsets:\n{expected_marker}" in system_prompt
+            if preloaded or len(self.agent_messages) > 1:
+                return _agent_final_step("The metrics capability is ready when needed.")
+            arguments = json.dumps({"toolset": "metrics"})
+            return AgentStep(
+                assistant_message={
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "load-metrics",
+                        "type": "function",
+                        "function": {
+                            "name": "load_toolset",
+                            "arguments": arguments,
+                        },
+                    }],
+                },
+                content=None,
+                tool_calls=(AgentToolCall(
+                    id="load-metrics", name="load_toolset", arguments=arguments,
+                ),),
+            )
+
+    provider = Provider()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider,
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=240,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": question},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"}
+        )
+        assert "The metrics capability is ready when needed." in rendered.text
+
+    assert len(provider.agent_messages) == (1 if preloaded else 2)
+    if not preloaded:
+        activation = provider.agent_messages[1][-1]
+        assert activation["role"] == "tool"
+        payload = json.loads(str(activation["content"]))
+        assert payload == {
+            "message": "The registered metrics toolset will be available on the next agent step.",
+            "podpilot_toolset_activation": True,
+            "status": "enabled",
+            "toolset": "metrics",
+        }
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            audit = db_session.scalar(select(AuditEvent).where(
+                AuditEvent.action == "agentic.toolset"
+            ))
+            assert audit is not None and audit.outcome == "enabled"
+        engine.dispose()
 
 
 def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnostics(
