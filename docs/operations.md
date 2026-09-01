@@ -316,6 +316,9 @@ PodPilot also records provider termination metadata when it is supplied: Chat Co
 `finish_reason`, or the Responses API's incomplete reason. The Ask page displays the distinct
 values under **Model usage**, which makes output-budget truncation distinguishable from a
 schema-valid but semantically incomplete answer.
+The same disclosure lists the tools invoked for that reply, grouped by tool name with call and
+status counts. This view uses persisted activity metadata only; commands, arguments, results, and
+credentials are not added to model diagnostics.
 
 When a structured model response fails validation, the same collapsed control shows a bounded
 failure summary: failure category, schema, attempt number, and up to six validation field paths,

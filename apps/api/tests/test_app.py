@@ -51,6 +51,7 @@ from podpilot_api.main import (
     _deterministic_route_tls_answer,
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
+    _summarize_tool_activity,
     _grounded_read_candidates,
     _claims_complete_pod_health,
     _investigation_capability_ledger,
@@ -16359,6 +16360,11 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
             id="00000000-0000-0000-0000-000000000191",
             conversation_id=conversation_id, role="assistant", actor=None,
             content="A bounded answer.", answer_mode="general_guidance",
+            tool_activity_json=json.dumps({"reads": [
+                {"tool": "execute_shell", "status": "completed"},
+                {"tool": "execute_shell", "status": "failed"},
+                {"tool": "query_metrics", "status": "denied_or_unavailable"},
+            ]}),
             model_diagnostics_json=json.dumps({
                 "call_count": 3,
                 "usage_reported_calls": 2,
@@ -16399,6 +16405,37 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "50,000" in rendered.text
     assert "Largest input" in rendered.text
     assert "3 model calls; usage reported for 2" in rendered.text
+    assert "Tool activity" in rendered.text
+    assert "execute_shell" in rendered.text
+    assert "2 calls · 1 completed · 1 failed" in rendered.text
+    assert "query_metrics" in rendered.text
+    assert "1 call · 1 denied or unavailable" in rendered.text
     assert "Model request failures" in rendered.text
     assert "schema validation · ActionSelection · attempt 2" in rendered.text
     assert "object_reads.0.resource" in rendered.text
+
+
+def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:
+    summary = _summarize_tool_activity([
+        {"tool": "execute_shell", "status": "completed"},
+        {"tool": "execute_shell", "status": "invalid"},
+        {"tool": "query_metrics", "status": "completed"},
+        "not-an-activity-item",
+        {"status": "completed"},
+    ])
+
+    assert summary == [
+        {
+            "name": "execute_shell",
+            "count": 2,
+            "statuses": [
+                {"name": "completed", "count": 1},
+                {"name": "invalid", "count": 1},
+            ],
+        },
+        {
+            "name": "query_metrics",
+            "count": 1,
+            "statuses": [{"name": "completed", "count": 1}],
+        },
+    ]

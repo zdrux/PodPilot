@@ -57,6 +57,19 @@
             {% if message.model_diagnostics.finish_reasons %}
             <small>Provider termination: {{ message.model_diagnostics.finish_reasons | join(', ') }}.</small>
             {% endif %}
+            {% if message.tool_usage %}
+            <div class="message-model-tools">
+              <strong>Tool activity</strong>
+              <ul>
+                {% for tool in message.tool_usage %}
+                <li>
+                  <code>{{ tool.name }}</code>
+                  <span>{{ tool.count }} call{% if tool.count != 1 %}s{% endif %}{% for status in tool.statuses %} · {{ status.count }} {{ status.name | replace('_', ' ') }}{% endfor %}</span>
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
             {% if message.model_diagnostics.failures %}
             <div class="message-model-failures">
               <strong>Model request failures</strong>

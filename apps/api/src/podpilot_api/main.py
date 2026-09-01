@@ -444,6 +444,41 @@ def _cluster_summary(cluster: Cluster) -> dict[str, object]:
     }
 
 
+def _summarize_tool_activity(value: object) -> list[dict[str, object]]:
+    """Aggregate persisted per-read metadata for the compact Ask diagnostics view."""
+
+    if not isinstance(value, list):
+        return []
+    by_name: dict[str, dict[str, object]] = {}
+    for raw_item in value:
+        if not isinstance(raw_item, dict):
+            continue
+        name = redact_text(str(raw_item.get("tool") or "")).strip()[:80]
+        if not name:
+            continue
+        usage = by_name.setdefault(name, {
+            "name": name,
+            "count": 0,
+            "statuses": {},
+        })
+        usage["count"] = int(usage["count"]) + 1
+        status = redact_text(str(raw_item.get("status") or "unknown")).strip()[:40]
+        statuses = usage["statuses"]
+        if isinstance(statuses, dict):
+            statuses[status] = int(statuses.get(status, 0)) + 1
+    return [
+        {
+            "name": item["name"],
+            "count": item["count"],
+            "statuses": [
+                {"name": status, "count": count}
+                for status, count in item["statuses"].items()
+            ],
+        }
+        for item in by_name.values()
+    ]
+
+
 def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
     return ModelProfileConfig(
         provider_label=profile.provider_label,
@@ -12519,6 +12554,7 @@ def create_app(
                 "id": row.id, "role": row.role, "actor": row.actor, "content": row.content,
                 "answer_mode": row.answer_mode, "citations": citations,
                 "activity": activity_view, "provider_status": row.provider_status,
+                "tool_usage": _summarize_tool_activity(activity_view.get("reads")),
                 "raw_responses": json.loads(row.raw_responses_json or "[]"),
                 "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
                 "prefer_metric_card": prefer_metric_card,

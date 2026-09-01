@@ -473,6 +473,12 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .message-model-diagnostics dt { color: #8296ae; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .message-model-diagnostics dd { margin: 2px 0 0; color: #d2dce8; font: 11px/1.4 "Cascadia Code", Consolas, monospace; }
 .message-model-diagnostics p, .message-model-diagnostics small { display: block; margin: 8px 0 0; color: #8da0b8; font-size: 10px; line-height: 1.55; }
+.message-model-tools { margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(161, 177, 195, .14); }
+.message-model-tools > strong { color: #aebed0; font-size: 10px; text-transform: uppercase; }
+.message-model-tools ul { display: grid; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
+.message-model-tools li { min-width: 0; }
+.message-model-tools code { display: block; color: #8dc9d2; font-size: 10px; overflow-wrap: anywhere; }
+.message-model-tools span { display: block; margin-top: 1px; color: #8da0b8; font-size: 9px; line-height: 1.45; }
 .message-model-failures { margin-top: 11px; padding-top: 9px; border-top: 1px solid rgba(161, 177, 195, .14); }
 .message-model-failures > strong { color: #e2ac98; font-size: 10px; text-transform: uppercase; }
 .message-model-failures ul { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
