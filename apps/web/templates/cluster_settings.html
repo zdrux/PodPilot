@@ -19,6 +19,7 @@
         data-save-url="/api/v1/clusters/{{ selected.id }}/metadata"
         data-success-message="Runtime cluster metadata saved.">
         <label>Display name<input name="name" required maxlength="253" value="{{ selected.name }}" placeholder="prod-openshift-east"></label>
+        <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment }}" placeholder="dev"><small>Used to label and group this cluster with other connection targets in the cluster picker.</small></label>
         <label>Tags
           <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson }}'>
             <div class="tag-chip-list" data-tag-list aria-live="polite"></div>
@@ -28,7 +29,7 @@
           <small id="cluster-tags-help">Use a single word such as <code>azure</code> or a pair such as <code>region:toronto</code>. Tags scope cluster memory and Ask PodPilot guidance.</small>
           <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
         </label>
-        <p class="muted-copy">The display name and tags describe the cluster where PodPilot is running across the dashboard, Ask PodPilot, and future evidence. The projected service-account connection remains managed by the deployment.</p>
+        <p class="muted-copy">The display name, environment, and tags describe the cluster where PodPilot is running across the dashboard, cluster picker, Ask PodPilot, and future evidence. The projected service-account connection remains managed by the deployment.</p>
         <div class="form-actions"><button class="button primary" type="submit">Save metadata</button></div>
       </form>
     {% elif selected and not selected_editable %}

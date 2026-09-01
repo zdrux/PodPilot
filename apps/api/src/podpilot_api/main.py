@@ -9653,6 +9653,7 @@ def create_app(
                         "connection": "in-cluster",
                         "environment": app_settings.environment,
                     }, sort_keys=True),
+                    environment=app_settings.environment,
                     tls_verify=True,
                     is_enabled=True,
                     is_system=True,
@@ -13536,11 +13537,22 @@ def create_app(
                 raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
             previous_name = cluster.name
             previous_tags = _parse_tags(cluster.tags_json, field_name="Stored cluster tags")
+            previous_environment = cluster.environment
+            environment = (
+                redact_text(form["environment"].strip()).casefold()[:64]
+                if "environment" in form else previous_environment
+            )
+            if not environment or not _TAG_VALUE.fullmatch(environment):
+                raise HTTPException(
+                    status_code=422,
+                    detail="A valid cluster environment is required.",
+                )
             tags = (
                 _parse_tags(form["tags_json"], field_name="Cluster tags")
                 if "tags_json" in form else previous_tags
             )
             cluster.name = name
+            cluster.environment = environment
             cluster.tags_json = json.dumps(tags, sort_keys=True)
             cluster.updated_by = user.username
             cluster.updated_at = now
@@ -13550,7 +13562,9 @@ def create_app(
                 outcome="saved",
                 details_json=json.dumps({
                     "cluster_id": cluster.id,
+                    "environment": environment,
                     "previous_name": previous_name,
+                    "previous_environment": previous_environment,
                     "name": name,
                     "previous_tag_keys": sorted(previous_tags),
                     "tag_keys": sorted(tags),
@@ -13561,6 +13575,7 @@ def create_app(
             "status": "saved",
             "cluster_id": cluster_id,
             "name": name,
+            "environment": environment,
             "tags": tags,
             "detail": "Runtime cluster metadata saved.",
         })
@@ -14466,6 +14481,10 @@ def create_app(
             runtime_cluster_name = (
                 runtime_cluster.name if runtime_cluster is not None else app_settings.cluster_name
             )
+            runtime_cluster_environment = (
+                runtime_cluster.environment
+                if runtime_cluster is not None else app_settings.environment
+            )
             recent_conversations = recent_conversations_for(db_session, user.username)
 
         response = templates.TemplateResponse(
@@ -14474,7 +14493,7 @@ def create_app(
             context={
                 "user": user,
                 "cluster_name": runtime_cluster_name,
-                "environment": app_settings.environment,
+                "environment": runtime_cluster_environment,
                 "poc_mode": app_settings.poc_mode,
                 "now": datetime.now(timezone.utc),
                 "snapshot": snapshot,

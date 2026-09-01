@@ -10944,7 +10944,9 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
     assert captured["tls_verify"] is True
 
 
-def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) -> None:
+def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
+    tmp_path: Path,
+) -> None:
     app, settings = make_app(
         tmp_path,
         assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
@@ -10959,6 +10961,8 @@ def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) 
         assert page.status_code == 200 and csrf is not None
         assert f'data-save-url="/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata"' in page.text
         assert 'name="name"' in page.text
+        assert 'name="environment"' in page.text
+        assert 'name="environment" required maxlength="64" value="test"' in page.text
         assert 'name="tags_json"' in page.text
         assert "Tags scope cluster memory" in page.text
         assert "projected service-account connection remains managed by the deployment" in page.text
@@ -10969,6 +10973,7 @@ def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) 
             headers=headers,
             data={
                 "name": "toronto-sno-lab",
+                "environment": "hci",
                 "tags_json": '{"azure":"","environment":"dev","region":"toronto"}',
             },
         )
@@ -10977,14 +10982,28 @@ def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) 
             "status": "saved",
             "cluster_id": SYSTEM_CLUSTER_ID,
             "name": "toronto-sno-lab",
+            "environment": "hci",
             "tags": {"azure": "", "environment": "dev", "region": "toronto"},
             "detail": "Runtime cluster metadata saved.",
         }
 
         dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
         ask = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert "test · toronto-sno-lab" in dashboard.text
+        updated_page = client.get(
+            f"/settings/clusters?edit={SYSTEM_CLUSTER_ID}",
+            headers={"x-forwarded-user": "ada"},
+        )
+        assert "hci · toronto-sno-lab" in dashboard.text
         assert "toronto-sno-lab" in ask.text
+        assert 'name="environment" required maxlength="64" value="hci"' in updated_page.text
+        assert "<b>HCI</b>" in updated_page.text
+
+        invalid_environment = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
+            headers=headers,
+            data={"name": "toronto-sno-lab", "environment": "not?valid"},
+        )
+        assert invalid_environment.status_code == 422
 
         denied = client.post(
             f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
@@ -11000,13 +11019,14 @@ def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) 
     )
     with TestClient(restarted_app) as client:
         dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
-        assert "test · toronto-sno-lab" in dashboard.text
+        assert "hci · toronto-sno-lab" in dashboard.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
         cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
         assert cluster is not None
         assert cluster.name == "toronto-sno-lab"
+        assert cluster.environment == "hci"
         assert json.loads(cluster.tags_json) == {
             "azure": "", "environment": "dev", "region": "toronto",
         }
@@ -11018,7 +11038,9 @@ def test_approver_updates_runtime_cluster_display_name_and_tags(tmp_path: Path) 
         assert event is not None
         assert json.loads(event.details_json) == {
             "cluster_id": SYSTEM_CLUSTER_ID,
+            "environment": "hci",
             "name": "toronto-sno-lab",
+            "previous_environment": "test",
             "previous_name": "test-cluster",
             "previous_tag_keys": ["connection", "environment"],
             "tag_keys": ["azure", "environment", "region"],

@@ -448,11 +448,19 @@ Each button remains disabled until a cluster is selected and the model/session i
 submits its bounded prompt through the normal new-conversation endpoint with the current cluster
 selection and reasoning settings. Starter actions never contain write instructions.
 
-An Approver can edit the display name and tags of the automatically registered runtime cluster
-from **Manage → Clusters**. The display name is used on the dashboard, in new Ask evidence, and
-in future runtime-cluster operations. Tags make tag-scoped cluster memory eligible for the runtime
-cluster. These metadata changes do not alter the projected service-account identity or Kubernetes
-API connection. Historical evidence keeps the cluster name recorded when it was collected.
+An Approver can edit the display name, environment, and tags of the automatically registered runtime
+cluster from **Manage → Clusters**. The display name is used on the dashboard, in new Ask evidence,
+and in future runtime-cluster operations. The environment labels and groups the runtime cluster in
+cluster-selection and delegated sign-in UI just like a registered remote cluster. Tags make
+tag-scoped cluster memory eligible for the runtime cluster. These metadata changes do not alter the
+projected service-account identity or Kubernetes API connection. Historical evidence keeps the
+cluster name recorded when it was collected.
+
+The `podpilot-runtime` ConfigMap `environment` key remains the deployment-level
+`PODPILOT_ENVIRONMENT` setting. It seeds the runtime cluster's persisted environment when the
+system-cluster record is first created and remains available to deployment safety checks. Once that
+record exists, changing the GUI field controls its operator-facing environment label; later
+ConfigMap changes do not overwrite saved cluster metadata.
 
 Runtime- and remote-cluster tags are entered as removable text chips rather than JSON. Use a
 single-word label such as `production` or an exact key/value tag such as `region:toronto`; press
