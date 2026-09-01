@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -57,6 +58,7 @@ from podpilot_api.main import (
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _summarize_tool_activity,
+    _stream_delegated_upstream,
     _grounded_read_candidates,
     _claims_complete_pod_health,
     _investigation_capability_ledger,
@@ -601,6 +603,40 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows("PUT", "/api/v1/pods/api/status") is False
     assert _read_only_proxy_allows("PATCH", "/apis/apps/v1/deployments/api") is False
     assert _read_only_proxy_allows("DELETE", "/api/v1/pods/api") is False
+
+
+def test_delegated_proxy_logs_bounded_redacted_upstream_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    body = ("token=sensitive-token " + ("router unavailable " * 300)).encode()
+    upstream = httpx.Response(
+        503,
+        request=httpx.Request("GET", "https://api.example.test/apis/apps/v1/deployments"),
+        content=body,
+    )
+
+    async def collect() -> bytes:
+        chunks = bytearray()
+        async for chunk in _stream_delegated_upstream(
+            upstream,
+            actor="ivy",
+            cluster_id="cluster-east",
+            method="GET",
+            remote_target="/apis/apps/v1/deployments",
+        ):
+            chunks.extend(chunk)
+        return bytes(chunks)
+
+    streamed = asyncio.run(collect())
+
+    assert streamed == body
+    assert "status_code=503" in caplog.text
+    assert "response_truncated=True" in caplog.text
+    assert "body_complete=True" in caplog.text
+    assert "response_sha256=" in caplog.text
+    assert "token=[REDACTED]" in caplog.text
+    assert "sensitive-token" not in caplog.text
+    assert len(caplog.text) < 3_000
 
 
 def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> None:
@@ -10397,6 +10433,7 @@ def test_unrestricted_kafka_inventory_does_not_run_without_agent_selected_reads(
 def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="uvicorn.error")
     cluster_ids = [
         "30000000-0000-0000-0000-000000000001",
         "30000000-0000-0000-0000-000000000002",
@@ -10585,6 +10622,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         )
     engine.dispose()
     assert "runner_request_id=runner-east" in caplog.text
+    assert "command='oc get kafkas.kafka.strimzi.io -A -o name'" in caplog.text
+    assert "command_truncated=False" in caplog.text
     assert "stderr_tail='Unable to connect to the server: synthetic failure'" in caplog.text
     assert re.search(r"diagnostic_ref=[0-9a-f]{12}", caplog.text)
 

@@ -148,6 +148,59 @@ from podpilot_openshift.workloads import (
 CSRF_COOKIE = "podpilot_csrf"
 DELEGATED_SESSION_COOKIE = "podpilot_delegated_session"
 LOGGER = logging.getLogger("uvicorn.error")
+DELEGATED_PROXY_ERROR_PREVIEW_BYTES = 2_048
+DELEGATED_PROXY_ERROR_CAPTURE_BYTES = 8_192
+
+
+async def _stream_delegated_upstream(
+    upstream: httpx.Response,
+    *,
+    actor: str,
+    cluster_id: str,
+    method: str,
+    remote_target: str,
+) -> AsyncIterator[bytes]:
+    """Stream a Kubernetes response while retaining bounded error diagnostics."""
+
+    is_error = 400 <= upstream.status_code <= 599
+    captured = bytearray()
+    response_bytes = 0
+    response_digest = hashlib.sha256()
+    body_complete = False
+    try:
+        async for chunk in upstream.aiter_bytes():
+            response_bytes += len(chunk)
+            response_digest.update(chunk)
+            if is_error and len(captured) < DELEGATED_PROXY_ERROR_CAPTURE_BYTES:
+                remaining = DELEGATED_PROXY_ERROR_CAPTURE_BYTES - len(captured)
+                captured.extend(chunk[:remaining])
+            yield chunk
+        body_complete = True
+    finally:
+        if is_error:
+            redacted = redact_text(bytes(captured).decode("utf-8", errors="replace"))
+            redacted_bytes = redacted.encode("utf-8", errors="replace")
+            preview = " ".join(
+                redacted_bytes[:DELEGATED_PROXY_ERROR_PREVIEW_BYTES]
+                .decode("utf-8", errors="replace")
+                .split()
+            )
+            LOGGER.warning(
+                "podpilot.delegated_proxy.error_response actor=%s cluster_id=%s "
+                "method=%s target=%r status_code=%s response_bytes=%s "
+                "response_truncated=%s body_complete=%s response_sha256=%s "
+                "response_preview=%r",
+                actor,
+                cluster_id,
+                method,
+                remote_target,
+                upstream.status_code,
+                response_bytes,
+                response_bytes > DELEGATED_PROXY_ERROR_PREVIEW_BYTES,
+                body_complete,
+                response_digest.hexdigest(),
+                preview,
+            )
 SYSTEM_CLUSTER_ID = "00000000-0000-0000-0000-000000000001"
 _TAG_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 _TAG_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/ -]{0,126}$")
@@ -9788,8 +9841,22 @@ def create_app(
             + request.headers.get("user-agent", "oc")[:256]
         )
         target = f"{api_url}/{remote_path.lstrip('/')}"
+        remote_target = f"/{remote_path.lstrip('/')}"
         if request.url.query:
             target += f"?{request.url.query}"
+            remote_target += f"?{request.url.query}"
+        redacted_target_bytes = redact_text(remote_target).encode("utf-8", errors="replace")
+        logged_target = redacted_target_bytes[:2_048].decode("utf-8", errors="replace")
+        LOGGER.info(
+            "podpilot.delegated_proxy.request actor=%s cluster_id=%s method=%s "
+            "target=%r target_truncated=%s request_bytes=%s",
+            connection.owner,
+            connection.cluster_id,
+            request.method,
+            logged_target,
+            len(redacted_target_bytes) > 2_048,
+            len(body),
+        )
         client = httpx.AsyncClient(
             verify=tls_context(custom_ca_pem) if tls_verify else False,
             timeout=app_settings.delegated_proxy_timeout_seconds,
@@ -9802,6 +9869,15 @@ def create_app(
             upstream = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
             await client.aclose()
+            LOGGER.warning(
+                "podpilot.delegated_proxy.request_failed actor=%s cluster_id=%s "
+                "method=%s target=%r error_type=%s",
+                connection.owner,
+                connection.cluster_id,
+                request.method,
+                logged_target,
+                type(exc).__name__,
+            )
             raise HTTPException(
                 status_code=502,
                 detail=f"The delegated Kubernetes API request failed ({type(exc).__name__}).",
@@ -9817,12 +9893,28 @@ def create_app(
                 owner=connection.owner,
                 cluster_id=connection.cluster_id,
             )
+        LOGGER.info(
+            "podpilot.delegated_proxy.response actor=%s cluster_id=%s method=%s "
+            "target=%r status_code=%s content_length=%r",
+            connection.owner,
+            connection.cluster_id,
+            request.method,
+            logged_target,
+            upstream.status_code,
+            upstream.headers.get("content-length"),
+        )
         response_headers = {
             name: value for name, value in upstream.headers.items()
             if name.casefold() not in {"connection", "content-length", "transfer-encoding", "content-encoding"}
         }
         return StreamingResponse(
-            upstream.aiter_bytes(),
+            _stream_delegated_upstream(
+                upstream,
+                actor=connection.owner,
+                cluster_id=connection.cluster_id,
+                method=request.method,
+                remote_target=logged_target,
+            ),
             status_code=upstream.status_code,
             headers=response_headers,
             background=BackgroundTask(close_upstream),
@@ -10685,9 +10777,13 @@ def create_app(
                     runner_requests.add(runner_request_id)
                     runner_task: asyncio.Task[AgentCommandResult] | None = None
                     try:
+                        redacted_command_bytes = redact_text(command).encode(
+                            "utf-8", errors="replace"
+                        )
                         LOGGER.info(
                             "podpilot.agentic.command_start actor=%s conversation_id=%s "
                             "cluster_id=%s cluster=%r tls_verify=%s command_sha256=%s "
+                            "command_bytes=%s command_truncated=%s command=%r "
                             "runner_request_id=%s",
                             username,
                             conversation_id,
@@ -10695,6 +10791,9 @@ def create_app(
                             cluster_name,
                             True if connection is None else connection.tls_verify,
                             command_hash,
+                            len(command.encode("utf-8", errors="replace")),
+                            len(redacted_command_bytes) > 4_096,
+                            redacted_command_bytes[:4_096].decode("utf-8", errors="replace"),
                             runner_request_id,
                         )
                         command_started = asyncio.get_running_loop().time()

@@ -232,7 +232,7 @@ def test_agent_runner_client_sends_capability_without_delegated_token(monkeypatc
     assert "opaque-capability" in serialized
 
 
-def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch) -> None:
+def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch, caplog) -> None:
     def fake_post(url, *, json, timeout):
         request = httpx.Request("POST", url)
         return httpx.Response(200, request=request, json={
@@ -247,6 +247,7 @@ def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch) -> None:
         })
 
     monkeypatch.setattr(httpx, "post", fake_post)
+    caplog.set_level("INFO", logger="podpilot_openshift.agent_runner")
     result = OcAgentRunnerClient("http://127.0.0.1:8090").execute("oc get pods")
 
     assert result.request_id == "runner-request-1"
@@ -254,6 +255,8 @@ def test_agent_runner_client_preserves_runner_diagnostics(monkeypatch) -> None:
     assert result.stdout_truncated is True
     assert result.stderr_truncated is False
     assert result.timed_out is False
+    assert "status_code=200" in caplog.text
+    assert "response_bytes=" in caplog.text
 
 
 def test_agent_runner_client_surfaces_redacted_http_failure(monkeypatch) -> None:
@@ -269,6 +272,30 @@ def test_agent_runner_client_surfaces_redacted_http_failure(monkeypatch) -> None
 
     with pytest.raises(AgentRunnerError, match=r"HTTP 400.*token=\[REDACTED\]"):
         OcAgentRunnerClient("http://127.0.0.1:8090").execute("oc get pods")
+
+
+def test_agent_runner_client_logs_http_failure_status_without_body(monkeypatch, caplog) -> None:
+    body = "token=sensitive-token " + ("router unavailable " * 300)
+    caplog.set_level("INFO", logger="podpilot_openshift.agent_runner")
+
+    def fake_post(url, *, json, timeout):
+        return httpx.Response(
+            503,
+            request=httpx.Request("POST", url),
+            text=body,
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    with pytest.raises(AgentRunnerError, match=r"HTTP 503"):
+        OcAgentRunnerClient("http://127.0.0.1:8090").execute(
+            "oc get pods",
+            request_id="00000000-0000-0000-0000-000000000107",
+        )
+
+    assert "status_code=503" in caplog.text
+    assert "sensitive-token" not in caplog.text
+    assert "response_preview" not in caplog.text
 
 
 def test_remote_runner_kubeconfig_disables_tls_and_is_removable() -> None:

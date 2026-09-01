@@ -724,8 +724,13 @@ Removing a cluster used by an existing conversation makes that conversation requ
 it does not delete the conversation. Inspect redacted execution metadata with
 `oc logs deployment/podpilot -n ai-ops -c oc-runner`; failed command summaries also appear in Ask.
 The runner logs startup plus command start, completion, termination, and timeout events. The API
-logs a matching runner request ID, command hash, duration, timeout and truncation flags, and a
-bounded redacted stderr tail for non-zero commands. Typed Kubernetes/OpenShift collector failures
+logs a matching runner request ID, command hash, a redacted command preview capped at 4 KiB,
+duration, shell exit code, timeout and truncation flags, and a bounded redacted stderr tail for
+non-zero commands. The runner client's HTTP transport log records every runner-protocol status.
+Responses from the actual OpenShift API are diagnosed at the API's delegated-proxy boundary; 4xx
+and 5xx responses add only a redacted 2 KiB body preview, original byte count, truncation flag,
+and digest.
+Typed Kubernetes/OpenShift collector failures
 include a diagnostic reference plus a bounded redacted exception chain and traceback frame
 locations. Use the diagnostic reference shown in Ask to find the matching API log entry; neither
 log stream records cluster credentials or complete command output. The API

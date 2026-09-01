@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -11,6 +12,7 @@ import yaml
 from podpilot_diagnostics.redaction import redact_text
 
 
+LOGGER = logging.getLogger(__name__)
 class AgentRunnerError(RuntimeError):
     pass
 
@@ -130,10 +132,11 @@ class OcAgentRunnerClient:
         *,
         request_id: str | None = None,
     ) -> AgentCommandResult:
+        correlation_id = request_id or str(uuid4())
         try:
             payload: dict[str, object] = {
                 "command": command,
-                "request_id": request_id or str(uuid4()),
+                "request_id": correlation_id,
             }
             if connection is not None:
                 payload["cluster"] = connection.to_payload()
@@ -141,6 +144,14 @@ class OcAgentRunnerClient:
                 f"{self.base_url}/v1/execute",
                 json=payload,
                 timeout=self.timeout_seconds,
+            )
+            response_bytes = len(response.content)
+            LOGGER.info(
+                "podpilot.agent_runner.http_response request_id=%s status_code=%s "
+                "response_bytes=%s",
+                correlation_id,
+                response.status_code,
+                response_bytes,
             )
             response.raise_for_status()
             payload = response.json()

@@ -344,6 +344,7 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
     runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
     assert runner["name"] == "oc-runner"
     assert runner["image"] == "podpilot-oc-runner:latest"
+    assert runner["resources"]["limits"]["memory"] == "4Gi"
     assert all(
         document.get("roleRef", {}).get("name") != "cluster-admin"
         for document in rbac_documents

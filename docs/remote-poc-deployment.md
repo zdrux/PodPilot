@@ -363,9 +363,16 @@ be able to exercise every permission granted to that service account.
 
 In a multi-cluster Ask session, the API resolves the token for each model-selected cluster
 from the in-memory delegated session and passes it only over Pod loopback for that command.
-The runner follows the selected cluster's TLS policy, deletes the per-command kubeconfig,
-and logs only cluster identity, TLS mode, exit code,
-duration, and output byte counts:
+The runner follows the selected cluster's TLS policy and deletes the per-command kubeconfig.
+The API logs cluster identity, TLS mode, a 12-character SHA-256 fingerprint, and up to 4 KiB of
+the submitted command after best-effort credential redaction. Completion records include the shell
+exit code,
+duration, output byte counts, truncation state, and a bounded stderr tail for failures. The
+loopback runner client logs every runner-protocol HTTP status. The API's delegated Kubernetes proxy
+logs the actual OpenShift API status; for a 4xx or 5xx response it retains only a redacted 2 KiB
+body preview plus the full body byte count, truncation state, and SHA-256 digest. The original
+response continues streaming unchanged to `oc`; PodPilot never writes the complete error body
+merely because the request failed:
 
 ```bash
 oc logs -n ai-ops deployment/podpilot -c oc-runner --since=10m

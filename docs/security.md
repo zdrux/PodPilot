@@ -169,6 +169,15 @@ group; it cannot target another command by cluster name or expose the delegated 
 does not reverse an API write that reached Kubernetes before process termination, so the UI and
 persisted cancellation result state this limitation explicitly.
 
+For operational diagnosis, the API logs a best-effort credential-redacted command preview capped
+at 4 KiB together with its 12-character SHA-256 fingerprint. Operators must still treat
+application logs as sensitive because arbitrary shell text cannot be proven secret-free. The
+localhost runner client's HTTP response log contains only the runner-protocol status and body size.
+The API's delegated Kubernetes proxy records the actual OpenShift API status; 4xx and 5xx bodies
+are represented only by a redacted 2 KiB preview, truncation flag, and full-body digest while the
+original response streams unchanged to `oc`. Successful response bodies and full error pages are
+not logged.
+
 The shared agent loop exposes registered HTTP-probe, audit, and metric collectors as model-callable
 helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not
 model-callable; the agent uses bounded brokered `oc get` commands and authors its own presentation.
