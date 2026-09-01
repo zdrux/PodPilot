@@ -51,6 +51,53 @@ final result: passed
 
 ---
 
+# Cluster Sign-in Intro Consolidation QA
+
+## Comparison target
+
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-8e7480c0-0b90-4b0c-9d82-c5694a7e9a14.png`.
+- Browser-rendered implementation: unavailable because the Codex in-app browser blocked local HTTP rendering and no Chrome or Edge browser connection was available.
+- Intended state: delegated cluster sign-in page with no active connections.
+
+## Viewport and normalization
+
+- Source image: 1832 × 370 pixels at the supplied density.
+- Intended implementation viewport: 1832 × 370 CSS pixels at device scale factor 1.
+- No density normalization was possible without a browser-rendered implementation capture.
+
+## Findings
+
+- [P2] Visual comparison is blocked.
+  Location: `/delegated/connect`, page intro and sign-in card.
+  Evidence: the source image is available, but the browser safety layer rejected loopback and local-network rendering with `ERR_BLOCKED_BY_CLIENT`; desktop Chrome and Edge connections were unavailable.
+  Impact: the template and focused server test confirm the notice removal and merged copy, but card placement, wrapping, and above-the-fold height could not be verified from rendered pixels.
+  Fix: capture the local or deployed route at 1832 × 370 in a connected browser and compare it directly with the source screenshot.
+
+## Required fidelity surfaces
+
+- Fonts and typography: unchanged in code; rendered wrapping is unverified.
+- Spacing and layout rhythm: the standalone notice is removed, which should recover its full height plus the following flow spacing; rendered placement is unverified.
+- Colors and visual tokens: the amber notice is removed and no new semantic color is introduced.
+- Image quality and asset fidelity: no imagery or icon assets were added or changed.
+- Copy and content: the environment scope, password disposal, cross-conversation lifetime, and sign-out revocation guidance are consolidated into the existing two-sentence subtitle.
+
+## Comparison history
+
+- Pass 1: source opened successfully; local server started successfully; focused delegated-session test passed.
+- Browser capture: blocked for loopback, LAN IP, and DNS bridge URLs. No alternate connected desktop browser was available.
+
+## Implementation checklist
+
+- [x] Remove the amber informational notice.
+- [x] Consolidate its guidance into the existing page subtitle.
+- [x] Preserve the dynamic delegated-session lifetime.
+- [x] Add regression assertions for the revised intro and removed warning markup.
+- [ ] Capture and compare the rendered 1832 × 370 page.
+
+final result: blocked
+
+---
+
 # Cluster Selector Empty-state QA
 
 ## Comparison target
@@ -96,3 +143,11 @@ No actionable P0, P1, or P2 differences remain.
 - [x] Verify desktop and compact layouts and browser console.
 
 final result: passed
+
+---
+
+## Current QA status
+
+The current comparison target is the Cluster Sign-in Intro Consolidation QA above. Its browser-rendered evidence remains unavailable, so that build gate supersedes the earlier passed reports in this file.
+
+final result: blocked

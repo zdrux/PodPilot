@@ -1,8 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Connect clusters · PodPilot{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Cluster sign-ins</h1><p class="subtitle">Add clusters to this PodPilot browser session at any time. Existing sign-ins stay connected and remain available when you start another conversation.</p></div></header>
-<section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>Credentials are scoped by environment</strong><p>Select clusters from one environment at a time. PodPilot discards your password immediately after the OAuth exchanges. Tokens remain for at most {{ session_hours }} hours and are revoked when you sign out.</p></div></section>
+<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Cluster sign-ins</h1><p class="subtitle">Add clusters from one environment to this PodPilot browser session at a time; your password is discarded immediately after OAuth. Existing sign-ins stay connected across conversations for up to {{ session_hours }} hours, and their tokens are revoked when you sign out.</p></div></header>
 <section class="delegated-connect-panel{% if connections %} has-connections{% endif %}" aria-labelledby="cluster-signin-title">
   {% if connections %}
   <div class="connected-cluster-section">

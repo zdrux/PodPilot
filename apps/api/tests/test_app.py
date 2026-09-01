@@ -13381,7 +13381,10 @@ def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
         connect_page = client.get(
             "/delegated/connect", headers={"x-forwarded-user": "dana"}
         )
+        assert "Add clusters from one environment" in connect_page.text
         assert "Existing sign-ins stay connected" in connect_page.text
+        assert "Credentials are scoped by environment" not in connect_page.text
+        assert "warning-notice" not in connect_page.text
         assert connect_page.text.count("data-delegated-remove-url=") == 2
         assert "Add selected clusters" in connect_page.text
 
