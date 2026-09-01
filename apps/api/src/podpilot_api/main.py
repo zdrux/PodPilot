@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import secrets
+import shlex
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -7848,6 +7849,83 @@ def _agent_collector_failure_category(exc: BaseException) -> str:
     return fallback_category or "read_failed"
 
 
+_JQ_PARSE_ERROR_PATTERN = re.compile(
+    r"(?is)\bjq:\s*(?:error:\s*)?(?:syntax error|\d+ compile errors?)"
+)
+_JQ_OPTIONS_WITH_ARGUMENT = frozenset({
+    "--arg", "--argjson", "--argfile", "--slurpfile", "--rawfile",
+    "--from-file", "--library-path", "-f", "-L",
+})
+
+
+def _jq_filters_from_shell_command(command: str) -> list[str]:
+    """Extract inline jq programs from a simple shell command without executing it.
+
+    The agent normally uses jq in an oc pipeline.  Shell parsing is deliberately
+    best-effort: when a command's quoting cannot be parsed or jq loads a program
+    from a file, leave it alone rather than guessing at executable content.
+    """
+
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars="|;&")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return []
+
+    filters: list[str] = []
+    segment: list[str] = []
+    for token in [*tokens, "|"]:
+        if token in {"|", ";", "&", "&&", "||"}:
+            if segment:
+                for index, value in enumerate(segment):
+                    if value.rsplit("/", 1)[-1] != "jq":
+                        continue
+                    arguments = segment[index + 1:]
+                    positional: list[str] = []
+                    skip_next = False
+                    reads_program_file = False
+                    for argument in arguments:
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        if argument in _JQ_OPTIONS_WITH_ARGUMENT:
+                            if argument in {"--from-file", "-f"}:
+                                reads_program_file = True
+                            skip_next = True
+                            continue
+                        if argument.startswith("-"):
+                            continue
+                        positional.append(argument)
+                    if not reads_program_file and positional:
+                        filters.append(positional[0])
+                    break
+            segment = []
+        else:
+            segment.append(token)
+    return filters
+
+
+def _jq_preflight_command(command: str) -> str | None:
+    """Return a no-input jq compile check for every inline jq program, if present."""
+
+    filters = _jq_filters_from_shell_command(command)
+    if not filters:
+        return None
+    return " && ".join(
+        f"jq -n {shlex.quote(jq_filter)} >/dev/null" for jq_filter in filters
+    )
+
+
+def _command_failure_category(stderr: str) -> str | None:
+    """Classify actionable shell failures without treating cluster text as commands."""
+
+    if _JQ_PARSE_ERROR_PATTERN.search(stderr):
+        return "jq_filter_parse_error"
+    return None
+
+
 _AGENT_PREMATURE_DEFERRAL_PATTERNS = (
     re.compile(r"(?i)\blet me know (?:which|if|whether)\b"),
     re.compile(r"(?i)\bif you (?:want|wish|would like)(?: me)? to (?:continue|check|inspect|run|query)\b"),
@@ -10057,6 +10135,9 @@ def create_app(
                 "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. Never dump Secrets or credentials. "
+                "When using jq, write an inline filter with shell-safe quoting; PodPilot validates it "
+                "without cluster input before the command runs. In an object constructor, parenthesize "
+                "fallback expressions, for example `{value: (.path // \"unknown\")}`. "
                 "An empty label-filtered workload query proves only that the chosen selector matched no "
                 "objects; it does not prove an operator-managed stack is absent or unhealthy. For stack "
                 "health questions, inspect the exact discovered custom resource and its status, then verify "
@@ -10794,6 +10875,84 @@ def create_app(
                         redact_text(tool_error)[:1_000],
                     )
 
+                if tool_error is None:
+                    jq_preflight_command = _jq_preflight_command(command)
+                    if jq_preflight_command is not None:
+                        preflight_request_id = str(uuid4())
+                        runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
+                        runner_requests.add(preflight_request_id)
+                        try:
+                            LOGGER.info(
+                                "podpilot.agentic.jq_preflight_start actor=%s conversation_id=%s "
+                                "cluster_id=%s cluster=%r command_sha256=%s runner_request_id=%s",
+                                username, conversation_id, cluster_id, cluster_name,
+                                command_hash, preflight_request_id,
+                            )
+                            preflight_result = await run_in_threadpool(
+                                unrestricted_runner.execute,
+                                jq_preflight_command,
+                                connection,
+                                request_id=preflight_request_id,
+                            )
+                            if preflight_result.exit_code != 0:
+                                command_diagnostic_ref = uuid4().hex[:12]
+                                command_failure_category = _command_failure_category(
+                                    preflight_result.stderr
+                                ) or "jq_filter_preflight_failed"
+                                stderr_summary = " ".join(
+                                    redact_text(preflight_result.stderr).strip().split()
+                                )[:500]
+                                if command_failure_category == "jq_filter_parse_error":
+                                    tool_error = (
+                                        "jq filter parse error"
+                                        + (f": {stderr_summary}" if stderr_summary else ".")
+                                    )
+                                else:
+                                    tool_error = (
+                                        "jq filter preflight failed"
+                                        + (f": {stderr_summary}" if stderr_summary else ".")
+                                    )
+                                command_retry_guidance = (
+                                    "Correct the jq filter syntax, then run the intended read again."
+                                )
+                                agent_diagnostics.append(
+                                    f"execute_shell: {tool_error} "
+                                    f"(diagnostic ref {command_diagnostic_ref})"
+                                )
+                                LOGGER.warning(
+                                    "podpilot.agentic.jq_preflight_failed actor=%s "
+                                    "conversation_id=%s cluster_id=%s cluster=%r "
+                                    "command_sha256=%s runner_request_id=%s diagnostic_ref=%s "
+                                    "failure_category=%s stderr_tail=%r",
+                                    username, conversation_id, cluster_id, cluster_name,
+                                    command_hash, preflight_request_id,
+                                    command_diagnostic_ref, command_failure_category,
+                                    stderr_summary,
+                                )
+                        except AgentRunnerError as exc:
+                            command_diagnostic_ref = uuid4().hex[:12]
+                            command_failure_category = "jq_filter_preflight_unavailable"
+                            tool_error = "jq filter preflight could not run"
+                            command_retry_guidance = (
+                                "Use a command without jq or retry when the command runner is available."
+                            )
+                            agent_diagnostics.append(
+                                f"execute_shell: {tool_error} "
+                                f"(diagnostic ref {command_diagnostic_ref})"
+                            )
+                            LOGGER.warning(
+                                "podpilot.agentic.jq_preflight_error actor=%s conversation_id=%s "
+                                "cluster_id=%s cluster=%r command_sha256=%s diagnostic_ref=%s "
+                                "exception_chain=%s",
+                                username, conversation_id, cluster_id, cluster_name,
+                                command_hash, command_diagnostic_ref,
+                                _safe_exception_diagnostics(exc),
+                            )
+                        finally:
+                            runner_requests.discard(preflight_request_id)
+                            if not runner_requests:
+                                app.state.adhoc_runner_requests.pop(run_id, None)
+
                 if progress:
                     await progress(
                         "agent_command",
@@ -10880,6 +11039,9 @@ def create_app(
                         if result.exit_code != 0:
                             command_diagnostic_ref = uuid4().hex[:12]
                             result_payload["diagnostic_ref"] = command_diagnostic_ref
+                            command_failure_category = _command_failure_category(result.stderr)
+                            if command_failure_category is not None:
+                                result_payload["failure_category"] = command_failure_category
                         log_method(
                             "podpilot.agentic.command_complete actor=%s conversation_id=%s "
                             "cluster_id=%s cluster=%r command_sha256=%s runner_request_id=%s "
@@ -10940,8 +11102,13 @@ def create_app(
                         stderr_summary
                         or redact_text(str(result_payload.get("error") or "command failed"))[:500]
                     )
+                    failure_label = (
+                        "jq filter parse error"
+                        if command_failure_category == "jq_filter_parse_error"
+                        else "shell command failed"
+                    )
                     agent_limitations.append(
-                        f"Cluster {cluster_name or cluster_id or 'unknown'}: shell command failed"
+                        f"Cluster {cluster_name or cluster_id or 'unknown'}: {failure_label}"
                         + (f" with exit code {exit_code}" if exit_code is not None else "")
                         + f" ({failure_detail}; diagnostic ref {command_diagnostic_ref})."
                     )

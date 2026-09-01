@@ -25,6 +25,7 @@ from podpilot_api.main import (
     _adhoc_evidence_view,
     _agent_collector_error_detail,
     _agent_collector_failure_category,
+    _command_failure_category,
     _agent_duplicate_command_issue,
     _agent_final_answer_quality_issue,
     _agent_premature_deferral_issue,
@@ -64,6 +65,8 @@ from podpilot_api.main import (
     _claims_complete_pod_health,
     _investigation_capability_ledger,
     _investigation_unit_cost,
+    _jq_filters_from_shell_command,
+    _jq_preflight_command,
     _inventory_plan_scope_errors,
     _is_access_review_question,
     _is_broad_pod_health_question,
@@ -10692,6 +10695,32 @@ def test_agent_duplicate_command_requires_a_retry_reason() -> None:
     assert _agent_duplicate_command_issue(
         previous_executions=0, repeat_reason=None,
     ) is None
+
+
+def test_jq_preflight_extracts_inline_filters_without_cluster_input() -> None:
+    command = (
+        "oc get routes -n retail -o json | jq -r "
+        "'.items[:5] | map({name: .metadata.name, "
+        "destinationCA: (.spec.tls.destinationCACertificate // \"<none>\")})'"
+    )
+
+    assert _jq_filters_from_shell_command(command) == [
+        '.items[:5] | map({name: .metadata.name, '
+        'destinationCA: (.spec.tls.destinationCACertificate // "<none>")})'
+    ]
+    assert _jq_preflight_command(command) == (
+        "jq -n '.items[:5] | map({name: .metadata.name, "
+        "destinationCA: (.spec.tls.destinationCACertificate // \"<none>\")})' >/dev/null"
+    )
+
+
+def test_jq_failure_is_classified_as_a_filter_parse_error() -> None:
+    stderr = (
+        "jq: error: syntax error, unexpected //, expecting '}' "
+        "at <top-level>, line 1:\njq: 1 compile error"
+    )
+
+    assert _command_failure_category(stderr) == "jq_filter_parse_error"
 
 
 def test_agent_collector_failure_category_survives_wrapping() -> None:

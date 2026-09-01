@@ -385,6 +385,11 @@ that the API type is advertised; it does not prove the delegated identity may re
 Discovery denial or failure remains a non-blocking limitation, and the full catalog is never placed
 in the model prompt.
 
+Before an unrestricted Ask command containing an inline `jq` filter is allowed to read cluster
+input, PodPilot runs the filter with `jq -n` and no cluster input. A failed compile is returned as a
+`jq filter parse error`, and the original read is not run. Agent prompts require parentheses around
+fallback expressions used as object values, such as `{value: (.path // "unknown")}`.
+
 Answer-derived Markdown tables render through the same raw-HTML-disabled boundary as chat prose.
 Within table headers and cells only, PodPilot normalizes model-authored `<br>`, `<br/>`, and `<br />`
 variants into safe line breaks even when the model mistakenly wraps the tag in an inline-code span.
