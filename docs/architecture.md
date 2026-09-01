@@ -60,13 +60,9 @@ OpenShift template braces are preserved.
 ## Current Runtime
 
 Delegated and shared-credential Investigator and Action conversations share the same agent tool
-contract. The Chat Completions model can select typed `http_probe` and `query_audit_events` helpers
-in the same iterative loop as its brokered shell escape hatch. The larger `query_metrics` schema is
-staged: explicit telemetry questions preload it, while other turns receive a compact
-`load_toolset(metrics)` capability and can add the registered helper on the next model step when
-the investigation develops a material need for usage, rates, trends, rankings, saturation, or
-monitoring signals. Loading a toolset performs no cluster read. The helpers reuse the guarded
-readers' fixed query construction, limits,
+contract. The Chat Completions model can select typed `http_probe`, `query_audit_events`, and
+`query_metrics` helpers in the same iterative loop as its brokered
+shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
@@ -124,13 +120,18 @@ Agent tool schemas enumerate the conversation's selected cluster IDs and require
 call. Malformed arguments are rejected before cluster execution with bounded correction guidance.
 Those model-formatting mistakes remain audited and appear only in collapsed tool-call diagnostics;
 actual collector denials, unavailable sources, and non-zero commands remain visible limitations.
+An empty label-filtered workload query is treated only as a zero-match selector result. Health or
+absence conclusions for operator-managed stacks require the exact discovered custom resource status
+and its owned or selected workloads; the agent may not substitute a guessed conventional label.
 The standing agent instructions require initial Pod and container log reads to use an exact scope
 when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
 The agent may narrow or expand subsequent reads in bounded increments when that sample is
 insufficient, rather than placing an arbitrary full log stream into every later model request.
-If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
-finalization retry using the command results already in context. A second empty turn fails the run;
-successful commands are not automatically repeated and the loop cannot retry indefinitely.
+If a Chat Completions turn returns neither content nor a tool call, or serializes tool arguments as
+the final answer, the API issues up to two bounded finalization attempts using the command results
+already in context. Successful commands are not automatically repeated. If both attempts remain
+empty or tool-shaped, PodPilot renders deterministic collected evidence (or a safe unresolved
+message when only shell reads exist) instead of exposing the malformed model output.
 No retrieval enrichment is authoritative over the agent and no collector suppresses a model-proposed
 read. Collection completeness is evidence about the bounded read, not answer completeness. Native
 resource cards remain additive while the agent can explain selectors, rules, effects, and other

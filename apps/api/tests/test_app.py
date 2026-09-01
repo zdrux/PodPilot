@@ -22,6 +22,7 @@ from podpilot_api.main import (
     _adhoc_capability_wording_issue,
     _adhoc_evidence_view,
     _agent_collector_error_detail,
+    _agent_final_answer_quality_issue,
     _bind_plan_log_intents,
     _bounded_detail_fanout,
     _build_delegated_read_only_explorer,
@@ -48,7 +49,6 @@ from podpilot_api.main import (
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
-    _explicit_metric_question,
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _grounded_read_candidates,
@@ -690,23 +690,6 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                     ),),
                 )
             if self.calls == 2:
-                arguments = json.dumps({"toolset": "metrics"})
-                return AgentStep(
-                    assistant_message={
-                        "role": "assistant", "content": None,
-                        "tool_calls": [{
-                            "id": "load-metrics", "type": "function",
-                            "function": {
-                                "name": "load_toolset", "arguments": arguments,
-                            },
-                        }],
-                    },
-                    content=None,
-                    tool_calls=(AgentToolCall(
-                        id="load-metrics", name="load_toolset", arguments=arguments,
-                    ),),
-                )
-            if self.calls == 3:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
                     "metric": "top_log_volume_by_namespace",
@@ -729,7 +712,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="rank-logs", name="query_metrics", arguments=arguments,
                     ),),
                 )
-            if self.calls == 4:
+            if self.calls == 3:
                 arguments = json.dumps({
                     "cluster_id": cluster_id,
                     "audit_operation_scope": "deletes",
@@ -751,7 +734,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="audit-deletes", name="query_audit_events", arguments=arguments,
                     ),),
                 )
-            if self.calls == 5:
+            if self.calls == 4:
                 arguments = json.dumps({
                     "command": (
                         "oc get clusterlogforwarders.observability.openshift.io "
@@ -2684,6 +2667,23 @@ def test_final_answer_quality_rejects_embedded_schema_but_not_markdown_style() -
     ) is None
 
 
+def test_agent_final_answer_quality_rejects_serialized_tool_arguments() -> None:
+    command = json.dumps({
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "command": "oc get pods -n openshift-logging -o name",
+    })
+
+    assert _agent_final_answer_quality_issue(command) == (
+        "execute_shell_arguments_as_answer"
+    )
+    assert _agent_final_answer_quality_issue(f"```json\n{command}\n```") == (
+        "execute_shell_arguments_as_answer"
+    )
+    assert _agent_final_answer_quality_issue(
+        "The LokiStack is healthy based on the collected Pod status."
+    ) is None
+
+
 def test_inline_bold_sections_and_unicode_bullets_become_readable_markdown() -> None:
     cleaned = _clean_adhoc_markdown(
         "**Observation** • The Route uses passthrough TLS. • The Service receives port 443. "
@@ -3724,24 +3724,6 @@ def test_explicit_metric_question_retries_inventory_classification() -> None:
 
     assert provider.calls == 2
     assert inquiry is not None and inquiry.mode == "metrics"
-
-
-@pytest.mark.parametrize("question", [
-    "Show cluster metrics.",
-    "Graph the CPU usage trend.",
-    "Rank namespaces by log volume.",
-    "What was the API request latency over the last hour?",
-])
-def test_explicit_metric_question_preloads_staged_metrics(question: str) -> None:
-    assert _explicit_metric_question(question) is True
-
-
-@pytest.mark.parametrize("question", [
-    "Show me the Pods in namespace payments.",
-    "Describe the ClusterOperator configuration.",
-])
-def test_inventory_question_does_not_preload_staged_metrics(question: str) -> None:
-    assert _explicit_metric_question(question) is False
 
 
 @pytest.mark.parametrize(
@@ -9149,6 +9131,8 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
     assert "Never fetch unbounded Pod logs by default" in system_prompt
     assert "list_resources and search_resources helpers are unavailable" in system_prompt
+    assert "empty label-filtered workload query proves only" in system_prompt
+    assert "inspect the exact discovered custom resource and its status" in system_prompt
     assert "Markdown table with a header row" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
@@ -9170,47 +9154,59 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     engine.dispose()
 
 
-@pytest.mark.parametrize("preloaded", [False, True])
-def test_unrestricted_agent_stages_metrics_toolset(
-    tmp_path: Path, preloaded: bool,
+@pytest.mark.parametrize("second_finalization_is_valid", [True, False])
+def test_unrestricted_agent_rejects_tool_arguments_returned_as_final_content(
+    tmp_path: Path, second_finalization_is_valid: bool,
 ) -> None:
-    question = (
-        "Show CPU usage for the selected cluster."
-        if preloaded else
-        "Investigate whether resource saturation explains the slowdown."
-    )
+    raw_arguments = json.dumps({
+        "cluster_id": SYSTEM_CLUSTER_ID,
+        "command": "oc get pods -n openshift-logging -o name",
+    })
 
     class Provider(FakeModelProvider):
         def __init__(self) -> None:
             super().__init__()
-            self.agent_messages: list[list[dict[str, object]]] = []
+            self.agent_calls = 0
+            self.finalization_messages: list[list[dict[str, object]]] = []
 
-        def next_agent_step(self, _profile, _api_key, messages):
-            self.agent_messages.append(list(messages))
-            system_prompt = str(messages[0]["content"])
-            expected_marker = '["metrics"]' if preloaded else "[]"
-            assert f"Enabled toolsets:\n{expected_marker}" in system_prompt
-            if preloaded or len(self.agent_messages) > 1:
-                return _agent_final_step("The metrics capability is ready when needed.")
-            arguments = json.dumps({"toolset": "metrics"})
+        def next_agent_step(self, _profile, _api_key, _messages):
+            self.agent_calls += 1
+            if self.agent_calls == 1:
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "pods", "type": "function",
+                            "function": {
+                                "name": "execute_shell", "arguments": raw_arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="pods", name="execute_shell", arguments=raw_arguments,
+                    ),),
+                )
             return AgentStep(
-                assistant_message={
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "id": "load-metrics",
-                        "type": "function",
-                        "function": {
-                            "name": "load_toolset",
-                            "arguments": arguments,
-                        },
-                    }],
-                },
+                assistant_message={"role": "assistant", "content": None},
                 content=None,
-                tool_calls=(AgentToolCall(
-                    id="load-metrics", name="load_toolset", arguments=arguments,
-                ),),
+                tool_calls=(),
             )
+
+        def finalize_agent_step(self, _profile, _api_key, messages):
+            self.finalization_messages.append(list(messages))
+            if len(self.finalization_messages) == 1 or not second_finalization_is_valid:
+                return _agent_final_step(raw_arguments)
+            return _agent_final_step(
+                "No Loki Pods were returned from the openshift-logging namespace."
+            )
+
+    class Runner:
+        def execute(self, command: str, connection=None, **_kwargs) -> AgentCommandResult:
+            assert command == "oc get pods -n openshift-logging -o name"
+            assert connection is None
+            return AgentCommandResult(command=command, exit_code=0, stdout="", stderr="")
 
     provider = Provider()
     app, settings = make_app(
@@ -9219,6 +9215,7 @@ def test_unrestricted_agent_stages_metrics_toolset(
         source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
+        agent_runner=Runner(),
         settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
@@ -9237,7 +9234,6 @@ def test_unrestricted_agent_stages_metrics_toolset(
             updated_by="ivy",
         ))
         db_session.commit()
-    engine.dispose()
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
@@ -9246,32 +9242,33 @@ def test_unrestricted_agent_stages_metrics_toolset(
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": question},
+            data={"message": "Is the Loki stack healthy?"},
             follow_redirects=False,
         )
-        rendered = client.get(
-            created.headers["location"], headers={"x-forwarded-user": "ivy"}
-        )
-        assert "The metrics capability is ready when needed." in rendered.text
+        client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
-    assert len(provider.agent_messages) == (1 if preloaded else 2)
-    if not preloaded:
-        activation = provider.agent_messages[1][-1]
-        assert activation["role"] == "tool"
-        payload = json.loads(str(activation["content"]))
-        assert payload == {
-            "message": "The registered metrics toolset will be available on the next agent step.",
-            "podpilot_toolset_activation": True,
-            "status": "enabled",
-            "toolset": "metrics",
-        }
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            audit = db_session.scalar(select(AuditEvent).where(
-                AuditEvent.action == "agentic.toolset"
-            ))
-            assert audit is not None and audit.outcome == "enabled"
-        engine.dispose()
+    assert provider.agent_calls == 2
+    assert len(provider.finalization_messages) == 2
+    assert "Do not return JSON tool arguments" in str(
+        provider.finalization_messages[1][-1]["content"]
+    )
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        expected_content = (
+            "No Loki Pods were returned from the openshift-logging namespace."
+            if second_finalization_is_valid else
+            "PodPilot completed the bounded cluster reads, but the model did not return "
+            "a usable operator-facing conclusion. The rejected model output was not "
+            "displayed, and no additional cluster operation was attempted."
+        )
+        assert assistant.content == expected_content
+        assert raw_arguments not in assistant.content
+        activity = json.loads(assistant.tool_activity_json)
+        assert bool(activity["limitations"]) is (not second_finalization_is_valid)
+    engine.dispose()
 
 
 def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnostics(

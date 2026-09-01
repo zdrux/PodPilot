@@ -93,8 +93,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
   and command failures remain visible.
 - Delegated and shared-credential unified-agent conversations expose the same purpose-built HTTP,
-  metric, and audit collectors. The full metric schema is preloaded for explicit telemetry requests
-  and otherwise staged behind the audited, non-reading `load_toolset(metrics)` capability. Delegated
+  metric, and audit collectors on every model turn. Delegated
   Thanos and Loki reads resolve the current memory-only user
   token per request and stop working immediately after capability revocation; read-only versus
   read-write behavior is enforced by the Kubernetes broker rather than by different tool menus.

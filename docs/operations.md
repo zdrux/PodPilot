@@ -716,11 +716,13 @@ current run reaches a terminal state.
 See `docs/remote-poc-deployment.md` for ordered image-promotion, air-gap, dry-run,
 authorization-audit, and rollback instructions.
 
-Some OpenAI-compatible reasoning models may occasionally return an empty assistant turn after
-successful tool calls. PodPilot detects that shape and asks once for a concise final answer from the
-existing command results. Look for `podpilot.agentic.empty_step_retry` in API logs. If the retry is
-also empty, the run fails explicitly; PodPilot does not loop or automatically replay successful
-commands.
+Some OpenAI-compatible reasoning models may occasionally return an empty assistant turn or serialize
+the next tool arguments as answer content after successful tool calls. PodPilot rejects both shapes
+and makes at most two finalization attempts from the existing command results. Look for
+`podpilot.agentic.final_answer_retry` in API logs; the legacy `podpilot.agentic.empty_step_retry`
+marker is also emitted for an empty turn. PodPilot never automatically replays successful commands.
+If both bounded attempts remain unusable, it displays deterministic collected evidence or a safe
+unresolved message instead of the malformed model output.
 
 1. Connect and apply the reusable namespace, service account, and read-only RBAC:
 

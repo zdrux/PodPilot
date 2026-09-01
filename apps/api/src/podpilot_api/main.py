@@ -1205,6 +1205,40 @@ def _adhoc_answer_quality_issue(
     return None
 
 
+def _agent_final_answer_quality_issue(content: str) -> str | None:
+    """Reject a tool invocation serialized as an operator-facing answer."""
+
+    candidate = content.strip()
+    fenced = re.fullmatch(
+        r"```(?:json)?\s*(.*?)\s*```",
+        candidate,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if fenced is not None:
+        candidate = fenced.group(1).strip()
+    try:
+        payload = json.loads(candidate)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("command"), str) and (
+        "cluster_id" in payload
+        or re.match(r"^\s*(?:oc|kubectl)\s+", str(payload["command"]), re.IGNORECASE)
+    ):
+        return "execute_shell_arguments_as_answer"
+    if set(payload) == {"toolset"}:
+        return "toolset_arguments_as_answer"
+    if payload.get("name") in {
+        "execute_shell", "discover_resources", "pod_health_summary",
+        "http_probe", "query_audit_events", "query_metrics",
+    } and "arguments" in payload:
+        return "tool_call_as_answer"
+    if "tool_calls" in payload:
+        return "tool_calls_as_answer"
+    return None
+
+
 def _adhoc_capability_wording_issue(
     *, content: str, capability_ledger: dict[str, object] | None
 ) -> str | None:
@@ -7408,8 +7442,7 @@ def _explicit_metric_question(question: str) -> bool:
     """Recognize requests whose requested value can only come from telemetry."""
 
     return bool(re.search(
-        r"(?i)\b(?:metrics?|time[- ]series|trends?|log\s+volume|utili[sz]ation|"
-        r"throughput|consumer\s+lag|request\s+rate|"
+        r"(?i)\b(?:utili[sz]ation|throughput|consumer\s+lag|request\s+rate|"
         r"message\s+rate|bytes?\s+(?:in|out)|iops|latency|error\s+rate|"
         r"under[- ]replicated|cpu\s+(?:usage|consum)|memory\s+(?:usage|consum))",
         question,
@@ -9748,7 +9781,6 @@ def create_app(
             }
             for cluster_id, (cluster_name, connection) in agent_targets.items()
         ]
-        enabled_toolsets = {"metrics"} if _explicit_metric_question(question) else set()
         messages: list[dict[str, object]] = [{
             "role": "system",
             "content": (
@@ -9792,6 +9824,10 @@ def create_app(
                 "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. Never dump Secrets or credentials. "
+                "An empty label-filtered workload query proves only that the chosen selector matched no "
+                "objects; it does not prove an operator-managed stack is absent or unhealthy. For stack "
+                "health questions, inspect the exact discovered custom resource and its status, then verify "
+                "the workloads it owns or selects without guessing a conventional label. "
                 "Use http_probe for an exact observed HTTP(S) endpoint. connect_host preserves the "
                 "URL hostname as HTTP Host and TLS SNI while connecting to an observed address. Keep "
                 "TLS verification enabled unless the operator's investigation specifically requires "
@@ -9808,11 +9844,8 @@ def create_app(
                 "by cluster_id; state that origin and never describe it as bidirectional inter-cluster "
                 "connectivity unless evidence was actually collected from both network origins. "
                 "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
-                "not the cluster audit log. Registered metrics are staged. If query_metrics is unavailable "
-                "and current or historical usage, rates, trends, rankings, saturation, or monitoring signals "
-                "would materially help, call load_toolset with metrics. When query_metrics is available, use "
-                "it before improvising raw PromQL or LogQL; the helper chooses the registered backend and "
-                "bounded range. "
+                "not the cluster audit log. Use query_metrics for registered metrics before improvising "
+                "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. "
                 "Use pod_health_summary for broad questions about whether Pods are healthy, Ready, or "
                 "running. Prefer its anomaly-first complete scan over a broad Pod dump, and never claim all "
                 "matching Pods are healthy unless its scanComplete field is true. "
@@ -9824,9 +9857,6 @@ def create_app(
                 "Use <br> for multiple items inside a cell; never put a raw pipe, JSON braces, quoted JSON "
                 "placeholder, or schema syntax in a cell. Use plain unknown or an em dash when needed. "
                 "Keep explanatory conclusions outside the table.\n\n"
-                "Enabled toolsets:\n"
-                + json.dumps(sorted(enabled_toolsets))
-                + "\n\n"
                 "Selected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),
@@ -9876,7 +9906,7 @@ def create_app(
         agent_diagnostics: list[str] = []
         agent_evidence: list[dict[str, object]] = list(enrichment_evidence or [])
         typed_units_used = 0
-        empty_step_retry_used = False
+        finalization_attempts = 0
         while True:
             if progress:
                 await progress(
@@ -9884,7 +9914,7 @@ def create_app(
                 )
             model_started = asyncio.get_running_loop().time()
             step_method = provider.next_agent_step
-            if empty_step_retry_used:
+            if finalization_attempts:
                 finalizer = getattr(provider, "finalize_agent_step", None)
                 if callable(finalizer):
                     step_method = finalizer
@@ -9924,44 +9954,86 @@ def create_app(
                     )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
-                if not agent_content:
-                    if not empty_step_retry_used:
-                        empty_step_retry_used = True
+                answer_issue = (
+                    "empty_turn"
+                    if not agent_content else
+                    _agent_final_answer_quality_issue(agent_content)
+                )
+                forced_fallback: dict[str, object] | None = None
+                if answer_issue is not None:
+                    if finalization_attempts < 2:
+                        finalization_attempts += 1
                         LOGGER.warning(
-                            "podpilot.agentic.empty_step_retry actor=%s conversation_id=%s",
+                            "podpilot.agentic.final_answer_retry actor=%s conversation_id=%s "
+                            "attempt=%s issue=%s",
                             username,
                             conversation_id,
+                            finalization_attempts,
+                            answer_issue,
                         )
+                        if answer_issue == "empty_turn":
+                            LOGGER.warning(
+                                "podpilot.agentic.empty_step_retry actor=%s conversation_id=%s",
+                                username,
+                                conversation_id,
+                            )
                         if progress:
                             await progress(
                                 "agent_thinking",
-                                "The model returned an empty turn; requesting the final answer once more.",
+                                "The model did not return a usable operator-facing answer; "
+                                "requesting a bounded finalization retry.",
                             )
                         messages.append({
                             "role": "user",
                             "content": (
-                                "Your previous turn contained neither a tool call nor an "
-                                "operator-facing answer. Use the command results already present "
-                                "in this conversation and return a concise final answer now. Do "
-                                "not repeat successful commands unless their results are genuinely "
-                                "insufficient."
+                                "Your previous turn did not contain a usable operator-facing "
+                                "answer. It was empty or serialized tool-call arguments as JSON. "
+                                "Use the command and collector results already present in this "
+                                "conversation and return a concise final answer now in prose or "
+                                "Markdown. Do not return JSON tool arguments and do not repeat successful "
+                                "commands."
                             ),
                         })
                         continue
-                    raise ModelProviderError(
-                        "The agent returned neither a tool call nor a final answer "
-                        "after one finalization retry.",
-                        failure_type="agent_contract",
+                    if agent_evidence:
+                        forced_fallback = _deterministic_provider_failure_answer(
+                            question=question,
+                            evidence=agent_evidence,
+                            activity=activity,
+                        )
+                        agent_content = str(forced_fallback["content"])
+                    else:
+                        agent_content = (
+                            "PodPilot completed the bounded cluster reads, but the model did not "
+                            "return a usable operator-facing conclusion. The rejected model output "
+                            "was not displayed, and no additional cluster operation was attempted."
+                        )
+                        forced_fallback = {
+                            "content": agent_content,
+                            "citations": [],
+                            "conclusion_status": "unresolved",
+                        }
+                    agent_limitations.append(
+                        "The model returned an empty response or tool-call arguments after two "
+                        "bounded finalization attempts; PodPilot used a deterministic fallback."
                     )
                 content = agent_content
-                agent_conclusion_status = "agent_reported"
+                agent_conclusion_status = (
+                    str(forced_fallback.get("conclusion_status") or "probable")
+                    if forced_fallback is not None else
+                    "agent_reported"
+                )
                 deterministic_health = (
                     _deterministic_pod_health_answer(
                         evidence=agent_evidence, activity=activity,
                     )
-                    if _is_broad_pod_health_question(question) else None
+                    if forced_fallback is None and _is_broad_pod_health_question(question) else None
                 )
-                if deterministic_health is not None:
+                if forced_fallback is not None:
+                    enrichment_citations = [
+                        str(item) for item in forced_fallback.get("citations", [])
+                    ]
+                elif deterministic_health is not None:
                     content = str(deterministic_health["content"])
                     enrichment_citations = [
                         str(item) for item in deterministic_health.get("citations", [])
@@ -10075,55 +10147,6 @@ def create_app(
 
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
-                if tool_call.name == "load_toolset":
-                    toolset = ""
-                    activation_status = "invalid"
-                    activation_error: str | None = None
-                    try:
-                        activation_arguments = json.loads(tool_call.arguments)
-                        if not isinstance(activation_arguments, dict):
-                            raise ValueError("arguments must be an object")
-                        if set(activation_arguments) != {"toolset"}:
-                            raise ValueError("only toolset may be supplied")
-                        toolset = str(activation_arguments.get("toolset") or "").strip()
-                        if toolset != "metrics":
-                            raise ValueError("toolset must be metrics")
-                        activation_status = (
-                            "already_enabled" if toolset in enabled_toolsets else "enabled"
-                        )
-                        enabled_toolsets.add(toolset)
-                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                        activation_error = f"The toolset request was invalid: {exc}"
-                    activation_payload: dict[str, object] = {
-                        "podpilot_toolset_activation": True,
-                        "status": activation_status,
-                        "toolset": toolset,
-                        "message": (
-                            "The registered metrics toolset will be available on the next agent step."
-                            if activation_status in {"enabled", "already_enabled"}
-                            else "No toolset was enabled."
-                        ),
-                    }
-                    if activation_error:
-                        activation_payload["error"] = activation_error
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(activation_payload, sort_keys=True),
-                    })
-                    with Session(engine) as db_session:
-                        db_session.add(AuditEvent(
-                            actor=username,
-                            action="agentic.toolset",
-                            outcome=activation_status,
-                            details_json=json.dumps({
-                                "conversation_id": conversation_id,
-                                "toolset": toolset,
-                            }, sort_keys=True),
-                        ))
-                        db_session.commit()
-                    continue
-
                 if tool_call.name in {
                     "discover_resources", "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
@@ -10139,13 +10162,6 @@ def create_app(
                     collector_retry_guidance: str | None = None
                     intent: ReadIntent | None = None
                     try:
-                        if (
-                            tool_call.name == "query_metrics"
-                            and "metrics" not in enabled_toolsets
-                        ):
-                            raise ValueError(
-                                "the metrics toolset is not enabled; call load_toolset first"
-                            )
                         raw_arguments = json.loads(tool_call.arguments)
                         if not isinstance(raw_arguments, dict):
                             raise ValueError("arguments must be an object")
@@ -10216,7 +10232,6 @@ def create_app(
                             isinstance(exc, (ValidationError, TypeError, json.JSONDecodeError))
                             or str(exc).startswith("arguments must be an object")
                             or "cluster_id must identify" in str(exc)
-                            or "toolset is not enabled" in str(exc)
                         )
                         collector_status = (
                             "invalid" if argument_error else "denied_or_unavailable"
