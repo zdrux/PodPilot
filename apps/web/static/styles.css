@@ -291,31 +291,28 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .raw-response-switch > input:checked + span::after { background: var(--orange); transform: translateX(15px); }
 .raw-response-switch > input:focus-visible + span { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .raw-response-switch strong { font-size: 10px; font-weight: 750; }
-.composer-meta-row { display: flex !important; align-items: center !important; justify-content: space-between !important; gap: 18px !important; margin: 0 0 8px !important; }
+.composer-prompt-label { width: max-content; margin-bottom: 8px !important; }
+.composer-toolbar { min-height: 49px; display: flex !important; align-items: center !important; justify-content: space-between !important; gap: 18px !important; margin: 0 !important; padding: 8px 9px; border-top: 1px solid rgba(161, 177, 195, .22); }
 .question-cluster-row { min-width: 0; display: flex; align-items: center; gap: 10px; }
-.question-cluster-row > label, .cluster-inline-label { flex: 0 0 auto; margin: 0; }
+.cluster-inline-label { flex: 0 0 auto; margin: 0; }
 .cluster-inline-label { color: var(--muted); font-size: 9px; font-weight: 750; text-transform: uppercase; }
 .composer-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; margin-left: auto; }
 .composer-controls > .raw-response-switch { flex: 0 0 auto; white-space: nowrap; }
 .reasoning-effort-picker { display: flex !important; align-items: center; gap: 7px; margin: 0 !important; white-space: nowrap; }
 .reasoning-effort-picker select { min-height: 32px; padding: 0 8px; border: 1px solid var(--border-bright); border-radius: 7px; color: var(--text); background: #08101b; font: inherit; font-size: 10px; }
-.composer-input-wrap { position: relative; display: block !important; margin: 0 !important; }
-.composer-input-wrap textarea { display: block; padding-right: 142px; }
-.composer-input-wrap > button {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  bottom: 10px;
-  min-width: 116px;
-  min-height: 0;
-}
-.ask-layout.action-session .composer-input-wrap > [data-ask-submit] {
+.composer-input-wrap { position: relative; display: block !important; overflow: visible; margin: 0 !important; border: 1px solid #e7edf2; border-radius: 9px; background: #142133; }
+.ask-composer .composer-input-wrap textarea { min-height: 73px; max-height: 260px; display: block; resize: none; overflow-y: hidden; padding: 13px; border: 0 !important; border-radius: 9px 9px 0 0; outline: 0; background: transparent !important; }
+.composer-input-wrap:focus-within { box-shadow: 0 0 0 2px rgba(69, 212, 232, .1); }
+.composer-controls > [data-ask-submit] { min-width: 86px; min-height: 32px; padding: 5px 15px; }
+.ask-layout.action-session .composer-controls > [data-ask-submit] {
   border-color: rgba(233, 163, 121, .72);
   color: #180d0b;
   background: linear-gradient(135deg, #e9a379, #c86455);
 }
 .cluster-picker { position: relative; flex: 0 1 520px; width: min(520px, 42vw); min-width: 260px; }
 .cluster-picker > summary { min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 12px; border: 1px solid var(--border-bright); border-radius: 9px; color: var(--text); background: #08101b; cursor: pointer; list-style: none; }
+.composer-toolbar .cluster-picker { flex-basis: 460px; width: min(460px, 32vw); min-width: 230px; }
+.composer-toolbar .cluster-picker > summary { min-height: 32px; padding-inline: 10px; border-radius: 7px; }
 .cluster-picker > summary::-webkit-details-marker { display: none; }
 .cluster-picker-selection { min-width: 0; display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: thin; }
 .cluster-picker-chip { flex: 0 0 auto; max-width: 220px; overflow: hidden; padding: 5px 8px; border: 1px solid rgba(69, 212, 232, .32); border-radius: 3px; color: #bff6ff; background: rgba(69, 212, 232, .14); font-size: 11px; font-weight: 750; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
@@ -853,13 +850,12 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   .ask-thread .chat-meta { margin-bottom: 9px; padding-top: 0; }
   .ask-thread .chat-meta strong { flex-basis: auto; }
   .ask-composer .chat-form { padding-inline: 16px; }
-  .composer-meta-row { align-items: flex-start !important; flex-direction: column; gap: 9px !important; }
+  .composer-toolbar { align-items: stretch !important; flex-direction: column; gap: 9px !important; }
   .question-cluster-row { width: 100%; }
-  .composer-controls { margin-left: 0; flex-wrap: wrap; }
+  .composer-controls { width: 100%; margin-left: 0; flex-wrap: wrap; }
   .cluster-picker { flex-basis: 100%; width: 100%; min-width: 0; }
   .cluster-picker-menu { width: min(520px, calc(100vw - 32px)); }
-  .composer-input-wrap textarea { padding-right: 12px; padding-bottom: 64px; }
-  .composer-input-wrap > button { top: auto; right: 9px; bottom: 9px; min-height: 42px; }
+  .composer-controls > [data-ask-submit] { min-height: 36px; margin-left: auto; }
   .prompt-starters { grid-template-columns: 1fr; }
   .workload-starter-form { grid-template-columns: 1fr; }
 }

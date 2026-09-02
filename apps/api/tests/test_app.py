@@ -14638,13 +14638,19 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "clusterPicker.open && !clusterPicker.contains(event.target)" in script
     assert "clusterPicker.open = false" in script
     assert ".cluster-filter-tabs > button[aria-selected=\"true\"]" in styles
-    assert "composer-meta-row" in template
+    assert "composer-toolbar" in template
     assert "composer-input-wrap" in template
+    assert 'rows="2" data-min-rows="2" data-max-rows="10"' in template
     assert '>Submit</button>' in template
     assert 'askSubmit.textContent = "Submit"' in script
-    assert ".ask-layout.action-session .composer-input-wrap > [data-ask-submit]" in styles
+    assert "border: 1px solid #e7edf2" in styles
+    assert ".composer-controls > [data-ask-submit]" in styles
+    assert "min-height: 73px; max-height: 260px" in styles
+    assert ".ask-composer .composer-input-wrap textarea" in styles
+    assert "resizeComposerTextarea" in script
+    assert 'composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"' in script
+    assert ".ask-layout.action-session .composer-controls > [data-ask-submit]" in styles
     assert ".composer-input-wrap > [data-run-cancel]" not in styles
-    assert "top: 10px;" in styles
     assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script
     assert 'pickerLabel.replaceChildren()' in script

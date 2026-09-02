@@ -146,8 +146,90 @@ final result: passed
 
 ---
 
+# Ask Composer Bottom-toolbar QA
+
+## Comparison target
+
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-f3d3fc34-b20c-4ee7-b7cc-b4c1a4df6500.png`, with the one-row toolbar patterns in `codex-clipboard-47a7dea3-3730-41f0-a65f-5e91822c8cc2.png` and `codex-clipboard-0c4e7864-db98-422a-9ad1-71baceb61ec6.png`.
+- Browser-rendered implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-composer-toolbar.png`.
+- Deployed application: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/ask/5696d571-6448-4a4d-bb33-8c63ec427d1c`.
+- State: authenticated `podpilot-breakglass` user, existing conversation, textarea focused, reasoning `Low`, raw-response switch off.
+
+## Viewport and normalization
+
+- Source crop: 1859 × 202 pixels at the supplied density.
+- Browser viewport: 1859 × 500 CSS pixels at device scale factor 1.
+- Implementation composer crop: 1611 × 233 pixels; the narrower crop reflects PodPilot's 248-pixel desktop sidebar, not a density mismatch.
+- Full-view comparison evidence: the source and implementation were opened together at native density after the SNO rollout.
+- Focused-region evidence: the composer crop is the complete changed region, so no smaller focused crop was required.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: PodPilot's existing label, control, and prompt typography is preserved; the hierarchy now reads as prompt first and controls second without introducing a foreign type style.
+- Spacing and layout rhythm: the prompt is 119 pixels high inside a 172-pixel shared frame; the bottom toolbar is 51 pixels high and remains a single desktop row. The Submit control is 86 × 32 pixels, matching the selects instead of spanning the textarea height.
+- Colors and visual tokens: the shared frame retains the requested one-pixel warm-white border. Autofocus adds only the existing subtle cyan outer glow and no longer replaces the white outline.
+- Image quality and asset fidelity: the composer contains no raster imagery or custom visual assets; existing product controls and icons remain unchanged.
+- Copy and content: cluster selection, Change, mode/reasoning, raw-response, Submit/Cancel, and the prompt placeholder keep their existing behavior and wording. The captured legacy conversation does not render a delegated mode badge; new delegated conversations retain the mode control in the same toolbar.
+- Interaction and accessibility: the Reasoning select changed from Low to Medium and back, and the raw-response switch toggled on and off without submitting a chat. The textarea retains its associated `Question or symptom` label. Browser console errors: none.
+- Responsive behavior: the desktop toolbar is explicitly a row; the existing compact breakpoint stacks the toolbar groups inside the same bordered frame so controls remain usable without horizontal clipping.
+
+## Comparison history
+
+- Pass 1: the structure and button geometry matched the requested direction, but autofocus changed the shared outline from white to cyan.
+- Fix: retained the white one-pixel border during focus and moved the cyan indication to a two-pixel outer glow.
+- Final pass: the deployed crop shows the stable white frame, two-row resting prompt area, one-row control bar, and compact Submit button with no console errors.
+
+## Implementation checklist
+
+- [x] Move cluster, mode, reasoning, and raw-response controls into the composer bottom row.
+- [x] Place Submit/Cancel on the same desktop toolbar.
+- [x] Reduce Submit to the one-row control height.
+- [x] Expand the shared input frame vertically for the added toolbar.
+- [x] Preserve the existing responsive and interaction behavior.
+- [x] Deploy to SNO and verify the rendered state in Chrome.
+
+final result: passed
+
+---
+
 ## Current QA status
 
-The current comparison target is the Cluster Sign-in Intro Consolidation QA above. Its browser-rendered evidence remains unavailable, so that build gate supersedes the earlier passed reports in this file.
+The current comparison target is the Ask Composer Auto-growth QA below.
 
-final result: blocked
+final result: passed
+
+---
+
+# Ask Composer Auto-growth QA
+
+## Comparison target
+
+- Browser-rendered implementation: `C:\Users\zdrux\Desktop\projects\PodPilot\design-qa-composer-autogrow.png`.
+- Deployed application: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/ask/5696d571-6448-4a4d-bb33-8c63ec427d1c`.
+- State: authenticated existing conversation, empty focused composer at its two-row minimum. Live Chrome verification: 73 px at rest, 259 px with ten lines, and scrolling starts at line eleven (282 px content height).
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- The empty composer is 73 pixels high, representing two text rows with its existing padding.
+- Three explicit lines expand the textarea to 96 pixels; ten lines expand it to 259 pixels.
+- An eleventh line retains the 259-pixel cap and changes vertical overflow from hidden to auto.
+- Clearing the field returns it to 73 pixels with overflow hidden.
+- Draft restoration, optimistic clearing, and failed-submit restoration all invoke the same resize path.
+- The bottom toolbar, white frame, 32-pixel Submit button, and responsive behavior are unchanged.
+- Browser console errors: none.
+
+## Verification
+
+- JavaScript syntax check passed.
+- Focused composer regression passed.
+- Full model-free suite: 777 passed with 80% aggregate coverage.
+- SNO application image: `sha256:5050b801625a6b2201e6e17c720b4c2f0ae55858dd6baf9377d03e615345cf41`.
+- Model profile probe: ready.
+
+final result: passed
+
+final result: passed

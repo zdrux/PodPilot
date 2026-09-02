@@ -531,6 +531,25 @@
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
+  const resizeComposerTextarea = () => {
+    if (!composerTextarea) return;
+    const styles = window.getComputedStyle(composerTextarea);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 23;
+    const verticalChrome = Number.parseFloat(styles.paddingTop)
+      + Number.parseFloat(styles.paddingBottom)
+      + Number.parseFloat(styles.borderTopWidth)
+      + Number.parseFloat(styles.borderBottomWidth);
+    const minRows = Number.parseInt(composerTextarea.dataset.minRows || "2", 10);
+    const maxRows = Number.parseInt(composerTextarea.dataset.maxRows || "4", 10);
+    const minHeight = Math.ceil((lineHeight * minRows) + verticalChrome);
+    const maxHeight = Math.ceil((lineHeight * maxRows) + verticalChrome);
+    composerTextarea.style.height = "auto";
+    const contentHeight = composerTextarea.scrollHeight
+      + Number.parseFloat(styles.borderTopWidth)
+      + Number.parseFloat(styles.borderBottomWidth);
+    composerTextarea.style.height = `${Math.min(Math.max(contentHeight, minHeight), maxHeight)}px`;
+    composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+  };
   const updateAskSubmitAvailability = () => {
     if (!askSubmit || askSubmit.type !== "submit") return;
     const ready = executionMode?.value === "action"
@@ -549,11 +568,15 @@
     const savedDraft = composerDraftKey ? window.sessionStorage.getItem(composerDraftKey) : "";
     if (!composerTextarea.value && savedDraft) composerTextarea.value = savedDraft;
     composerTextarea.addEventListener("input", () => {
+      resizeComposerTextarea();
       if (!composerDraftKey) return;
       if (composerTextarea.value) window.sessionStorage.setItem(composerDraftKey, composerTextarea.value);
       else window.sessionStorage.removeItem(composerDraftKey);
     });
-    window.requestAnimationFrame(() => composerTextarea.focus({preventScroll: true}));
+    window.requestAnimationFrame(() => {
+      resizeComposerTextarea();
+      composerTextarea.focus({preventScroll: true});
+    });
   }
   if (executionMode && askSubmit) {
     const updateModeAvailability = () => {
@@ -1043,7 +1066,10 @@
       const requestBody = new URLSearchParams(new FormData(adhocForm));
       requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
-      if (textarea) textarea.value = "";
+      if (textarea) {
+        textarea.value = "";
+        resizeComposerTextarea();
+      }
       if (composerDraftKey) window.sessionStorage.removeItem(composerDraftKey);
       textarea?.focus({preventScroll: true});
       if (rawResponseToggle) rawResponseToggle.disabled = true;
@@ -1065,7 +1091,10 @@
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         optimistic?.nodes.forEach((node) => node.remove());
         if (optimistic?.empty) optimistic.empty.hidden = false;
-        if (textarea) textarea.value = question;
+        if (textarea) {
+          textarea.value = question;
+          resizeComposerTextarea();
+        }
         if (composerDraftKey) window.sessionStorage.setItem(composerDraftKey, question);
         if (rawResponseToggle) rawResponseToggle.disabled = false;
         if (reasoningSelect) reasoningSelect.disabled = false;

@@ -391,9 +391,11 @@
         data-read-only-model-ready="{{ 'true' if read_only_model_ready else 'false' }}"
         data-action-model-ready="{{ 'true' if action_model_ready else 'false' }}"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
-        <div class="composer-meta-row">
-          <div class="question-cluster-row">
-            <label for="adhoc-message">Question or symptom</label>
+        <label class="composer-prompt-label" for="adhoc-message">Question or symptom</label>
+        <div class="composer-input-wrap">
+          <textarea id="adhoc-message" name="message" rows="2" data-min-rows="2" data-max-rows="10" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>
+          <div class="composer-toolbar">
+            <div class="question-cluster-row">
             <span class="cluster-inline-label">Send requests to</span>
             <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if not conversation %}data-cluster-selection-required{% endif %} {% if conversation or active_run %}data-locked="true"{% endif %}>
               <summary>
@@ -429,8 +431,8 @@
             </details>
             <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
             {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">Change</a>{% endif %}
-          </div>
-          <div class="composer-controls">
+            </div>
+            <div class="composer-controls">
             {% if not conversation and is_delegated_mode %}
             <label class="reasoning-effort-picker" for="execution-mode">Mode
               <select id="execution-mode" name="execution_mode">
@@ -452,15 +454,13 @@
               <span aria-hidden="true"></span>
               <strong>Show raw model response</strong>
             </label>
+              {% if active_run %}
+              <button class="button primary" type="button" data-ask-submit data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" aria-label="Cancel current request">Cancel</button>
+              {% else %}
+              <button class="button primary" type="submit" data-ask-submit {% if not model_ready or not selected_cluster_ids or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
+              {% endif %}
+            </div>
           </div>
-        </div>
-        <div class="composer-input-wrap">
-          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>
-          {% if active_run %}
-          <button class="button primary" type="button" data-ask-submit data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" aria-label="Cancel current request">Cancel</button>
-          {% else %}
-          <button class="button primary" type="submit" data-ask-submit {% if not model_ready or not selected_cluster_ids or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
-          {% endif %}
         </div>
       </form>
       {% else %}

@@ -508,9 +508,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   and collapse cited observations into one rounded on-demand vertical timeline; the redundant
   inspected-target disclosure is no longer rendered. Ask session,
   reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
-- The Ask composer now keeps the question label, cluster picker, and raw-response toggle on one
-  row and places the Investigate button inside the text box; the former per-question budget and
-  keyboard-hint row is no longer rendered.
+- The Ask composer keeps its question label above one shared prompt frame. Cluster, execution-mode,
+  reasoning, raw-response, and Submit/Cancel controls occupy the frame's bottom toolbar; the former
+  per-question budget and keyboard-hint row is no longer rendered.
 - Final-answer evidence is compacted into a provider-only bounded view that prioritizes
   current reads and caps Pod logs, objects, findings, and total bytes without changing
   persisted provenance. Citation-bearing heading-only or extremely brief answers receive
