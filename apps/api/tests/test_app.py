@@ -10223,6 +10223,79 @@ def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
     engine.dispose()
 
 
+def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
+    tmp_path: Path, caplog,
+) -> None:
+    class Provider(FakeModelProvider):
+        def next_agent_step(self, *_args, **_kwargs):
+            raise ModelProviderError(
+                "PodPilot stopped the model request before transmission because its conservative "
+                "input-token upper bound (61668) exceeds the configured maximum (59904).",
+                failure_type="input_limit",
+                failure={
+                    "failure_type": "input_limit",
+                    "estimated_input_tokens_upper_bound": 61_668,
+                    "configured_input_tokens": 59_904,
+                },
+            )
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=Provider(),
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    conversation_id = "30600000-0000-0000-0000-000000000001"
+    now = datetime.now(timezone.utc)
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1, provider_label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b", api_type="chat-completions",
+            embedding_model=None, timeout_seconds=240, max_output_tokens=4096,
+            status="ready", capabilities_json='{"tool_calls": true}', updated_by="ivy",
+        ))
+        db_session.add(AdHocConversation(
+            id=conversation_id, created_by="ivy", title="Large investigation",
+            status="active",
+            evidence_json=json.dumps([{
+                "id": "prior-evidence", "tool": "get_resource",
+                "summary": "Previously read a Pod.", "source": "test:pod",
+                "collected_at": now.isoformat(),
+                "data": {"kind": "Pod", "metadata": {"name": "web", "namespace": "apps"}},
+            }]),
+        ))
+        db_session.add(AdHocMessage(
+            id="30600000-0000-0000-0000-000000000002",
+            conversation_id=conversation_id, role="user", actor="ivy",
+            content="Inspect the existing evidence.", created_at=now,
+        ))
+        db_session.commit()
+    engine.dispose()
+    caplog.set_level("INFO", logger="uvicorn.error")
+
+    with TestClient(app) as client:
+        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        continued = client.post(
+            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Continue the investigation."},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            continued.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert "configured input-token limit" in rendered.text
+    assert "input-token upper bound (61668) exceeds the configured maximum (59904)" in rendered.text
+    assert "UnboundLocalError" not in rendered.text
+    assert "Internal job failure" not in rendered.text
+    assert "podpilot.adhoc.provider_failed" in caplog.text
+
+
 def test_unrestricted_audit_argument_normalization_is_broad_and_error_safe() -> None:
     aliases = _normalize_agent_collector_arguments("query_audit_events", {
         "audit_operation_scope": "delete",

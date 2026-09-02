@@ -448,7 +448,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   `role=tool` results.
 - Provider-input tests must prove oversized shell results are compacted before reinjection, the
   complete messages-plus-tools request stays below `max_input_tokens`, irreducible requests fail
-  locally without provider transmission, and bounded redacted 4xx/5xx error details are retained.
+  locally without provider transmission, the operator sees the configured input-token limit rather
+  than an internal exception type even when prior evidence exists, and bounded redacted 4xx/5xx
+  error details are retained.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's

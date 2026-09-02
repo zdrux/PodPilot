@@ -11522,6 +11522,7 @@ def create_app(
             "citations": [],
             "limitations": [],
         }
+        inquiry: InquirySemantics | None = None
         if profile_snapshot:
             provider_phase = "credential_read"
             try:
@@ -11665,7 +11666,6 @@ def create_app(
                         agent_readers=agent_readers,
                         read_only=read_only_agent,
                     )
-                inquiry = None
                 prior_audit_query = _latest_audit_query_semantics(evidence)
                 prior_metric_query = _latest_metric_query_semantics(evidence)
                 prior_resource_query = _latest_resource_query_semantics(evidence)
@@ -12134,6 +12134,7 @@ def create_app(
                     getattr(exc, "failure_type", "")
                     if isinstance(exc, ModelProviderError) else ""
                 )
+                input_limit = provider_failure_type == "input_limit"
                 request_rejected = provider_failure_type in {
                     "input_limit", "request_rejected",
                 }
@@ -12164,7 +12165,8 @@ def create_app(
                         )
                     )
                     failure_kind = (
-                        "rejected or over-budget model request" if request_rejected else
+                        "configured input-token limit" if input_limit else
+                        "rejected model request" if request_rejected else
                         "invalid structured response" if contract_failure
                         else "provider failure"
                     )
@@ -12175,6 +12177,13 @@ def create_app(
                     limitations.append(str(exc))
                     validated["limitations"] = _dedupe_limitations(limitations)
                     validated["conclusion_status"] = "probable"
+                    if input_limit:
+                        validated["content"] = (
+                            "**PodPilot reached this model profile's configured input-token limit.** "
+                            "The oversized model request was not sent; operations completed earlier "
+                            "in the turn are unaffected.\n\n"
+                            + str(validated["content"])
+                        )
                     log_section = _deterministic_log_findings_section(
                         evidence=evidence, activity=activity
                     )
@@ -12201,6 +12210,11 @@ def create_app(
                                 "The agent could not produce a valid final answer, so PodPilot could not "
                                 "complete this investigation. No cluster changes were attempted."
                                 if agent_contract_failure else
+                                "PodPilot reached this model profile's configured input-token limit. The "
+                                "oversized model request was stopped before transmission; operations completed "
+                                "earlier in the turn are unaffected. Start a new conversation or narrow the "
+                                "request. Increase the profile limit only if the provider model supports it."
+                                if input_limit else
                                 "PodPilot stopped or the provider rejected the model request because its "
                                 "input was invalid or exceeded the configured context budget. No cluster "
                                 "changes were attempted."
