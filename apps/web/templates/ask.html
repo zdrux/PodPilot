@@ -195,22 +195,25 @@
         {% if message.role == 'assistant' and message.citations %}
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
-            {% if cited and cited.metric_ranking %}
+            {% if cited and (cited.metric_ranking or cited.kafka_topic_storage) %}
+            {% set metric_presentation = cited.kafka_topic_storage or cited.metric_ranking %}
             <section class="metric-result" aria-labelledby="metric-result-{{ message.id }}-{{ id }}">
               <div class="metric-result-heading">
                 <div>
                   <span class="evidence-tool">Observed metric</span>
-                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{% if cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ cited.metric_ranking.title }}</h3>
-                  <p>{{ cited.metric_ranking.description }}</p>
+                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{% if cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ metric_presentation.title }}</h3>
+                  <p>{{ metric_presentation.description }}</p>
                 </div>
+                {% if not cited.kafka_topic_storage %}
                 <button class="button secondary compact-button" type="button"
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
                   data-csv-filename="podpilot-{{ cited.data.metric if cited.data else 'metrics' }}.csv">Download CSV</button>
+                {% endif %}
               </div>
               {% if cited.metric_trend %}
-              <figure class="metric-trend" aria-label="{{ cited.metric_ranking.title }} over time">
+              <figure class="metric-trend" aria-label="{{ metric_presentation.title }} over time">
                 <svg viewBox="0 0 1000 232" role="img" aria-labelledby="metric-trend-title-{{ message.id }}-{{ id }} metric-trend-desc-{{ message.id }}-{{ id }}">
-                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }} over time</title>
+                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ metric_presentation.title }} over time</title>
                   <desc id="metric-trend-desc-{{ message.id }}-{{ id }}">Bounded metric samples from {{ cited.metric_trend.start }} through {{ cited.metric_trend.end }}. Peak {{ cited.metric_trend.peak }} at {{ cited.metric_trend.peak_at }}.</desc>
                   <g class="metric-trend-grid" aria-hidden="true">
                     <line x1="42" y1="30" x2="958" y2="30"></line>
@@ -235,6 +238,38 @@
                 {% endif %}
               </figure>
               {% endif %}
+              {% if cited.kafka_topic_storage %}
+              <div class="kafka-topic-storage-list">
+                <div class="kafka-topic-storage-columns" aria-hidden="true">
+                  <span>Rank / topic</span><span>Replicated disk usage</span><span>Aggregate PVC capacity share</span><span>Placement</span>
+                </div>
+                {% for row in cited.kafka_topic_storage.rows %}
+                <details class="kafka-topic-storage-group" {% if loop.first %}open{% endif %}>
+                  <summary>
+                    <span class="kafka-topic-storage-identity"><b>{{ row.rank }}</b><code>{{ row.topic }}</code>{% if row.internal %}<em>Internal</em>{% endif %}</span>
+                    <strong>{{ row.current_bytes }}</strong>
+                    <span class="kafka-topic-storage-share"><progress max="{{ cited.kafka_topic_storage.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.topic }} aggregate broker PVC capacity share {{ row.utilization }}"></progress><strong>{{ row.utilization }}</strong></span>
+                    <span>{{ row.placement_summary }}</span>
+                  </summary>
+                  {% if row.partitions %}
+                  <div class="metric-table-wrap kafka-partition-table-wrap">
+                    <table class="metric-ranking-table kafka-partition-table">
+                      <thead><tr><th>Partition</th><th>Broker ID</th><th>Broker Pod</th><th>Replica disk usage</th></tr></thead>
+                      <tbody>
+                      {% for partition in row.partitions %}
+                        <tr><td><code>{{ partition.partition }}</code></td><td><code>{{ partition.broker_id }}</code></td><td><code>{{ partition.broker_pod }}</code></td><td class="metric-current"><strong>{{ partition.current_bytes }}</strong></td></tr>
+                      {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <p class="kafka-topic-storage-empty">No partition replica detail was retained for this topic.</p>
+                  {% endif %}
+                </details>
+                {% endfor %}
+              </div>
+              <p class="metric-result-note">{{ cited.kafka_topic_storage.capacity_note }}</p>
+              {% else %}
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
                   <thead><tr><th>Rank</th>{% for column in cited.metric_ranking.columns %}<th>{{ column.label }}</th>{% endfor %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if cited.metric_ranking.show_maximum %}<th>Peak</th>{% endif %}</tr></thead>
@@ -251,7 +286,8 @@
                   </tbody>
                 </table>
               </div>
-              <small>{% if cited.metric_ranking.complete %}Complete bounded result{% else %}Result reached a collection limit and may be incomplete{% endif %} · Source: {{ cited.source }}</small>
+              {% endif %}
+              <small>{% if metric_presentation.complete %}Complete bounded result{% else %}Result reached a collection limit and may be incomplete{% endif %} · Source: {{ cited.source }}</small>
             </section>
             {% endif %}
           {% endfor %}

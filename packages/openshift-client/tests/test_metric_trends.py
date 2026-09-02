@@ -4,7 +4,12 @@ import pytest
 
 from podpilot_diagnostics.adhoc import ReadIntent
 from podpilot_openshift.metric_trends import BoundedMetricTrendReader
-from podpilot_openshift.metrics import MetricPoint, MetricRange, MetricSeries
+from podpilot_openshift.metrics import (
+    MetricPoint,
+    MetricRange,
+    MetricSeries,
+    MonitoringQueryError,
+)
 
 
 NOW = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
@@ -27,6 +32,22 @@ class FakeRangeSource:
             collected_at=NOW,
             is_complete=True,
         )
+
+
+class SequentialRangeSource:
+    def __init__(self, responses: list[MetricRange | Exception]) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.responses = list(responses)
+
+    def query_range(self, promql, *, start, end, step_seconds):
+        self.calls.append({
+            "promql": promql, "start": start, "end": end,
+            "step_seconds": step_seconds,
+        })
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def test_pod_cpu_trend_uses_server_owned_query_and_statistics() -> None:
@@ -330,6 +351,126 @@ def test_kafka_topic_disk_utilization_exposes_shared_capacity_semantics() -> Non
     assert observation.data["consumptionBasis"] == "replicated_topic_log_bytes"
     assert observation.data["capacityBasis"] == "aggregate_kafka_broker_pvc_capacity"
     assert "topics share broker PVCs" in result.limitations[0]
+
+
+def test_kafka_topic_disk_utilization_collects_topic_bytes_and_partition_replicas() -> None:
+    source = SequentialRangeSource([
+        MetricRange(series=(
+            MetricSeries(labels={"topic": "orders"}, points=(
+                MetricPoint(NOW, 12.5),
+            )),
+            MetricSeries(labels={"topic": "payments"}, points=(
+                MetricPoint(NOW, 4.0),
+            )),
+        ), collected_at=NOW, is_complete=True),
+        MetricRange(series=(
+            MetricSeries(labels={"topic": "orders"}, points=(
+                MetricPoint(NOW, 3072.0),
+            )),
+            MetricSeries(labels={"topic": "payments"}, points=(
+                MetricPoint(NOW, 1024.0),
+            )),
+        ), collected_at=NOW, is_complete=True),
+        MetricRange(series=(
+            MetricSeries(labels={
+                "topic": "orders", "partition": "0", "pod": "orders-broker-0",
+            }, points=(MetricPoint(NOW, 2048.0),)),
+            MetricSeries(labels={
+                "topic": "orders", "partition": "1", "pod": "orders-broker-1",
+            }, points=(MetricPoint(NOW, 1024.0),)),
+        ), collected_at=NOW, is_complete=True),
+        MetricRange(series=(
+            MetricSeries(labels={
+                "topic": "payments", "partition": "0", "pod": "orders-broker-0",
+            }, points=(MetricPoint(NOW, 1024.0),)),
+        ), collected_at=NOW, is_complete=True),
+    ])
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="streams", name="orders",
+        metric_operation="rank", metric_group_by=["topic"], limit=5,
+    ))
+
+    assert len(source.calls) == 4
+    assert "sum by (topic)" in str(source.calls[1]["promql"])
+    assert "topic=~\"^(?:orders|payments)$\"" in str(source.calls[1]["promql"])
+    assert "sum by (topic, partition, pod, kubernetes_pod_name)" in str(
+        source.calls[2]["promql"]
+    )
+    assert "topk(100" in str(source.calls[2]["promql"])
+    assert 'topic=~"^(?:orders)$"' in str(source.calls[2]["promql"])
+    assert 'topic=~"^(?:payments)$"' in str(source.calls[3]["promql"])
+    storage = result.observations[0].data["topicStorage"]
+    assert storage["complete"] is True
+    assert storage["topics"][0] == {
+        "topic": "orders",
+        "internal": False,
+        "currentBytes": 3072.0,
+        "utilizationPercent": 12.5,
+        "partitionCount": 2,
+        "replicaCount": 2,
+        "partitionsComplete": True,
+        "partitions": [
+            {
+                "partition": "0", "brokerPod": "orders-broker-0",
+                "brokerId": "0", "currentBytes": 2048.0,
+            },
+            {
+                "partition": "1", "brokerPod": "orders-broker-1",
+                "brokerId": "1", "currentBytes": 1024.0,
+            },
+        ],
+    }
+
+
+def test_explicit_kafka_partition_ranking_keeps_flat_metric_result() -> None:
+    source = FakeRangeSource(series=(MetricSeries(
+        labels={"topic": "orders", "partition": "0"},
+        points=(MetricPoint(NOW, 0.5),),
+    ),))
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="streams", name="orders",
+        metric_operation="rank", metric_group_by=["topic", "partition"], limit=5,
+    ))
+
+    assert len(source.calls) == 1
+    assert "topicStorage" not in result.observations[0].data
+
+
+def test_kafka_partition_detail_failure_preserves_primary_topic_result() -> None:
+    source = SequentialRangeSource([
+        MetricRange(series=(MetricSeries(
+            labels={"topic": "orders"}, points=(MetricPoint(NOW, 12.5),),
+        ),), collected_at=NOW, is_complete=True),
+        MetricRange(series=(MetricSeries(
+            labels={"topic": "orders"}, points=(MetricPoint(NOW, 3072.0),),
+        ),), collected_at=NOW, is_complete=True),
+        MonitoringQueryError("partition series unavailable"),
+    ])
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="streams", name="orders",
+        metric_operation="rank", metric_group_by=["topic"], limit=5,
+    ))
+
+    storage = result.observations[0].data["topicStorage"]
+    assert storage["complete"] is False
+    assert storage["topicBytesComplete"] is True
+    assert storage["partitionDetailsComplete"] is False
+    assert storage["topics"][0]["currentBytes"] == 3072.0
+    assert storage["topics"][0]["partitionsComplete"] is False
+    assert storage["topics"][0]["partitions"] == []
+    assert any("partition placement details were unavailable" in item for item in result.limitations)
 
 
 def test_namespace_cpu_can_be_grouped_by_pod_and_container() -> None:

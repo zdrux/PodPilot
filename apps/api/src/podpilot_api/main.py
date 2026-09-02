@@ -4556,6 +4556,8 @@ def _format_metric_value(value: object, unit: str) -> str:
     if unit == "samples_per_second":
         return f"{numeric:.2f} samples/s"
     if unit == "percent":
+        if 0 < abs(numeric) < 0.01:
+            return "<0.01%" if numeric > 0 else ">-0.01%"
         return f"{numeric:.2f}%"
     if unit == "cores":
         return f"{numeric:.3f} cores"
@@ -4914,6 +4916,97 @@ def _metric_ranking_view(data: dict[str, object]) -> dict[str, object] | None:
     }
 
 
+def _kafka_topic_storage_view(data: dict[str, object]) -> dict[str, object] | None:
+    raw_storage = data.get("topicStorage")
+    if not isinstance(raw_storage, dict) or not isinstance(raw_storage.get("topics"), list):
+        return None
+    rows: list[dict[str, object]] = []
+    for index, item in enumerate(raw_storage["topics"], start=1):
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic") or "").strip()
+        if not topic:
+            continue
+        utilization = item.get("utilizationPercent")
+        partitions = []
+        raw_partitions = item.get("partitions")
+        for partition in raw_partitions if isinstance(raw_partitions, list) else []:
+            if not isinstance(partition, dict):
+                continue
+            broker_pod = str(partition.get("brokerPod") or "—")
+            broker_id = str(partition.get("brokerId") or "")
+            partition_id = partition.get("partition")
+            partitions.append({
+                "partition": (
+                    "—" if partition_id in (None, "") else str(partition_id)
+                ),
+                "broker_pod": broker_pod,
+                "broker_id": broker_id or "—",
+                "current_bytes": _format_metric_value(
+                    partition.get("currentBytes"), "bytes",
+                ),
+            })
+        try:
+            partition_count = max(0, int(item.get("partitionCount") or 0))
+        except (TypeError, ValueError):
+            partition_count = 0
+        try:
+            replica_count = max(0, int(item.get("replicaCount") or 0))
+        except (TypeError, ValueError):
+            replica_count = 0
+        partitions_complete = item.get("partitionsComplete") is True
+        if partitions_complete:
+            placement_summary = (
+                f"{partition_count} partition{'s' if partition_count != 1 else ''} · "
+                f"{replica_count} replica{'s' if replica_count != 1 else ''}"
+            )
+        elif partition_count or replica_count:
+            placement_summary = (
+                f"{partition_count} retained partition"
+                f"{'s' if partition_count != 1 else ''} · "
+                f"{replica_count} retained replica{'s' if replica_count != 1 else ''}"
+            )
+        else:
+            placement_summary = "Partition detail incomplete"
+        rows.append({
+            "rank": index,
+            "topic": topic,
+            "internal": item.get("internal") is True,
+            "current_bytes": _format_metric_value(item.get("currentBytes"), "bytes"),
+            "utilization": _format_metric_value(utilization, "percent"),
+            "progress": (
+                max(0.0, float(utilization))
+                if isinstance(utilization, (int, float))
+                and not isinstance(utilization, bool)
+                else 0.0
+            ),
+            "partition_count": partition_count,
+            "replica_count": replica_count,
+            "partitions_complete": partitions_complete,
+            "placement_summary": placement_summary,
+            "partitions": partitions,
+        })
+    if not rows:
+        return None
+    return {
+        "title": "Kafka Topic Disk Usage",
+        "description": (
+            "Replicated topic log bytes ranked at topic level. Expand a topic to inspect "
+            "partition replicas and their broker Pod placement."
+        ),
+        "rows": rows,
+        "scale_max": 100.0,
+        "complete": raw_storage.get("complete") is True,
+        "topic_bytes_complete": raw_storage.get("topicBytesComplete") is True,
+        "partition_details_complete": raw_storage.get("partitionDetailsComplete") is True,
+        "selected_topics_complete": raw_storage.get("selectedTopicsComplete") is True,
+        "capacity_note": (
+            "Capacity share compares replicated topic bytes with aggregate Kafka broker-PVC "
+            "capacity. Broker-local free space can differ when replicas are unevenly placed."
+        ),
+    }
+
+
 def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
     """Build redacted, operator-facing facts from one persisted evidence observation."""
 
@@ -4965,6 +5058,7 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         add("Statistics", data.get("statistics"))
         add("Complete", data.get("complete"))
         view["metric_ranking"] = _metric_ranking_view(data)
+        view["kafka_topic_storage"] = _kafka_topic_storage_view(data)
         view["metric_trend"] = _metric_trend_view(data)
     elif tool == "query_audit_events":
         add("User", data.get("username"))
@@ -7715,6 +7809,10 @@ def _normalize_agent_collector_arguments(
             "node_log_volume": "application_log_volume",
             "log_volume_by_node": "application_log_volume",
             "top_log_volume_by_node": "application_log_volume",
+            "kafka_topic_disk_usage": "kafka_topic_disk_utilization",
+            "kafka_topic_disk_usage_bytes": "kafka_topic_disk_utilization",
+            "kafka_topic_disk_bytes": "kafka_topic_disk_utilization",
+            "kafka_topic_storage_bytes": "kafka_topic_disk_utilization",
         }
         scope_aliases = {
             "all": "cluster", "cluster_wide": "cluster", "clusterwide": "cluster",
@@ -7786,6 +7884,12 @@ def _normalize_agent_collector_arguments(
             normalized["metric_operation"] = (
                 "rank" if normalized.get("metric_group_by") else "show"
             )
+        elif metric == "kafka_topic_disk_utilization":
+            normalized["metric_scope"] = "kafka_cluster"
+            if not normalized.get("metric_group_by"):
+                normalized["metric_group_by"] = ["topic"]
+            if tuple(normalized.get("metric_group_by") or ()) == ("topic",):
+                normalized["metric_operation"] = "rank"
         explicit_range = _explicit_duration_seconds(question)
         normalized["range_seconds"] = explicit_range or DEFAULT_METRIC_RANGE_SECONDS
         return normalized

@@ -7,23 +7,25 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` remains deployed on the
-disposable SNO lab at schema head `0020_delegated_sessions`; the working tree now targets
-`0021_user_delegated_access` and has not yet been deployed. The 2026-08-30 rollout uses
-application image digest `sha256:19cdd8ff9a651777b4a2ab12b7891b6d7c07396dda4b97cbf2696a55fcb86b9c`
-and runner digest `sha256:dbb8f35dec2105e09815ebc40e1a84df8b952d6f0273bbdeef35f9ded3aa49d0`.
-The pending implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,
+PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
+disposable SNO lab at schema head `0021_user_delegated_access`. The 2026-09-01 rollout uses
+application image digest `sha256:02b041afb5824019941cc1e62067dd90748063992f9514106d83c4464fced061`
+and runner digest `sha256:fc7c654ea5f3ea9c86b69e698f2640f038aab511d6de360edb4f1742ccaac05e`.
+The deployed implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,
 supports per-cluster TLS policy and private user-owned registry entries, and removes stored remote
 cluster credentials. Successful cluster sign-ins are reused across new conversations for the
 browser session. Partial login failures remain retryable without discarding successful connections;
 users can append clusters, revoke one sign-in, or clear all sign-ins independently of durable chat history, and an owned
-conversation can resume after its required clusters are reconnected. The deployed lab still has a
-two-hour session bound and verified remote TLS.
-The pending Workspace navigation also exposes visible clusters as a sidebar tree with connected and
+conversation can resume after its required clusters are reconnected.
+The Workspace navigation also exposes visible clusters as a sidebar tree with connected and
 sign-in-required indicators. A cluster click starts a fresh preselected conversation or routes
 through the existing credential form first; the tree's add control opens a dedicated **My clusters**
 page for owner-scoped ad hoc entries. Shared registry administration now appears only to
 configuration administrators as **Cluster Management** in the Manage section.
+The Ask composer keeps the prompt and its cluster, mode, reasoning, raw-response, and submit
+controls inside one frame. It starts at two text rows, grows through ten as the operator adds
+lines, then scrolls internally; the desktop toolbar stays on one row and Submit matches the
+32-pixel control height.
 OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
 `oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
@@ -44,9 +46,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   and Kafka signals. `top_log_volume_by_namespace` again provides the dedicated cluster-level Loki
   namespace ranking, while `application_log_volume` provides scoped namespace and Pod reads from
   aggregate byte counts without reading log lines. Kafka topic disk utilization
-  compares replicated topic bytes with the shared allocated broker-PVC capacity, and Kafka consumer
-  lag remains available. Legacy server-side templates remain readable for persisted evidence but are
-  no longer advertised to the model.
+  compares replicated topic bytes with the shared allocated broker-PVC capacity. Topic-grouped reads
+  now add bounded topic-byte and partition-replica companion evidence, and Ask renders a topic-first
+  ranking with expandable partition ID, replica bytes, broker ID, and broker Pod placement. Kafka
+  consumer lag remains available. Legacy server-side templates remain readable for persisted evidence
+  but are no longer advertised to the model.
 
 - Dynamic answer tables now use a stricter equal-cell prompt contract and bounded display cleanup
   for strict-JSON leakage. Redundant leading `unknown` placeholders and unmatched boundary braces

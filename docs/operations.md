@@ -1482,6 +1482,18 @@ exporter/profile rather than treating the object as idle or allowing the model t
 Metric label names can vary across operator/exporter releases; unsupported profiles require a new
 reviewed server-owned template or label alias, not an operator-supplied query.
 
+Topic-grouped Kafka disk requests use the percentage query as the authoritative bounded result and
+perform two additional server-owned reads for replicated topic bytes and partition-replica bytes.
+The Ask result ranks topics first and lets the operator expand each topic to see partition ID,
+replica bytes, broker ID, and broker Pod placement. Partition replicas are collected separately for
+at most the first five displayed topics so one high-partition topic cannot consume the shared Thanos
+series ceiling and silently truncate another topic. An explicit `topic,partition` grouping keeps the
+flat partition-first result. Companion-read failures do not invalidate the topic utilization result;
+they mark the expandable detail incomplete and appear as operator-visible limitations.
+Common model spellings such as `kafka_topic_disk_usage` and
+`kafka_topic_disk_usage_bytes` are normalized server-side to the registered
+`kafka_topic_disk_utilization` capability; they never become model-authored PromQL.
+
 Remote monitoring and logging authorization failures preserve `HTTP 403` in the per-cluster Ask
 limitation. A Thanos denial names the required `cluster-monitoring-view` role. Application-log
 volume is a Loki tenant query rather than a Thanos metric; its denial names

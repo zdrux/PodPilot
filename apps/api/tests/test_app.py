@@ -3547,6 +3547,54 @@ def test_operator_evidence_view_builds_metric_ranking_for_direct_rendering() -> 
     }
 
 
+def test_operator_evidence_view_builds_topic_first_kafka_storage_detail() -> None:
+    view = _adhoc_evidence_view({
+        "id": "metric-kafka-storage", "tool": "query_metrics",
+        "source": "thanos:query_range/kafka_topic_disk_utilization",
+        "data": {
+            "metric": "kafka_topic_disk_utilization", "scope": "kafka_cluster",
+            "namespace": "streams", "name": "orders", "unit": "percent",
+            "complete": True,
+            "ranking": [{
+                "labels": {"topic": "orders"},
+                "average": 0.005, "current": 0.008, "maximum": 0.009,
+            }],
+            "topicStorage": {
+                "complete": True, "topicBytesComplete": True,
+                "partitionDetailsComplete": True, "selectedTopicsComplete": True,
+                "topics": [{
+                    "topic": "orders", "internal": False,
+                    "currentBytes": 3072.0, "utilizationPercent": 0.008,
+                    "partitionCount": 2, "replicaCount": 2,
+                    "partitionsComplete": True,
+                    "partitions": [
+                        {
+                            "partition": "0", "brokerPod": "orders-broker-0",
+                            "brokerId": "0", "currentBytes": 2048.0,
+                        },
+                        {
+                            "partition": "1", "brokerPod": "orders-broker-1",
+                            "brokerId": "1", "currentBytes": 1024.0,
+                        },
+                    ],
+                }],
+            },
+        },
+    })
+
+    storage = view["kafka_topic_storage"]
+    assert storage["title"] == "Kafka Topic Disk Usage"
+    assert storage["complete"] is True
+    assert storage["scale_max"] == 100.0
+    assert storage["rows"][0]["current_bytes"] == "3.00 KiB"
+    assert storage["rows"][0]["utilization"] == "<0.01%"
+    assert storage["rows"][0]["placement_summary"] == "2 partitions · 2 replicas"
+    assert storage["rows"][0]["partitions"][0] == {
+        "partition": "0", "broker_pod": "orders-broker-0",
+        "broker_id": "0", "current_bytes": "2.00 KiB",
+    }
+
+
 def test_operator_evidence_view_builds_scoped_log_volume_dimensions() -> None:
     view = _adhoc_evidence_view({
         "id": "metric-log-pods", "tool": "query_metrics",
@@ -10186,6 +10234,24 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
     )
     assert generic_cluster_ranking["metric"] == "top_log_volume_by_namespace"
 
+    for kafka_alias in (
+        "kafka_topic_disk_usage", "kafka_topic_disk_usage_bytes",
+        "kafka_topic_disk_bytes", "kafka_topic_storage_bytes",
+    ):
+        kafka_storage = _normalize_agent_collector_arguments(
+            "query_metrics",
+            {
+                "metric": kafka_alias, "metric_scope": "namespace",
+                "namespace": "kafka-observability",
+                "name": "kafka-observability-cluster",
+            },
+            question="Show Kafka topic disk usage grouped by topic",
+        )
+        assert kafka_storage["metric"] == "kafka_topic_disk_utilization"
+        assert kafka_storage["metric_scope"] == "kafka_cluster"
+        assert kafka_storage["metric_operation"] == "rank"
+        assert kafka_storage["metric_group_by"] == ["topic"]
+
     with pytest.raises(ValueError, match="not in the focused catalog"):
         _normalize_agent_collector_arguments(
             "query_metrics",
@@ -14617,6 +14683,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert ".metric-ranking-table th { color: var(--subtle); font-size: 11px;" in styles
     assert ".metric-ranking-table td { color: #e8f3fb; }" in styles
     assert ".metric-ranking-table code { color: #e8f3fb; font-size: 13px;" in styles
+    assert "cited.kafka_topic_storage" in template
+    assert "Replicated disk usage" in template
+    assert "Replica disk usage" in template
+    assert ".kafka-topic-storage-group > summary" in styles
+    assert ".kafka-partition-table" in styles
     assert "new URLSearchParams(new FormData(adhocForm))" in script
     assert 'requestBody.set("message", question)' in script
     assert "rawResponseToggle.disabled = true" in script
