@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     chat_max_chars: int = Field(default=4000, ge=100, le=4000)
     adhoc_max_evidence: int = Field(default=40, ge=5, le=100)
     adhoc_max_rounds: int = Field(default=10, ge=1, le=12)
-    adhoc_max_reads_per_turn: int = Field(default=25, ge=1, le=50)
+    adhoc_max_reads_per_turn: int = Field(default=50, ge=1, le=100)
     adhoc_followup_reserve_units: int = Field(default=0, ge=0, le=15)
     adhoc_max_clusters_per_conversation: int = Field(default=10, ge=1, le=20)
     adhoc_http_probe_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)

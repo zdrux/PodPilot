@@ -27,7 +27,7 @@ data:
   loki_timeout_seconds: "90"
   loki_max_series: "50"
   adhoc_max_rounds: "10"
-  adhoc_max_reads_per_turn: "25"
+  adhoc_max_reads_per_turn: "50"
   adhoc_followup_reserve_units: "0"
   adhoc_worker_concurrency: "3"
   adhoc_max_concurrent_runs_per_user: "2"

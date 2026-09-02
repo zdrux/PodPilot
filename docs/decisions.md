@@ -1305,3 +1305,20 @@ Consequences: Every retained metric accepts a bounded period. Kafka topic disk u
 shared-pool pressure indicator, not a per-topic quota: topics share broker PVCs, so broker-local
 headroom and replica skew still require inspection. Adding a metric to the public catalog now
 requires an explicit product decision rather than merely registering an internal query template.
+
+## 2026-09-02 - One app-wide investigation budget permits longer on-premises agent runs
+
+Context: Delegated agent investigations can require more than 25 operations when they diagnose,
+change, and re-check several related workloads. A separate agent-only limit would make budgeting
+harder to understand and configure, while the current model is hosted on premises and does not incur
+per-token provider cost.
+
+Decision: Use `PODPILOT_ADHOC_MAX_READS_PER_TURN` as the single weighted action budget for typed
+planning and delegated-agent Investigation and Action conversations. Raise its default to 50 units
+and allow configuration from 1 to 100. Do not add deterministic remediation-intent analysis or a
+server-authored remediation completion contract.
+
+Consequences: All investigation paths expose one operational budget control. Longer agent runs can
+retain and act on more evidence, while the existing run deadline, model context ceiling, broker
+authorization, command de-duplication, and payload bounds remain independent safeguards. This
+supersedes the 25-unit default in the 2026-08-26 adaptive read-only traversal decision.

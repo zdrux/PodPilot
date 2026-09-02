@@ -128,8 +128,10 @@ Before first reinjection, a shell result is capped to a 48 KiB provider payload 
 stdout and stderr prefixes. The model receives that raw result once. After the next model response,
 PodPilot removes the completed assistant tool-call and tool-result protocol pair and replaces it with
 a deterministic rolling evidence ledger: a compact index of all completed operations plus bounded
-detail for the latest results. Exact command execution remains available in the activity and audit
-records, while raw logs and object YAML do not accumulate as hidden provider conversation state.
+detail for up to the full 50-operation window. If the 80 KiB ledger ceiling requires reduction,
+successful read-only shell excerpts are discarded before typed observations, mutations, or failed
+operations. Exact command execution remains available in the activity and audit records, while raw
+logs and object YAML do not accumulate as hidden provider conversation state.
 Every Chat Completions call estimates the complete messages-plus-tools token count using lexical BPE-
 style fragments, JSON punctuation, and a protocol safety margin. This avoids treating each UTF-8 byte
 as a token while remaining tokenizer-independent for OpenAI-compatible gateways that front different
@@ -361,7 +363,7 @@ Milestone 8 adds durable `ChatMessage` records and a provider-level structured
 chat contract. The API composes bounded context from one investigation, redacts
 the operator message before storage, and sends no Kubernetes credentials or
 generic Kubernetes client to the provider. Incident chat now shares Ask
-PodPilot's bounded read-plan broker: up to ten planning rounds and 25 weighted
+PodPilot's bounded read-plan broker: up to ten planning rounds and 50 weighted
 investigation units cover resource, ConfigMap, Event, Pod-log, metric, HTTP-probe, and
 bounded-watch reads under the same read-only identity,
 deny policy, normalization, redaction, and evidence cap. Trusted alert labels seed
@@ -435,7 +437,7 @@ is supplied.
 
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
 broker later shared by incident chat. Up to ten
-schema-validated planning rounds may spend at most 25 weighted units on
+schema-validated planning rounds may spend at most 50 weighted units on
 `discover_resources`, `get_resource`, `list_resources`, `search_resources`,
 `watch_resources`, `pod_logs`, `http_probe`, and `query_metrics`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.

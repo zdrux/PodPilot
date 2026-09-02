@@ -319,7 +319,7 @@ An Investigator can ask follow-up questions inside one durable investigation.
 PodPilot supplies only that investigation's redacted alert, deterministic analysis,
 persisted evidence, bounded conversation history, alert-scoped read policy, and
 available registered intent names to the configured model. Up to ten planning
-rounds may spend at most 25 weighted investigation units through the same typed broker as
+rounds may spend at most 50 weighted investigation units through the same typed broker as
 standalone Ask; successful observations are persisted into the investigation
 before the answer pass. Factual incident answers must cite observation IDs
 that the server can resolve in the investigation; an evidence-based response with

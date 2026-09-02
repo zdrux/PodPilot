@@ -281,7 +281,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "key": "model_timeout_max_seconds",
     }
     assert runtime["data"]["adhoc_max_rounds"] == "10"
-    assert runtime["data"]["adhoc_max_reads_per_turn"] == "25"
+    assert runtime["data"]["adhoc_max_reads_per_turn"] == "50"
     assert runtime["data"]["adhoc_followup_reserve_units"] == "0"
     reserve = next(
         item for item in env if item["name"] == "PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS"

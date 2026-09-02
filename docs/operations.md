@@ -735,6 +735,12 @@ Within one agent turn, each raw tool result is returned to the model once so it 
 Subsequent model calls receive a bounded rolling evidence ledger instead of replaying completed raw
 logs, object YAML, stdout/stderr, and tool-call arguments. Later user turns continue to use the
 bounded visible chat history and persisted typed evidence, not an earlier turn's raw tool transcript.
+The ledger can retain detailed excerpts for the full 50-operation budget within an 80 KiB ceiling.
+When that ceiling is reached, successful read-only shell detail is reduced before typed evidence,
+write results, or failures, preserving the findings most likely to matter later in the turn.
+One app-wide 50-unit default action budget is configured with
+`PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
+and Action conversations and may be set from 1 to 100.
 The same retained excerpts and operation metadata are operator-inspectable beneath the answer in the
 expandable **Agent evidence ledger** section.
 **Cluster sign-ins** manages the current
@@ -1106,7 +1112,7 @@ bounded client-side exact field search, and explicit log periods become Kubernet
 only after an observed Pod/container candidate is selected. Static phrase matching remains a
 recovery path for a small set of unambiguous requests rather than the primary semantic vocabulary.
 
-The default ad-hoc budget is ten planning rounds and 25 weighted investigation units,
+The default ad-hoc budget is ten planning rounds and 50 weighted investigation units,
 configured with `PODPILOT_ADHOC_MAX_ROUNDS` and
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`. The default
 `PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS=0` makes the full budget available to the dynamic

@@ -2911,7 +2911,67 @@ def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> 
     assert "first relevant line" in retained
     assert "last line" in retained
     assert len(retained.encode()) < len(raw_output.encode()) // 10
-    assert len(str(_agent_evidence_ledger_message(ledger)["content"]).encode()) <= 24 * 1024
+    assert len(str(_agent_evidence_ledger_message(ledger)["content"]).encode()) <= 80 * 1024
+
+
+def test_agent_ledger_preserves_writes_and_failures_before_successful_read_detail() -> None:
+    entries = [
+        _agent_tool_ledger_entry(
+            sequence=index,
+            tool_name="execute_shell",
+            tool_call_id=f"read-{index}",
+            cluster_id="cluster-1",
+            cluster_name="EC2",
+            status="completed",
+            request=f"oc get pod pod-{index} -o yaml",
+            result={
+                "exit_code": 0,
+                "stdout": f"pod-{index}\n" + ("x" * 5_000),
+                "stderr": "",
+                "operation_kind": "read",
+            },
+        )
+        for index in range(1, 49)
+    ]
+    entries.extend([
+        _agent_tool_ledger_entry(
+            sequence=49,
+            tool_name="execute_shell",
+            tool_call_id="write-49",
+            cluster_id="cluster-1",
+            cluster_name="EC2",
+            status="completed",
+            request="oc patch deployment web --type=merge -p '{}'",
+            result={
+                "exit_code": 0, "stdout": "deployment.apps/web patched",
+                "stderr": "", "operation_kind": "write",
+            },
+        ),
+        _agent_tool_ledger_entry(
+            sequence=50,
+            tool_name="execute_shell",
+            tool_call_id="failed-50",
+            cluster_id="cluster-1",
+            cluster_name="EC2",
+            status="failed",
+            request="oc apply -f replacement.yaml",
+            result={
+                "exit_code": 1, "stdout": "", "stderr": "immutable field",
+                "operation_kind": "write", "failure_category": "command_failed",
+            },
+        ),
+    ])
+
+    message = _agent_evidence_ledger_message(entries)
+    assert message is not None
+    payload = json.loads(str(message["content"]).split("\n", 1)[1])
+    retained_sequences = {
+        item["sequence"] for item in payload["retained_details"]
+    }
+
+    assert 49 in retained_sequences
+    assert 50 in retained_sequences
+    assert len(str(message["content"]).encode()) <= 80 * 1024
 
 
 def test_agent_completion_recovers_prose_from_serialized_finish_arguments() -> None:

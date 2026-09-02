@@ -154,8 +154,8 @@ DELEGATED_PROXY_ERROR_CAPTURE_BYTES = 8_192
 AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES = 48 * 1024
 AGENT_PROVIDER_STDOUT_MAX_BYTES = 32 * 1024
 AGENT_PROVIDER_STDERR_MAX_BYTES = 8 * 1024
-AGENT_PROVIDER_LEDGER_MAX_BYTES = 24 * 1024
-AGENT_PROVIDER_LEDGER_DETAIL_COUNT = 8
+AGENT_PROVIDER_LEDGER_MAX_BYTES = 80 * 1024
+AGENT_PROVIDER_LEDGER_DETAIL_COUNT = 50
 
 
 async def _stream_delegated_upstream(
@@ -8343,7 +8343,7 @@ def _agent_evidence_ledger_message(
             "repeat a command only when current state must be re-observed."
         ),
         "completed_operations": operation_index,
-        "recent_details": list(entries[-AGENT_PROVIDER_LEDGER_DETAIL_COUNT:]),
+        "retained_details": list(entries[-AGENT_PROVIDER_LEDGER_DETAIL_COUNT:]),
     }
     def render() -> str:
         return _AGENT_EVIDENCE_LEDGER_PREFIX + json.dumps(
@@ -8351,13 +8351,39 @@ def _agent_evidence_ledger_message(
         )
 
     content = render()
-    recent_details = payload["recent_details"]
-    assert isinstance(recent_details, list)
+    retained_details = payload["retained_details"]
+    assert isinstance(retained_details, list)
+    detail_removal_order = sorted(
+        range(len(retained_details)),
+        key=lambda index: (
+            0
+            if retained_details[index].get("tool") == "execute_shell"
+            and retained_details[index].get("operation_kind") == "read"
+            and retained_details[index].get("status") == "completed"
+            else 1
+            if retained_details[index].get("tool") != "execute_shell"
+            and retained_details[index].get("status") == "succeeded"
+            else 2
+            if retained_details[index].get("status") == "completed"
+            else 3,
+            int(retained_details[index].get("sequence") or 0),
+        ),
+    )
     while (
         len(content.encode("utf-8", errors="replace")) > AGENT_PROVIDER_LEDGER_MAX_BYTES
-        and recent_details
+        and detail_removal_order
     ):
-        recent_details.pop(0)
+        removed_index = detail_removal_order.pop(0)
+        retained_details.pop(removed_index)
+        detail_removal_order = [
+            index - 1 if index > removed_index else index
+            for index in detail_removal_order
+        ]
+        content = render()
+    if len(content.encode("utf-8", errors="replace")) > AGENT_PROVIDER_LEDGER_MAX_BYTES:
+        for item in operation_index:
+            if item.get("operation_kind") == "read":
+                item.pop("command", None)
         content = render()
     if len(content.encode("utf-8", errors="replace")) > AGENT_PROVIDER_LEDGER_MAX_BYTES:
         for item in operation_index:

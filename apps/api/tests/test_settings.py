@@ -148,6 +148,13 @@ def test_model_timeout_ceiling_is_bounded() -> None:
     assert Settings(model_timeout_max_seconds=240).model_timeout_max_seconds == 240
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=29)
+
+
+def test_app_wide_action_budget_defaults_to_fifty_and_is_configurable() -> None:
+    assert Settings(_env_file=None).adhoc_max_reads_per_turn == 50
+    assert Settings(adhoc_max_reads_per_turn=75).adhoc_max_reads_per_turn == 75
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_reads_per_turn=101)
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=301)
 

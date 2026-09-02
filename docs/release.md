@@ -454,7 +454,10 @@ summary must preserve the complete-coverage rule before confirming absence.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
   A raw tool result and its assistant call may be sent through one subsequent model request only;
-  later requests must replace the completed pair with the bounded rolling evidence ledger.
+  later requests must replace the completed pair with the bounded rolling evidence ledger. Ledger
+  pressure must reduce successful read-only shell details before mutation, typed-observation, or
+  failure details. Manifest tests must keep the single app-wide action budget at 50 for delegated
+  agents and typed planning.
   Successful mutations must be marked as writes, and a final answer that describes them as
   read-only or merely “safe patches” must be rejected and corrected before display.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's

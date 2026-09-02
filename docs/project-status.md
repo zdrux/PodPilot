@@ -269,7 +269,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
-- Standalone Ask now supports a model-directed loop of ten planning rounds within 25 weighted
+- Standalone Ask now supports a model-directed loop of ten planning rounds within 50 weighted
   investigation units, with no default server-follow-up reserve. The model dynamically selects
   evidence-grounded object, owner, log, Event, metric, probe, and configuration traversal while
   the broker retains all sensitivity, verb, budget, redaction, and RBAC enforcement. It can
@@ -351,7 +351,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   must use the separate existing check control and its CSRF, atomic claim, scope,
   and audit gates.
 - Standalone Ask PodPilot conversations can investigate symptoms without an alert.
-  Up to ten schema-validated planning rounds spend at most 25 weighted units on adaptive
+  Up to ten schema-validated planning rounds spend at most 50 weighted units on adaptive
   discovery, bounded resource/search/watch, ConfigMap, Pod-log, metric, or HTTP-probe reads.
   Earlier observations feed later rounds so
   discovery can lead to exact container logs; a final pass answers from persisted, redacted evidence with
@@ -482,7 +482,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
-  bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
+  bounded to 50 weighted investigation units, and each user is throttled to ten questions per minute.
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline. The Ask screen now uses one mellow slate-blue surface across its
