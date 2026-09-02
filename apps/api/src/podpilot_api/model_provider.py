@@ -2419,8 +2419,10 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
 
         pod_health_tool = collector_tool(
             "pod_health_summary",
-            "Return an anomaly-first bounded Pod and container health scan. Use for all-healthy, "
-            "Ready, or running questions; only a complete zero-anomaly result supports an all-healthy conclusion.",
+            "Return an anomaly-first bounded Pod and container health scan. Use for healthy, Ready, "
+            "running, crashing, failing, Pending, Evicted, not-running, or problem-Pod questions. "
+            "It includes every Pod outside Running or Succeeded plus unhealthy container and readiness "
+            "state; only a complete zero-anomaly result supports an all-healthy conclusion.",
             ("namespace", "label_selector", "limit"),
             (),
         )

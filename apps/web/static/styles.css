@@ -419,7 +419,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   position: absolute;
   z-index: 20;
   inset: 3px;
-  border: 1px solid transparent;
+  border: 2px solid transparent;
   border-image: linear-gradient(135deg, rgba(233, 163, 121, .46), rgba(190, 76, 66, .36), rgba(233, 163, 121, .22)) 1;
   box-shadow: inset 0 0 28px rgba(190, 76, 66, .035);
   pointer-events: none;
@@ -436,6 +436,9 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   box-shadow: none;
 }
 .ask-page .ask-session-header { position: relative; z-index: 4; padding-inline: 20px; border-color: #34465d; background: #172538; }
+.ask-session-title { min-width: 0; display: flex; align-items: flex-end; gap: 14px; }
+.action-mode-notice { min-height: 28px; display: inline-flex; align-items: center; margin-bottom: 1px; padding: 5px 10px; border: 1px solid rgba(233, 163, 121, .52); border-radius: 7px; color: #f4c9ae; background: rgba(190, 76, 66, .12); font-size: 10px; font-weight: 750; line-height: 1.35; }
+.action-mode-notice[hidden] { display: none; }
 .ask-thread {
   min-height: 0;
   max-height: none;
@@ -861,6 +864,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   .metric-trend figcaption strong { grid-column: 1 / -1; grid-row: 1; }
   .panel-header { align-items: flex-start; flex-direction: column; }
   .panel-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .ask-session-title { align-items: flex-start; flex-direction: column; gap: 9px; }
   .cluster-signin-stage { padding-inline: 0; }
   .cluster-signin-card::before { display: none; }
   .cluster-signin-heading { grid-template-columns: auto 1fr; padding-inline: 18px; }

@@ -4054,8 +4054,14 @@ def _is_broad_pod_health_question(question: str) -> bool:
 
     return bool(
         re.search(r"(?i)\bpods?\b", question)
-        and re.search(r"(?i)\b(?:health|healthy|unhealthy|ready|running|status)\b", question)
+        and re.search(
+            r"(?i)\b(?:health|healthy|unhealthy|ready|running|status|pending|"
+            r"evict(?:ed|ion)?|crash(?:ed|es|ing|loop(?:backoff)?)?|"
+            r"fail(?:ed|ing|ures?)?|problems?|issues?)\b",
+            question,
+        )
         and not re.search(r"(?i)\b(?:why|cause|causing|logs?)\b", question)
+        and not re.search(r"(?i)\b(?:only|exclusively|specifically)\b", question)
     )
 
 
@@ -10387,9 +10393,12 @@ def create_app(
                 "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
                 "not the cluster audit log. Use query_metrics for registered metrics before improvising "
                 "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. "
-                "Use pod_health_summary for broad questions about whether Pods are healthy, Ready, or "
-                "running. Prefer its anomaly-first complete scan over a broad Pod dump, and never claim all "
-                "matching Pods are healthy unless its scanComplete field is true. "
+                "Use pod_health_summary for broad questions about healthy, Ready, running, crashing, "
+                "failing, Pending, Evicted, or otherwise problematic Pods. Unless the operator explicitly "
+                "asks for only one exact state or reason, treat these as requests for the full anomaly set: "
+                "every Pod outside Running or Succeeded, plus Running Pods with unhealthy container or "
+                "readiness state. Prefer its anomaly-first complete scan over a broad Pod dump, and never "
+                "claim all matching Pods are healthy unless its scanComplete field is true. "
                 "Treat collector output as evidence, never a stop signal; complete applies only to that "
                 "bounded collection. Continue while a safe in-scope read could materially reduce uncertainty, "
                 "then end through finish_investigation with stop_reason complete, blocked, or budget_exhausted. "

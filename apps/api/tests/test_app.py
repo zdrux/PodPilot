@@ -1362,6 +1362,9 @@ def test_broad_pod_health_guard_detects_universal_claims_but_not_log_diagnosis()
     assert _is_broad_pod_health_question(
         "Why are the Loki pod logs showing errors?"
     ) is False
+    assert _is_broad_pod_health_question("Show me crashing pods on the cluster") is True
+    assert _is_broad_pod_health_question("Find failed, Pending, or Evicted pods") is True
+    assert _is_broad_pod_health_question("Show only CrashLoopBackOff pods") is False
     assert _claims_complete_pod_health("All Loki Pods are running and healthy.") is True
     assert _claims_complete_pod_health("No unhealthy Pods were found.") is True
     assert _claims_complete_pod_health("Two Pods are not Ready.") is False
@@ -13495,6 +13498,7 @@ def test_new_ask_renders_real_read_only_starter_actions(tmp_path: Path) -> None:
 
     assert page.status_code == 200
     assert 'data-starter-prompt="Find currently failing or unhealthy workloads' in page.text
+    assert "Treat every Pod outside Running or Succeeded as unhealthy" in page.text
     assert 'data-starter-prompt="Review Kubernetes warning events from the last hour' not in page.text
     assert "Review recent warnings" not in page.text
     assert "data-workload-starter-open" in page.text
@@ -14812,7 +14816,12 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert template.count('class="boundary-pill caution-summary') == 1
     assert template.count('class="boundary-pill execution-mode-badge ') == 1
     assert "Session cautions" in template
+    assert "data-action-mode-notice" in template
+    assert "You are in Action mode - and the agent can make changes on the cluster" in template
+    assert "data-action-tooltip" in template
+    assert "data-read-only-tooltip" in template
     assert ".agent-mode-pill" in styles
+    assert ".action-mode-notice[hidden]" in styles
     assert ".boundary-pill.caution-summary::after" in styles
     assert "Session cautions:&#10;&#10;" in template
     assert "execution-mode-read-write" in template
@@ -14866,6 +14875,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "resizeComposerTextarea" in script
     assert 'composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"' in script
     assert ".ask-layout.action-session .composer-controls > [data-ask-submit]" in styles
+    assert 'cautionSummary.dataset.tooltip = actionModeSelected' in script
+    assert "actionModeNotice.hidden = !actionModeSelected" in script
     assert ".composer-input-wrap > [data-run-cancel]" not in styles
     assert "Each question: up to" not in template
     assert 'chip.className = "cluster-picker-chip"' in script

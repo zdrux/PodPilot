@@ -806,6 +806,8 @@ def test_pod_health_summary_accepts_scope_selector_and_result_limit() -> None:
 @pytest.mark.parametrize("question", [
     "Are any pods on the cluster crashing currently?",
     "Show unhealthy pods",
+    "Show Evicted pods",
+    "Show pods that are not running",
     "What is the health status of the pods?",
 ])
 def test_known_pod_health_questions_compile_to_typed_summary(question: str) -> None:

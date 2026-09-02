@@ -248,7 +248,7 @@ def _nonnegative_int(value: object) -> int:
 def _pod_health_anomaly(
     raw: dict[str, Any], *, collected_at: datetime,
 ) -> dict[str, Any] | None:
-    """Classify current Pod/container state without treating Pod phase as health."""
+    """Classify non-running/non-succeeded Pods and unhealthy container state."""
 
     metadata = raw.get("metadata") or {}
     status = raw.get("status") or {}
@@ -329,13 +329,13 @@ def _pod_health_anomaly(
                     container_type=container_type,
                 )
 
+    status_reason = str(status.get("reason") or "")[:128]
     if phase in {"Failed", "Unknown"}:
-        add_issue(f"PodPhase{phase}", severity="critical")
-    elif (
-        phase == "Pending"
-        and (age_seconds is None or age_seconds >= _POD_HEALTH_GRACE_SECONDS)
-    ):
+        add_issue(status_reason or f"PodPhase{phase}", severity="critical")
+    elif phase == "Pending":
         add_issue("Pending", severity="warning")
+    elif phase not in {"Running", "Succeeded"}:
+        add_issue(status_reason or f"PodPhase{phase}", severity="warning")
 
     conditions = status.get("conditions") or []
     if isinstance(conditions, list):
@@ -2075,7 +2075,7 @@ class KubernetesReadOnlyExplorer:
             data={
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "healthSummaryVersion": 1,
+                "healthSummaryVersion": 2,
                 "scope": scope,
                 "labelSelector": intent.label_selector,
                 "scannedCount": scanned,

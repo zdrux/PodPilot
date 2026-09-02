@@ -1367,8 +1367,11 @@ Cluster-wide or namespace-scoped Pod health questions use the deterministic
 `pod_health_summary` read rather than a generic Pod inventory. It evaluates every Pod reached
 within `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS`, then retains only compact anomalous records and
 aggregate counts. `CrashLoopBackOff` and other container waiting failures are evaluated from
-container and init-container status even when the Pod phase remains `Running`. Successfully
-completed Pods are not treated as unhealthy. The result distinguishes scan completeness from
+container and init-container status even when the Pod phase remains `Running`. Every Pod whose
+phase is neither `Running` nor `Succeeded` is treated as anomalous; this includes fresh `Pending`,
+`Failed`, `Evicted`, `Unknown`, and unrecognized phases. A failed Pod's specific status reason is
+preserved when available. Successfully completed Pods are not treated as unhealthy. The result
+distinguishes scan completeness from
 the separate anomaly-detail result/payload ceiling; PodPilot confirms that no anomalies exist
 only when the scan is complete. Raising the evidence payload is therefore not required for large
 healthy inventories. The Kubernetes transport currently receives ordinary Pod API objects and

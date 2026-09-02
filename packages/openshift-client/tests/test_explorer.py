@@ -910,6 +910,37 @@ def test_pod_health_summary_includes_init_failures_and_excludes_completed_pods()
     assert data["anomalies"][0]["issues"][0]["containerType"] == "initContainer"
 
 
+def test_pod_health_summary_includes_fresh_pending_and_preserves_evicted_reason() -> None:
+    fresh_pending = FakeObject(payload={
+        "metadata": {
+            "name": "starting-web", "namespace": "apps",
+            "creationTimestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [{
+                "name": "web", "ready": False, "restartCount": 0,
+                "state": {"waiting": {"reason": "ContainerCreating"}},
+            }],
+        },
+    })
+    evicted = FakeObject(payload={
+        "metadata": {"name": "evicted-worker", "namespace": "jobs"},
+        "status": {"phase": "Failed", "reason": "Evicted"},
+    })
+    target, _, _ = explorer(FakeResource([fresh_pending, evicted]))
+
+    result = target.execute(ReadIntent(tool="pod_health_summary", limit=20))
+
+    data = result.observations[0].data
+    assert data["healthSummaryVersion"] == 2
+    assert data["anomalyCount"] == 2
+    assert data["byReason"] == {"Evicted": 1, "Pending": 1}
+    assert {item["name"] for item in data["anomalies"]} == {
+        "starting-web", "evicted-worker",
+    }
+
+
 def test_pod_health_summary_separates_scan_and_anomaly_result_ceilings() -> None:
     def pod(name: str, *, crash: bool = False) -> FakeObject:
         return FakeObject(payload={

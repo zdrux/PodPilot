@@ -530,6 +530,8 @@
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
+  const cautionSummary = document.querySelector(".caution-summary");
+  const actionModeNotice = document.querySelector("[data-action-mode-notice]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
   const resizeComposerTextarea = () => {
     if (!composerTextarea) return;
@@ -580,7 +582,21 @@
   }
   if (executionMode && askSubmit) {
     const updateModeAvailability = () => {
-      askLayout?.classList.toggle("action-session", executionMode.value === "action");
+      const actionModeSelected = executionMode.value === "action";
+      askLayout?.classList.toggle("action-session", actionModeSelected);
+      cautionSummary?.classList.toggle("agent-mode-pill", actionModeSelected);
+      if (cautionSummary) {
+        cautionSummary.dataset.tooltip = actionModeSelected
+          ? cautionSummary.dataset.actionTooltip
+          : cautionSummary.dataset.readOnlyTooltip;
+        cautionSummary.setAttribute(
+          "aria-label",
+          actionModeSelected
+            ? cautionSummary.dataset.actionAriaLabel
+            : cautionSummary.dataset.readOnlyAriaLabel
+        );
+      }
+      if (actionModeNotice) actionModeNotice.hidden = !actionModeSelected;
       updateAskSubmitAvailability();
     };
     executionMode.addEventListener("change", updateModeAvailability);

@@ -1474,7 +1474,7 @@ _POD_HEALTH_QUERY = re.compile(
     r"(?=.*\bpods\b)(?=.*\b(?:health|healthy|unhealthy|status|states?|"
     r"crash(?:ed|es|ing|loop(?:backoff)?)?|fail(?:ed|ing|ures?)?|"
     r"restart(?:ed|ing|s)?|not\s+ready|imagepullbackoff|errimagepull|"
-    r"pending|problems?|issues?)\b)",
+    r"pending|evict(?:ed|ion)?|not\s+running|problems?|issues?)\b)",
     re.IGNORECASE,
 )
 _POD_HEALTH_NAMESPACE_STOP_WORDS = {
