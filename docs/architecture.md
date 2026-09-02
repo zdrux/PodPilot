@@ -124,13 +124,19 @@ when to invoke them, how to interpret their observations, and whether to continu
 helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
 approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
-Before reinjection, a shell result is capped to a 48 KiB provider payload with separate bounded
-stdout and stderr prefixes. Every Chat Completions call also serializes its messages and tool schema
-to a tokenizer-independent UTF-8 byte upper bound, compacts older tool/history messages when needed,
-and refuses local transmission if the result still exceeds the profile's `max_input_tokens` ceiling.
-This bound is intentionally conservative because an OpenAI-compatible gateway may front models with
-different tokenizers. The bound is content-agnostic: PodPilot does not infer an investigation's
-intent from question wording to require particular shell fields or command shapes.
+Before first reinjection, a shell result is capped to a 48 KiB provider payload with separate bounded
+stdout and stderr prefixes. The model receives that raw result once. After the next model response,
+PodPilot removes the completed assistant tool-call and tool-result protocol pair and replaces it with
+a deterministic rolling evidence ledger: a compact index of all completed operations plus bounded
+detail for the latest results. Exact command execution remains available in the activity and audit
+records, while raw logs and object YAML do not accumulate as hidden provider conversation state.
+Every Chat Completions call estimates the complete messages-plus-tools token count using lexical BPE-
+style fragments, JSON punctuation, and a protocol safety margin. This avoids treating each UTF-8 byte
+as a token while remaining tokenizer-independent for OpenAI-compatible gateways that front different
+models. Older tool/history messages are compacted when needed, and PodPilot refuses local transmission
+if the estimate still exceeds the profile's `max_input_tokens` ceiling. The estimate is content-
+agnostic: PodPilot does not infer an investigation's intent from question wording to require particular
+shell fields or command shapes.
 Lazy delegated typed-reader construction, including Kubernetes dynamic-client discovery through the
 loopback broker, runs in a worker thread. It must not block the ASGI event loop that serves that same
 broker or the health endpoints. Delegated metric and audit adapters resolve the current token from

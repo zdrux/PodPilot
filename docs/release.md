@@ -446,13 +446,17 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Provider tests must prove `openai/gpt-oss-120b` is sent through Chat Completions with
   `tool_choice=auto`, sequential tool calls, assistant tool-call preservation, and correlated
   `role=tool` results.
-- Provider-input tests must prove oversized shell results are compacted before reinjection, the
-  complete messages-plus-tools request stays below `max_input_tokens`, irreducible requests fail
-  locally without provider transmission, the operator sees the configured input-token limit rather
-  than an internal exception type even when prior evidence exists, and bounded redacted 4xx/5xx
-  error details are retained.
+- Provider-input tests must prove oversized shell results are compacted before reinjection, token
+  estimates are not raw UTF-8 byte counts, and the complete messages-plus-tools request stays below
+  `max_input_tokens`. Irreducible requests must fail locally without provider transmission, the
+  operator must see the configured input-token limit rather than an internal exception type even
+  when prior evidence exists, and bounded redacted 4xx/5xx error details must be retained.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
+  A raw tool result and its assistant call may be sent through one subsequent model request only;
+  later requests must replace the completed pair with the bounded rolling evidence ledger.
+  Successful mutations must be marked as writes, and a final answer that describes them as
+  read-only or merely “safe patches” must be rejected and corrected before display.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
   token reaches the loopback runner, tokens never enter model messages or logs, the temporary
   kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command

@@ -327,6 +327,24 @@
           <ul>{% for item in message.activity.diagnostics %}<li>{{ item }}</li>{% endfor %}</ul>
         </details>
         {% endif %}
+        {% if message.activity and message.activity.evidence_ledger %}
+        <details class="answer-diagnostics retained-agent-evidence">
+          <summary>Agent evidence ledger <small>{{ message.activity.evidence_ledger | length }} completed operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
+          <p>This is the bounded evidence the agent retained after each raw tool result was interpreted once.</p>
+          <ol>
+          {% for item in message.activity.evidence_ledger %}
+            <li>
+              <strong>{{ item.cluster_name or item.cluster_id }} · {{ item.tool }} · {{ item.status }}</strong>
+              {% if item.command %}<code>{{ item.command }}</code>{% endif %}
+              {% if item.stdout_excerpt %}<pre>{{ item.stdout_excerpt }}</pre>{% endif %}
+              {% if item.stderr_excerpt %}<pre class="ledger-stderr">{{ item.stderr_excerpt }}</pre>{% endif %}
+              {% if item.observations %}<pre>{{ item.observations | tojson(indent=2) }}</pre>{% endif %}
+              {% if item.limitations %}<pre class="ledger-stderr">{{ item.limitations | tojson(indent=2) }}</pre>{% endif %}
+            </li>
+          {% endfor %}
+          </ol>
+        </details>
+        {% endif %}
         {% if message.command_failures %}
         <details class="answer-diagnostics exploratory-failures">
           <summary>Exploratory checks <small>{{ message.command_failures | sum(attribute='count') }} unsuccessful attempt{% if message.command_failures | sum(attribute='count') != 1 %}s{% endif %}</small></summary>

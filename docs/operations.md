@@ -727,7 +727,17 @@ typed access or the user's full cluster authorization. Investigation mode blocks
 other prohibited operations at the broker. Action mode forwards operations directly under the
 signed-in user's OpenShift RBAC and admission controls; there is no PodPilot preview or approval
 step. The Ask session-cautions disclosure reflects this persisted conversation mode rather than
-the internal agent-loop mode. **Cluster sign-ins** manages the current
+the internal agent-loop mode. PodPilot classifies each completed `oc`/`kubectl` command as a read or
+write operation in the tool result and command audit. The Action-mode prompt must call successful
+patches and other mutations writes, even when they are safe or narrowly scoped; final-answer
+validation rejects claims that all commands were read-only when a successful write was recorded.
+Within one agent turn, each raw tool result is returned to the model once so it can be interpreted.
+Subsequent model calls receive a bounded rolling evidence ledger instead of replaying completed raw
+logs, object YAML, stdout/stderr, and tool-call arguments. Later user turns continue to use the
+bounded visible chat history and persisted typed evidence, not an earlier turn's raw tool transcript.
+The same retained excerpts and operation metadata are operator-inspectable beneath the answer in the
+expandable **Agent evidence ledger** section.
+**Cluster sign-ins** manages the current
 browser session independently of chat history: select unconnected clusters to add them, use
 **Remove** to revoke one cluster token, or **Remove all sign-ins** to revoke the complete set.
 Removing a cluster used by an existing conversation makes that conversation require reconnection;

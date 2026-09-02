@@ -28,6 +28,7 @@ from podpilot_api.model_provider import (
     _model_request_context,
     _minimal_action_payload,
     _minimal_answer_payload,
+    _chat_input_token_estimate,
     _prepare_chat_input,
     _record_model_failure,
     _validation_failure_details,
@@ -712,6 +713,16 @@ def test_chat_input_budget_compacts_large_tool_results_before_provider_call() ->
     tool_content = str(prepared[-1]["content"])
     assert "compacted this message" in tool_content
     assert len(json.dumps({"messages": prepared}).encode()) <= 20_000
+
+
+def test_chat_input_budget_counts_estimated_tokens_instead_of_utf8_bytes() -> None:
+    messages = [{"role": "user", "content": "check the current pod status " * 2_000}]
+    serialized_bytes = len(json.dumps({"messages": messages}).encode())
+    estimated_tokens = _chat_input_token_estimate(messages)
+
+    assert estimated_tokens < serialized_bytes // 2
+    prepared = _prepare_chat_input(profile(max_input_tokens=64_000), messages)
+    assert prepared == messages
 
 
 def test_chat_input_budget_stops_request_when_fixed_context_exceeds_limit() -> None:

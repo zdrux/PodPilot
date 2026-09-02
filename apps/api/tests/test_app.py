@@ -29,6 +29,11 @@ from podpilot_api.main import (
     _agent_duplicate_command_issue,
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
+    _agent_action_claim_issue,
+    _agent_command_operation_kind,
+    _agent_evidence_ledger_message,
+    _agent_tool_ledger_entry,
+    _compact_consumed_agent_tool_messages,
     _recover_serialized_agent_completion,
     _agent_premature_deferral_issue,
     _bounded_agent_provider_result,
@@ -988,6 +993,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "broker will reject Kubernetes writes" in system_prompt
     else:
         assert "delegated read-write mode" in system_prompt
+        assert "identify successful writes accurately" in system_prompt
     assert "same investigation tools" in system_prompt
     assert "search_resources helpers are unavailable" in system_prompt
     assert "discover_resources before guessing" in system_prompt
@@ -2850,6 +2856,62 @@ def test_agent_final_answer_quality_rejects_serialized_tool_arguments() -> None:
     assert _agent_final_answer_quality_issue(
         "The LokiStack is healthy based on the collected Pod status."
     ) is None
+
+
+def test_agent_action_claim_rejects_read_only_summary_after_successful_write() -> None:
+    activity = [{
+        "tool": "execute_shell", "status": "completed", "operation_kind": "write",
+        "command": "oc patch deployment web -n apps --type=merge -p '{} '",
+    }]
+
+    assert _agent_command_operation_kind("oc patch deployment web -n apps -p '{}'") == "write"
+    assert _agent_command_operation_kind("oc -n apps scale deployment web --replicas=2") == "write"
+    assert _agent_command_operation_kind("oc auth can-i patch deployments -n apps") == "read"
+    assert _agent_command_operation_kind("oc get deployments -n apps") == "read"
+    assert _agent_action_claim_issue(
+        "All commands executed were read-only or safe patches within delegated permissions.",
+        activity,
+    ) == "successful_writes_described_as_read_only"
+    assert _agent_action_claim_issue(
+        "I patched deployment/web and then verified its rollout status.", activity,
+    ) is None
+
+
+def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> None:
+    raw_output = "first relevant line\n" + ("hidden deployment yaml\n" * 4_000) + "last line"
+    ledger = [_agent_tool_ledger_entry(
+        sequence=1,
+        tool_name="execute_shell",
+        tool_call_id="call-1",
+        cluster_id="cluster-1",
+        cluster_name="EC2",
+        status="completed",
+        request="oc get deployment web -o yaml",
+        result={"exit_code": 0, "stdout": raw_output, "stderr": "", "operation_kind": "read"},
+    )]
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "Agent instructions."},
+        {"role": "user", "content": "Check web."},
+        {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "execute_shell", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": raw_output},
+    ]
+
+    _compact_consumed_agent_tool_messages(messages, ledger)
+
+    assert not any(message.get("role") == "tool" for message in messages)
+    assert not any(message.get("tool_calls") for message in messages)
+    retained = str(messages[-1]["content"])
+    assert "rolling evidence ledger" in retained
+    assert "first relevant line" in retained
+    assert "last line" in retained
+    assert len(retained.encode()) < len(raw_output.encode()) // 10
+    assert len(str(_agent_evidence_ledger_message(ledger)["content"]).encode()) <= 24 * 1024
 
 
 def test_agent_completion_recovers_prose_from_serialized_finish_arguments() -> None:
@@ -9370,6 +9432,8 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
             created.headers["location"], headers={"x-forwarded-user": "ivy"}
         )
         assert "RBAC denied the mutation" in rendered.text
+        assert "Agent evidence ledger" in rendered.text
+        assert "oc auth can-i patch deployments --all-namespaces" in rendered.text
 
     assert runner.commands == ["oc auth can-i patch deployments --all-namespaces"]
     system_prompt = str(provider.agent_messages[0][0]["content"])
@@ -9384,6 +9448,13 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     assert '"exit_code": 1' in str(tool_message["content"])
     assert len(provider.agent_messages) == 2
     assert len(provider.finalization_messages) == 1
+    finalization_context = provider.finalization_messages[0]
+    assert not any(message.get("role") == "tool" for message in finalization_context)
+    assert not any(message.get("tool_calls") for message in finalization_context)
+    assert any(
+        "rolling evidence ledger" in str(message.get("content") or "")
+        for message in finalization_context
+    )
     retry_message = provider.finalization_messages[0][-1]
     assert retry_message["role"] == "user"
     assert "return a concise final answer now" in str(retry_message["content"])
@@ -10229,13 +10300,14 @@ def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
     class Provider(FakeModelProvider):
         def next_agent_step(self, *_args, **_kwargs):
             raise ModelProviderError(
-                "PodPilot stopped the model request before transmission because its conservative "
-                "input-token upper bound (61668) exceeds the configured maximum (59904).",
+                "PodPilot stopped the model request before transmission because its estimated "
+                "input-token count (61668) exceeds the configured maximum (59904).",
                 failure_type="input_limit",
                 failure={
                     "failure_type": "input_limit",
-                    "estimated_input_tokens_upper_bound": 61_668,
+                    "estimated_input_tokens": 61_668,
                     "configured_input_tokens": 59_904,
+                    "estimation_method": "tokenizer_independent_lexical_v1",
                 },
             )
 
@@ -10290,7 +10362,7 @@ def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
         )
 
     assert "configured input-token limit" in rendered.text
-    assert "input-token upper bound (61668) exceeds the configured maximum (59904)" in rendered.text
+    assert "input-token count (61668) exceeds the configured maximum (59904)" in rendered.text
     assert "UnboundLocalError" not in rendered.text
     assert "Internal job failure" not in rendered.text
     assert "podpilot.adhoc.provider_failed" in caplog.text
@@ -10854,7 +10926,8 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
 
     assert [call[1].cluster_id for call in runner.calls] == cluster_ids
     assert all(call[1].tls_verify is True for call in runner.calls)
-    assert "synthetic failure" not in rendered.text
+    assert "synthetic failure" in rendered.text
+    assert "Agent evidence ledger" in rendered.text
     assert "Exploratory checks" in rendered.text
     assert "Command failed" in rendered.text
     assert "East DEV" in rendered.text

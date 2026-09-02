@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import ssl
 import time
@@ -125,29 +126,48 @@ def _utf8_prefix(value: str, limit: int) -> str:
     return retained.decode("utf-8", errors="ignore").rstrip() + marker.decode()
 
 
-def _chat_input_token_upper_bound(
+def _estimated_serialized_tokens(value: object) -> int:
+    """Estimate BPE-style tokens without assuming one provider tokenizer.
+
+    OpenAI-compatible endpoints can front models with different tokenizers, so an
+    exact local count is not generally available. Counting JSON bytes as tokens was
+    safe but rejected ordinary English and JSON at roughly one quarter of the
+    configured context. This lexical estimate deliberately over-counts JSON
+    punctuation and long word fragments, then adds a small protocol margin.
+    """
+
+    serialized = json.dumps(
+        value, sort_keys=True, default=str, ensure_ascii=False,
+    )
+    estimated = 0
+    for piece in re.findall(r"[A-Za-z0-9_]+|[^A-Za-z0-9_\s]", serialized):
+        if piece[0].isalnum() or piece[0] == "_":
+            byte_length = len(piece.encode("utf-8"))
+            estimated += max(
+                1,
+                math.ceil(byte_length / (2 if len(piece) > 32 else 4)),
+            )
+        elif ord(piece[0]) > 127:
+            estimated += max(1, math.ceil(len(piece.encode("utf-8")) / 2))
+        else:
+            estimated += 1
+    return max(1, math.ceil(estimated * 1.10) + 8)
+
+
+def _chat_input_token_estimate(
     messages: list[dict[str, object]],
     *,
     tools: list[dict[str, object]] | None = None,
     request_fields: dict[str, object] | None = None,
 ) -> int:
-    """Return a tokenizer-independent conservative token upper bound.
-
-    OpenAI-compatible gateways can front models with different tokenizers. Every
-    UTF-8 byte can be represented by at most one byte-fallback token, so the
-    serialized request byte count is a deliberately conservative upper bound.
-    """
+    """Return a tokenizer-independent estimate for the complete chat request."""
 
     payload: dict[str, object] = {"messages": messages}
     if tools is not None:
         payload["tools"] = tools
     if request_fields:
         payload.update(request_fields)
-    return len(
-        json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode(
-            "utf-8", errors="replace"
-        )
-    )
+    return _estimated_serialized_tokens(payload)
 
 
 def _prepare_chat_input(
@@ -160,7 +180,7 @@ def _prepare_chat_input(
     """Compact provider-bound messages and enforce the configured input ceiling."""
 
     prepared = deepcopy(messages)
-    if _chat_input_token_upper_bound(
+    if _chat_input_token_estimate(
         prepared, tools=tools, request_fields=request_fields,
     ) <= profile.max_input_tokens:
         return prepared
@@ -174,7 +194,7 @@ def _prepare_chat_input(
         message["content"] = _utf8_prefix(
             str(message.get("content") or ""), _COMPACTED_TOOL_MESSAGE_BYTES
         )
-        if _chat_input_token_upper_bound(
+        if _chat_input_token_estimate(
             prepared, tools=tools, request_fields=request_fields,
         ) <= profile.max_input_tokens:
             return prepared
@@ -190,7 +210,7 @@ def _prepare_chat_input(
         if not isinstance(content, str) or not content:
             continue
         message["content"] = _utf8_prefix(content, _COMPACTED_HISTORY_MESSAGE_BYTES)
-        if _chat_input_token_upper_bound(
+        if _chat_input_token_estimate(
             prepared, tools=tools, request_fields=request_fields,
         ) <= profile.max_input_tokens:
             return prepared
@@ -199,20 +219,21 @@ def _prepare_chat_input(
         latest = prepared[latest_user_index]
         latest["content"] = _utf8_prefix(str(latest.get("content") or ""), 16_384)
 
-    upper_bound = _chat_input_token_upper_bound(
+    estimated_tokens = _chat_input_token_estimate(
         prepared, tools=tools, request_fields=request_fields,
     )
-    if upper_bound > profile.max_input_tokens:
+    if estimated_tokens > profile.max_input_tokens:
         raise ModelProviderError(
-            "PodPilot stopped the model request before transmission because its conservative "
-            f"input-token upper bound ({upper_bound}) exceeds the configured maximum "
+            "PodPilot stopped the model request before transmission because its estimated "
+            f"input-token count ({estimated_tokens}) exceeds the configured maximum "
             f"({profile.max_input_tokens}). Narrow the collected evidence or increase the model "
             "profile limit only when the provider model supports it.",
             failure_type="input_limit",
             failure={
                 "failure_type": "input_limit",
-                "estimated_input_tokens_upper_bound": upper_bound,
+                "estimated_input_tokens": estimated_tokens,
                 "configured_input_tokens": profile.max_input_tokens,
+                "estimation_method": "tokenizer_independent_lexical_v1",
             },
         )
     return prepared
