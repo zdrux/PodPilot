@@ -2490,8 +2490,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "function": {
                 "name": "finish_investigation",
                 "description": (
-                    "End with the operator-facing answer: complete only after all material safe reads; "
-                    "blocked when none can progress; budget_exhausted when the action budget prevents one."
+                    "End the investigation: complete only after all material safe reads; blocked when "
+                    "none can progress; budget_exhausted when the action budget prevents one."
                 ),
                 "parameters": {
                     "type": "object",
@@ -2502,7 +2502,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                         },
                         "answer": {
                             "type": "string",
-                            "description": "The concise operator-facing answer in Markdown.",
+                            "description": "The operator-facing answer in Markdown.",
                         },
                         "unresolved_safe_reads": {
                             "type": "array",

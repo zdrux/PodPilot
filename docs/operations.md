@@ -743,6 +743,8 @@ One app-wide 50-unit default action budget is configured with
 and Action conversations and may be set from 1 to 100.
 The same retained excerpts and operation metadata are operator-inspectable beneath the answer in the
 expandable **Agent evidence ledger** section.
+The agent has only a lightweight presentation preference: lists of comparable items should use a
+concise Markdown table, while other answers use whichever format is clearest.
 **Cluster sign-ins** manages the current
 browser session independently of chat history: select unconnected clusters to add them, use
 **Remove** to revoke one cluster token, or **Remove all sign-ins** to revoke the complete set.

@@ -10633,11 +10633,8 @@ def create_app(
                 "then end through finish_investigation with stop_reason complete, blocked, or budget_exhausted. "
                 "Do not repeat an identical shell command on the same cluster unless a state change, timed "
                 "comparison, incomplete prior result, or transient failure genuinely requires it; supply the "
-                "matching repeat_reason when it does. When presenting multiple comparable items, use a concise GitHub-flavored "
-                "Markdown table with a header row and exactly the same number of cells in every row. "
-                "Use <br> for multiple items inside a cell; never put a raw pipe, JSON braces, quoted JSON "
-                "placeholder, or schema syntax in a cell. Use plain unknown or an em dash when needed. "
-                "Keep explanatory conclusions outside the table.\n\n"
+                "matching repeat_reason when it does. When presenting a list of comparable items, use a concise "
+                "Markdown table; otherwise choose the clearest format.\n\n"
                 "Selected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),

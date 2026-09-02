@@ -7,8 +7,11 @@
   <section class="panel ask-panel">
     <div class="panel-header ask-session-header">
       <div class="ask-session-title">
-        <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
-        <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE - Cluster WRITES Permitted</span>
+        <p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p>
+        <div class="ask-session-heading-row">
+          <h2>Cluster conversation</h2>
+          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE - Cluster WRITES Permitted</span>
+        </div>
       </div>
       <div class="panel-header-actions">
         {% if is_delegated_mode %}

@@ -995,6 +995,8 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "delegated read-write mode" in system_prompt
         assert "identify successful writes accurately" in system_prompt
     assert "same investigation tools" in system_prompt
+    assert "When presenting a list of comparable items" in system_prompt
+    assert "otherwise choose the clearest format" in system_prompt
     assert "search_resources helpers are unavailable" in system_prompt
     assert "discover_resources before guessing" in system_prompt
     assert "API discovery does not prove" in system_prompt
@@ -9502,7 +9504,6 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     assert "Use only the tools supplied in this request" in system_prompt
     assert "empty label-filtered workload query proves only" in system_prompt
     assert "inspect the exact discovered custom resource and its status" in system_prompt
-    assert "Markdown table with a header row" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])
@@ -15023,6 +15024,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert template.count('class="boundary-pill execution-mode-badge ') == 1
     assert "Session cautions" in template
     assert "data-action-mode-notice" in template
+    assert 'class="ask-session-heading-row"' in template
     assert "ACTION MODE - Cluster WRITES Permitted" in template
     assert "data-action-tooltip" in template
     assert "data-read-only-tooltip" in template
