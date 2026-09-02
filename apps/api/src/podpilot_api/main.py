@@ -7939,7 +7939,11 @@ def _normalize_agent_collector_arguments(
                 question,
             )
         )
-        if metric == "log_entries_total" and log_ranking_question:
+        if log_ranking_question and (
+            metric == "log_entries_total"
+            or metric not in PUBLIC_METRICS
+            or "log" in metric
+        ):
             if re.search(r"(?i)\bpods?\b", question):
                 metric = "application_log_volume"
                 if normalized.get("namespace"):

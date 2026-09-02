@@ -10270,6 +10270,22 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
     assert normalized["metric_scope"] == "cluster"
     assert normalized["metric_operation"] == "rank"
     assert normalized["metric_group_by"] == ["namespace"]
+
+    for guessed_metric in (
+        "log_volume_bytes",
+        "log_volume_bytes_total",
+        "loki_log_entries_total",
+        "container_log_bytes_total",
+    ):
+        repaired = _normalize_agent_collector_arguments(
+            "query_metrics",
+            {"metric": guessed_metric, "metric_scope": "cluster"},
+            question="Show me the namespaces that produce the most amount of logs",
+        )
+        assert repaired["metric"] == "top_log_volume_by_namespace"
+        assert repaired["metric_scope"] == "cluster"
+        assert repaired["metric_operation"] == "rank"
+        assert repaired["metric_group_by"] == ["namespace"]
     assert normalized["range_seconds"] == 300
 
     explicit_period = _normalize_agent_collector_arguments(

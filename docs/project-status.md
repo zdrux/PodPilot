@@ -227,6 +227,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   HTML error pages from leaking into the answer surface. When the agent stops blocked or exhausts
   its budget, the grouped failures also remain visible as answer limitations.
 
+- Explicit namespace log-volume ranking questions now repair model-invented log metric names at
+  the typed collector boundary and route them to `top_log_volume_by_namespace`. This preserves the
+  agent-owned investigation sequence while preventing Pod-count approximations when the registered
+  aggregate Loki reader is available.
+
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited
