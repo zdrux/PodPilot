@@ -220,6 +220,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   exact completion envelope and persists only its operator-facing Markdown `answer`; malformed
   envelopes remain rejected model output and enter the bounded finalization retry.
 
+- Failed exploratory shell reads no longer render their raw stderr as a stack of answer
+  limitations. Ask groups them by cluster and failure category in a collapsed **Exploratory
+  checks** disclosure. Command bodies and diagnostic references remain in persisted activity and
+  audit records, while redacted stderr remains in server logs. This also prevents delegated-proxy
+  HTML error pages from leaking into the answer surface. When the agent stops blocked or exhausts
+  its budget, the grouped failures also remain visible as answer limitations.
+
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited

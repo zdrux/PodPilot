@@ -537,6 +537,40 @@ def _summarize_tool_activity(value: object) -> list[dict[str, object]]:
     ]
 
 
+def _summarize_agent_command_failures(value: object) -> list[dict[str, object]]:
+    """Group failed exploratory shell reads without exposing command response bodies."""
+
+    if not isinstance(value, list):
+        return []
+    labels = {
+        "forbidden": "Access denied",
+        "not_found": "Resource not found",
+        "no_output_match": "No matching output",
+        "jq_filter_parse_error": "Invalid jq filter",
+        "command_failed": "Command failed",
+    }
+    grouped: dict[tuple[str, str], int] = {}
+    for item in value:
+        if not isinstance(item, dict) or item.get("tool") != "execute_shell":
+            continue
+        if item.get("status") != "failed":
+            continue
+        cluster = redact_text(str(
+            item.get("cluster_name") or item.get("cluster_id") or "Unknown cluster"
+        )).strip()[:120]
+        category = str(item.get("failure_category") or "command_failed")
+        grouped[(cluster, category)] = grouped.get((cluster, category), 0) + 1
+    return [
+        {
+            "cluster": cluster,
+            "category": category,
+            "label": labels.get(category, "Command failed"),
+            "count": count,
+        }
+        for (cluster, category), count in grouped.items()
+    ]
+
+
 def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
     return ModelProfileConfig(
         provider_label=profile.provider_label,
@@ -8105,6 +8139,10 @@ def _command_failure_category(stderr: str) -> str | None:
 
     if _JQ_PARSE_ERROR_PATTERN.search(stderr):
         return "jq_filter_parse_error"
+    if re.search(r"(?i)\bforbidden\b|<title>access error\s*[-·]", stderr):
+        return "forbidden"
+    if re.search(r"(?i)\bnotfound\b|\bnot found\b", stderr):
+        return "not_found"
     return None
 
 
@@ -10694,6 +10732,15 @@ def create_app(
                             "A complete pod_health_summary result is required before PodPilot can "
                             "claim that all matching Pods are healthy."
                         )
+                if explicit_stop_reason in {"blocked", "budget_exhausted"}:
+                    for failure in _summarize_agent_command_failures(activity):
+                        agent_limitations.append(
+                            f"Cluster {failure['cluster']}: {failure['label']}"
+                            + (
+                                f" ({failure['count']} attempts)."
+                                if failure["count"] != 1 else "."
+                            )
+                        )
                 effective_preferred_evidence_view = (
                     preferred_evidence_view
                     or _preferred_metric_evidence_view(
@@ -11228,9 +11275,15 @@ def create_app(
                         if result.exit_code != 0:
                             command_diagnostic_ref = uuid4().hex[:12]
                             result_payload["diagnostic_ref"] = command_diagnostic_ref
-                            command_failure_category = _command_failure_category(result.stderr)
-                            if command_failure_category is not None:
-                                result_payload["failure_category"] = command_failure_category
+                            command_failure_category = (
+                                _command_failure_category(result.stderr)
+                                or (
+                                    "no_output_match"
+                                    if not result.stderr.strip() and not result.stdout.strip()
+                                    else "command_failed"
+                                )
+                            )
+                            result_payload["failure_category"] = command_failure_category
                         log_method(
                             "podpilot.agentic.command_complete actor=%s conversation_id=%s "
                             "cluster_id=%s cluster=%r command_sha256=%s runner_request_id=%s "
@@ -11284,23 +11337,6 @@ def create_app(
                     "content": safe_result,
                 })
                 exit_code = result_payload.get("exit_code")
-                stderr_summary = redact_text(str(result_payload.get("stderr") or "")).strip()
-                stderr_summary = " ".join(stderr_summary.split())[:500]
-                if exit_code != 0 and tool_error is None:
-                    failure_detail = (
-                        stderr_summary
-                        or redact_text(str(result_payload.get("error") or "command failed"))[:500]
-                    )
-                    failure_label = (
-                        "jq filter parse error"
-                        if command_failure_category == "jq_filter_parse_error"
-                        else "shell command failed"
-                    )
-                    agent_limitations.append(
-                        f"Cluster {cluster_name or cluster_id or 'unknown'}: {failure_label}"
-                        + (f" with exit code {exit_code}" if exit_code is not None else "")
-                        + f" ({failure_detail}; diagnostic ref {command_diagnostic_ref})."
-                    )
                 activity_item = {
                     "tool": "execute_shell",
                     "command": redact_text(command),
@@ -13281,6 +13317,9 @@ def create_app(
             citations = json.loads(row.citations_json)
             raw_activity_view = json.loads(row.tool_activity_json)
             activity_view = raw_activity_view if isinstance(raw_activity_view, dict) else {}
+            command_failures = _summarize_agent_command_failures(
+                activity_view.get("reads")
+            )
             resource_presentation = activity_view.get("presentation")
             if not (
                 isinstance(resource_presentation, dict)
@@ -13316,6 +13355,7 @@ def create_app(
                 "answer_mode": row.answer_mode, "citations": citations,
                 "activity": activity_view, "provider_status": row.provider_status,
                 "tool_usage": _summarize_tool_activity(activity_view.get("reads")),
+                "command_failures": command_failures,
                 "raw_responses": json.loads(row.raw_responses_json or "[]"),
                 "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
                 "prefer_metric_card": prefer_metric_card,

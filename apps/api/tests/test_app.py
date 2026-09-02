@@ -62,6 +62,7 @@ from podpilot_api.main import (
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _summarize_tool_activity,
+    _summarize_agent_command_failures,
     _stream_delegated_upstream,
     _grounded_read_candidates,
     _claims_complete_pod_health,
@@ -10761,7 +10762,9 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
 
     assert [call[1].cluster_id for call in runner.calls] == cluster_ids
     assert all(call[1].tls_verify is True for call in runner.calls)
-    assert "synthetic failure" in rendered.text
+    assert "synthetic failure" not in rendered.text
+    assert "Exploratory checks" in rendered.text
+    assert "Command failed" in rendered.text
     assert "East DEV" in rendered.text
     assert "Cluster TLS exception" not in rendered.text
     assert "API TLS verification is disabled" not in rendered.text
@@ -10786,7 +10789,7 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         assert duplicate_read["failure_category"] == "duplicate_command"
         failed_read = next(item for item in command_reads if item["status"] == "failed")
         assert re.fullmatch(r"[0-9a-f]{12}", failed_read["diagnostic_ref"])
-        assert any("East DEV" in item for item in activity["limitations"])
+        assert activity["limitations"] == []
         assert all(
             "TLS verification is disabled" not in item
             for item in activity["limitations"]
@@ -10876,6 +10879,43 @@ def test_jq_failure_is_classified_as_a_filter_parse_error() -> None:
     )
 
     assert _command_failure_category(stderr) == "jq_filter_parse_error"
+
+
+def test_agent_command_failures_are_grouped_without_response_bodies() -> None:
+    failures = _summarize_agent_command_failures([
+        {
+            "tool": "execute_shell", "status": "failed",
+            "cluster_name": "Central DEV", "failure_category": "forbidden",
+        },
+        {
+            "tool": "execute_shell", "status": "failed",
+            "cluster_name": "Central DEV", "failure_category": "forbidden",
+        },
+        {
+            "tool": "execute_shell", "status": "failed",
+            "cluster_name": "Central DEV", "failure_category": "not_found",
+        },
+    ])
+
+    assert failures == [
+        {
+            "cluster": "Central DEV", "category": "forbidden",
+            "label": "Access denied", "count": 2,
+        },
+        {
+            "cluster": "Central DEV", "category": "not_found",
+            "label": "Resource not found", "count": 1,
+        },
+    ]
+
+
+def test_command_failure_classifies_proxy_html_without_exposing_it() -> None:
+    stderr = (
+        "Error from server (Forbidden): <!doctype html><html><head>"
+        "<title>Access error - PodPilot</title></head></html>"
+    )
+
+    assert _command_failure_category(stderr) == "forbidden"
 
 
 def test_agent_collector_failure_category_survives_wrapping() -> None:
