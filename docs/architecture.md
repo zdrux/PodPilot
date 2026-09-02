@@ -509,7 +509,9 @@ fact cards; LIST responses continue to expose metadata only.
 For `cluster_audit_events`, normal code compiles the grounded namespace, username, operation,
 outcome, period, and limit into a fixed Loki audit query. Loki applies those filters before its
 backward result limit and compact line projection; PodPilot revalidates them while projecting
-events and never sends model-authored LogQL.
+events and never sends model-authored LogQL. Reviewed query profiles cover a direct audit event,
+JSON audit text in the OpenShift log record's `message` field, and a parsed event under `structured`;
+projected results are deduplicated by audit ID.
 The model owns troubleshooting direction, but selects rather than authors each ordinary read.
 Normal code derives up to twelve opaque actions from exact operator coordinates, observed
 relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches

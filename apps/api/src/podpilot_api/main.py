@@ -849,6 +849,18 @@ def _validated_adhoc_answer(
         validation_limitations.append(
             "An incomplete or truncated inventory cannot prove that a named object is absent."
         )
+    empty_audit_result = _empty_audit_result(citations, observations or [])
+    if empty_audit_result:
+        content = (
+            "## Audit query result\n\n"
+            "Loki returned no matching completed audit events for the searched window. This "
+            "result is inconclusive: it does not establish that no cluster actions occurred. "
+            "Verify that audit logs are forwarded to the selected LokiStack audit tenant and "
+            "retained for the requested period, then retry the query."
+        )
+        validation_limitations.append(
+            "An empty Loki audit query cannot prove an absence of cluster activity."
+        )
     investigation_gaps: list[InvestigationGap] = []
     for gap in answer.investigation_gaps[:5]:
         supporting_ids = [
@@ -863,7 +875,8 @@ def _validated_adhoc_answer(
     return {
         "answer_mode": mode,
         "conclusion_status": (
-            "unresolved" if incomplete_inventory_absence else answer.conclusion_status
+            "unresolved" if incomplete_inventory_absence or empty_audit_result
+            else answer.conclusion_status
             or ("unresolved" if original_mode == "insufficient_evidence" else "confirmed")
         ),
         "content": content,
@@ -877,6 +890,28 @@ def _validated_adhoc_answer(
         ],
         "investigation_gaps": investigation_gaps,
     }
+
+
+def _empty_audit_result(
+    citations: list[str], observations: list[dict[str, object]],
+) -> bool:
+    """Return whether the answer cites only successful audit reads with zero projected events."""
+
+    cited = [
+        item for item in observations if str(item.get("id") or "") in citations
+    ]
+    if not cited:
+        return False
+    for item in cited:
+        data = item.get("data")
+        if item.get("tool") != "query_audit_events" or not isinstance(data, dict):
+            return False
+        try:
+            if int(data.get("count") or 0) != 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def _incomplete_inventory_supports_absence_claim(

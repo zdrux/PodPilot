@@ -2695,6 +2695,33 @@ def test_adhoc_answer_does_not_call_unrelated_rbac_failure_blocking() -> None:
     assert not str(validated["content"]).startswith("**Access blocked")
 
 
+def test_empty_audit_evidence_cannot_be_presented_as_no_cluster_activity() -> None:
+    evidence_id = "audit-empty"
+    answer = AdHocAnswer(
+        answer_mode="evidence_based",
+        conclusion_status="confirmed",
+        answer="No audit entries were recorded and no users performed actions in the cluster.",
+        cited_evidence_ids=[evidence_id],
+    )
+
+    validated = _validated_adhoc_answer(
+        answer,
+        known_evidence_ids={evidence_id},
+        observations=[{
+            "id": evidence_id,
+            "tool": "query_audit_events",
+            "data": {"count": 0, "events": [], "rangeSeconds": 86_400},
+        }],
+    )
+
+    assert validated["conclusion_status"] == "unresolved"
+    assert "does not establish that no cluster actions occurred" in str(validated["content"])
+    assert any(
+        "cannot prove an absence" in limitation
+        for limitation in validated["limitations"]
+    )
+
+
 def test_adhoc_answer_removes_provider_recommendations_from_narrative() -> None:
     answer = AdHocAnswer(
         answer_mode="evidence_based",

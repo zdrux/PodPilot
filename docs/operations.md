@@ -430,6 +430,11 @@ The Loki request limit now matches the requested result count because its LogQL 
 validated stage, operation, outcome, and optional exact-username filters. Audit traffic uses the
 separate 1 MiB default response ceiling rather than
 overfetching four times the requested number of verbose raw records under the generic 64 KiB cap.
+OpenShift Logging can store the Kubernetes audit event directly, as JSON text in `message`, or as a
+parsed object in `structured`. PodPilot tries each reviewed record profile with the same bounded
+server-side filters and compact projection until one matches, then deduplicates projected events by audit ID. An empty
+result is reported as an inconclusive Loki/forwarding observation rather than proof that no cluster
+activity occurred.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
 an Approver may disable verification on that cluster entry. This also disables hostname

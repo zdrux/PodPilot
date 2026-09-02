@@ -48,6 +48,55 @@ _COMPACT_AUDIT_LINE_TEMPLATE = (
     '"responseStatus":{"code":{{printf "%q" .audit_code}}}}'
 )
 
+_AUDIT_RECORD_PROFILES = ("top_level", "message", "structured")
+
+
+def _audit_logql(
+    *,
+    profile: str,
+    username: str | None,
+    namespace: str | None,
+    resource: str | None,
+    operation_scope: str,
+    outcome: str,
+) -> str:
+    """Build one reviewed audit-record profile with a compact server-side projection."""
+
+    if profile not in _AUDIT_RECORD_PROFILES:
+        raise ValueError("Unsupported audit record profile.")
+    prefix = "structured." if profile == "structured" else ""
+    query = '{log_type="audit"} '
+    if profile == "message":
+        query += '| json audit_payload="message" | line_format "{{.audit_payload}}" '
+    query += (
+        f'| json audit_id="{prefix}auditID", '
+        f'audit_timestamp="{prefix}requestReceivedTimestamp", '
+        f'audit_username="{prefix}user.username", audit_stage="{prefix}stage", '
+        f'audit_verb="{prefix}verb", audit_code="{prefix}responseStatus.code", '
+        f'audit_api_group="{prefix}objectRef.apiGroup", '
+        f'audit_api_version="{prefix}objectRef.apiVersion", '
+        f'audit_resource="{prefix}objectRef.resource", '
+        f'audit_subresource="{prefix}objectRef.subresource", '
+        f'audit_namespace="{prefix}objectRef.namespace", '
+        f'audit_name="{prefix}objectRef.name" '
+    )
+    if username:
+        query += f'| audit_username=~{_logql_regex_literal(username)} '
+    if namespace:
+        query += f'| audit_namespace=~{_logql_regex_literal(namespace)} '
+    if resource:
+        query += f'| audit_resource=~{_logql_regex_literal(resource)} '
+    query += '| audit_stage="ResponseComplete"'
+    if operation_scope == "mutations":
+        query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
+    elif operation_scope == "deletes":
+        query += ' | audit_verb=~"^(?:delete|deletecollection)$"'
+    if outcome == "successful":
+        query += ' | audit_code=~"^[123][0-9]{2}$"'
+    elif outcome == "failed":
+        query += ' | audit_code=~"^[45][0-9]{2}$"'
+    return query + f" | line_format `{_COMPACT_AUDIT_LINE_TEMPLATE}`"
+
 
 def _logql_regex_literal(value: str) -> str:
     """Encode an exact case-insensitive value without granting regex syntax."""
@@ -114,46 +163,49 @@ class BoundedAuditEventReader:
         resource = intent.audit_resource.strip() if intent.audit_resource else None
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         end = self._clock()
-        query = (
-            '{log_type="audit"} '
-            '| json audit_id="auditID", audit_timestamp="requestReceivedTimestamp", '
-            'audit_username="user.username", audit_stage="stage", '
-            'audit_verb="verb", audit_code="responseStatus.code", '
-            'audit_api_group="objectRef.apiGroup", audit_api_version="objectRef.apiVersion", '
-            'audit_resource="objectRef.resource", audit_subresource="objectRef.subresource", '
-            'audit_namespace="objectRef.namespace", audit_name="objectRef.name" '
-        )
-        if username:
-            query += f'| audit_username=~{_logql_regex_literal(username)} '
-        if namespace:
-            query += f'| audit_namespace=~{_logql_regex_literal(namespace)} '
-        if resource:
-            query += f'| audit_resource=~{_logql_regex_literal(resource)} '
-        query += '| audit_stage="ResponseComplete"'
-        if intent.audit_operation_scope == "mutations":
-            query += ' | audit_verb=~"^(?:create|delete|deletecollection|patch|update)$"'
-        elif intent.audit_operation_scope == "deletes":
-            query += ' | audit_verb=~"^(?:delete|deletecollection)$"'
-        if intent.audit_outcome == "successful":
-            query += ' | audit_code=~"^[123][0-9]{2}$"'
-        elif intent.audit_outcome == "failed":
-            query += ' | audit_code=~"^[45][0-9]{2}$"'
-        # Rewrite matching audit lines inside Loki so large request/response objects never
-        # cross the network. The HTTP limit and backward direction then apply to these compact,
-        # server-filtered projections rather than pages of raw audit payloads.
-        query += f" | line_format `{_COMPACT_AUDIT_LINE_TEMPLATE}`"
         snapshot = AuditLogEntries(entries=(), is_complete=True)
         events: list[dict[str, object]] = []
+        matched_profiles: list[str] = []
         while True:
             start = end - timedelta(seconds=range_seconds)
-            snapshot = self._source.query_audit_entries(
-                query,
-                start=start,
-                end=end,
-                # Loki already applies the username, stage, operation, and outcome
-                # filters. Asking for four times the requested count only inflates
-                # verbose raw audit payloads and can trip the bounded HTTP ceiling.
-                limit=intent.limit,
+            profile_snapshots: list[AuditLogEntries] = []
+            matched_profiles = []
+            for profile in _AUDIT_RECORD_PROFILES:
+                profile_snapshot = self._source.query_audit_entries(
+                    _audit_logql(
+                        profile=profile,
+                        username=username,
+                        namespace=namespace,
+                        resource=resource,
+                        operation_scope=str(intent.audit_operation_scope),
+                        outcome=str(intent.audit_outcome),
+                    ),
+                    start=start,
+                    end=end,
+                    # Every profile filters and projects inside Loki, so verbose
+                    # request/response objects never cross this boundary.
+                    limit=intent.limit,
+                )
+                profile_snapshots.append(profile_snapshot)
+                if profile_snapshot.entries:
+                    matched_profiles.append(profile)
+                    # One OpenShift Logging deployment uses one record envelope.
+                    # Stop after the first matching reviewed profile to avoid
+                    # multiplying successful audit-query latency.
+                    break
+            snapshot = AuditLogEntries(
+                entries=tuple(
+                    sorted(
+                        (
+                            entry
+                            for item in profile_snapshots
+                            for entry in item.entries
+                        ),
+                        key=lambda item: item[0],
+                        reverse=True,
+                    )
+                ),
+                is_complete=all(item.is_complete for item in profile_snapshots),
             )
             events = self._project_events(
                 snapshot,
@@ -191,7 +243,10 @@ class BoundedAuditEventReader:
             )
         if not events:
             limitations.append(
-                "No matching completed audit events were observed during the requested period."
+                "Loki returned no matching completed audit events across the supported OpenShift "
+                "audit record profiles. This does not prove that no cluster activity occurred; "
+                "verify that audit logs are forwarded to this LokiStack and retained for the "
+                "requested period."
             )
         return ReadResult(observations=(AdHocObservation(
             id=f"audit-{uuid4()}",
@@ -222,6 +277,7 @@ class BoundedAuditEventReader:
                 "count": len(events),
                 "complete": snapshot.is_complete and len(events) < intent.limit,
                 "rawLinesPersisted": False,
+                "matchedRecordProfiles": matched_profiles,
             },
         ),), limitations=tuple(limitations))
 
