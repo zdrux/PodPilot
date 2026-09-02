@@ -1564,6 +1564,19 @@ def test_platform_metric_scopes_require_typed_coordinates() -> None:
             metric_scope="kafka_cluster", kind="Kafka",
             namespace="vc-streams", name="vc-cluster",
         )
+    exact_topic = ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+        topic="ep.ticket.status.updated.events",
+        metric_operation="rank", metric_group_by=["topic"], limit=1,
+    )
+    assert exact_topic.topic == "ep.ticket.status.updated.events"
+    with pytest.raises(ValidationError, match="topic is valid only"):
+        ReadIntent(
+            tool="query_metrics", metric="cpu_usage", metric_scope="cluster",
+            topic="orders",
+        )
 
 
 @pytest.mark.parametrize(("question", "expected_limit"), [
@@ -1686,6 +1699,27 @@ def test_namespace_kafka_topic_storage_compiles_discovery_then_metric_reads() ->
         "show me the disk usage of kafka topics in kafka-observability namespace",
         [],
     ) is None
+
+
+def test_named_kafka_topic_storage_plan_preserves_cluster_target_and_topic_filter() -> None:
+    plan = plan_kafka_topic_storage_metrics(
+        "show me disk usage for topic ep.ticket.status.updated.events in tm-streams-sit2 namespace",
+        [("tm-streams-sit2", "tm-streams-sit2-cluster")],
+    )
+
+    assert plan is not None
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster",
+        kind="Kafka",
+        namespace="tm-streams-sit2",
+        name="tm-streams-sit2-cluster",
+        topic="ep.ticket.status.updated.events",
+        range_seconds=300,
+        limit=1,
+        metric_group_by=["topic"],
+    )]
 
 
 def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:

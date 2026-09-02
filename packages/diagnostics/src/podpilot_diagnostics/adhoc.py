@@ -168,6 +168,7 @@ class ReadIntent(BaseModel):
     match_value: str | None = Field(default=None, max_length=512)
     match_operator: Literal["exact", "contains"] = "exact"
     container: str | None = Field(default=None, max_length=253)
+    topic: str | None = Field(default=None, max_length=249)
     candidate_id: str | None = Field(default=None, max_length=80)
     url: str | None = Field(default=None, max_length=2048)
     connect_host: str | None = Field(default=None, max_length=253)
@@ -244,6 +245,20 @@ class ReadIntent(BaseModel):
             raise ValueError("must be an exact target, not a deferred placeholder")
         return value
 
+    @field_validator("topic")
+    @classmethod
+    def require_exact_kafka_topic(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        if not normalized:
+            return None
+        if looks_like_deferred_target(normalized):
+            raise ValueError("must be an exact target, not a deferred placeholder")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", normalized):
+            raise ValueError(
+                "Kafka topic must contain only letters, digits, dots, underscores, or hyphens"
+            )
+        return normalized
+
     @field_validator("match_field")
     @classmethod
     def require_search_field_path(cls, value: str | None) -> str | None:
@@ -296,7 +311,12 @@ class ReadIntent(BaseModel):
             if self.metric_scope in {"node", "node_role"} and self.namespace:
                 raise ValueError("the selected cluster metric scope does not accept a namespace")
             if self.metric_scope == "kafka_cluster" and self.kind != "Kafka":
-                raise ValueError("kafka_cluster metric scope requires kind Kafka")
+                raise ValueError(
+                    "kafka_cluster metric scope requires kind Kafka and name must identify "
+                    "the owning Kafka custom resource; use topic for an exact Kafka topic"
+                )
+            if self.topic and not self.metric.startswith("kafka_"):
+                raise ValueError("topic is valid only for registered Kafka metrics")
             metric_scopes = {
                 "cpu_usage": {"cluster", "namespace", "pod", "node"},
                 "cpu_requests": {"cluster", "namespace", "pod", "node"},
@@ -407,6 +427,7 @@ class ReadIntent(BaseModel):
             or self.metric_statistic != "current" or self.metric_group_by
             or self.threshold_operator is not None
             or self.threshold_value is not None
+            or self.topic is not None
         ):
             raise ValueError("metric fields are valid only for query_metrics")
         if self.tool == "query_audit_events":
@@ -1375,6 +1396,11 @@ _KAFKA_TOPIC_STORAGE_QUERY = re.compile(
     r"(?=.*\b(?:disk|storage|space|size|bytes?|usage|utili[sz]ation)\b)",
     re.IGNORECASE,
 )
+_EXACT_KAFKA_TOPIC_QUERY = re.compile(
+    r"\b(?:for\s+(?:the\s+)?topic|topic\s+(?:named\s+|called\s+)?)"
+    r"[`'\"]?(?P<topic>[A-Za-z0-9._-]+)[`'\"]?\b",
+    re.IGNORECASE,
+)
 _EXACT_KAFKA_CLUSTER_QUERY = re.compile(
     r"\b(?:on|for)\s+(?:the\s+)?[`'\"]?"
     r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\s+Kafka\b|"
@@ -1687,6 +1713,14 @@ def plan_kafka_topic_storage_metrics(
     result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    topic_match = _EXACT_KAFKA_TOPIC_QUERY.search(question)
+    topic = topic_match.group("topic") if topic_match else None
+    if topic and topic.casefold() in {
+        "disk", "storage", "space", "size", "bytes", "usage", "utilization", "utilisation",
+    }:
+        topic = None
+    if topic:
+        result_limit = 1
     limitations = []
     if len(coordinates) > len(selected):
         limitations.append(
@@ -1707,6 +1741,7 @@ def plan_kafka_topic_storage_metrics(
                 kind="Kafka",
                 namespace=namespace,
                 name=name,
+                topic=topic,
                 range_seconds=range_seconds,
                 limit=result_limit,
                 metric_operation="show",

@@ -188,6 +188,8 @@ Namespace-scoped Kafka topic-disk-utilization requests are a registered two-stag
 exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
 `kafka_topic_disk_utilization` query per observed CR and groups the result by topic. The query
 compares replicated topic log bytes with aggregate capacity from that Kafka cluster's broker PVCs.
+When the operator names one topic, the typed request keeps the owning `Kafka` CR as its target and
+adds an exact `topic` selector, so that topic's byte and partition details do not depend on its rank.
 An empty namespace,
 partial metric failure, or denied monitoring read remains visible evidence. This resolves the Kafka
 name from observed API evidence instead of requiring the model or operator to supply it, without

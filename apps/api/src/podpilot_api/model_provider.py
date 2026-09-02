@@ -495,6 +495,7 @@ class MetricRequestSemantics(BaseModel):
         "alertmanager_active_alerts", "logging_ingestion_rate", "logging_query_latency",
     ]] = Field(min_length=1, max_length=4)
     target: MetricTargetSemantics
+    topic: str | None = Field(default=None, max_length=249)
     operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
     statistic: Literal["current", "average", "maximum", "minimum"] = "current"
     group_by: list[Literal[
@@ -506,6 +507,18 @@ class MetricRequestSemantics(BaseModel):
     threshold_value: float | None = None
     range_seconds: int | None = Field(default=None, ge=300, le=7_776_000)
     result_limit: int | None = Field(default=None, ge=1, le=100)
+
+    @field_validator("topic")
+    @classmethod
+    def normalize_topic(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        if not normalized:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", normalized):
+            raise ValueError(
+                "Kafka topic must contain only letters, digits, dots, underscores, or hyphens"
+            )
+        return normalized
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
@@ -531,6 +544,11 @@ class MetricRequestSemantics(BaseModel):
             raise ValueError("threshold arguments are valid only for threshold metrics")
         if self.operation == "rank" and self.result_limit is None:
             self.result_limit = 10
+        if self.topic and (
+            self.target.scope != "kafka_cluster"
+            or any(not signal.startswith("kafka_") for signal in self.signals)
+        ):
+            raise ValueError("topic is valid only for registered Kafka-cluster metrics")
         return self
 
 
@@ -2044,7 +2062,9 @@ class OpenAIResponsesProvider:
                     "and throttling are measured trends. top_log_volume_by_namespace is the dedicated "
                     "cluster-scope Loki namespace ranking. application_log_volume returns only numeric Loki "
                     "payload-byte aggregates for an exact namespace or Pod, and namespace scope grouped by "
-                    "Pod ranks Pods in that namespace. "
+                    "Pod ranks Pods in that namespace. Kafka metrics use kafka_cluster scope with a Kafka "
+                    "custom resource as the target; namespace and name identify that Kafka resource, while "
+                    "topic carries an optional exact Kafka topic name. Never use a KafkaTopic as the target. "
                     "http_probe may test any investigation-relevant absolute HTTP or HTTPS URL with HEAD or a "
                     "bounded GET. The URL hostname is always the HTTP Host and HTTPS SNI name. To test a passthrough "
                     "Route against a specific router address, keep the Route hostname in url and put the router IP "
@@ -2431,9 +2451,11 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "query_metrics",
             "Query bounded registered Thanos or Loki metrics: CPU, memory, application-log volume, "
             "Kafka consumer lag, or Kafka topic disk utilization. Kafka requires kafka_cluster scope "
-            "and exact kind, namespace, and name. Use rank for rankings, show for totals; default period is 300 seconds.",
+            "with kind=Kafka; namespace and name identify the owning Kafka custom resource, never a "
+            "KafkaTopic. Put a requested exact topic name in topic. Use rank for rankings, show for "
+            "totals; default period is 300 seconds.",
             (
-                "metric", "metric_scope", "kind", "namespace", "name",
+                "metric", "metric_scope", "kind", "namespace", "name", "topic",
                 "container", "metric_operation", "metric_statistic", "metric_group_by",
                 "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
                 "limit",
@@ -3034,7 +3056,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "top_log_volume_by_namespace is the dedicated cluster-scope Loki namespace ranking. "
                 "application_log_volume returns numeric Loki payload bytes, never log lines: group a Namespace "
                 "by Pod for top Pods, or leave Namespace or Pod ungrouped for its total. Kafka exposes only "
-                "consumer lag and topic disk utilization. "
+                "consumer lag and topic disk utilization. Kafka metrics use kafka_cluster scope with a Kafka "
+                "custom resource as the target; namespace and name identify that Kafka resource, while topic "
+                "carries an optional exact Kafka topic name. Never use a KafkaTopic as the target. "
                 "For a comprehensive inventory, set the list limit to "
                 "tool_policy.max_list_objects; otherwise choose a deliberately bounded limit for the "
                 "diagnostic goal. A cluster-wide LIST is allowed for inventory when no namespace "

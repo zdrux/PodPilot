@@ -563,15 +563,19 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         }[metric]
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"rate({source_metric}{{{selector},topic!=\"\"}}[{window}])",
+            f"rate({source_metric}{{{selector}}}[{window}])",
             intent, default_labels=("topic",),
         )
     if metric == "kafka_topic_disk_utilization":
         log_size = _kafka_broker_metric(
             ("kafka_log_log_size", "kafka_log_log_size_value"), intent,
-            extra_selector='topic!=""',
+            extra_selector=(
+                f"topic={json.dumps(intent.topic)}" if intent.topic else 'topic!=""'
+            ),
         )
         usage = _domain_aggregate(
             log_size, intent,
@@ -595,17 +599,21 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
     if metric == "kafka_consumer_lag":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"kafka_consumergroup_lag{{{selector},topic!=\"\"}}",
+            f"kafka_consumergroup_lag{{{selector}}}",
             intent, default_labels=("topic", "consumergroup"),
         )
     if metric == "kafka_under_replicated_partitions":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"kafka_topic_partition_under_replicated_partition{{{selector},topic!=\"\"}}",
+            f"kafka_topic_partition_under_replicated_partition{{{selector}}}",
             intent, default_labels=("topic",),
         )
     if metric in {"ingress_request_rate", "ingress_error_rate"}:
@@ -1031,6 +1039,7 @@ class BoundedMetricTrendReader:
                 "name": intent.name,
                 "kind": intent.kind,
                 "container": intent.container,
+                "topic": intent.topic,
                 "unit": _UNITS[intent.metric],
                 "operation": intent.metric_operation,
                 "statistic": intent.metric_statistic,

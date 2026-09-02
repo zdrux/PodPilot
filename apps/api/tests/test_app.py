@@ -27,6 +27,7 @@ from podpilot_api.main import (
     _agent_collector_failure_category,
     _command_failure_category,
     _agent_duplicate_command_issue,
+    _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
     _agent_premature_deferral_issue,
     _bounded_agent_provider_result,
@@ -10252,6 +10253,21 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
         assert kafka_storage["metric_operation"] == "rank"
         assert kafka_storage["metric_group_by"] == ["topic"]
 
+    exact_topic = _normalize_agent_collector_arguments(
+        "query_metrics",
+        {
+            "metric": "kafka_topic_disk_usage_bytes",
+            "metric_scope": "kafka_cluster",
+            "kind": "Kafka",
+            "namespace": "tm-streams-sit2",
+            "name": "tm-streams-sit2-cluster",
+            "topic": "ep.ticket.status.updated.events",
+            "limit": 300,
+        },
+        question="Show disk usage for topic ep.ticket.status.updated.events",
+    )
+    assert exact_topic["topic"] == "ep.ticket.status.updated.events"
+    assert exact_topic["limit"] == 1
     with pytest.raises(ValueError, match="not in the focused catalog"):
         _normalize_agent_collector_arguments(
             "query_metrics",
@@ -10294,6 +10310,21 @@ def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> Non
     assert exact_node["metric_scope"] == "node"
     assert exact_node["metric_operation"] == "show"
     assert exact_node.get("metric_group_by") is None
+
+
+def test_kafka_metric_validation_retry_explains_cluster_and_topic_coordinates() -> None:
+    guidance = _agent_tool_retry_guidance(
+        tool_name="query_metrics",
+        error=(
+            "Invalid typed collector arguments: arguments: Value error, kafka_cluster "
+            "metric scope requires kind Kafka and name must identify the owning Kafka custom resource"
+        ),
+        selected_cluster_ids=["cluster-1"],
+    )
+
+    assert "kind=Kafka" in guidance
+    assert "owning Kafka CR name" in guidance
+    assert "put the requested exact Kafka topic in topic" in guidance
 
 
 def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(

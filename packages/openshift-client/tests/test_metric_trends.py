@@ -444,6 +444,36 @@ def test_explicit_kafka_partition_ranking_keeps_flat_metric_result() -> None:
     assert "topicStorage" not in result.observations[0].data
 
 
+def test_exact_kafka_topic_filter_collects_named_topic_bytes_and_partitions() -> None:
+    topic = "ep.ticket.status.updated.events"
+    source = SequentialRangeSource([
+        MetricRange(series=(MetricSeries(
+            labels={"topic": topic}, points=(MetricPoint(NOW, 2.5),),
+        ),), collected_at=NOW, is_complete=True),
+        MetricRange(series=(MetricSeries(
+            labels={"topic": topic}, points=(MetricPoint(NOW, 4096.0),),
+        ),), collected_at=NOW, is_complete=True),
+        MetricRange(series=(MetricSeries(
+            labels={"topic": topic, "partition": "0", "pod": "tm-cluster-kafka-0"},
+            points=(MetricPoint(NOW, 4096.0),),
+        ),), collected_at=NOW, is_complete=True),
+    ])
+    reader = BoundedMetricTrendReader(source, clock=lambda: NOW)
+
+    result = reader.execute(ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="tm-streams-sit2", name="tm-streams-sit2-cluster",
+        topic=topic, metric_operation="rank", metric_group_by=["topic"], limit=1,
+    ))
+
+    assert f'topic="{topic}"' in str(source.calls[0]["promql"])
+    storage = result.observations[0].data["topicStorage"]
+    assert storage["topics"][0]["topic"] == topic
+    assert storage["topics"][0]["currentBytes"] == 4096.0
+    assert result.observations[0].data["topic"] == topic
+
+
 def test_kafka_partition_detail_failure_preserves_primary_topic_result() -> None:
     source = SequentialRangeSource([
         MetricRange(series=(MetricSeries(

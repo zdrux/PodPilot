@@ -7890,6 +7890,8 @@ def _normalize_agent_collector_arguments(
                 normalized["metric_group_by"] = ["topic"]
             if tuple(normalized.get("metric_group_by") or ()) == ("topic",):
                 normalized["metric_operation"] = "rank"
+            if normalized.get("topic"):
+                normalized["limit"] = 1
         explicit_range = _explicit_duration_seconds(question)
         normalized["range_seconds"] = explicit_range or DEFAULT_METRIC_RANGE_SECONDS
         return normalized
@@ -8121,6 +8123,13 @@ def _agent_tool_retry_guidance(
         return (
             "Retry with exactly one cluster_id from this allowed set: "
             f"{allowed}. For a multi-cluster comparison, issue one separate tool call per cluster."
+        )
+    if tool_name == "query_metrics" and "kafka_cluster metric scope requires kind Kafka" in error:
+        return (
+            "Retry with metric_scope=kafka_cluster, kind=Kafka, namespace=<Kafka CR namespace>, "
+            "and name=<owning Kafka CR name>. The name field must not contain a KafkaTopic name; "
+            "put the requested exact Kafka topic in topic. Discover or list Kafka resources first "
+            "if the owning Kafka CR coordinates are not yet known."
         )
     return (
         "Correct the arguments using the tool schema and retry only if this read remains "
@@ -8459,6 +8468,7 @@ def _semantic_metric_read_plan(
             namespace=target.namespace,
             name=name,
             container=target.container,
+            topic=request.topic,
             range_seconds=range_seconds,
             limit=limit,
             metric_operation=request.operation,

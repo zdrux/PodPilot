@@ -1493,6 +1493,10 @@ they mark the expandable detail incomplete and appear as operator-visible limita
 Common model spellings such as `kafka_topic_disk_usage` and
 `kafka_topic_disk_usage_bytes` are normalized server-side to the registered
 `kafka_topic_disk_utilization` capability; they never become model-authored PromQL.
+The typed metric target remains the owning `Kafka` custom resource (`namespace` plus
+`name`). An optional exact `topic` argument is compiled into the reviewed server-owned
+selector and ensures named-topic byte and partition details are collected even when the
+topic would not appear among the first five entries of an unfiltered ranking.
 
 Remote monitoring and logging authorization failures preserve `HTTP 403` in the per-cluster Ask
 limitation. A Thanos denial names the required `cluster-monitoring-view` role. Application-log
