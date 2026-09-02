@@ -636,6 +636,12 @@ records remain, but execution now awaits a separate approval-gated action servic
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe
   link schemes are not activated.
+- Delegated agent shell calls no longer require `repeat_reason` and are not de-duplicated by PodPilot.
+  The model may poll or re-run an observation as needed within the existing action budget and deadlines;
+  broker authorization and cluster RBAC remain authoritative. Ledger rows expose runner execution,
+  safe failure categories, errors, and diagnostic references. A provider failure after completed agent
+  work preserves the activity and reports completed, non-rolled-back writes instead of claiming that no
+  cluster changes were attempted.
 - The application runs as `ai-ops/podpilot-investigator`, bound only to the custom
   `podpilot-role-reader` for OpenShift Group lookup plus explicit supporting platform views.
   It has no `cluster-reader` binding. The separate `ai-observer` identity retains cluster-admin

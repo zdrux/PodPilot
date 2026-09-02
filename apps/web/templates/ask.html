@@ -88,6 +88,7 @@
                 {% for failure in message.model_diagnostics.failures %}
                 <li>
                   <span>{{ failure.failure_type | replace('_', ' ') }}{% if failure.schema %} · {{ failure.schema }}{% endif %}{% if failure.attempt %} · attempt {{ failure.attempt }}{% endif %}</span>
+                  {% if failure.duration_ms is not none %}<small>{{ failure.duration_ms }} ms elapsed{% if failure.timeout_seconds is not none %} · {{ failure.timeout_seconds }}s per-attempt timeout{% endif %}{% if failure.max_retries is not none %} · up to {{ failure.max_retries }} transient retries{% endif %}</small>{% endif %}
                   {% for field in failure.fields %}<small><code>{{ field.path }}</code> · {{ field.code }} — {{ field.message }}</small>{% endfor %}
                 </li>
                 {% endfor %}
@@ -332,12 +333,14 @@
         {% endif %}
         {% if message.activity and message.activity.evidence_ledger %}
         <details class="answer-diagnostics retained-agent-evidence">
-          <summary>Agent evidence ledger <small>{{ message.activity.evidence_ledger | length }} completed operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
-          <p>This is the bounded evidence the agent retained after each raw tool result was interpreted once.</p>
+          <summary>Agent evidence ledger <small>{{ message.activity.evidence_ledger | length }} recorded operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
+          <p>This is the bounded operation trail the agent retained after each raw tool result was interpreted once.</p>
           <ol>
           {% for item in message.activity.evidence_ledger %}
             <li>
               <strong>{{ item.cluster_name or item.cluster_id }} · {{ item.tool }} · {{ item.status }}</strong>
+              {% if item.executed is defined %}<small>Runner executed: {{ 'yes' if item.executed else 'no' }}{% if item.failure_category %} · {{ item.failure_category | replace('_', ' ') }}{% endif %}{% if item.diagnostic_ref %} · diagnostic {{ item.diagnostic_ref }}{% endif %}</small>{% endif %}
+              {% if item.error %}<small class="ledger-stderr">{{ item.error }}</small>{% endif %}
               {% if item.command %}<code>{{ item.command }}</code>{% endif %}
               {% if item.stdout_excerpt %}<pre>{{ item.stdout_excerpt }}</pre>{% endif %}
               {% if item.stderr_excerpt %}<pre class="ledger-stderr">{{ item.stderr_excerpt }}</pre>{% endif %}

@@ -280,6 +280,10 @@ tests must enforce three collection issues, cluster ID/name-only attribution, an
 raw observations, findings, knowledge, relationship graph, capability ledger, catalog, and tool policy. Empty-content gates
 must prove one schema-only retry and a cited deterministic fallback after successful collection when
 that retry or a later final call still fails; no-evidence provider failures remain insufficient.
+Delegated-agent provider-failure gates must also prove that completed shell operations remain in the
+activity and evidence ledger, executed writes are identified as not rolled back, and the fallback never
+claims that no changes were attempted. Repeated identical shell calls must reach the runner independently
+without a model-authored retry-reason field while remaining subject to the action budget and deadlines.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

@@ -411,7 +411,8 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
         "query_audit_events", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
-    assert parameters["required"] == ["command", "cluster_id", "repeat_reason"]
+    assert parameters["required"] == ["command", "cluster_id"]
+    assert "repeat_reason" not in parameters["properties"]
     assert "cluster_id" in parameters["properties"]
     assert parameters["properties"]["cluster_id"]["enum"] == selected_cluster_ids
     assert "one tool call per cluster" in parameters["properties"]["cluster_id"]["description"]
@@ -470,6 +471,54 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     ]
 
 
+def test_unrestricted_agent_timeout_records_effective_transport_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class APITimeoutError(Exception):
+        pass
+
+    class TimeoutCompletions:
+        def create(self, **_kwargs):
+            raise APITimeoutError("timed out")
+
+    provider = OpenAIChatCompletionsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_client",
+        lambda *_args: SimpleNamespace(
+            chat=SimpleNamespace(completions=TimeoutCompletions())
+        ),
+    )
+    selected_cluster_id = "00000000-0000-0000-0000-000000000001"
+    messages = [{
+        "role": "system",
+        "content": (
+            "Agent instructions.\nSelected clusters:\n"
+            + json.dumps([{
+                "cluster_id": selected_cluster_id,
+                "cluster_name": "Cluster 1",
+            }])
+        ),
+    }, {"role": "user", "content": "Inspect the cluster."}]
+
+    with capture_model_diagnostics() as calls:
+        with pytest.raises(ModelProviderError, match="30s per attempt") as raised:
+            provider.next_agent_step(
+                profile(max_retries=2), "secret-token", messages,
+            )
+
+    assert raised.value.failure_type == "timeout"
+    summary = summarize_model_diagnostics(calls)
+    assert summary["failures"] == [{
+        "operation": "workflow.unrestricted_agent",
+        "failure_type": "timeout",
+        "schema": "AgentStep",
+        "attempt": 1,
+        "duration_ms": raised.value.failure["duration_ms"],
+        "timeout_seconds": 30,
+        "max_retries": 2,
+        "fields": [],
+    }]
 def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

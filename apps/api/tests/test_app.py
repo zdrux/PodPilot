@@ -26,7 +26,6 @@ from podpilot_api.main import (
     _agent_collector_error_detail,
     _agent_collector_failure_category,
     _command_failure_category,
-    _agent_duplicate_command_issue,
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
     _agent_command_operation_kind,
@@ -10936,7 +10935,9 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         )
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
 
-    assert [call[1].cluster_id for call in runner.calls] == cluster_ids
+    assert [call[1].cluster_id for call in runner.calls] == [
+        *cluster_ids, cluster_ids[1],
+    ]
     assert all(call[1].tls_verify is True for call in runner.calls)
     assert "synthetic failure" in rendered.text
     assert "Agent evidence ledger" in rendered.text
@@ -10947,8 +10948,6 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
     assert "API TLS verification is disabled" not in rendered.text
     assert "credentials and evidence are vulnerable to interception" not in rendered.text
     assert all("token-" not in str(messages) for messages in provider.agent_messages)
-    duplicate_payload = json.loads(str(provider.agent_messages[3][-1]["content"]))
-    assert duplicate_payload["failure_category"] == "duplicate_command"
     engine = build_engine(settings)
     with Session(engine) as db_session:
         assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
@@ -10961,11 +10960,13 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         assert [item["cluster_id"] for item in command_reads] == [
             *cluster_ids, cluster_ids[1],
         ]
-        duplicate_read = command_reads[-1]
-        assert duplicate_read["status"] == "rejected"
-        assert duplicate_read["failure_category"] == "duplicate_command"
-        failed_read = next(item for item in command_reads if item["status"] == "failed")
-        assert re.fullmatch(r"[0-9a-f]{12}", failed_read["diagnostic_ref"])
+        assert [item["status"] for item in command_reads] == [
+            "completed", "failed", "failed",
+        ]
+        assert all(
+            re.fullmatch(r"[0-9a-f]{12}", item["diagnostic_ref"])
+            for item in command_reads if item["status"] == "failed"
+        )
         assert activity["limitations"] == []
         assert all(
             "TLS verification is disabled" not in item
@@ -10983,6 +10984,114 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
     assert re.search(r"diagnostic_ref=[0-9a-f]{12}", caplog.text)
 
 
+def test_unrestricted_agent_preserves_completed_changes_when_provider_times_out(
+    tmp_path: Path,
+) -> None:
+    class Provider(FakeModelProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.steps = 0
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.steps += 1
+            if self.steps == 1:
+                arguments = json.dumps({
+                    "command": "oc patch deployment web -n demo --type=merge -p '{}'",
+                    "cluster_id": SYSTEM_CLUSTER_ID,
+                })
+                return AgentStep(
+                    assistant_message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": "write-1",
+                            "type": "function",
+                            "function": {
+                                "name": "execute_shell",
+                                "arguments": arguments,
+                            },
+                        }],
+                    },
+                    content=None,
+                    tool_calls=(AgentToolCall(
+                        id="write-1", name="execute_shell", arguments=arguments,
+                    ),),
+                )
+            raise ModelProviderError(
+                "Provider request failed (APITimeoutError).",
+                failure_type="timeout",
+            )
+
+    class Runner:
+        def execute(self, command, connection=None, **_kwargs):
+            return AgentCommandResult(
+                command=command,
+                exit_code=0,
+                stdout="deployment.apps/web patched\n",
+                stderr="",
+                request_id="runner-write-1",
+                duration_ms=80,
+            )
+
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        credential_store=MemoryCredentialStore("model-token"),
+        model_provider=Provider(),
+        agent_runner=Runner(),
+        settings_overrides={"agent_mode": "unrestricted"},
+    )
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        db_session.add(ModelProfile(
+            id=1,
+            provider_label="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            chat_model="openai/gpt-oss-120b",
+            api_type="chat-completions",
+            embedding_model=None,
+            timeout_seconds=180,
+            max_retries=1,
+            max_output_tokens=4096,
+            status="ready",
+            capabilities_json='{"tool_calls": true}',
+            updated_by="ivy",
+        ))
+        db_session.commit()
+    engine.dispose()
+
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        created = client.post(
+            "/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Patch the deployment and verify it."},
+            follow_redirects=False,
+        )
+        rendered = client.get(
+            created.headers["location"], headers={"x-forwarded-user": "ivy"},
+        )
+
+    assert "provider became unavailable" in rendered.text
+    assert "1 completed cluster change was not rolled back" in rendered.text
+    assert "No cluster changes were attempted" not in rendered.text
+    assert "Runner executed: yes" in rendered.text
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assistant = db_session.scalar(select(AdHocMessage).where(
+            AdHocMessage.role == "assistant"
+        ))
+        assert assistant is not None
+        activity = json.loads(assistant.tool_activity_json)
+        assert [item["status"] for item in activity["reads"]] == ["completed"]
+        assert activity["evidence_ledger"][0]["operation_kind"] == "write"
+        assert activity["evidence_ledger"][0]["executed"] is True
+    engine.dispose()
+
+
 def test_safe_exception_diagnostics_redacts_chain_and_includes_frames() -> None:
     try:
         try:
@@ -10997,18 +11106,6 @@ def test_safe_exception_diagnostics_redacts_chain_and_includes_frames() -> None:
     ]
     assert diagnostics[1]["detail"] == "request failed token=[REDACTED]"
     assert diagnostics[1]["frames"]
-
-
-def test_agent_duplicate_command_requires_a_retry_reason() -> None:
-    assert _agent_duplicate_command_issue(
-        previous_executions=1, repeat_reason=None,
-    ) is not None
-    assert _agent_duplicate_command_issue(
-        previous_executions=1, repeat_reason="time_comparison",
-    ) is None
-    assert _agent_duplicate_command_issue(
-        previous_executions=0, repeat_reason=None,
-    ) is None
 
 
 def test_jq_preflight_extracts_inline_filters_without_cluster_input() -> None:

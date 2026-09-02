@@ -69,9 +69,10 @@ tool observation and control returns to the model; neither success nor a collect
 projection, and registered metric backends without making a collector the orchestrator.
 The model ends this loop through a structured `finish_investigation` call with `complete`,
 `blocked`, or `budget_exhausted`. A claimed completion is returned to the loop when it declares
-remaining safe reads or delegates an available read-only check to the operator. Exact shell
-commands are de-duplicated per cluster unless the model supplies a retry, state-change,
-time-comparison, or incomplete-result reason; PodPilot does not prescribe a diagnostic sequence.
+remaining safe reads or delegates an available read-only check to the operator. PodPilot does not
+de-duplicate model-selected shell commands or require model-authored retry metadata: the agent may
+re-observe state as needed, and every attempt remains bounded by the action budget, command timeout,
+outer run deadline, broker authorization, and audit trail. PodPilot does not prescribe a diagnostic sequence.
 Collector transport failures retain a safe category such as `tls_verification_failed`, `timeout`,
 or `transport_unavailable` so the model does not confuse failed trust verification with backend
 absence.

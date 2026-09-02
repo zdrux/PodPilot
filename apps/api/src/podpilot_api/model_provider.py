@@ -1311,6 +1311,9 @@ def summarize_model_diagnostics(
                 "failure_type": str(failure.get("failure_type") or "provider_error")[:80],
                 "schema": str(failure.get("schema") or call.get("schema") or "")[:100],
                 "attempt": failure.get("attempt"),
+                "duration_ms": failure.get("duration_ms"),
+                "timeout_seconds": failure.get("timeout_seconds"),
+                "max_retries": failure.get("max_retries"),
                 "fields": failure.get("fields") if isinstance(failure.get("fields"), list) else [],
             })
     finish_reasons = list(dict.fromkeys(
@@ -2394,23 +2397,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                             "description": "The complete bash script to execute.",
                         },
                         "cluster_id": deepcopy(cluster_id_schema),
-                        "repeat_reason": {
-                            "type": ["string", "null"],
-                            "enum": [
-                                None,
-                                "state_changed",
-                                "time_comparison",
-                                "previous_result_incomplete",
-                                "transient_retry",
-                            ],
-                            "description": (
-                                "Required only when deliberately repeating the exact same command "
-                                "on the same cluster. Set null for a first execution; otherwise "
-                                "supply the legitimate retry category."
-                            ),
-                        },
                     },
-                    "required": ["command", "cluster_id", "repeat_reason"],
+                    "required": ["command", "cluster_id"],
                     "additionalProperties": False,
                 },
                 "strict": True,
@@ -2540,6 +2528,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         prepared_messages = _prepare_chat_input(profile, messages, tools=tools)
         capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
         request_start = len(capture) if capture is not None else 0
+        request_started = time.monotonic()
         try:
             with _model_request_context("workflow.unrestricted_agent"):
                 response = self._client(profile, api_key).chat.completions.create(
@@ -2555,19 +2544,29 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             raise
         except Exception as exc:
             failure_type = _provider_failure_type(exc)
+            failure = {
+                "failure_type": failure_type,
+                "schema": "AgentStep",
+                "attempt": 1,
+                "duration_ms": max(0, int((time.monotonic() - request_started) * 1000)),
+                "timeout_seconds": profile.timeout_seconds,
+                "max_retries": profile.max_retries,
+                "fields": [],
+            }
             _record_model_failure(
-                {
-                    "failure_type": failure_type,
-                    "schema": "AgentStep",
-                    "attempt": 1,
-                    "fields": [],
-                },
+                failure,
                 operation="workflow.unrestricted_agent",
                 schema="AgentStep",
                 since=request_start,
             )
+            detail = self._safe_error(exc)
+            if failure_type == "timeout":
+                detail += (
+                    f" Configured timeout: {profile.timeout_seconds:g}s per attempt with "
+                    f"up to {profile.max_retries} transient retries."
+                )
             raise ModelProviderError(
-                self._safe_error(exc), failure_type=failure_type
+                detail, failure_type=failure_type, failure=failure,
             ) from exc
         message = response.choices[0].message
         calls = tuple(
@@ -2611,6 +2610,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         prepared_messages = _prepare_chat_input(profile, messages)
         capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
         request_start = len(capture) if capture is not None else 0
+        request_started = time.monotonic()
         try:
             with _model_request_context("workflow.unrestricted_agent_finalization"):
                 response = self._client(profile, api_key).chat.completions.create(
@@ -2623,19 +2623,29 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             raise
         except Exception as exc:
             failure_type = _provider_failure_type(exc)
+            failure = {
+                "failure_type": failure_type,
+                "schema": "AgentStep",
+                "attempt": 1,
+                "duration_ms": max(0, int((time.monotonic() - request_started) * 1000)),
+                "timeout_seconds": profile.timeout_seconds,
+                "max_retries": profile.max_retries,
+                "fields": [],
+            }
             _record_model_failure(
-                {
-                    "failure_type": failure_type,
-                    "schema": "AgentStep",
-                    "attempt": 1,
-                    "fields": [],
-                },
+                failure,
                 operation="workflow.unrestricted_agent_finalization",
                 schema="AgentStep",
                 since=request_start,
             )
+            detail = self._safe_error(exc)
+            if failure_type == "timeout":
+                detail += (
+                    f" Configured timeout: {profile.timeout_seconds:g}s per attempt with "
+                    f"up to {profile.max_retries} transient retries."
+                )
             raise ModelProviderError(
-                self._safe_error(exc), failure_type=failure_type
+                detail, failure_type=failure_type, failure=failure,
             ) from exc
         message = response.choices[0].message
         return AgentStep(

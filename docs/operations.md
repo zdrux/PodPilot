@@ -745,7 +745,10 @@ One app-wide 50-unit default action budget is configured with
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
 and Action conversations and may be set from 1 to 100.
 The same retained excerpts and operation metadata are operator-inspectable beneath the answer in the
-expandable **Agent evidence ledger** section.
+expandable **Agent evidence ledger** section. Each shell row states whether the runner executed it
+and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
+are recorded and executed like any other agent-selected operation; there is no separate duplicate-command
+or retry-reason contract.
 The agent has only a lightweight presentation preference: lists of comparable items should use a
 concise Markdown table, while other answers use whichever format is clearest.
 **Cluster sign-ins** manages the current
@@ -774,6 +777,10 @@ best supported answer from retained evidence. Keep command and model-attempt tim
 deadline so PodPilot can preserve redacted timeout details and persist an answer. New model profiles
 default to a 180-second attempt timeout with one transient retry; tune those values to the provider's
 observed latency rather than allowing one call's retry window to consume the complete Ask deadline.
+Timeout diagnostics identify the agent or finalization operation and retain elapsed time, the effective
+per-attempt timeout, and retry allowance. If a provider call fails after agent operations have run,
+PodPilot persists those operations and explicitly warns that completed changes were not rolled back;
+it never reports that no changes were attempted when the operation ledger is non-empty.
 While a durable Ask run is queued or running, its owner can request cancellation from the live
 progress card. PodPilot records the run as cancelled, sends the correlated runner request ID to the
 loopback sidecar, terminates that command's process group when it is still active, and cancels the

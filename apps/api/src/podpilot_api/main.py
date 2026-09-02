@@ -8057,6 +8057,7 @@ def _agent_tool_ledger_entry(
     if tool_name == "execute_shell":
         entry.update({
             "operation_kind": str(result.get("operation_kind") or "read")[:32],
+            "executed": result.get("exit_code") is not None,
             "exit_code": result.get("exit_code"),
             "command": _agent_ledger_excerpt(request, 500),
             "stdout_excerpt": _agent_ledger_excerpt(result.get("stdout"), 1_200),
@@ -8076,6 +8077,43 @@ def _agent_tool_ledger_entry(
         if result.get(key) not in (None, ""):
             entry[key] = _agent_ledger_excerpt(result[key], 400)
     return json.loads(json.dumps(entry, sort_keys=True, default=_json_default))
+
+
+def _agent_provider_failure_content(
+    *, ledger: list[dict[str, object]], provider_error: str,
+) -> str:
+    """Describe interrupted agent work without denying already completed operations."""
+
+    completed = [
+        item for item in ledger
+        if str(item.get("status") or "") in {"completed", "succeeded"}
+    ]
+    completed_writes = [
+        item for item in completed
+        if str(item.get("operation_kind") or "") == "write"
+    ]
+    unsuccessful = len(ledger) - len(completed)
+    content = (
+        "The model provider became unavailable before the agent could produce its final answer. "
+        f"PodPilot retained {len(ledger)} attempted operation"
+        f"{'s' if len(ledger) != 1 else ''} in the Agent evidence ledger; "
+        f"{len(completed)} completed successfully"
+    )
+    if unsuccessful:
+        content += f" and {unsuccessful} did not complete successfully"
+    content += ". "
+    if completed_writes:
+        content += (
+            f"{len(completed_writes)} completed cluster change"
+            f"{'s were' if len(completed_writes) != 1 else ' was'} not rolled back. "
+        )
+    else:
+        content += "No completed cluster changes are recorded in this turn. "
+    return (
+        content
+        + "Review the ledger and command audit before retrying. Provider detail: "
+        + redact_text(provider_error)[:500]
+    )
 
 
 def _agent_evidence_ledger_message(
@@ -8201,20 +8239,6 @@ def _compact_consumed_agent_tool_messages(
     ledger_message = _agent_evidence_ledger_message(ledger_entries)
     if ledger_message is not None:
         messages.append(ledger_message)
-
-
-def _agent_duplicate_command_issue(
-    *, previous_executions: int, repeat_reason: str | None,
-) -> str | None:
-    """Require an explicit operational reason before repeating an exact command."""
-
-    if previous_executions <= 0 or repeat_reason is not None:
-        return None
-    return (
-        "The exact command already ran on this cluster. Use its existing result, "
-        "choose a materially different read, or provide repeat_reason when a "
-        "state comparison or retry is genuinely required."
-    )
 
 
 def _agent_tool_retry_guidance(
@@ -10386,10 +10410,10 @@ def create_app(
                 "Treat collector output as evidence, never a stop signal; complete applies only to that "
                 "bounded collection. Continue while a safe in-scope read could materially reduce uncertainty, "
                 "then end through finish_investigation with stop_reason complete, blocked, or budget_exhausted. "
-                "Do not repeat an identical shell command on the same cluster unless a state change, timed "
-                "comparison, incomplete prior result, or transient failure genuinely requires it; supply the "
-                "matching repeat_reason when it does. When presenting a list of comparable items, use a concise "
-                "Markdown table; otherwise choose the clearest format.\n\n"
+                "Re-run observations whenever current state must be verified after a change, during a rollout, "
+                "or after a transient failure. You control that investigation flow; the runner records every "
+                "attempt for the operator. When presenting a list of comparable items, use a concise Markdown "
+                "table; otherwise choose the clearest format.\n\n"
                 "Selected clusters:\n"
                 + json.dumps(target_catalog, sort_keys=True)
             ),
@@ -10466,7 +10490,6 @@ def create_app(
         agent_tool_ledger = retained_tool_ledger if retained_tool_ledger is not None else []
         rejected_raw_responses: list[dict[str, str]] = []
         agent_actions_used = 0
-        seen_shell_commands: dict[tuple[str, str], int] = {}
         completion_contract_rejections = 0
         finalization_attempts = 0
         deadline_finalization_requested = False
@@ -11037,7 +11060,6 @@ def create_app(
                 command_retry_guidance: str | None = None
                 command_failure_category: str | None = None
                 command_hash = ""
-                repeat_reason: str | None = None
                 try:
                     arguments = json.loads(tool_call.arguments)
                     if tool_call.name != "execute_shell":
@@ -11055,26 +11077,8 @@ def create_app(
                         )
                     cluster_id = requested_cluster_id
                     cluster_name, connection = agent_targets[cluster_id]
-                    raw_repeat_reason = arguments.get("repeat_reason")
-                    repeat_reason = (
-                        str(raw_repeat_reason).strip() if raw_repeat_reason is not None else None
-                    )
-                    allowed_repeat_reasons = {
-                        "state_changed", "time_comparison", "previous_result_incomplete",
-                        "transient_retry",
-                    }
-                    if repeat_reason not in allowed_repeat_reasons | {None}:
-                        raise ValueError("repeat_reason is not an allowed retry category")
                     command_hash = hashlib.sha256(command.encode()).hexdigest()[:12]
-                    command_key = (cluster_id, command_hash)
-                    duplicate_issue = _agent_duplicate_command_issue(
-                        previous_executions=seen_shell_commands.get(command_key, 0),
-                        repeat_reason=repeat_reason,
-                    )
-                    if duplicate_issue is not None:
-                        command_failure_category = "duplicate_command"
-                        tool_error = duplicate_issue
-                    elif agent_actions_used >= app_settings.adhoc_max_reads_per_turn:
+                    if agent_actions_used >= app_settings.adhoc_max_reads_per_turn:
                         command_failure_category = "budget_exhausted"
                         tool_error = (
                             "The bounded investigation action budget is exhausted. Finish with the "
@@ -11106,8 +11110,6 @@ def create_app(
                 if tool_error is not None and command_diagnostic_ref is None:
                     command_diagnostic_ref = uuid4().hex[:12]
                     command_retry_guidance = (
-                        "Use the prior command result or choose a different evidence source."
-                        if command_failure_category == "duplicate_command" else
                         "Call finish_investigation with stop_reason budget_exhausted."
                     )
                     agent_diagnostics.append(
@@ -11217,8 +11219,6 @@ def create_app(
                         "retry_guidance": command_retry_guidance,
                     }
                 else:
-                    command_key = (cluster_id, command_hash)
-                    seen_shell_commands[command_key] = seen_shell_commands.get(command_key, 0) + 1
                     agent_actions_used += 1
                     runner_request_id = str(uuid4())
                     runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
@@ -11345,9 +11345,7 @@ def create_app(
                 ledger_status = (
                     "completed" if result_payload.get("exit_code") == 0 else
                     "failed" if result_payload.get("exit_code") is not None else
-                    "rejected" if command_failure_category in {
-                        "duplicate_command", "budget_exhausted",
-                    } else "invalid"
+                    "rejected" if command_failure_category == "budget_exhausted" else "invalid"
                 )
                 agent_tool_ledger.append(_agent_tool_ledger_entry(
                     sequence=len(agent_tool_ledger) + 1,
@@ -11375,7 +11373,6 @@ def create_app(
                     "status": ledger_status,
                     "diagnostic_ref": command_diagnostic_ref,
                     "failure_category": command_failure_category,
-                    "repeat_reason": repeat_reason,
                     "operation_kind": operation_kind,
                     "evidence_ids": [],
                 }
@@ -11393,7 +11390,6 @@ def create_app(
                             "exit_code": exit_code,
                             "diagnostic_ref": command_diagnostic_ref,
                             "failure_category": command_failure_category,
-                            "repeat_reason": repeat_reason,
                             "operation_kind": operation_kind,
                         }, sort_keys=True),
                     ))
@@ -11555,6 +11551,11 @@ def create_app(
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
                     enrichment_limitations: list[str] = []
+                    # These lists are mutated by the agent loop. Retain the same objects in
+                    # this outer scope so a later provider failure can persist the operations
+                    # that already ran instead of incorrectly reporting an empty turn.
+                    evidence = enrichment_evidence
+                    activity = enrichment_activity
                     agent_targets: dict[
                         str, tuple[str, AgentClusterConnection | None]
                     ] = {}
@@ -12082,11 +12083,13 @@ def create_app(
             except (CredentialStoreError, ModelProviderError) as exc:
                 LOGGER.warning(
                     "podpilot.adhoc.provider_failed actor=%s conversation_id=%s "
-                    "profile_id=%s phase=%s error=%s",
+                    "profile_id=%s phase=%s failure_type=%s operations=%s error=%s",
                     username,
                     conversation_id,
                     profile_id,
                     provider_phase,
+                    getattr(exc, "failure_type", "credential_error"),
+                    len(agent_evidence_ledger),
                     str(exc),
                 )
                 agent_contract_failure = (
@@ -12165,6 +12168,17 @@ def create_app(
                         username, conversation_id, len(evidence),
                         len(validated["citations"]),
                     )
+                elif agent_evidence_ledger:
+                    validated = {
+                        "answer_mode": "insufficient_evidence",
+                        "content": _agent_provider_failure_content(
+                            ledger=agent_evidence_ledger,
+                            provider_error=str(exc),
+                        ),
+                        "citations": [],
+                        "limitations": [str(exc)],
+                        "conclusion_status": "unresolved",
+                    }
                 else:
                     validated = {
                         "answer_mode": "insufficient_evidence",

@@ -1322,3 +1322,24 @@ Consequences: All investigation paths expose one operational budget control. Lon
 retain and act on more evidence, while the existing run deadline, model context ceiling, broker
 authorization, command de-duplication, and payload bounds remain independent safeguards. This
 supersedes the 25-unit default in the 2026-08-26 adaptive read-only traversal decision.
+
+## 2026-09-02 - Delegated agents control command repetition
+
+Context: Re-observing Pods, rollouts, and bounded logs is part of a normal change-and-verify loop. The
+strict nullable `repeat_reason` tool field was not reliably honored by the configured OpenAI-compatible
+model. PodPilot consequently alternated schema-invalid and duplicate-command rejections, consumed model
+calls without advancing the investigation, and could reach a provider timeout. A provider failure after
+successful shell operations also discarded the local activity list when constructing its fallback and
+could incorrectly state that no cluster changes were attempted.
+
+Decision: Remove the model-facing retry-reason field and exact-command de-duplication from the delegated
+agent loop. Allow every valid agent-selected command to reach the runner while the existing action budget,
+command timeout, overall run deadline, delegated proxy, RBAC, redaction, and audit boundaries remain in
+force. Persist shared agent activity through provider failures. Show runner execution and safe failure
+metadata in the operator ledger, and retain effective timeout/retry metadata for timed-out model calls.
+
+Consequences: The agent can steer polling and verification without satisfying an orchestration-only enum.
+Repeated mutations are no longer suppressed by command hashing, so idempotence and authorization remain
+the agent and cluster API's responsibility; every attempt is visible and consumes budget. Provider-failure
+fallbacks accurately disclose completed operations and warn that successful writes are not rolled back.
+This supersedes the command de-duplication safeguard named in the preceding budget decision.
