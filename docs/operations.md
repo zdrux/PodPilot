@@ -193,6 +193,9 @@ provider and credentials are healthy.
 - Users manage private entries and configuration administrators manage shared entries under
   **Clusters**. Save and run **Test OAuth discovery**; a tokenless entry reports successful
   TLS and OAuth discovery without asking for a user's credentials.
+- Owners may permanently delete their private entries from **Clusters**. PodPilot deletes any
+  stored credential and revokes live delegated connections before removing the registry entry;
+  historical conversations remain available. Shared entries use **Disable** instead.
 
 - `PODPILOT_AGENT_MODE`; checked-in workload manifests set `unrestricted` and deploy the runner.
   Conversation mode chooses the read-only collector or Action loop.

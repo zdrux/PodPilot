@@ -11304,6 +11304,9 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert "data-tag-editor" in edited.text
         assert "single word" in edited.text
         assert "production" in edited.text
+        assert f'data-action-url="/api/v1/clusters/{cluster_id}/delete"' in edited.text
+        assert ">Delete</button>" in edited.text
+        assert f'/api/v1/clusters/{cluster_id}/disable' not in edited.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -11317,6 +11320,63 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert cluster.tls_verify is False
         assert "top-secret" not in json.dumps(cluster.__dict__, default=str)
         assert cluster_credentials.get(cluster.credential_key) == "sha256~top-secret-cluster-token"
+    engine.dispose()
+
+
+def test_owner_deletes_private_secret_backed_cluster_and_credential(tmp_path: Path) -> None:
+    cluster_credentials = MemoryCredentialStore()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(),
+        cluster_credential_store=cluster_credentials,
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {
+            "x-forwarded-user": "ada",
+            "x-podpilot-csrf": csrf.group(1),
+        }
+        saved = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "name": "private-delete-test",
+                "api_url": "https://api.private-delete.example:6443",
+                "token": "sha256~private-delete-token",
+                "visibility": "private",
+            },
+        )
+        assert saved.status_code == 200
+        cluster_id = saved.json()["cluster_id"]
+
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            cluster = db_session.get(Cluster, cluster_id)
+            assert cluster is not None and cluster.credential_key is not None
+            credential_key = cluster.credential_key
+        engine.dispose()
+        assert cluster_credentials.get(credential_key) == "sha256~private-delete-token"
+
+        deleted = client.post(
+            f"/api/v1/clusters/{cluster_id}/delete",
+            headers=headers,
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["status"] == "deleted"
+        assert deleted.json()["detail"].startswith("Private cluster deleted")
+        assert credential_key not in cluster_credentials.values
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.get(Cluster, cluster_id) is None
+        event = db_session.scalar(select(AuditEvent).where(
+            AuditEvent.action == "cluster.delete"
+        ))
+        assert event is not None
     engine.dispose()
 
 
@@ -16654,9 +16714,14 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
         assert created.status_code == 200
         cluster_id = created.json()["cluster_id"]
 
-        own_page = client.get("/clusters/personal", headers={"x-forwarded-user": "ivy"})
+        own_page = client.get(
+            f"/clusters/personal?edit={cluster_id}",
+            headers={"x-forwarded-user": "ivy"},
+        )
         other_page = client.get("/clusters/personal", headers={"x-forwarded-user": "grace"})
         assert "Ivy ad-hoc DEV" in own_page.text
+        assert f'data-action-url="/api/v1/clusters/{cluster_id}/delete"' in own_page.text
+        assert ">Delete</button>" in own_page.text
         assert "Ivy ad-hoc DEV" not in other_page.text
         denied = client.post(
             f"/api/v1/clusters/{cluster_id}/disable",

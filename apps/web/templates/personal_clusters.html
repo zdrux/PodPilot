@@ -8,7 +8,7 @@
     <div class="panel-header"><div><p class="eyebrow">Personal workspace</p><h2>My configured clusters</h2></div><span class="tag">{{ clusters | length }}</span></div>
     <ul class="model-profile-list cluster-registry-list">
     {% for cluster in clusters %}
-      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/clusters/personal?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if not cluster.is_enabled %}<em>Removed</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{{ cluster.api_url }}</small></a></li>
+      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/clusters/personal?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if not cluster.is_enabled %}<em>Disabled</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{{ cluster.api_url }}</small></a></li>
     {% else %}<li class="side-empty">You have not added any personal clusters.</li>{% endfor %}
     </ul>
   </aside>
@@ -36,7 +36,7 @@
       <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify TLS certificates and hostnames for the Kubernetes API and discovered telemetry endpoints</span></label>
       <input type="hidden" name="tls_verify" value="{{ 'true' if (selected and selected.tls_verify) or not selected else 'false' }}">
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
-      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test cluster connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/clusters/personal" data-confirm="Remove this personal cluster from your workspace? Historical conversations will be retained.">Remove</button>{% endif %}</div>
+      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test cluster connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/clusters/personal" data-confirm="Permanently delete this private cluster from your list? Historical conversations will be retained.">Delete</button>{% endif %}</div>
       {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}
       {% if selected and selected.last_tested_at %}<p class="muted-copy">Last tested {{ selected.last_tested_at | est_time('%Y-%m-%d %H:%M:%S') }}.</p>{% endif %}
     </form>

@@ -293,8 +293,11 @@ mode. The browser cannot change either value on a continuation request. Normal c
 only entries visible to the owner, refuses disabled or disconnected targets, obtains the
 user token from the in-memory delegated-session vault, and attributes retained evidence
 to the source cluster. Shared cluster metadata requires configuration-administrator
-capability; users may create, update, test, and disable their own private entries. These
-operations require CSRF and content-free audit metadata and never accept a bearer token.
+capability; users may create, update, test, and permanently delete their own private entries.
+Deletion removes any credential held by the configured credential store before removing the
+registry metadata, revokes live delegated connections for that cluster, and retains historical
+conversation records. Shared entries remain disable-only. These operations require CSRF and
+content-free audit metadata and never return a bearer token.
 
 Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a

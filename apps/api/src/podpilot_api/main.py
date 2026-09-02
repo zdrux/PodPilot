@@ -14281,10 +14281,10 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if not _can_ask(user) or not app_settings.delegated_access_enabled:
+        if not _can_ask(user):
             raise HTTPException(
                 status_code=403,
-                detail="Personal cluster removal requires an authorized PodPilot role.",
+                detail="Private cluster deletion requires an authorized PodPilot role.",
             )
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
@@ -14297,9 +14297,16 @@ def create_app(
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only your own personal cluster entries can be removed here.",
+                    detail="Only your own private cluster entries can be deleted here.",
                 )
             cluster_name = cluster.name
+            credential_key = cluster.credential_key
+
+        if credential_key:
+            try:
+                await run_in_threadpool(cluster_credentials.delete, credential_key)
+            except CredentialStoreError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         await _revoke_delegated_connections(
             request.app,
@@ -14309,10 +14316,14 @@ def create_app(
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
                 raise HTTPException(status_code=404, detail="Cluster entry not found.")
-            if cluster.visibility != "private" or cluster.owner != user.username:
+            if (
+                cluster.is_system
+                or cluster.visibility != "private"
+                or cluster.owner != user.username
+            ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only your own personal cluster entries can be removed here.",
+                    detail="Only your own private cluster entries can be deleted here.",
                 )
             db_session.delete(cluster)
             db_session.add(AuditEvent(
@@ -14329,7 +14340,7 @@ def create_app(
         return JSONResponse({
             "status": "deleted",
             "cluster_id": cluster_id,
-            "detail": "Personal cluster removed. Historical conversations were retained.",
+            "detail": "Private cluster deleted. Historical conversations were retained.",
         })
 
     @app.get("/settings/model", response_class=HTMLResponse)

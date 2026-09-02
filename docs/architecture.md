@@ -237,6 +237,9 @@ The picker reads shared entries plus the current user's private entries. Credent
 for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
 the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
+Owners can permanently delete private registry entries; this revokes matching live delegated
+connections while historical conversations retain their immutable cluster references. Shared
+entries remain disable-only so their lifecycle stays under configuration-administrator control.
 
 Active workload and remote overlays enable delegated access and deploy a tokenless runner. The
 Pod-level `podpilot-investigator` service account is not bound to `cluster-reader`; its custom

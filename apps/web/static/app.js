@@ -392,14 +392,14 @@
       const prior = button.textContent;
       button.textContent = button.dataset.actionKind === "test"
         ? "Testing…"
-        : button.dataset.actionKind === "delete" ? "Removing…" : "Disabling…";
+        : button.dataset.actionKind === "delete" ? "Deleting…" : "Disabling…";
       try {
         const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
         const passed = payload.status === "ready";
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
           tone: passed || ["disabled", "deleted"].includes(payload.status) ? "success" : "error",
           message: payload.detail || (
-            payload.status === "deleted" ? "Personal cluster removed."
+            payload.status === "deleted" ? "Private cluster deleted."
               : payload.status === "disabled" ? "Cluster disabled and token removed."
                 : "Cluster connection tested."
           ),
