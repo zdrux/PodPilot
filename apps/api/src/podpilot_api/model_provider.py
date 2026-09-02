@@ -2342,10 +2342,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "function": {
                 "name": "execute_shell",
                 "description": (
-                    "Execute a Linux shell script against one selected OpenShift "
-                    "cluster through PodPilot's oc runner. The API brokers the selected cluster's "
-                    "credential; never put credentials in the command. Return codes, stdout, and "
-                    "stderr are returned verbatim."
+                    "Run a Linux shell script against one selected OpenShift cluster through "
+                    "PodPilot's oc runner."
                 ),
                 "parameters": {
                     "type": "object",
@@ -2401,43 +2399,28 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
 
         pod_health_tool = collector_tool(
             "pod_health_summary",
-            "Evaluate current Pod and container health with an anomaly-first bounded scan. Use "
-            "this for questions asking whether all Pods in a namespace or label-selected workload "
-            "are running, Ready, or healthy. A complete zero-anomaly result supports an all-healthy "
-            "conclusion; an incomplete scan does not. Prefer this over list_resources for universal "
-            "Pod-health conclusions. This helper returns evidence to you and never ends the investigation.",
+            "Return an anomaly-first bounded Pod and container health scan. Use for all-healthy, "
+            "Ready, or running questions; only a complete zero-anomaly result supports an all-healthy conclusion.",
             ("namespace", "label_selector", "limit"),
             (),
         )
         discovery_tool = collector_tool(
             "discover_resources",
-            "Search the selected cluster's authoritative Kubernetes API discovery catalog for "
-            "an unfamiliar resource concept or failed resource name. Use this before guessing "
-            "an operator or CRD resource name, and after an oc command reports that the server "
-            "does not have a resource type. Supply the operator's original concept when possible. "
-            "Returned entries are exact discovered API coordinates, but discovery does not prove "
-            "the delegated user is authorized to read objects of that type.",
+            "Find exact Kubernetes API coordinates for an unfamiliar resource concept or a failed "
+            "resource name. Use before guessing an operator or CRD resource, including after an oc NoMatch error.",
             ("discovery_query", "limit"),
             ("discovery_query",),
         )
         http_probe_tool = collector_tool(
             "http_probe",
-            "Run a bounded, unauthenticated HTTP(S) connectivity, TLS, and response probe from "
-            "PodPilot. Use an exact absolute URL grounded in the operator request or collected "
-            "evidence. connect_host may target an observed IP or hostname while preserving the "
-            "URL hostname for HTTP Host and TLS SNI. TLS verification defaults to true; disable "
-            "it only for a scoped HTTPS trust diagnosis, and never treat an unverified success "
-            "as proof of server identity. This helper returns evidence to you and never ends "
-            "the investigation.",
+            "Probe an exact HTTP(S) URL from PodPilot. connect_host can use an observed address "
+            "while preserving the URL hostname for HTTP Host and TLS SNI.",
             ("url", "connect_host", "method", "tls_verify"),
             ("url",),
         )
         audit_tool = collector_tool(
             "query_audit_events",
-            "Query the registered, bounded Loki audit-log source. Kubernetes Events and "
-            "events.audit.k8s.io are not cluster audit logs. Use this helper for audit actors, "
-            "operations, resources, namespaces, and outcomes. Its result returns to you and "
-            "never ends the investigation.",
+            "Query bounded Loki audit logs. Kubernetes Events are not audit logs.",
             (
                 "namespace", "audit_username", "audit_resource", "audit_operation_scope",
                 "audit_outcome", "audit_search_until_limit", "range_seconds", "limit",
@@ -2446,17 +2429,9 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         )
         metric_tool = collector_tool(
             "query_metrics",
-            "Query a bounded CPU, memory, application-log-volume, Kafka consumer-lag, or Kafka "
-            "topic-disk-utilization metric through PodPilot's registered Thanos or Loki adapter. "
-            "For top namespaces use the dedicated Loki metric "
-            "top_log_volume_by_namespace with cluster scope, rank operation, and "
-            "group_by=[namespace]. application_log_volume returns numeric bytes only, never log "
-            "lines: use namespace scope with group_by=[pod] for top Pods, or ungrouped namespace "
-            "or pod scope for an exact total. "
-            "Kafka metrics require kafka_cluster scope plus exact Kafka kind, namespace, and name. "
-            "Rankings use metric_operation=rank; exact totals use show. The default period is 300 "
-            "seconds when the operator supplies none. Results return as evidence and never end the "
-            "investigation.",
+            "Query bounded registered Thanos or Loki metrics: CPU, memory, application-log volume, "
+            "Kafka consumer lag, or Kafka topic disk utilization. Kafka requires kafka_cluster scope "
+            "and exact kind, namespace, and name. Use rank for rankings, show for totals; default period is 300 seconds.",
             (
                 "metric", "metric_scope", "kind", "namespace", "name",
                 "container", "metric_operation", "metric_statistic", "metric_group_by",
@@ -2470,10 +2445,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "function": {
                 "name": "finish_investigation",
                 "description": (
-                    "End the investigation with the operator-facing answer. Use complete only "
-                    "after performing every safe, in-scope read that could materially resolve "
-                    "the request. Use blocked only when no available safe read can make progress, "
-                    "or budget_exhausted when the enforced action budget prevents another useful read."
+                    "End with the operator-facing answer: complete only after all material safe reads; "
+                    "blocked when none can progress; budget_exhausted when the action budget prevents one."
                 ),
                 "parameters": {
                     "type": "object",
@@ -2512,15 +2485,12 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         ]
         audit_parameters = audit_tool["function"]["parameters"]["properties"]
         audit_parameters["audit_search_until_limit"]["description"] = (
-            "Set true only when the operator explicitly asks for a last/top N result so the "
-            "bounded reader may widen backward until N matches or its policy ceiling. Keep false "
-            "for vague 'recent' requests."
+            "True only for an explicit last/top-N request; otherwise false."
         )
         metric_parameters = metric_tool["function"]["parameters"]["properties"]
         metric_parameters["range_seconds"]["default"] = 300
         metric_parameters["range_seconds"]["description"] = (
-            "Requested metric period in seconds. Use 300 when the operator supplies no period; "
-            "do not invent a wide range."
+            "Requested period in seconds; default 300."
         )
         prepared_messages = _prepare_chat_input(profile, messages, tools=tools)
         capture = _MODEL_DIAGNOSTIC_CAPTURE.get()

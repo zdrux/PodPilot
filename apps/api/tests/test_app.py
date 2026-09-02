@@ -9312,7 +9312,7 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
     system_prompt = str(provider.agent_messages[0][0]["content"])
     assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
     assert "Never fetch unbounded Pod logs by default" in system_prompt
-    assert "list_resources and search_resources helpers are unavailable" in system_prompt
+    assert "Use only the tools supplied in this request" in system_prompt
     assert "empty label-filtered workload query proves only" in system_prompt
     assert "inspect the exact discovered custom resource and its status" in system_prompt
     assert "Markdown table with a header row" in system_prompt

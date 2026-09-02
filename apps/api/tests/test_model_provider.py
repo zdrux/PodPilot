@@ -443,11 +443,10 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
         "cluster_id", "discovery_query",
     ]
     assert "before guessing" in discovery_tool["description"]
-    assert "does not prove" in discovery_tool["description"]
+    assert "NoMatch" in discovery_tool["description"]
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]
-    assert "never ends the investigation" in probe_tool["description"]
     audit_tool = tools_by_name["query_audit_events"]
     assert "Kubernetes Events" in audit_tool["description"]
     assert audit_tool["parameters"]["required"] == [
@@ -457,8 +456,8 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",
     ]
-    assert "application_log_volume" in metric_tool["description"]
-    assert "namespace scope with group_by=[pod]" in metric_tool["description"]
+    assert "application-log volume" in metric_tool["description"]
+    assert "Kafka requires kafka_cluster scope" in metric_tool["description"]
     assert "default period is 300 seconds" in metric_tool["description"]
     assert metric_tool["parameters"]["properties"]["metric"]["anyOf"][0]["enum"] == [
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
