@@ -14905,6 +14905,7 @@ def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(
         assert terminal["events"][-1]["phase"] == "failed"
         rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
         assert "exceeded the execution deadline" in rendered.text
+        assert "This conversation did not permit cluster writes" in rendered.text
         assert "last recorded operation was:" in rendered.text
         assert "Working on your question" not in rendered.text
         assert "last_phase=" in caplog.text

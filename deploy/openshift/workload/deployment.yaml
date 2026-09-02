@@ -169,6 +169,11 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_run_timeout_seconds
+            - name: PODPILOT_ADHOC_FINALIZATION_RESERVE_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: adhoc_finalization_reserve_seconds
             - name: PODPILOT_AGENT_MODE
               valueFrom:
                 configMapKeyRef:

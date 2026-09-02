@@ -259,7 +259,8 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "adhoc_metrics_max_response_bytes",
     }
-    assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
+    assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
+    assert runtime["data"]["adhoc_finalization_reserve_seconds"] == "60"
     assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["delegated_access_enabled"] == "true"
     assert runtime["data"]["delegated_session_lifetime_seconds"] == "86400"
@@ -271,6 +272,14 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert timeout["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_run_timeout_seconds",
+    }
+    finalization_reserve = next(
+        item for item in env
+        if item["name"] == "PODPILOT_ADHOC_FINALIZATION_RESERVE_SECONDS"
+    )
+    assert finalization_reserve["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_finalization_reserve_seconds",
     }
     assert runtime["data"]["model_timeout_max_seconds"] == "240"
     model_timeout = next(

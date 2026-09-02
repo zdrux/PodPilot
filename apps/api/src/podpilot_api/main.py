@@ -10539,6 +10539,7 @@ def create_app(
         agent_readers: dict[str, ReadOnlyExplorer | Callable[[], ReadOnlyExplorer]],
         read_only: bool,
         retained_tool_ledger: list[dict[str, object]] | None = None,
+        run_deadline: float | None = None,
     ) -> str:
         if profile.api_type != "chat-completions":
             raise ModelProviderError(
@@ -10704,7 +10705,30 @@ def create_app(
         seen_shell_commands: dict[tuple[str, str], int] = {}
         completion_contract_rejections = 0
         finalization_attempts = 0
+        deadline_finalization_requested = False
         while True:
+            effective_finalization_reserve = min(
+                app_settings.adhoc_finalization_reserve_seconds,
+                app_settings.adhoc_run_timeout_seconds / 3,
+            )
+            if run_deadline is not None and not deadline_finalization_requested:
+                remaining_seconds = run_deadline - asyncio.get_running_loop().time()
+                if remaining_seconds <= effective_finalization_reserve:
+                    deadline_finalization_requested = True
+                    finalization_attempts = max(1, finalization_attempts)
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "The investigation deadline is approaching. Do not request another tool. "
+                            "Return the best supported operator-facing answer now from the evidence and "
+                            "operation results already retained, and state any unresolved limitations."
+                        ),
+                    })
+                    if progress:
+                        await progress(
+                            "finalizing",
+                            "The investigation is using its reserved time to prepare the final answer.",
+                        )
             if progress:
                 await progress(
                     "agent_thinking", "The agent is choosing its next action."
@@ -10715,10 +10739,33 @@ def create_app(
                 finalizer = getattr(provider, "finalize_agent_step", None)
                 if callable(finalizer):
                     step_method = finalizer
+            step_profile = profile
+            if run_deadline is not None:
+                remaining_seconds = max(
+                    3.0, run_deadline - asyncio.get_running_loop().time()
+                )
+                reserved_seconds = (
+                    0.0 if deadline_finalization_requested
+                    else effective_finalization_reserve
+                )
+                call_budget_seconds = max(
+                    3.0, remaining_seconds - reserved_seconds - 5.0
+                )
+                transport_budget_seconds = max(3.0, call_budget_seconds - 30.0)
+                attempt_timeout = min(profile.timeout_seconds, transport_budget_seconds)
+                retry_capacity = max(
+                    0,
+                    int(transport_budget_seconds // attempt_timeout) - 1,
+                )
+                step_profile = replace(
+                    profile,
+                    timeout_seconds=attempt_timeout,
+                    max_retries=min(profile.max_retries, retry_capacity),
+                )
             model_task = asyncio.create_task(
                 run_in_threadpool(
                     step_method,
-                    profile,
+                    step_profile,
                     api_key,
                     messages,
                 )
@@ -10738,11 +10785,11 @@ def create_app(
                     await progress(
                         "agent_thinking",
                         f"Waiting for the model's next action ({elapsed_seconds}s elapsed; "
-                        f"{profile.timeout_seconds:g}s per-attempt timeout; "
-                        f"up to {profile.max_retries} transient retries).",
+                        f"{step_profile.timeout_seconds:g}s per-attempt timeout; "
+                        f"up to {step_profile.max_retries} transient retries).",
                     )
                 provider_call_deadline = (
-                    profile.timeout_seconds * (profile.max_retries + 1) + 30
+                    step_profile.timeout_seconds * (step_profile.max_retries + 1) + 30
                 )
                 if elapsed_seconds >= provider_call_deadline:
                     model_task.cancel()
@@ -11658,6 +11705,7 @@ def create_app(
         followup_action: dict[str, object] | None = None,
         progress: ProgressReporter | None = None,
         delegated_vault: DelegatedSessionVault | None = None,
+        run_deadline: float | None = None,
     ) -> str:
         source_question = redact_text(str(
             (followup_action or {}).get("source_question") or message_text
@@ -11931,6 +11979,7 @@ def create_app(
                         agent_readers=agent_readers,
                         read_only=read_only_agent,
                         retained_tool_ledger=agent_evidence_ledger,
+                        run_deadline=run_deadline,
                     )
                 prior_audit_query = _latest_audit_query_semantics(evidence)
                 prior_metric_query = _latest_metric_query_semantics(evidence)
@@ -12611,10 +12660,30 @@ def create_app(
                 str(latest.get("message") or "") or None,
             )
 
-    def _adhoc_timeout_answer(last_progress: str | None) -> str:
-        answer = (
-            "PodPilot stopped this investigation because it exceeded the execution deadline. "
-            "No cluster changes were attempted."
+    def _adhoc_timeout_answer(
+        engine, run_id: str, last_progress: str | None
+    ) -> str:
+        writes_permitted = False
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            conversation = (
+                db_session.get(AdHocConversation, run.conversation_id)
+                if run is not None else None
+            )
+            if conversation is not None:
+                writes_permitted = (
+                    conversation.execution_mode in {"action", "delegated_unrestricted"}
+                    or (
+                        not app_settings.delegated_access_enabled
+                        and app_settings.agent_mode == "unrestricted"
+                    )
+                )
+        answer = "PodPilot stopped this investigation because it exceeded the execution deadline. "
+        answer += (
+            "Cluster operations completed before the timeout are not rolled back; review the "
+            "Agent evidence ledger and command audit before retrying."
+            if writes_permitted else
+            "This conversation did not permit cluster writes."
         )
         if last_progress:
             answer += f" The last recorded operation was: {last_progress}"
@@ -12709,7 +12778,7 @@ def create_app(
             error_type="RunTimeout",
             error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
             progress_message="The investigation reached its execution deadline.",
-            answer=_adhoc_timeout_answer(last_progress),
+            answer=_adhoc_timeout_answer(engine, run_id, last_progress),
         )
 
     def _claim_adhoc_run(engine, run_id: str | None = None) -> str | None:
@@ -12865,6 +12934,10 @@ def create_app(
             await _record_run_progress(engine, run_id, phase, message)
 
         try:
+            run_deadline = (
+                asyncio.get_running_loop().time()
+                + app_settings.adhoc_run_timeout_seconds
+            )
             with capture_model_diagnostics() as model_calls:
                 assistant_message_id = await asyncio.wait_for(
                     _execute_adhoc_turn(
@@ -12878,6 +12951,7 @@ def create_app(
                         followup_action=followup_action or None,
                         progress=report,
                         delegated_vault=application.state.delegated_vault,
+                        run_deadline=run_deadline,
                     ),
                     timeout=app_settings.adhoc_run_timeout_seconds,
                 )
@@ -12908,7 +12982,7 @@ def create_app(
                 error_type="RunTimeout",
                 error_detail=f"Investigation exceeded the {seconds}-second execution deadline.",
                 progress_message="The investigation reached its execution deadline.",
-                answer=_adhoc_timeout_answer(last_progress),
+                answer=_adhoc_timeout_answer(engine, run_id, last_progress),
             )
         except Exception as exc:
             LOGGER.error(
@@ -14737,7 +14811,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="Custom CA input must not contain a private key.")
         try:
             timeout_seconds = float(form.get("timeout_seconds", "30"))
-            max_retries = int(form.get("max_retries", "3"))
+            max_retries = int(form.get("max_retries", "1"))
             max_input_tokens = int(form.get("max_input_tokens", "128000"))
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
             temperature = float(temperature_text) if temperature_text else None

@@ -137,11 +137,16 @@ def test_audit_query_defaults_and_bounds_are_configurable() -> None:
 
 
 def test_adhoc_run_deadline_is_bounded() -> None:
+    defaults = Settings(_env_file=None)
+    assert defaults.adhoc_run_timeout_seconds == 900
+    assert defaults.adhoc_finalization_reserve_seconds == 60
     assert Settings(adhoc_run_timeout_seconds=45).adhoc_run_timeout_seconds == 45
     with pytest.raises(ValidationError):
         Settings(adhoc_run_timeout_seconds=0)
     with pytest.raises(ValidationError):
-        Settings(adhoc_run_timeout_seconds=901)
+        Settings(adhoc_run_timeout_seconds=1801)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_finalization_reserve_seconds=301)
 
 
 def test_model_timeout_ceiling_is_bounded() -> None:

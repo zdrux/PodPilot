@@ -765,9 +765,12 @@ log stream records cluster credentials or complete command output. The API
 publishes changing model/command elapsed-time messages to Ask without periodic runtime, model-wait,
 or command heartbeat log entries. A command is bounded by
 `agent_command_timeout_seconds` (240 seconds by default), while the complete Ask job remains bounded
-by `adhoc_run_timeout_seconds` (300 seconds by default). Keep the command timeout lower than the Ask
-deadline so the runner can return its redacted timeout details and the agent has time to finalize and
-persist an answer.
+by `adhoc_run_timeout_seconds` (900 seconds by default). The agent stops starting ordinary work during
+the final `adhoc_finalization_reserve_seconds` (60 seconds by default) and asks the model to produce the
+best supported answer from retained evidence. Keep command and model-attempt timeouts below the Ask
+deadline so PodPilot can preserve redacted timeout details and persist an answer. New model profiles
+default to a 180-second attempt timeout with one transient retry; tune those values to the provider's
+observed latency rather than allowing one call's retry window to consume the complete Ask deadline.
 While a durable Ask run is queued or running, its owner can request cancellation from the live
 progress card. PodPilot records the run as cancelled, sends the correlated runner request ID to the
 loopback sidecar, terminates that command's process group when it is still active, and cancels the
