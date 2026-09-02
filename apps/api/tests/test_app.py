@@ -29,6 +29,7 @@ from podpilot_api.main import (
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
     _agent_command_operation_kind,
+    _agent_command_progress,
     _agent_evidence_ledger_message,
     _agent_tool_ledger_entry,
     _compact_consumed_agent_tool_messages,
@@ -2822,6 +2823,66 @@ def test_agent_command_operation_kind_classifies_write_commands() -> None:
     assert _agent_command_operation_kind("oc -n apps scale deployment web --replicas=2") == "write"
     assert _agent_command_operation_kind("oc auth can-i patch deployments -n apps") == "read"
     assert _agent_command_operation_kind("oc get deployments -n apps") == "read"
+
+
+@pytest.mark.parametrize("command,cluster_name,running,completed,failed", [
+    (
+        "oc get pods -n podpilot-test -o json",
+        "EC2",
+        "Listing Pods in namespace podpilot-test on EC2.",
+        "Listed Pods in namespace podpilot-test on EC2.",
+        "Could not list Pods in namespace podpilot-test on EC2.",
+    ),
+    (
+        "oc get route console -n openshift-console",
+        "SNO",
+        "Getting details for Route console in namespace openshift-console on SNO.",
+        "Retrieved details for Route console in namespace openshift-console on SNO.",
+        "Could not get details for Route console in namespace openshift-console on SNO.",
+    ),
+    (
+        "oc patch deployment web-a -n podpilot-test --type=merge -p '{\"spec\":{}}'",
+        "EC2",
+        "Patching Deployment web-a in namespace podpilot-test on EC2.",
+        "Patched Deployment web-a in namespace podpilot-test on EC2.",
+        "Could not patch Deployment web-a in namespace podpilot-test on EC2.",
+    ),
+    (
+        "oc rollout status deployment/web-a -n podpilot-test --timeout=120s",
+        "EC2",
+        "Checking rollout of Deployment web-a in namespace podpilot-test on EC2.",
+        "Checked rollout of Deployment web-a in namespace podpilot-test on EC2.",
+        "Could not check rollout of Deployment web-a in namespace podpilot-test on EC2.",
+    ),
+    (
+        "oc logs network-client-abc -n podpilot-test --tail=100",
+        "EC2",
+        "Reading logs for Pod network-client-abc in namespace podpilot-test on EC2.",
+        "Read logs for Pod network-client-abc in namespace podpilot-test on EC2.",
+        "Could not read logs for Pod network-client-abc in namespace podpilot-test on EC2.",
+    ),
+])
+def test_agent_command_progress_describes_safe_cluster_actions(
+    command: str,
+    cluster_name: str,
+    running: str,
+    completed: str,
+    failed: str,
+) -> None:
+    progress = _agent_command_progress(command, cluster_name)
+    assert progress.running == running
+    assert progress.completed == completed
+    assert progress.failed == failed
+
+
+def test_agent_command_progress_does_not_expose_patch_body() -> None:
+    progress = _agent_command_progress(
+        "oc patch deployment web -n apps -p '{\"token\":\"do-not-display\"}'",
+        "Production",
+    )
+
+    assert "do-not-display" not in repr(progress)
+    assert progress.running == "Patching Deployment web in namespace apps on Production."
 
 
 def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> None:
@@ -10972,10 +11033,15 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
             "TLS verification is disabled" not in item
             for item in activity["limitations"]
         )
+        progress_messages = [
+            item["message"] for item in json.loads(run.progress_json)
+        ]
         assert any(
-            "Still executing on Central DEV" in item["message"]
-            for item in json.loads(run.progress_json)
+            "Listing Kafkas across all namespaces on Central DEV" in message
+            for message in progress_messages
         )
+        assert "Listed Kafkas across all namespaces on Central DEV (0.4s)." in progress_messages
+        assert "Could not list Kafkas across all namespaces on East DEV (0.4s)." in progress_messages
     engine.dispose()
     assert "runner_request_id=runner-east" in caplog.text
     assert "command='oc get kafkas.kafka.strimzi.io -A -o name'" in caplog.text

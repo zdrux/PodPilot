@@ -1382,6 +1382,214 @@ def _agent_command_operation_kind(command: str) -> str:
 
     return "write" if _AGENT_WRITE_COMMAND.search(command) else "read"
 
+
+@dataclass(frozen=True)
+class _AgentCommandProgress:
+    running: str
+    completed: str
+    failed: str
+
+
+_OC_COMMAND_VERBS = {
+    "adm", "annotate", "api-resources", "api-versions", "apply", "auth", "cluster-info",
+    "cordon", "cp", "create", "debug", "delete", "describe", "drain", "edit", "exec",
+    "explain", "expose", "get", "label", "logs", "new-app", "new-build", "patch",
+    "replace", "rsh", "rollout", "scale", "set", "taint", "top", "uncordon", "wait",
+}
+_OC_OPTIONS_WITH_VALUES = {
+    "--as", "--as-group", "--cache-dir", "--certificate-authority", "--context",
+    "--field-selector", "--filename", "--kubeconfig", "--namespace", "--output",
+    "--request-timeout", "--selector", "--server", "--token", "--type", "-f", "-l",
+    "-n", "-o", "-p",
+}
+_RESOURCE_LABELS = {
+    "cm": ("ConfigMap", "ConfigMaps"),
+    "configmap": ("ConfigMap", "ConfigMaps"),
+    "configmaps": ("ConfigMap", "ConfigMaps"),
+    "cronjob": ("CronJob", "CronJobs"),
+    "cronjobs": ("CronJob", "CronJobs"),
+    "daemonset": ("DaemonSet", "DaemonSets"),
+    "daemonsets": ("DaemonSet", "DaemonSets"),
+    "ds": ("DaemonSet", "DaemonSets"),
+    "deploy": ("Deployment", "Deployments"),
+    "deployment": ("Deployment", "Deployments"),
+    "deployments": ("Deployment", "Deployments"),
+    "event": ("Event", "Events"),
+    "events": ("Event", "Events"),
+    "job": ("Job", "Jobs"),
+    "jobs": ("Job", "Jobs"),
+    "namespace": ("Namespace", "Namespaces"),
+    "namespaces": ("Namespace", "Namespaces"),
+    "netpol": ("NetworkPolicy", "NetworkPolicies"),
+    "networkpolicy": ("NetworkPolicy", "NetworkPolicies"),
+    "networkpolicies": ("NetworkPolicy", "NetworkPolicies"),
+    "node": ("Node", "Nodes"),
+    "nodes": ("Node", "Nodes"),
+    "pod": ("Pod", "Pods"),
+    "pods": ("Pod", "Pods"),
+    "po": ("Pod", "Pods"),
+    "project": ("Project", "Projects"),
+    "projects": ("Project", "Projects"),
+    "pvc": ("PersistentVolumeClaim", "PersistentVolumeClaims"),
+    "persistentvolumeclaim": ("PersistentVolumeClaim", "PersistentVolumeClaims"),
+    "persistentvolumeclaims": ("PersistentVolumeClaim", "PersistentVolumeClaims"),
+    "route": ("Route", "Routes"),
+    "routes": ("Route", "Routes"),
+    "secret": ("Secret", "Secrets"),
+    "secrets": ("Secret", "Secrets"),
+    "service": ("Service", "Services"),
+    "services": ("Service", "Services"),
+    "svc": ("Service", "Services"),
+    "statefulset": ("StatefulSet", "StatefulSets"),
+    "statefulsets": ("StatefulSet", "StatefulSets"),
+    "sts": ("StatefulSet", "StatefulSets"),
+}
+
+
+def _safe_progress_identifier(value: str) -> str | None:
+    candidate = redact_text(value).strip().strip("'\"")
+    if not candidate or len(candidate) > 128:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/=-]*", candidate):
+        return None
+    return candidate
+
+
+def _agent_command_progress(command: str, cluster_name: str = "") -> _AgentCommandProgress:
+    """Describe a selected oc command without exposing its body or model-authored prose."""
+
+    operation_kind = _agent_command_operation_kind(command)
+    try:
+        tokens = shlex.split(command, comments=False, posix=True)
+    except ValueError:
+        tokens = command.split()
+    oc_index = next((
+        index for index, token in enumerate(tokens)
+        if token.rsplit("/", 1)[-1].casefold() in {"oc", "kubectl"}
+    ), None)
+    verb_index = next((
+        index for index in range((oc_index + 1) if oc_index is not None else 0, len(tokens))
+        if tokens[index].casefold() in _OC_COMMAND_VERBS
+    ), None)
+    verb = tokens[verb_index].casefold() if verb_index is not None else ""
+
+    namespace = ""
+    all_namespaces = any(token in {"-A", "--all-namespaces"} for token in tokens)
+    for index, token in enumerate(tokens):
+        if token in {"-n", "--namespace"} and index + 1 < len(tokens):
+            namespace = _safe_progress_identifier(tokens[index + 1]) or ""
+        elif token.startswith("--namespace="):
+            namespace = _safe_progress_identifier(token.split("=", 1)[1]) or ""
+
+    def positionals(start: int) -> list[str]:
+        values: list[str] = []
+        skip_next = False
+        for token in tokens[start:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in _OC_OPTIONS_WITH_VALUES:
+                skip_next = True
+                continue
+            if token.startswith("-") or "=" in token and token.startswith("--"):
+                continue
+            if token in {"|", "||", "&&", ";"}:
+                break
+            values.append(token)
+        return values
+
+    arguments = positionals((verb_index + 1) if verb_index is not None else len(tokens))
+    subverb = ""
+    if verb in {"adm", "auth", "rollout", "set"} and arguments:
+        subverb = arguments.pop(0).casefold()
+    resource_token = arguments[0] if arguments else ""
+    resource_name = arguments[1] if len(arguments) > 1 else ""
+    if "/" in resource_token:
+        resource_token, embedded_name = resource_token.split("/", 1)
+        resource_name = resource_name or embedded_name
+    elif verb in {"debug", "exec", "logs", "rsh"} and resource_token:
+        resource_name = resource_token
+        resource_token = "pod"
+    resource_key = resource_token.split(".", 1)[0].casefold()
+    singular, plural = _RESOURCE_LABELS.get(
+        resource_key,
+        (
+            resource_key.replace("-", " ").title() or "cluster resource",
+            resource_key.replace("-", " ").title() or "cluster resources",
+        ),
+    )
+    safe_name = _safe_progress_identifier(resource_name)
+    target = f"{singular} {safe_name}" if safe_name else plural
+    scope = ""
+    if namespace:
+        scope += f" in namespace {namespace}"
+    elif all_namespaces:
+        scope += " across all namespaces"
+    safe_cluster = redact_text(cluster_name).strip()[:128]
+    if safe_cluster:
+        scope += f" on {safe_cluster}"
+
+    if verb == "get":
+        phrases = (
+            f"Getting details for {target}" if safe_name else f"Listing {target}",
+            f"Retrieved details for {target}" if safe_name else f"Listed {target}",
+            f"Could not {'get details for' if safe_name else 'list'} {target}",
+        )
+    elif verb == "describe":
+        phrases = (f"Inspecting {target}", f"Inspected {target}", f"Could not inspect {target}")
+    elif verb == "logs":
+        phrases = (
+            f"Reading logs for {target}",
+            f"Read logs for {target}",
+            f"Could not read logs for {target}",
+        )
+    elif verb == "patch":
+        phrases = (f"Patching {target}", f"Patched {target}", f"Could not patch {target}")
+    elif verb == "delete":
+        phrases = (f"Deleting {target}", f"Deleted {target}", f"Could not delete {target}")
+    elif verb == "scale":
+        phrases = (f"Scaling {target}", f"Scaled {target}", f"Could not scale {target}")
+    elif verb == "create":
+        phrases = (f"Creating {target}", f"Created {target}", f"Could not create {target}")
+    elif verb in {"apply", "replace"}:
+        noun = "cluster configuration"
+        phrases = (f"Applying {noun}", f"Applied {noun}", f"Could not apply {noun}")
+    elif verb in {"annotate", "label", "set", "taint"}:
+        phrases = (f"Updating {target}", f"Updated {target}", f"Could not update {target}")
+    elif verb in {"exec", "rsh", "debug"}:
+        phrases = (
+            f"Running a command in {target}",
+            f"Completed the command in {target}",
+            f"The command in {target} failed",
+        )
+    elif verb == "wait":
+        phrases = (f"Waiting for {target}", f"Finished waiting for {target}", f"Could not confirm {target}")
+    elif verb == "rollout" and subverb == "restart":
+        phrases = (f"Restarting {target}", f"Restarted {target}", f"Could not restart {target}")
+    elif verb == "rollout":
+        phrases = (
+            f"Checking rollout of {target}",
+            f"Checked rollout of {target}",
+            f"Could not check rollout of {target}",
+        )
+    elif verb == "auth":
+        phrases = (
+            "Checking cluster permissions",
+            "Checked cluster permissions",
+            "Could not check cluster permissions",
+        )
+    elif verb in {"adm", "top"}:
+        phrases = (
+            f"Reading resource usage for {target}",
+            f"Read resource usage for {target}",
+            f"Could not read resource usage for {target}",
+        )
+    elif operation_kind == "write":
+        phrases = ("Applying cluster changes", "Applied cluster changes", "Could not apply cluster changes")
+    else:
+        phrases = ("Running a cluster read", "Completed the cluster read", "The cluster read failed")
+    return _AgentCommandProgress(*[f"{phrase}{scope}." for phrase in phrases])
+
 def _recover_serialized_agent_completion(
     content: str,
 ) -> tuple[str, str, list[str]] | None:
@@ -11123,6 +11331,7 @@ def create_app(
                         redact_text(tool_error)[:1_000],
                     )
 
+                command_progress = _agent_command_progress(command, cluster_name)
                 if tool_error is None:
                     jq_preflight_command = _jq_preflight_command(command)
                     if jq_preflight_command is not None:
@@ -11201,14 +11410,10 @@ def create_app(
                             if not runner_requests:
                                 app.state.adhoc_runner_requests.pop(run_id, None)
 
-                if progress:
+                if progress and tool_error is None:
                     await progress(
                         "agent_command",
-                        (
-                            f"Executing an agent-selected shell command on {cluster_name}."
-                            if cluster_name else
-                            "Validating an agent-selected shell command."
-                        ),
+                        command_progress.running,
                     )
                 result_payload: dict[str, object]
                 if tool_error is not None:
@@ -11272,7 +11477,7 @@ def create_app(
                             if progress:
                                 await progress(
                                     "agent_command",
-                                    f"Still executing on {cluster_name} "
+                                    f"{command_progress.running.rstrip('.')} "
                                     f"({elapsed_seconds}s elapsed; "
                                     f"{app_settings.agent_command_timeout_seconds:g}s timeout).",
                                 )
@@ -11340,6 +11545,28 @@ def create_app(
                         runner_requests.discard(runner_request_id)
                         if not runner_requests:
                             app.state.adhoc_runner_requests.pop(run_id, None)
+                if progress and tool_error is None:
+                    duration_ms = result_payload.get("duration_ms")
+                    duration_suffix = (
+                        f" ({int(duration_ms) / 1000:.1f}s)."
+                        if isinstance(duration_ms, (int, float)) else ""
+                    )
+                    if result_payload.get("timed_out"):
+                        running_clause = command_progress.running.rstrip(".")
+                        progress_message = (
+                            f"Timed out while {running_clause[:1].lower()}{running_clause[1:]}."
+                        )
+                    elif result_payload.get("exit_code") == 0:
+                        progress_message = (
+                            command_progress.completed.rstrip(".") + duration_suffix
+                            if duration_suffix else command_progress.completed
+                        )
+                    else:
+                        progress_message = (
+                            command_progress.failed.rstrip(".") + duration_suffix
+                            if duration_suffix else command_progress.failed
+                        )
+                    await progress("agent_command", progress_message)
                 operation_kind = _agent_command_operation_kind(command)
                 result_payload["operation_kind"] = operation_kind
                 ledger_status = (

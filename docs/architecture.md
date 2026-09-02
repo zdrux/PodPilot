@@ -214,8 +214,11 @@ partial metric failure, or denied monitoring read remains visible evidence. This
 name from observed API evidence instead of requiring the model or operator to supply it, without
 forcing the agent to stop.
 Each shell process group also has an independent runner-side deadline. While it is active, the
-runner polls the process silently and the API records changing elapsed-time progress events so the
-SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible
+runner polls the process silently. Before dispatch, the API deterministically reduces the selected
+`oc`/`kubectl` command to a safe operation, resource, name, namespace, and cluster description. The
+SSE timeline reports that description at start, during changing elapsed-time updates, and at
+completion or failure without exposing command bodies, inline manifests, or model-authored
+narration. Timeout returns exit code `124` and a redacted operator-visible
 limitation instead of leaving the run indefinitely on `agent_command`.
 Dedicated drain threads consume stdout and stderr as the process runs, retain a bounded prefix of
 each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`

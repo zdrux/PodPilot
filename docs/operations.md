@@ -1582,7 +1582,11 @@ hypothesis, its proposed next check, and summaries of evidence actually found. N
 append without reordering existing sections; each section displays its latest three updates. These
 transient updates disappear when the
 final answer replaces the spinner. They are structured plan/action summaries, not hidden model
-reasoning. The final structured
+reasoning. Agent shell activity is described deterministically from the validated command: common
+reads and writes identify the operation, resource, safe object name, namespace, and cluster, while
+command bodies and inline configuration remain hidden. Long operations repeat the same description
+with elapsed time and then append a success, failure, or timeout update; the existing rolling
+three-item phase display and automatic scrolling remain unchanged. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
 The supported single-replica SQLite deployment has one bounded global Ask worker pool. A question
 submitted after the pool or the sender's concurrency allowance is full remains queued and starts
