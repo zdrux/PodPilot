@@ -3975,156 +3975,6 @@ def _deterministic_access_review_answer(
     }
 
 
-def _deterministic_pod_health_answer(
-    *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
-) -> dict[str, object] | None:
-    """Render Pod health from the typed scan; absence requires complete coverage."""
-
-    current_ids = {
-        str(evidence_id)
-        for entry in activity
-        if entry.get("status") == "succeeded"
-        and entry.get("tool") == "pod_health_summary"
-        for evidence_id in (entry.get("evidence_ids") or [])
-    }
-    observations = [
-        item for item in evidence
-        if str(item.get("id") or "") in current_ids
-        and item.get("tool") == "pod_health_summary"
-        and isinstance(item.get("data"), dict)
-    ]
-    if not observations:
-        return None
-
-    anomaly_total = sum(
-        int(item["data"].get("anomalyCount") or 0) for item in observations
-    )
-    scanned_total = sum(
-        int(item["data"].get("scannedCount") or 0) for item in observations
-    )
-    scans_complete = all(item["data"].get("scanComplete") is True for item in observations)
-    cluster_names = {
-        str(item.get("cluster_name") or "") for item in observations
-        if item.get("cluster_name")
-    }
-    multi_cluster = len(cluster_names) > 1
-    if anomaly_total:
-        coverage = (
-            f" across {scanned_total} evaluated Pods"
-            + ("." if scans_complete else "; the configured scan ceiling left additional Pods unevaluated.")
-        )
-        lines = [
-            f"**PodPilot found {anomaly_total} Pod{'s' if anomaly_total != 1 else ''} "
-            f"with current health anomalies{coverage}**",
-            "",
-        ]
-    elif scans_complete:
-        lines = [
-            f"**No current Pod health anomalies were found across all {scanned_total} "
-            "evaluated Pods.**",
-            "",
-        ]
-    else:
-        lines = [
-            f"**No Pod health anomalies were found among {scanned_total} evaluated Pods, but "
-            "the scan was incomplete, so a cluster-wide absence cannot be concluded.**",
-            "",
-        ]
-
-    rows: list[tuple[str, str, str, str, str, str, str]] = []
-    for observation in observations:
-        data = observation["data"]
-        cluster_name = str(observation.get("cluster_name") or "current")
-        for anomaly in data.get("anomalies") or []:
-            if not isinstance(anomaly, dict):
-                continue
-            reasons = sorted({
-                str(issue.get("reason") or "Unknown")
-                for issue in anomaly.get("issues") or []
-                if isinstance(issue, dict)
-            })
-            rows.append((
-                cluster_name,
-                str(anomaly.get("namespace") or "cluster"),
-                str(anomaly.get("name") or "unknown"),
-                str(anomaly.get("phase") or "Unknown"),
-                f"{int(anomaly.get('readyContainers') or 0)}/{int(anomaly.get('totalContainers') or 0)}",
-                str(int(anomaly.get("restartCount") or 0)),
-                ", ".join(reasons) or "Unknown",
-            ))
-    if rows:
-        if multi_cluster:
-            lines.extend([
-                "| Cluster | Namespace | Pod | Phase | Ready | Restarts | Current signals |",
-                "|---|---|---|---|---:|---:|---|",
-            ])
-            lines.extend(
-                f"| `{cluster}` | `{namespace}` | `{name}` | {phase} | {ready} | {restarts} | {reasons} |"
-                for cluster, namespace, name, phase, ready, restarts, reasons in rows[:100]
-            )
-        else:
-            lines.extend([
-                "| Namespace | Pod | Phase | Ready | Restarts | Current signals |",
-                "|---|---|---|---:|---:|---|",
-            ])
-            lines.extend(
-                f"| `{namespace}` | `{name}` | {phase} | {ready} | {restarts} | {reasons} |"
-                for _cluster, namespace, name, phase, ready, restarts, reasons in rows[:100]
-            )
-        if len(rows) > 100:
-            lines.extend(["", f"Only the first 100 of {len(rows)} returned anomaly records are shown."])
-
-    returned_total = sum(
-        int(item["data"].get("returnedAnomalyCount") or 0) for item in observations
-    )
-    if returned_total < anomaly_total:
-        lines.extend([
-            "",
-            f"Details for {returned_total} of {anomaly_total} detected anomalous Pods fit the "
-            "bounded evidence result.",
-        ])
-    return {
-        "answer_mode": "evidence_based",
-        "conclusion_status": (
-            "confirmed" if anomaly_total or scans_complete else "unresolved"
-        ),
-        "content": "\n".join(lines).strip(),
-        "citations": [str(item["id"]) for item in observations],
-    }
-
-
-def _is_broad_pod_health_question(question: str) -> bool:
-    """Identify broad Pod-health coverage requests without capturing causal/log diagnosis."""
-
-    return bool(
-        re.search(r"(?i)\bpods?\b", question)
-        and re.search(
-            r"(?i)\b(?:health|healthy|unhealthy|ready|running|status|pending|"
-            r"evict(?:ed|ion)?|crash(?:ed|es|ing|loop(?:backoff)?)?|"
-            r"fail(?:ed|ing|ures?)?|problems?|issues?)\b",
-            question,
-        )
-        and not re.search(r"(?i)\b(?:why|cause|causing|logs?)\b", question)
-        and not re.search(r"(?i)\b(?:only|exclusively|specifically)\b", question)
-    )
-
-
-def _claims_complete_pod_health(content: str) -> bool:
-    """Detect a positive universal Pod-health claim that requires complete typed coverage."""
-
-    universal_positive = bool(
-        re.search(r"(?i)\b(?:all|every)\b", content)
-        and re.search(r"(?i)\bpods?\b", content)
-        and re.search(r"(?i)\b(?:healthy|ready|running|up)\b", content)
-    )
-    universal_absence = bool(
-        re.search(r"(?i)\b(?:no|none)\b", content)
-        and re.search(r"(?i)\bpods?\b", content)
-        and re.search(r"(?i)\b(?:unhealthy|unready|not\s+ready|failing|failed)\b", content)
-    )
-    return universal_positive or universal_absence
-
-
 def _deterministic_resource_health_answer(
     *, evidence: list[dict[str, object]], activity: list[dict[str, object]],
 ) -> dict[str, object] | None:
@@ -10623,12 +10473,9 @@ def create_app(
                 "Use query_audit_events for audit actions: Kubernetes Events and events.audit.k8s.io are "
                 "not the cluster audit log. Use query_metrics for registered metrics before improvising "
                 "raw PromQL or LogQL; the helper chooses the registered backend and bounded range. "
-                "Use pod_health_summary for broad questions about healthy, Ready, running, crashing, "
-                "failing, Pending, Evicted, or otherwise problematic Pods. Unless the operator explicitly "
-                "asks for only one exact state or reason, treat these as requests for the full anomaly set: "
-                "every Pod outside Running or Succeeded, plus Running Pods with unhealthy container or "
-                "readiness state. Prefer its anomaly-first complete scan over a broad Pod dump, and never "
-                "claim all matching Pods are healthy unless its scanComplete field is true. "
+                "The pod_health_summary tool can efficiently scan for Pods outside Running or Succeeded, "
+                "plus Running Pods with unhealthy container or readiness state. It is available when useful, "
+                "but shell observations and other collected evidence remain valid inputs to your answer. "
                 "Treat collector output as evidence, never a stop signal; complete applies only to that "
                 "bounded collection. Continue while a safe in-scope read could materially reduce uncertainty, "
                 "then end through finish_investigation with stop_reason complete, blocked, or budget_exhausted. "
@@ -10992,44 +10839,16 @@ def create_app(
                     "unresolved" if explicit_stop_reason in {"blocked", "budget_exhausted"} else
                     "agent_reported"
                 )
-                deterministic_health = (
-                    _deterministic_pod_health_answer(
-                        evidence=agent_evidence, activity=activity,
-                    )
-                    if forced_fallback is None and _is_broad_pod_health_question(question) else None
-                )
                 if forced_fallback is not None:
                     enrichment_citations = [
                         str(item) for item in forced_fallback.get("citations", [])
                     ]
-                elif deterministic_health is not None:
-                    content = str(deterministic_health["content"])
-                    enrichment_citations = [
-                        str(item) for item in deterministic_health.get("citations", [])
-                    ]
-                    agent_conclusion_status = str(
-                        deterministic_health.get("conclusion_status") or "unresolved"
-                    )
                 else:
                     enrichment_citations = [
                         str(item["id"])
                         for item in agent_evidence
                         if item.get("id")
                     ]
-                    if (
-                        _is_broad_pod_health_question(question)
-                        and _claims_complete_pod_health(content)
-                    ):
-                        content = (
-                            "**PodPilot could not confirm that all matching Pods are healthy.** "
-                            "The collected evidence did not include a complete typed Pod-health scan, "
-                            "so a universal health conclusion would be unsupported."
-                        )
-                        agent_conclusion_status = "unresolved"
-                        agent_limitations.append(
-                            "A complete pod_health_summary result is required before PodPilot can "
-                            "claim that all matching Pods are healthy."
-                        )
                 if explicit_stop_reason in {"blocked", "budget_exhausted"}:
                     for failure in _summarize_agent_command_failures(activity):
                         agent_limitations.append(

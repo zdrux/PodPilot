@@ -106,10 +106,10 @@ namespace and compile the `strimzi.io/cluster=<name>` selector through the live 
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
 The API then sends OpenAI-compatible Chat Completions requests with bounded typed read helpers and
-one `execute_shell` function. Broad Pod health questions use the anomaly-first
-`pod_health_summary` helper, optionally scoped by namespace and label selector. A universal healthy
-conclusion requires its complete-scan flag; a resource inventory with compacted status detail cannot
-substitute for complete health coverage.
+one `execute_shell` function. The anomaly-first `pod_health_summary` helper is available with optional
+namespace and label-selector scope, but it is not mandatory. Its output, shell observations, and other
+tool results are returned as evidence to the agent. PodPilot does not replace a valid agent answer with
+a server-authored Pod-health conclusion or impose a typed-scan completion requirement on that answer.
 Each call identifies one cluster from the conversation's immutable selection. The API resolves that
 cluster's token from the conversation owner's in-memory delegated session and brokers the API origin,
 token, execution capability, and effective TLS mode over Pod loopback for that call only. Read-only

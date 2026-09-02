@@ -58,7 +58,6 @@ from podpilot_api.main import (
     _deterministic_inventory_answer,
     _deterministic_metric_ranking_answer,
     _deterministic_metric_summary_answer,
-    _deterministic_pod_health_answer,
     _deterministic_resource_health_answer,
     _deterministic_log_findings_section,
     _deterministic_provider_failure_answer,
@@ -70,14 +69,12 @@ from podpilot_api.main import (
     _summarize_agent_command_failures,
     _stream_delegated_upstream,
     _grounded_read_candidates,
-    _claims_complete_pod_health,
     _investigation_capability_ledger,
     _investigation_unit_cost,
     _jq_filters_from_shell_command,
     _jq_preflight_command,
     _inventory_plan_scope_errors,
     _is_access_review_question,
-    _is_broad_pod_health_question,
     _latest_audit_query_semantics,
     _latest_metric_query_semantics,
     _latest_resource_query_semantics,
@@ -1310,72 +1307,6 @@ def test_agent_provider_result_compacts_large_shell_output() -> None:
     assert payload["provider_payload_original_bytes"] > 400_000
     assert "compacted stdout" in payload["stdout"]
     assert len(rendered.encode()) <= 48 * 1024
-
-
-def test_deterministic_pod_health_answer_reports_running_phase_crashloop() -> None:
-    evidence = [{
-        "id": "pod-health-1",
-        "tool": "pod_health_summary",
-        "cluster_name": "lab",
-        "data": {
-            "kind": "Pod", "scannedCount": 600, "scanComplete": True,
-            "anomalyCount": 1, "returnedAnomalyCount": 1,
-            "anomalies": [{
-                "namespace": "payments", "name": "api-7d9", "phase": "Running",
-                "readyContainers": 1, "totalContainers": 2, "restartCount": 3595,
-                "issues": [{"reason": "CrashLoopBackOff"}],
-            }],
-        },
-    }]
-    activity = [{
-        "tool": "pod_health_summary", "status": "succeeded",
-        "evidence_ids": ["pod-health-1"],
-    }]
-
-    answer = _deterministic_pod_health_answer(evidence=evidence, activity=activity)
-
-    assert answer is not None
-    assert answer["conclusion_status"] == "confirmed"
-    assert "found 1 Pod with current health anomalies" in answer["content"]
-    assert "`payments` | `api-7d9` | Running | 1/2 | 3595 | CrashLoopBackOff" in answer["content"]
-    assert answer["citations"] == ["pod-health-1"]
-
-
-def test_deterministic_pod_health_answer_refuses_incomplete_absence_claim() -> None:
-    evidence = [{
-        "id": "pod-health-limited",
-        "tool": "pod_health_summary",
-        "data": {
-            "kind": "Pod", "scannedCount": 2000, "scanComplete": False,
-            "anomalyCount": 0, "returnedAnomalyCount": 0, "anomalies": [],
-        },
-    }]
-    activity = [{
-        "tool": "pod_health_summary", "status": "succeeded",
-        "evidence_ids": ["pod-health-limited"],
-    }]
-
-    answer = _deterministic_pod_health_answer(evidence=evidence, activity=activity)
-
-    assert answer is not None
-    assert answer["conclusion_status"] == "unresolved"
-    assert "scan was incomplete" in answer["content"]
-    assert "cannot be concluded" in answer["content"]
-
-
-def test_broad_pod_health_guard_detects_universal_claims_but_not_log_diagnosis() -> None:
-    assert _is_broad_pod_health_question(
-        "Are all the Loki pods in openshift-logging running healthy?"
-    ) is True
-    assert _is_broad_pod_health_question(
-        "Why are the Loki pod logs showing errors?"
-    ) is False
-    assert _is_broad_pod_health_question("Show me crashing pods on the cluster") is True
-    assert _is_broad_pod_health_question("Find failed, Pending, or Evicted pods") is True
-    assert _is_broad_pod_health_question("Show only CrashLoopBackOff pods") is False
-    assert _claims_complete_pod_health("All Loki Pods are running and healthy.") is True
-    assert _claims_complete_pod_health("No unhealthy Pods were found.") is True
-    assert _claims_complete_pod_health("Two Pods are not Ready.") is False
 
 
 def test_deterministic_resource_health_answer_reports_anomaly() -> None:
@@ -10239,7 +10170,7 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
     engine.dispose()
 
 
-def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
+def test_unrestricted_broad_pod_health_preserves_agent_conclusion(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10252,7 +10183,7 @@ def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
             self.agent_messages.append(list(messages))
             if self.steps:
                 return _agent_final_step(
-                    "All 75 Pods are healthy based on the inventory table."
+                    "The agent found no current anomalies among the 14 Pods it checked."
                 )
             self.steps += 1
             arguments = json.dumps({
@@ -10341,8 +10272,7 @@ def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
     assert explorer.calls[0].label_selector == "app.kubernetes.io/name=loki"
     tool_payload = json.loads(str(provider.agent_messages[1][-1]["content"]))
     assert tool_payload["observations"][0]["data"]["scanComplete"] is True
-    assert "No current Pod health anomalies were found across all 14 evaluated Pods" in rendered.text
-    assert "All 75 Pods are healthy based on the inventory table" not in rendered.text
+    assert "The agent found no current anomalies among the 14 Pods it checked" in rendered.text
     engine = build_engine(settings)
     with Session(engine) as db_session:
         assistant = db_session.scalar(select(AdHocMessage).where(
@@ -10351,7 +10281,7 @@ def test_unrestricted_broad_pod_health_uses_complete_typed_scan_conclusion(
         assert assistant is not None
         assert json.loads(assistant.citations_json) == ["loki-health-complete"]
         activity = json.loads(assistant.tool_activity_json)
-        assert activity["conclusion_status"] == "confirmed"
+        assert activity["conclusion_status"] == "agent_reported"
     engine.dispose()
 
 
