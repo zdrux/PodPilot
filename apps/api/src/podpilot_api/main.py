@@ -1365,7 +1365,48 @@ def _agent_final_answer_quality_issue(content: str) -> str | None:
         return "tool_call_as_answer"
     if "tool_calls" in payload:
         return "tool_calls_as_answer"
+    if set(payload) == {"stop_reason", "answer", "unresolved_safe_reads"}:
+        return "finish_investigation_arguments_as_answer"
     return None
+
+
+def _recover_serialized_agent_completion(
+    content: str,
+) -> tuple[str, str, list[str]] | None:
+    """Recover a valid finish contract emitted as message content by a provider."""
+
+    candidate = content.strip()
+    fenced = re.fullmatch(
+        r"```(?:json)?\s*(.*?)\s*```",
+        candidate,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if fenced is not None:
+        candidate = fenced.group(1).strip()
+    try:
+        payload = json.loads(candidate)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "stop_reason", "answer", "unresolved_safe_reads",
+    }:
+        return None
+    stop_reason = payload.get("stop_reason")
+    answer = payload.get("answer")
+    unresolved = payload.get("unresolved_safe_reads")
+    if (
+        stop_reason not in {"complete", "blocked", "budget_exhausted"}
+        or not isinstance(answer, str)
+        or not answer.strip()
+        or not isinstance(unresolved, list)
+        or any(not isinstance(item, str) for item in unresolved)
+    ):
+        return None
+    return (
+        str(stop_reason),
+        redact_text(answer).strip(),
+        [redact_text(item).strip()[:500] for item in unresolved if item.strip()][:12],
+    )
 
 
 def _adhoc_capability_wording_issue(
@@ -10512,16 +10553,23 @@ def create_app(
                 )
             if not step.tool_calls:
                 agent_content = redact_text(step.content or "").strip()
+                recovered_completion = _recover_serialized_agent_completion(agent_content)
+                if recovered_completion is not None:
+                    explicit_stop_reason, agent_content, unresolved_safe_reads = (
+                        recovered_completion
+                    )
                 implicit_deferral_issue = (
                     _agent_premature_deferral_issue(
                         agent_content,
-                        stop_reason="complete",
-                        unresolved_safe_reads=[],
+                        stop_reason=explicit_stop_reason or "complete",
+                        unresolved_safe_reads=unresolved_safe_reads,
                         action_budget_remaining=max(
                             0, app_settings.adhoc_max_reads_per_turn - agent_actions_used,
                         ),
                     )
-                    if agent_content and explicit_stop_reason is None else None
+                    if agent_content and (
+                        explicit_stop_reason is None or recovered_completion is not None
+                    ) else None
                 )
                 if (
                     implicit_deferral_issue is not None

@@ -29,6 +29,7 @@ from podpilot_api.main import (
     _agent_duplicate_command_issue,
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
+    _recover_serialized_agent_completion,
     _agent_premature_deferral_issue,
     _bounded_agent_provider_result,
     _bind_plan_log_intents,
@@ -2845,6 +2846,36 @@ def test_agent_final_answer_quality_rejects_serialized_tool_arguments() -> None:
     assert _agent_final_answer_quality_issue(
         "The LokiStack is healthy based on the collected Pod status."
     ) is None
+
+
+def test_agent_completion_recovers_prose_from_serialized_finish_arguments() -> None:
+    content = json.dumps({
+        "answer": "## Loki datasource\n\nThe cluster uses `logging-loki`.",
+        "stop_reason": "complete",
+        "unresolved_safe_reads": [],
+    })
+
+    assert _recover_serialized_agent_completion(content) == (
+        "complete",
+        "## Loki datasource\n\nThe cluster uses `logging-loki`.",
+        [],
+    )
+    assert _agent_final_answer_quality_issue(content) == (
+        "finish_investigation_arguments_as_answer"
+    )
+
+
+def test_agent_completion_does_not_recover_malformed_finish_arguments() -> None:
+    malformed = json.dumps({
+        "answer": {"summary": "The cluster uses logging-loki."},
+        "stop_reason": "complete",
+        "unresolved_safe_reads": [],
+    })
+
+    assert _recover_serialized_agent_completion(malformed) is None
+    assert _agent_final_answer_quality_issue(malformed) == (
+        "finish_investigation_arguments_as_answer"
+    )
 
 
 def test_inline_bold_sections_and_unicode_bullets_become_readable_markdown() -> None:

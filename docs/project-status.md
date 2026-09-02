@@ -215,6 +215,11 @@ records remain, but execution now awaits a separate approval-gated action servic
   either persists the recovered answer or fails explicitly after a second empty turn. It does not
   automatically repeat completed shell commands.
 
+- Some Chat Completions providers occasionally serialize valid `finish_investigation` arguments in
+  assistant content instead of returning a native tool call. The unified agent now validates that
+  exact completion envelope and persists only its operator-facing Markdown `answer`; malformed
+  envelopes remain rejected model output and enter the bounded finalization retry.
+
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
   credential Secret, default-on TLS verification, and an explicit visible/audited
