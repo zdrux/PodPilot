@@ -14890,7 +14890,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert template.count('class="boundary-pill execution-mode-badge ') == 1
     assert "Session cautions" in template
     assert "data-action-mode-notice" in template
-    assert "You are in Action mode - and the agent can make changes on the cluster" in template
+    assert "ACTION MODE - Cluster WRITES Permitted" in template
     assert "data-action-tooltip" in template
     assert "data-read-only-tooltip" in template
     assert ".agent-mode-pill" in styles
