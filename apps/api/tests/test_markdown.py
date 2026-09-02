@@ -80,6 +80,27 @@ def test_markdown_tables_become_ordered_bounded_native_blocks() -> None:
     assert blocks[2]["content"] == "The policy effect remains visible."
 
 
+def test_flat_json_summary_becomes_an_ordered_native_table() -> None:
+    blocks = split_markdown_tables(
+        "## Current pod health (post-fix)\n\n"
+        '```json\n{"anomalies":[],"anomalyCount":0,"scanComplete":true,"scannedCount":5}\n```\n\n'
+        "All matching Pods are healthy."
+    )
+
+    assert [block["type"] for block in blocks] == [
+        "markdown", "answer_table", "markdown",
+    ]
+    table = blocks[1]
+    assert table["source"] == "answer_json"
+    assert table["rows"] == [
+        {"cells": ["`anomalies`", "`[]`"]},
+        {"cells": ["`anomalyCount`", "`0`"]},
+        {"cells": ["`scanComplete`", "`true`"]},
+        {"cells": ["`scannedCount`", "`5`"]},
+    ]
+    assert blocks[2]["content"] == "All matching Pods are healthy."
+
+
 def test_markdown_table_extraction_is_bounded_and_leaves_extra_tables_in_prose() -> None:
     blocks = split_markdown_tables(
         "| A |\n|---|\n| 1 |\n| 2 |\n\n| B |\n|---|\n| 3 |",

@@ -161,8 +161,60 @@ def split_markdown_tables(
         if content:
             blocks.append({"type": "markdown", "content": content})
 
+    def flat_json_rows(raw: str) -> list[list[str]] | None:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict) or not payload:
+            return None
+        if any(
+            isinstance(item, (dict, list)) and bool(item)
+            for item in payload.values()
+        ):
+            return None
+
+        rows: list[list[str]] = []
+        for key, item in payload.items():
+            rendered = json.dumps(item, ensure_ascii=False, sort_keys=True)
+            safe_key = str(key).replace("`", "\\`").replace("|", "\\|")
+            safe_value = rendered.replace("`", "\\`").replace("|", "\\|")
+            rows.append([
+                f"`{safe_key}`",
+                f"`{safe_value}`",
+            ])
+        return rows
+
     while index < len(tokens):
         token = tokens[index]
+        if (
+            token.type == "fence"
+            and token.map is not None
+            and token.info.strip().casefold() == "json"
+            and table_count < max_tables
+        ):
+            json_rows = flat_json_rows(token.content)
+            if json_rows is not None:
+                start_line, end_line = token.map
+                add_markdown(cursor, start_line)
+                bounded_rows = json_rows[:max_rows_per_table]
+                blocks.append({
+                    "type": "answer_table",
+                    "version": 1,
+                    "source": "answer_json",
+                    "trust": "answer_content",
+                    "columns": [
+                        {"key": "property", "label": "Property", "cell_type": "markdown"},
+                        {"key": "value", "label": "Value", "cell_type": "markdown"},
+                    ],
+                    "rows": [{"cells": row} for row in bounded_rows],
+                    "row_count": len(bounded_rows),
+                    "omitted_count": max(0, len(json_rows) - len(bounded_rows)),
+                })
+                table_count += 1
+                cursor = end_line
+                index += 1
+                continue
         if (
             token.type != "table_open"
             or token.map is None

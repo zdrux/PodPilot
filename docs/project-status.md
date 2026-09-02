@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-02
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -96,9 +96,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   search/watch projections, catalogs, relationship graphs, findings, and
   enrichment packs can expose grounded candidates and native views but cannot force a read,
   continue/stop decision, terminal result, or replacement conclusion. The agent now terminates
-  through a structured complete/blocked/budget-exhausted contract; a claimed completion is returned
-  to the tool loop when it declares safe reads remaining or defers available read-only work to the
-  operator. Exact same-cluster shell commands require an explicit retry/comparison reason, while
+  through a structured complete/blocked/budget-exhausted contract, and PodPilot accepts the agent's
+  chosen stopping point without semantic deferral detection. Exact same-cluster shell commands require an explicit retry/comparison reason, while
   the evidence sequence remains model-selected. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
@@ -124,7 +123,11 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide
-  prose. Deterministic conclusions remain only as provider/contract-failure fallbacks.
+  prose. Older operator-visible conversation messages remain available through the bounded transcript
+  digest after they leave the recent-message window. Recommendation sections and valid audit, access,
+  or configuration conclusions are no longer removed or replaced by semantic output guards.
+  Flat standalone JSON summaries are transformed into native property/value tables without changing
+  their values. Deterministic conclusions remain only as provider/contract-failure fallbacks.
 
 - A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
   exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`

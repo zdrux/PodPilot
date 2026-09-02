@@ -29,13 +29,11 @@ from podpilot_api.main import (
     _agent_duplicate_command_issue,
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
-    _agent_action_claim_issue,
     _agent_command_operation_kind,
     _agent_evidence_ledger_message,
     _agent_tool_ledger_entry,
     _compact_consumed_agent_tool_messages,
     _recover_serialized_agent_completion,
-    _agent_premature_deferral_issue,
     _bounded_agent_provider_result,
     _bind_plan_log_intents,
     _bounded_detail_fanout,
@@ -103,6 +101,7 @@ from podpilot_api.main import (
     _resource_followup_reuses_snapshot,
     _reuse_prior_resource_evidence,
     _safe_exception_diagnostics,
+    _validated_chat_answer,
     _validated_adhoc_answer,
     SYSTEM_CLUSTER_ID,
     create_app,
@@ -990,7 +989,8 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "broker will reject Kubernetes writes" in system_prompt
     else:
         assert "delegated read-write mode" in system_prompt
-        assert "identify successful writes accurately" in system_prompt
+        assert "cluster write or privileged operation" in system_prompt
+        assert "identify successful writes accurately" not in system_prompt
     assert "same investigation tools" in system_prompt
     assert "When presenting a list of comparable items" in system_prompt
     assert "otherwise choose the clearest format" in system_prompt
@@ -2619,6 +2619,31 @@ def test_adhoc_answer_preserves_agent_text_without_injecting_rbac_prose() -> Non
     assert "observations.0" not in str(validated["content"])
 
 
+def test_validated_answers_preserve_full_provider_content() -> None:
+    content = "begin\n" + ("agent detail\n" * 500) + "end"
+
+    adhoc = _validated_adhoc_answer(
+        AdHocAnswer(
+            answer_mode="insufficient_evidence",
+            answer=content,
+            cited_evidence_ids=[],
+        ),
+        known_evidence_ids=set(),
+    )
+    chat = _validated_chat_answer(
+        InvestigationChatAnswer(
+            answer_mode="insufficient_evidence",
+            answer=content,
+            cited_evidence_ids=[],
+        ),
+        known_evidence_ids=set(),
+        queued_checks=0,
+    )
+
+    assert str(adhoc["content"]).endswith("end")
+    assert str(chat["content"]).endswith("end")
+
+
 def test_adhoc_answer_does_not_call_unrelated_rbac_failure_blocking() -> None:
     denial = (
         "OpenShift RBAC denied the configured identity permission to list "
@@ -2639,7 +2664,7 @@ def test_adhoc_answer_does_not_call_unrelated_rbac_failure_blocking() -> None:
     assert not str(validated["content"]).startswith("**Access blocked")
 
 
-def test_empty_audit_evidence_cannot_be_presented_as_no_cluster_activity() -> None:
+def test_empty_audit_evidence_does_not_replace_agent_answer() -> None:
     evidence_id = "audit-empty"
     answer = AdHocAnswer(
         answer_mode="evidence_based",
@@ -2658,15 +2683,14 @@ def test_empty_audit_evidence_cannot_be_presented_as_no_cluster_activity() -> No
         }],
     )
 
-    assert validated["conclusion_status"] == "unresolved"
-    assert "does not establish that no cluster actions occurred" in str(validated["content"])
-    assert any(
-        "cannot prove an absence" in limitation
-        for limitation in validated["limitations"]
+    assert validated["conclusion_status"] == "confirmed"
+    assert validated["content"] == (
+        "No audit entries were recorded and no users performed actions in the cluster."
     )
+    assert validated["limitations"] == []
 
 
-def test_adhoc_answer_removes_provider_recommendations_from_narrative() -> None:
+def test_adhoc_answer_preserves_provider_recommendations_in_narrative() -> None:
     answer = AdHocAnswer(
         answer_mode="evidence_based",
         answer=(
@@ -2682,7 +2706,10 @@ def test_adhoc_answer_removes_provider_recommendations_from_narrative() -> None:
         known_evidence_ids={"cluster-pod-1"},
     )
 
-    assert validated["content"] == "### Summary\n\nThe collector is restarting."
+    assert validated["content"] == (
+        "### Summary\n\nThe collector is restarting.\n\n"
+        "### Recommended action\n\n- Correct the processor name.\n- Redeploy the collector."
+    )
 
 
 def test_cited_unresolved_answer_remains_grounded_without_being_rejected() -> None:
@@ -2791,23 +2818,11 @@ def test_agent_final_answer_quality_rejects_serialized_tool_arguments() -> None:
     ) is None
 
 
-def test_agent_action_claim_rejects_read_only_summary_after_successful_write() -> None:
-    activity = [{
-        "tool": "execute_shell", "status": "completed", "operation_kind": "write",
-        "command": "oc patch deployment web -n apps --type=merge -p '{} '",
-    }]
-
+def test_agent_command_operation_kind_classifies_write_commands() -> None:
     assert _agent_command_operation_kind("oc patch deployment web -n apps -p '{}'") == "write"
     assert _agent_command_operation_kind("oc -n apps scale deployment web --replicas=2") == "write"
     assert _agent_command_operation_kind("oc auth can-i patch deployments -n apps") == "read"
     assert _agent_command_operation_kind("oc get deployments -n apps") == "read"
-    assert _agent_action_claim_issue(
-        "All commands executed were read-only or safe patches within delegated permissions.",
-        activity,
-    ) == "successful_writes_described_as_read_only"
-    assert _agent_action_claim_issue(
-        "I patched deployment/web and then verified its rollout status.", activity,
-    ) is None
 
 
 def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> None:
@@ -2968,14 +2983,16 @@ def test_recommendation_heading_is_not_a_quality_contract() -> None:
     assert _adhoc_answer_quality_issue(content=content) is None
 
 
-def test_provider_recommendation_schema_tail_is_removed_before_markdown_rendering() -> None:
+def test_provider_recommendation_schema_tail_is_preserved_before_markdown_rendering() -> None:
     cleaned = _clean_adhoc_markdown(
         "## Observation\n\nThe Pod is restarting.\n\n"
         'recommended_actions: [{"label": "Inspect logs"}]'
     )
 
-    assert cleaned == "## Observation\n\nThe Pod is restarting."
-    assert "recommended_actions" not in cleaned
+    assert cleaned == (
+        "## Observation\n\nThe Pod is restarting.\n\n"
+        'recommended_actions: [{"label": "Inspect logs"}]'
+    )
 
 
 def test_answer_correction_preserves_earlier_structured_recommendations() -> None:
@@ -3541,7 +3558,7 @@ def test_adhoc_answer_does_not_recover_unknown_inline_evidence_id() -> None:
     assert "did not cite collected evidence" in " ".join(validated["limitations"])
 
 
-def test_tls_claim_contradiction_is_labeled_without_rewriting_agent_text() -> None:
+def test_tls_claim_contradiction_does_not_change_agent_text_or_citations() -> None:
     answer = AdHocAnswer(
         answer_mode="insufficient_evidence",
         answer=(
@@ -3597,11 +3614,8 @@ def test_tls_claim_contradiction_is_labeled_without_rewriting_agent_text() -> No
     assert validated["content"] == (
         "The gateway pod is not terminating TLS and is likely serving only plain HTTP."
     )
-    assert validated["citations"] == [
-        "network-probe-1", "network-probe-insecure-1", "cluster-route-1",
-        "cluster-sidecar-1",
-    ]
-    assert "original response is preserved" in validated["limitations"][0]
+    assert validated["citations"] == ["cluster-sidecar-1"]
+    assert validated["limitations"] == []
 
 
 def test_operator_evidence_view_surfaces_probe_diagnostics_and_redacted_payload() -> None:
@@ -6649,7 +6663,7 @@ def test_named_configmap_guidance_stops_after_exact_get() -> None:
     )]
 
 
-def test_incomplete_inventory_cannot_support_named_object_absence_claim() -> None:
+def test_incomplete_inventory_does_not_change_agent_conclusion() -> None:
     evidence_id = "cluster-configmaps"
     validated = _validated_adhoc_answer(
         AdHocAnswer(
@@ -6672,9 +6686,9 @@ def test_incomplete_inventory_cannot_support_named_object_absence_claim() -> Non
     )
 
     assert validated["answer_mode"] == "evidence_based"
-    assert validated["conclusion_status"] == "unresolved"
+    assert validated["conclusion_status"] == "confirmed"
     assert validated["content"].endswith("so it is not present.")
-    assert "incomplete or truncated inventory" in " ".join(validated["limitations"])
+    assert validated["limitations"] == []
 
 
 def test_configuration_guidance_follows_exact_nested_configmap_reference() -> None:
@@ -9550,7 +9564,10 @@ def test_unrestricted_agent_rejects_tool_arguments_returned_as_final_content(
         created = client.post(
             "/api/v1/adhoc-conversations",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Is the Loki stack healthy?"},
+            data={
+                "message": "Is the Loki stack healthy?",
+                "include_raw_response": "on",
+            },
             follow_redirects=False,
         )
         client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
@@ -9574,6 +9591,10 @@ def test_unrestricted_agent_rejects_tool_arguments_returned_as_final_content(
         )
         assert assistant.content == expected_content
         assert raw_arguments not in assistant.content
+        raw_responses = json.loads(assistant.raw_responses_json)
+        assert raw_responses
+        assert all(item["stage"] == "rejected final answer" for item in raw_responses)
+        assert raw_arguments in raw_responses[0]["content"]
         activity = json.loads(assistant.tool_activity_json)
         assert bool(activity["limitations"]) is (not second_finalization_is_valid)
     engine.dispose()
@@ -10976,27 +10997,6 @@ def test_safe_exception_diagnostics_redacts_chain_and_includes_frames() -> None:
     ]
     assert diagnostics[1]["detail"] == "request failed token=[REDACTED]"
     assert diagnostics[1]["frames"]
-
-
-def test_agent_completion_gate_rejects_deferred_safe_reads() -> None:
-    assert _agent_premature_deferral_issue(
-        "I found one healthy pod. Let me know which component logs you'd like me to inspect.",
-        stop_reason="complete",
-        unresolved_safe_reads=[],
-        action_budget_remaining=8,
-    ) == "premature_operator_deferral"
-    assert _agent_premature_deferral_issue(
-        "The current evidence identifies the missing Service.",
-        stop_reason="complete",
-        unresolved_safe_reads=["Inspect the LokiStack custom resource status."],
-        action_budget_remaining=8,
-    ) == "declared_unresolved_safe_reads"
-    assert _agent_premature_deferral_issue(
-        "Further API discovery is unavailable to this identity.",
-        stop_reason="blocked",
-        unresolved_safe_reads=["Read the denied resource."],
-        action_budget_remaining=8,
-    ) is None
 
 
 def test_agent_duplicate_command_requires_a_retry_reason() -> None:

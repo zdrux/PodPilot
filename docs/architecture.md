@@ -132,6 +132,9 @@ detail for up to the full 50-operation window. If the 80 KiB ledger ceiling requ
 successful read-only shell excerpts are discarded before typed observations, mutations, or failed
 operations. Exact command execution remains available in the activity and audit records, while raw
 logs and object YAML do not accumulate as hidden provider conversation state.
+The latest conversation messages are sent verbatim after redaction. Once older messages roll out of
+that window, their existing bounded transcript digest is also supplied to the agent as continuity
+data rather than silently omitted.
 Every Chat Completions call estimates the complete messages-plus-tools token count using lexical BPE-
 style fragments, JSON punctuation, and a protocol safety margin. This avoids treating each UTF-8 byte
 as a token while remaining tokenizer-independent for OpenAI-compatible gateways that front different
@@ -163,7 +166,14 @@ If a Chat Completions turn returns neither content nor a tool call, or serialize
 the final answer, the API issues up to two bounded finalization attempts using the command results
 already in context. Successful commands are not automatically repeated. If both attempts remain
 empty or tool-shaped, PodPilot renders deterministic collected evidence (or a safe unresolved
-message when only shell reads exist) instead of exposing the malformed model output.
+message when only shell reads exist) instead of exposing the malformed model output. When the
+operator enabled raw-response capture for that turn, rejected non-empty final answers remain
+available in the untrusted raw-response panel.
+Otherwise, the agent's redacted prose and its chosen completion point are preserved. PodPilot does
+not reject a conclusion for offering optional follow-up work, rewrite it based on semantic claims
+about prior writes, remove recommendation sections, or replace a valid structured-workflow answer
+with a server-authored audit, access-review, or configuration-comparison conclusion. Evidence status,
+audited operations, limitations, and native evidence views remain separate metadata and presentation.
 No retrieval enrichment is authoritative over the agent and no collector suppresses a model-proposed
 read. Collection completeness is evidence about the bounded read, not answer completeness. Native
 resource cards remain additive while the agent can explain selectors, rules, effects, and other

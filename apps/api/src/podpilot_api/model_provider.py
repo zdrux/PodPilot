@@ -278,7 +278,7 @@ class ModelInterpretation(BaseModel):
 
 class InvestigationChatAnswer(BaseModel):
     answer_mode: Literal["evidence_based", "general_guidance", "insufficient_evidence"]
-    answer: str = Field(min_length=1, max_length=2400)
+    answer: str = Field(min_length=1)
     cited_evidence_ids: list[str] = Field(default_factory=list, max_length=12)
     proposed_tool_intent: Literal["run_queued_checks"] | None = None
     intent_reason: str | None = Field(default=None, max_length=500)
@@ -287,7 +287,7 @@ class InvestigationChatAnswer(BaseModel):
 class AdHocAnswer(BaseModel):
     answer_mode: Literal["evidence_based", "general_guidance", "insufficient_evidence"]
     conclusion_status: Literal["confirmed", "probable", "unresolved"] | None = None
-    answer: str = Field(min_length=1, max_length=4000)
+    answer: str = Field(min_length=1)
     cited_evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=6)
     recommended_next_checks: list[str] = Field(default_factory=list, max_length=5)
