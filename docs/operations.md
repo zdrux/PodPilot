@@ -1579,14 +1579,16 @@ count without question or evidence content. Inspect phase transitions without pa
 `podpilot.adhoc.*` application logs. The active assistant placeholder groups human-readable
 updates into phase sections in stable chronological order, including the planner's bounded working
 hypothesis, its proposed next check, and summaries of evidence actually found. New phase sections
-append without reordering existing sections; each section displays its latest three updates. These
+append without reordering existing sections; each section displays a bounded set of recent updates. These
 transient updates disappear when the
 final answer replaces the spinner. They are structured plan/action summaries, not hidden model
 reasoning. Agent shell activity is described deterministically from the validated command: common
 reads and writes identify the operation, resource, safe object name, namespace, and cluster, while
 command bodies and inline configuration remain hidden. Long operations repeat the same description
-with elapsed time and then append a success, failure, or timeout update; the existing rolling
-three-item phase display and automatic scrolling remain unchanged. The final structured
+with elapsed time and then append a success, failure, or timeout update. The Agent command phase
+retains its latest five updates while other phases retain three, and automatic scrolling follows
+new activity. One-time queued and starting events stay out of the phase timeline; the live header
+continues to distinguish a queued run from an active investigation. The final structured
 answer appears after the job reaches `succeeded` or `failed`.
 The supported single-replica SQLite deployment has one bounded global Ask worker pool. A question
 submitted after the pool or the sender's concurrency allowance is full remains queued and starts

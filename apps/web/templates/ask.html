@@ -394,7 +394,7 @@
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
           {% set progress = namespace(phases=[], seen_messages=[]) %}
           {% for event in active_run.events %}
-            {% if event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
+            {% if event.phase not in ['queued', 'starting'] and event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
           {% endfor %}
           {% for phase in progress.phases %}
             {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
@@ -409,7 +409,8 @@
             <li class="progress-phase" data-progress-phase="{{ phase }}">
               <div class="progress-phase-heading"><span aria-hidden="true"></span><small>{{ phase | replace('_', ' ') }}</small></div>
               <ul class="progress-phase-updates" data-progress-items>
-                {% for event in unique_phase.events[-3:] %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
+                {% set visible_phase_events = unique_phase.events[-5:] if phase == 'agent_command' else unique_phase.events[-3:] %}
+                {% for event in visible_phase_events %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
               </ul>
             </li>
             {% endif %}

@@ -11735,16 +11735,6 @@ def create_app(
             credential_key = profile.credential_key if profile_snapshot else None
             db_session.commit()
 
-        if progress:
-            await progress(
-                "starting",
-                (
-                    "Starting the delegated agent investigation."
-                    if turn_agent_mode == "unrestricted"
-                    else "Starting the read-only investigation."
-                ),
-            )
-
         activity: list[dict[str, object]] = []
         agent_evidence_ledger: list[dict[str, object]] = []
         limitations: list[str] = []

@@ -941,14 +941,17 @@
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
-    const progressItemsPerPhase = 3;
+    const hiddenProgressPhases = new Set(["queued", "starting"]);
     const displayedProgressMessages = new Set(
       Array.from(log?.querySelectorAll("[data-progress-items] li") || [], (item) => item.textContent)
     );
     const appendPhaseUpdate = (event, seq) => {
-      if (!log || !event.message || displayedProgressMessages.has(event.message)) return;
-      displayedProgressMessages.add(event.message);
       const phaseName = event.phase || "investigating";
+      if (
+        !log || !event.message || hiddenProgressPhases.has(phaseName)
+        || displayedProgressMessages.has(event.message)
+      ) return;
+      displayedProgressMessages.add(event.message);
       const phaseGroups = Array.from(log.querySelectorAll("[data-progress-phase]"));
       let group = phaseGroups.find((item) => item.dataset.progressPhase === phaseName);
       if (!group) {
@@ -974,6 +977,7 @@
       if (Number.isFinite(seq)) item.dataset.seq = String(seq);
       item.textContent = event.message;
       items.append(item);
+      const progressItemsPerPhase = phaseName === "agent_command" ? 5 : 3;
       while (items.children.length > progressItemsPerPhase) items.firstElementChild?.remove();
     };
     const addProgress = (event) => {

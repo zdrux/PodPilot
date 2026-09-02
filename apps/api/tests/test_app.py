@@ -14516,10 +14516,16 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
     conversation_id = "00000000-0000-0000-0000-000000000188"
     repeated = "Planning safe read-only checks."
     events = [
-        {"seq": 0, "phase": "planning", "message": repeated},
-        {"seq": 1, "phase": "planning", "message": repeated},
-        {"seq": 2, "phase": "replanning", "message": repeated},
-        {"seq": 3, "phase": "next_check", "message": "Collect selected evidence."},
+        {"seq": 0, "phase": "queued", "message": "Question queued."},
+        {"seq": 1, "phase": "starting", "message": "Starting investigation."},
+        {"seq": 2, "phase": "planning", "message": repeated},
+        {"seq": 3, "phase": "planning", "message": repeated},
+        {"seq": 4, "phase": "replanning", "message": repeated},
+        {"seq": 5, "phase": "next_check", "message": "Collect selected evidence."},
+        *[
+            {"seq": 6 + index, "phase": "agent_command", "message": f"Command update {index}."}
+            for index in range(1, 7)
+        ],
     ]
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -14539,7 +14545,7 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             conversation_id=conversation_id,
             created_by="ivy",
             message_text="Investigate safely",
-            status="queued",
+            status="running",
             phase="next_check",
             progress_json=json.dumps(events),
         ))
@@ -14552,6 +14558,13 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
     assert page.status_code == 200
     assert page.text.count(repeated) == 1
     assert 'data-progress-phase="replanning"' not in page.text
+    assert 'data-progress-phase="queued"' not in page.text
+    assert 'data-progress-phase="starting"' not in page.text
+    assert "Question queued." not in page.text
+    assert "Starting investigation." not in page.text
+    assert "Command update 1." not in page.text
+    for index in range(2, 7):
+        assert f"Command update {index}." in page.text
 
 
 def test_owner_can_delete_queued_conversation_and_evidence_with_audit_record(
@@ -15256,9 +15269,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
     assert "data-progress-phase" in template
     assert "event.message not in progress.seen_messages" in template
-    assert "unique_phase.events[-3:]" in template
+    assert "unique_phase.events[-5:] if phase == 'agent_command'" in template
+    assert "event.phase not in ['queued', 'starting']" in template
     assert "active_run.events[-6:]" not in template
-    assert "progressItemsPerPhase = 3" in script
+    assert 'hiddenProgressPhases = new Set(["queued", "starting"])' in script
+    assert 'phaseName === "agent_command" ? 5 : 3' in script
     assert "items.children.length > progressItemsPerPhase" in script
     assert "displayedProgressMessages.has(event.message)" in script
     assert '.progress-phase-updates li::before' not in styles

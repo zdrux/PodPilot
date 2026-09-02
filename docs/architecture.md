@@ -764,12 +764,14 @@ and completion transactions from concurrent runs can coexist. A restart changes 
 `running` jobs back to `queued`, so the workers
 can recover them from the PVC. The browser receives an immediate redirect, renders
 the submitted question optimistically, and follows owner-authorized Server-Sent
-Events for durable `starting`, `discovering`, `planning`, `hypothesis`, `next_check`,
-`collecting`, `finding`, `answering`,
+Events for durable `discovering`, `planning`, `hypothesis`, `next_check`,
+`collecting`, `agent_thinking`, `agent_command`, `finding`, `answering`,
 and terminal updates. Reloading reconstructs the same state from SQLite, and an
 SSE heartbeat keeps the OpenShift Route connection active. These events describe
 short operator-visible hypotheses and server-observed workflow actions; PodPilot does not
-expose hidden model chain-of-thought. The rolling journal exists only while a run is active.
+expose hidden model chain-of-thought. Queued state remains visible in the live header, while
+one-time queued and starting events are omitted from the phase journal. Agent command retains five
+recent updates and other visible phases retain three. The rolling journal exists only while a run is active.
 The final schema-validated answer remains a complete response rather than token
 streaming.
 For an individual Ask question, the operator may opt in to retaining the raw final-answer
