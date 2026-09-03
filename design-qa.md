@@ -39,7 +39,7 @@ No actionable P0, P1, or P2 issues remain.
 
 ## Deployed SNO validation
 
-- Build: `podpilot-74`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab.
+- Build: `podpilot-75`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab.
 - Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, activate an operation row, collapse and restore the evidence rail, and switch among all three themes.
 - Result: the live run retained 16 timed operations and 7 evidence sources. Timeline event rows, operation dialogs, the evidence toggle, and persisted theme selection worked without browser-console errors.
 - The 856-pixel in-app browser exposed clipped composer controls. The 960-pixel compact breakpoint now stacks the composer toolbar and lets long investigation titles wrap while preserving the desktop evidence rail above that breakpoint.

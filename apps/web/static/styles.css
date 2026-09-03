@@ -1058,6 +1058,8 @@ html[data-theme="light"] .ask-page {
 .ask-page .ask-session-title { width: 100%; min-width: 0; flex: 1 1 auto; overflow: hidden; padding-right: 410px; }
 .ask-page .ask-session-heading-row { min-width: 0; overflow: hidden; }
 .ask-page .ask-session-header .panel-header-actions { position: absolute; top: 50%; right: 22px; width: 396px; min-width: 396px; max-width: 396px; display: flex; transform: translateY(-50%); }
+.ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { padding-right: 736px; }
+.ask-layout:not(.activity-sidebar-collapsed) .ask-session-header .panel-header-actions { right: 348px; }
 .ask-session-title .eyebrow { display: flex; gap: 7px; margin: 0 0 8px; color: #7f8d9c; font-size: 10px; font-weight: 550; letter-spacing: 0; text-transform: none; }
 .ask-session-heading-row h2 { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; color: #f5f7f8; font-size: 21px; font-weight: 650; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
 .ask-page .button, .ask-page select, .ask-page input, .ask-page textarea, .operation-dialog button { border-radius: 7px; }
@@ -1251,6 +1253,8 @@ html[data-theme="light"] .operation-filter-notice ul { color: #765d48; }
 
 @media (max-width: 1180px) {
   .ask-layout { grid-template-columns: minmax(0, 1fr) 286px; }
+  .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { padding-right: 696px; }
+  .ask-layout:not(.activity-sidebar-collapsed) .ask-session-header .panel-header-actions { right: 308px; }
   .ask-thread .chat-message { grid-template-columns: 112px minmax(0, 1fr); column-gap: 18px; }
 }
 
@@ -1260,7 +1264,7 @@ html[data-theme="light"] .operation-filter-notice ul { color: #765d48; }
   .ask-page .ask-panel { height: min(100dvh, 900px); border-right: 0; }
   .ask-page .ask-session-header { align-items: stretch; flex-direction: column; gap: 12px; }
   .ask-page .ask-session-header { display: flex; }
-  .ask-page .ask-session-title { width: auto; padding-right: 0; }
+  .ask-page .ask-session-title, .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { width: auto; padding-right: 0; }
   .ask-page .ask-session-header .panel-header-actions { position: static; width: 100%; min-width: 0; justify-content: flex-start; flex-wrap: wrap; transform: none; }
   .ask-session-heading-row h2 { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   .ask-composer .composer-toolbar { align-items: stretch !important; flex-direction: column; gap: 9px !important; }
