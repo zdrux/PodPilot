@@ -631,12 +631,15 @@ records remain, but execution now awaits a separate approval-gated action servic
   compact planner schema and must pass live API resolution, namespace, sensitivity, verb, and RBAC
   validation; discovery is preferred when an exact name is not known. Model activation probes verify a
   synthetic discovery-to-exact-log-candidate sequence.
-- Ask PodPilot opens the bounded conversation viewport at the newest response. The conversation uses
-  a compact Mission Control layout with an activity sidebar that operators can hide or restore from the
+- Ask PodPilot opens the bounded conversation viewport at the newest response. The conversation now uses
+  the same navigation width, page-title typography, spacing rhythm, elevated surfaces, and semantic form
+  treatment as the cluster sign-in workflow. User prompts and assistant replies are contained in readable
+  conversation surfaces instead of the previous full-width flat transcript, while the activity sidebar
+  remains available for operators to hide or restore from the
   conversation header; that browser preference persists across conversations and reloads. The original
   blue-black PodPilot palette is the default, with persistent Dark and Light alternatives available
   from the shared sidebar on every page. Shared canvas, panel, navigation, input, menu, button, notice,
-  code, dialog, and evidence colors resolve through the same semantic theme tokens.
+  code, dialog, evidence, resource-result, and answer-table colors resolve through the same semantic theme tokens.
   The activity rail is timeline-only, and each full operation row opens its retained details. Completed agent operations retain
   start/stop timestamps, duration, cluster, status, bounded request/result detail, and a visible filtering
   indicator whenever credential redaction or output reduction occurred.

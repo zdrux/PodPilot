@@ -13222,6 +13222,13 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
     assert 'html[data-theme="dark"] .ask-page' in styles
+    assert "--conversation-content-width: 1120px" in styles
+    assert ".ask-page .shell { grid-template-columns: 248px" in styles
+    assert "html[data-theme] .ask-panel { background: var(--theme-canvas); }" in styles
+    assert "html[data-theme] .resource-result-group" in styles
+    assert "html[data-theme] .resource-result-table th" in styles
+    assert "width: min(100%, var(--conversation-content-width))" in styles
+    assert ".ask-composer .composer-input-wrap:focus-within" in styles
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template

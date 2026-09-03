@@ -39,11 +39,13 @@ No actionable P0, P1, or P2 issues remain.
 
 ## Deployed SNO validation
 
-- Build: `podpilot-81`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab.
+- Build: `podpilot-83`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab at image digest `sha256:a93b1caebbbd9c98822aa7d9e7025a4124a2b680012d40279f5f90963d55a055`.
 - Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, activate an operation row, collapse and restore the evidence rail, and switch among all three themes.
 - Result: the live run retained 16 timed operations and 7 evidence sources. Timeline event rows, operation dialogs, the evidence toggle, and persisted theme selection worked without browser-console errors.
 - The open evidence rail originally allowed the conversation header to retain its collapsed width, placing its controls beneath the rail. The header now reserves the rail and action widths, keeps the title ellipsized, and leaves New conversation plus Hide evidence visible; the collapsed state restores the full transcript width.
 - Global theme coverage was visually checked on the conversation workspace, delegated cluster sign-in, shared cluster management, personal cluster form, model registry, cluster memory, a retained incident investigation, and the investigation-not-found error state. The `/` route redirects to the checked delegated sign-in page in the deployed ask-first mode. Classic, Dark, and Light all change the page canvas, navigation, panels, fields, menus, buttons, notices, code, evidence rail, and transient detail surfaces together.
 - The earlier accepted captures remain in `.audit/sno-evidence-ledger/`; the final live pass used the current in-app browser state against build `podpilot-81`.
+- A follow-up side-by-side review against the Light cluster sign-in page found that Ask still used a narrower navigation rail, compressed title bar, divider-only transcript, and older hard-coded result-table fills. Build `podpilot-83` aligns Ask with the shared 248px operator navigation, larger page-title typography, generous page rhythm, elevated message surfaces, and card-style composer. Resource and answer-table surfaces now resolve through theme tokens as well.
+- Browser validation on build `podpilot-83` covered the Light conversation with the evidence rail open, the Dark conversation with the rail collapsed, and computed Classic surfaces. The evidence toggle restored correctly; all three themes used the intended canvas/card/result hierarchy; there was no horizontal page overflow and no browser-console output.
 
 final result: passed
