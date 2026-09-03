@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="dark">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=evidence-ledger-ui-12-3">
-  <script src="{{ url_for('static', path='/app.js') }}?v=evidence-ledger-ui-12-3" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=evidence-ledger-ui-13">
+  <script src="{{ url_for('static', path='/app.js') }}?v=evidence-ledger-ui-13" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
