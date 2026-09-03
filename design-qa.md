@@ -37,4 +37,12 @@ No actionable P0, P1, or P2 issues remain.
 - [x] Targeted API and UI tests passed.
 - [x] JavaScript syntax and Python compilation checks passed.
 
+## Deployed SNO validation
+
+- Build: `podpilot-60`, deployed from merged `main` to the disposable SNO lab.
+- Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, open an operation, and switch to collected evidence details.
+- Result: the live run retained 16 timed operations and 7 evidence sources. Timeline/Details tabs and operation dialogs worked without browser-console errors.
+- The 856-pixel in-app browser exposed clipped composer controls. The 960-pixel compact breakpoint now stacks the composer toolbar and lets long investigation titles wrap while preserving the desktop evidence rail above that breakpoint.
+- Accepted captures: `.audit/sno-evidence-ledger/01-cluster-signin.jpg` through `.audit/sno-evidence-ledger/06-evidence-details.jpg`.
+
 final result: passed
