@@ -132,10 +132,7 @@ a deterministic rolling evidence ledger: a compact index of all completed operat
 detail for up to the full 50-operation window. If the 80 KiB ledger ceiling requires reduction,
 successful read-only shell excerpts are discarded before typed observations, mutations, or failed
 operations. Exact command execution remains available in the activity and audit records, while raw
-logs and object YAML do not accumulate as hidden provider conversation state. Each retained
-operation records its start, completion, and elapsed time. The operator view identifies any
-operation whose retained request or output was credential-redacted, truncated, reduced to an
-excerpt, stripped of Kubernetes `managedFields`, or replaced by oversized-JSON structural metadata.
+logs and object YAML do not accumulate as hidden provider conversation state.
 The latest conversation messages are sent verbatim after redaction. Once older messages roll out of
 that window, their existing bounded transcript digest is also supplied to the agent as continuity
 data rather than silently omitted.
@@ -802,12 +799,10 @@ normal code recovers only that allowlisted ID as a citation and removes the
 provider-facing marker from displayed prose. Ask PodPilot initializes its bounded chat viewport at the
 newest message after navigation while retaining normal manual scrolling afterward.
 Private Ask sessions are rendered as a nested list beneath the primary Ask
-PodPilot navigation item and expose owner-authorized deletion controls. Collected evidence and
-agent activity occupy a persistent investigation sidebar with separate timeline and evidence-detail
-views. Each completed operation can open a focused detail sheet; credential filtering and other
-retained-output reductions are disclosed on the affected timeline row. The header count and answer
-citations continue to open the modal provenance drawer focused on the matching evidence card. Reply
-citations are collapsed by default beneath a
+PodPilot navigation item and expose owner-authorized deletion controls. Collected
+evidence no longer consumes a permanent content column: a count in the chat header
+opens a modal provenance drawer, and answer citations open that drawer focused on
+the matching evidence card. Reply citations are collapsed by default beneath a
 compact disclosure and expand into a vertical provenance timeline with the evidence
 tool, summary, first material fact, and stable evidence ID. Drawer cards expose typed operator
 facts (including exact object coordinates, selected Route/Service/Pod fields,
