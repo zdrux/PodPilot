@@ -17,12 +17,6 @@
         {% if is_delegated_mode %}
         {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
         {% endif %}
-        <button class="button secondary compact-button activity-sidebar-toggle" type="button"
-          data-activity-sidebar-toggle aria-controls="investigation-activity-sidebar" aria-expanded="true"
-          title="Hide evidence panel">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
-          <span data-activity-sidebar-toggle-label>Hide evidence</span>
-        </button>
         <span class="boundary-pill caution-summary{% if delegated_action_session %} action-caution-pill{% endif %}" tabindex="0"
           data-tooltip="Session cautions:&#10;&#10;{% if delegated_action_session %}• Delegated Action mode — The agent may create, patch, apply, or delete objects directly. There is no PodPilot preview or approval step. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC and admission controls apply as you.&#10;&#10;{% else %}• Delegated read-only mode — PodPilot's broker blocks Kubernetes mutations, exec, attach, proxy, port-forward, and Secret reads. Allowed read requests use your connected identity and remain subject to OpenShift RBAC.&#10;&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if not delegated_action_session %} This conversation remains read-only.{% endif %}"
           aria-label="Session cautions. {% if delegated_action_session %}Delegated Action mode: the agent may change cluster objects directly using your OpenShift identity and RBAC; there is no PodPilot preview or approval step. {% else %}Delegated read-only mode: PodPilot's broker blocks Kubernetes mutations and other prohibited operations. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."
@@ -531,7 +525,7 @@
     </div>
   </section>
 
-  <aside class="activity-sidebar" id="investigation-activity-sidebar" aria-label="Investigation activity">
+  <aside class="activity-sidebar" aria-label="Investigation activity">
     {% set activity_summary = namespace(operation_count=0, diagnostic_count=0) %}
     {% for message in messages %}
       {% if message.activity and message.activity.evidence_ledger %}{% set activity_summary.operation_count = activity_summary.operation_count + (message.activity.evidence_ledger | length) %}{% endif %}

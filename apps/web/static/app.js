@@ -537,29 +537,6 @@
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
-  const activitySidebar = document.getElementById("investigation-activity-sidebar");
-  const activitySidebarToggle = document.querySelector("[data-activity-sidebar-toggle]");
-  const activitySidebarToggleLabel = activitySidebarToggle?.querySelector("[data-activity-sidebar-toggle-label]");
-  const activitySidebarPreferenceKey = "podpilot-evidence-panel-open";
-  const setActivitySidebarVisibility = (open, {persist = false} = {}) => {
-    if (!askLayout || !activitySidebar || !activitySidebarToggle) return;
-    activitySidebar.hidden = !open;
-    askLayout.classList.toggle("activity-sidebar-collapsed", !open);
-    activitySidebarToggle.setAttribute("aria-expanded", String(open));
-    activitySidebarToggle.title = open ? "Hide evidence panel" : "Show evidence panel";
-    if (activitySidebarToggleLabel) activitySidebarToggleLabel.textContent = open ? "Hide evidence" : "Show evidence";
-    if (persist) {
-      try { window.localStorage.setItem(activitySidebarPreferenceKey, String(open)); } catch (_error) { /* Preference storage is optional. */ }
-    }
-  };
-  if (activitySidebar && activitySidebarToggle) {
-    let activitySidebarOpen = true;
-    try { activitySidebarOpen = window.localStorage.getItem(activitySidebarPreferenceKey) !== "false"; } catch (_error) { /* Use the default. */ }
-    setActivitySidebarVisibility(activitySidebarOpen);
-    activitySidebarToggle.addEventListener("click", () => {
-      setActivitySidebarVisibility(activitySidebar.hidden, {persist: true});
-    });
-  }
   const cautionSummary = document.querySelector(".caution-summary");
   const actionModeNotice = document.querySelector("[data-action-mode-notice]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");

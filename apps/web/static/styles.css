@@ -1056,8 +1056,6 @@ body { background-image: none; }
 .ask-page .button.primary { border-color: #62d9e9; color: #061016; background: #62d9e9; }
 .ask-page .button.primary:hover:not(:disabled) { background: #83e4ef; }
 .ask-page .compact-button { min-height: 34px; }
-.ask-page .activity-sidebar-toggle { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.ask-page .activity-sidebar-toggle svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .ask-page .boundary-pill, .ask-page .evidence-toggle { min-height: 34px; border-radius: 7px; }
 .ask-page .evidence-toggle { border-color: #2c4c5c; background: #10232d; }
 .ask-page .evidence-toggle strong { width: 20px; min-width: 20px; height: 20px; }
@@ -1079,9 +1077,6 @@ body { background-image: none; }
 .cluster-picker > summary, .reasoning-effort-picker select { border-color: #334252; background: #101822; }
 
 .activity-sidebar { min-width: 0; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; color: #d5dce3; background: #0b1118; }
-.activity-sidebar[hidden] { display: none; }
-.ask-layout.activity-sidebar-collapsed { grid-template-columns: minmax(0, 1fr); }
-.ask-page .ask-layout.activity-sidebar-collapsed .ask-panel { border-right: 0; }
 .activity-sidebar-header { min-height: 92px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 18px 14px; border-bottom: 1px solid var(--border); }
 .activity-sidebar-header > div { min-width: 0; }
 .activity-kicker { display: block; margin-bottom: 5px; color: #758395; font-size: 9px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
