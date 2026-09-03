@@ -631,7 +631,10 @@ records remain, but execution now awaits a separate approval-gated action servic
   compact planner schema and must pass live API resolution, namespace, sensitivity, verb, and RBAC
   validation; discovery is preferred when an exact name is not known. Model activation probes verify a
   synthetic discovery-to-exact-log-candidate sequence.
-- Ask PodPilot opens the bounded conversation viewport at the newest response.
+- Ask PodPilot opens the bounded conversation viewport at the newest response. The conversation uses
+  a compact Mission Control layout with a persistent activity sidebar. Completed agent operations retain
+  start/stop timestamps, duration, cluster, status, bounded request/result detail, and a visible filtering
+  indicator whenever credential redaction or output reduction occurred.
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe
   link schemes are not activated.
