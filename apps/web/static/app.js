@@ -944,9 +944,7 @@
     const progressTitle = pendingRun.querySelector("[data-progress-title]");
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
-    const activityLive = document.querySelector("[data-activity-live]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
-    let activityLastSeq = Number.parseInt(activityLive?.dataset.lastSeq || "-1", 10);
     const hiddenProgressPhases = new Set(["queued", "starting"]);
     const displayedProgressMessages = new Set(
       Array.from(log?.querySelectorAll("[data-progress-items] li") || [], (item) => item.textContent)
@@ -999,27 +997,6 @@
           : "PodPilot is choosing and running useful checks.";
       }
       appendPhaseUpdate(event, seq);
-      if (
-        activityLive && event.message && !hiddenProgressPhases.has(event.phase)
-        && (!Number.isFinite(seq) || seq > activityLastSeq)
-      ) {
-        if (Number.isFinite(seq)) activityLastSeq = seq;
-        const item = document.createElement("li");
-        if (Number.isFinite(seq)) item.dataset.seq = String(seq);
-        const time = document.createElement("time");
-        const parsedAt = event.at ? new Date(event.at) : null;
-        time.textContent = parsedAt && !Number.isNaN(parsedAt.valueOf())
-          ? parsedAt.toLocaleTimeString("en-US", {
-            hour: "2-digit", minute: "2-digit", second: "2-digit",
-            hour12: false, timeZone: "America/Toronto",
-          })
-          : "now";
-        const message = document.createElement("span");
-        message.textContent = event.message;
-        item.append(time, message);
-        activityLive.append(item);
-        while (activityLive.children.length > 12) activityLive.firstElementChild?.remove();
-      }
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
     };
@@ -1218,34 +1195,6 @@
       event.preventDefault();
       focusEvidence(target);
       window.history.replaceState(null, "", link.hash);
-    });
-  });
-  document.querySelectorAll("[data-activity-tab]").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll("[data-activity-tab]").forEach((candidate) => {
-        candidate.setAttribute("aria-selected", candidate === tab ? "true" : "false");
-      });
-      document.querySelectorAll("[data-activity-panel]").forEach((panel) => {
-        panel.hidden = panel.dataset.activityPanel !== tab.dataset.activityTab;
-      });
-    });
-  });
-  document.querySelectorAll("[data-operation-open]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const dialog = document.getElementById(button.dataset.operationOpen);
-      if (dialog instanceof HTMLDialogElement && !dialog.open) dialog.showModal();
-    });
-  });
-  document.querySelectorAll("[data-operation-dialog]").forEach((dialog) => {
-    dialog.querySelector("[data-operation-close]")?.addEventListener("click", () => dialog.close());
-    dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) dialog.close();
-    });
-  });
-  document.querySelectorAll("[data-evidence-ref]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = document.getElementById(button.dataset.evidenceRef);
-      if (target) focusEvidence(target);
     });
   });
   if (window.location.hash.startsWith("#evidence-")) {

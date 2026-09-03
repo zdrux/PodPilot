@@ -2992,40 +2992,6 @@ def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> 
     assert len(str(_agent_evidence_ledger_message(ledger)["content"]).encode()) <= 80 * 1024
 
 
-def test_agent_ledger_records_timing_and_filtered_content_notice() -> None:
-    started_at = datetime(2026, 9, 3, 15, 0, tzinfo=timezone.utc)
-    completed_at = datetime(2026, 9, 3, 15, 0, 2, 250000, tzinfo=timezone.utc)
-
-    entry = _agent_tool_ledger_entry(
-        sequence=1,
-        tool_name="execute_shell",
-        tool_call_id="call-filtered",
-        cluster_id="cluster-1",
-        cluster_name="EC2",
-        status="completed",
-        request="oc get deployment web -o yaml --token=secret-value",
-        result={
-            "exit_code": 0,
-            "stdout": "authorization: Bearer secret-value\nkind: Deployment",
-            "stderr": "",
-            "operation_kind": "read",
-            "managed_fields_removed": True,
-        },
-        started_at=started_at,
-        completed_at=completed_at,
-    )
-
-    assert entry["started_at"] == "2026-09-03T15:00:00+00:00"
-    assert entry["completed_at"] == "2026-09-03T15:00:02.250000+00:00"
-    assert entry["duration_ms"] == 2250
-    assert entry["content_filtered"] is True
-    assert set(entry["filtered_fields"]) == {"command", "stdout"}
-    assert "Credential-like values were redacted." in entry["filter_reasons"]
-    assert "Kubernetes managedFields were omitted." in entry["filter_reasons"]
-    assert "secret-value" not in json.dumps(entry)
-    assert "[REDACTED]" in entry["command"]
-
-
 def test_agent_ledger_preserves_writes_and_failures_before_successful_read_detail() -> None:
     entries = [
         _agent_tool_ledger_entry(
@@ -13189,9 +13155,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "PodPilot is choosing and running useful checks." in script
     assert "active_run.events[-1].message if active_run.events" not in template
     assert 'current.textContent = event.message || "Investigation in progress."' not in script
-    assert "data-activity-live" in template
-    assert "event.message not in live_progress.seen_messages" in template
-    assert "unique_live_phase.events[-5:] if phase == 'agent_command'" in template
+    assert "data-progress-phase" in template
+    assert "event.message not in progress.seen_messages" in template
+    assert "unique_phase.events[-5:] if phase == 'agent_command'" in template
     assert "event.phase not in ['queued', 'starting']" in template
     assert "active_run.events[-6:]" not in template
     assert 'hiddenProgressPhases = new Set(["queued", "starting"])' in script
@@ -13200,11 +13166,6 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "displayedProgressMessages.has(event.message)" in script
     assert '.progress-phase-updates li::before' not in styles
     assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
-    assert 'data-activity-tab="timeline"' in template
-    assert 'data-activity-tab="details"' in template
-    assert "data-operation-open" in template
-    assert "filtered-output-indicator" in template
-    assert 'document.querySelectorAll("[data-operation-open]")' in script
     assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
     assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
     assert "target.scrollIntoView" in script
@@ -15184,29 +15145,11 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
             id="00000000-0000-0000-0000-000000000191",
             conversation_id=conversation_id, role="assistant", actor=None,
             content="A bounded answer.", answer_mode="general_guidance",
-            tool_activity_json=json.dumps({
-                "reads": [
-                    {"tool": "execute_shell", "status": "completed"},
-                    {"tool": "execute_shell", "status": "failed"},
-                    {"tool": "query_metrics", "status": "denied_or_unavailable"},
-                ],
-                "evidence_ledger": [{
-                    "sequence": 1,
-                    "tool": "execute_shell",
-                    "tool_call_id": "call-1",
-                    "cluster_id": SYSTEM_CLUSTER_ID,
-                    "cluster_name": "Runtime cluster",
-                    "status": "completed",
-                    "command": "oc get deployment web -o yaml --token=[REDACTED]",
-                    "stdout_excerpt": "kind: Deployment",
-                    "started_at": "2026-09-02T20:00:02+00:00",
-                    "completed_at": "2026-09-02T20:00:04.250000+00:00",
-                    "duration_ms": 2250,
-                    "content_filtered": True,
-                    "filtered_fields": ["command"],
-                    "filter_reasons": ["Credential-like values were redacted."],
-                }],
-            }),
+            tool_activity_json=json.dumps({"reads": [
+                {"tool": "execute_shell", "status": "completed"},
+                {"tool": "execute_shell", "status": "failed"},
+                {"tool": "query_metrics", "status": "denied_or_unavailable"},
+            ]}),
             model_diagnostics_json=json.dumps({
                 "call_count": 3,
                 "usage_reported_calls": 2,
@@ -15279,14 +15222,6 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "Provider HTTP error · 400" in rendered.text
     assert "provider-request-400" in rendered.text
     assert "context_length_exceeded" in rendered.text
-    assert "Investigation activity" in rendered.text
-    assert "1 operation" in rendered.text
-    assert "20:00:02 EST (-4)" not in rendered.text
-    assert "16:00:02 EST (-4)" in rendered.text
-    assert "2.2s" in rendered.text
-    assert 'class="filtered-output-indicator"' in rendered.text
-    assert "Credential-like values were redacted." in rendered.text
-    assert 'data-operation-open="operation-00000000-0000-0000-0000-000000000191-1"' in rendered.text
 
 
 def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:

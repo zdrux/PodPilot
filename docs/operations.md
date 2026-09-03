@@ -756,12 +756,9 @@ write results, or failures, preserving the findings most likely to matter later 
 One app-wide 50-unit default action budget is configured with
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
 and Action conversations and may be set from 1 to 100.
-The retained excerpts and operation metadata are operator-inspectable in the Ask activity sidebar.
-Each operation row shows start and completion timing, duration, cluster, status, and a detail action.
-Rows whose retained request or response was credential-redacted, truncated, excerpted, stripped of
-Kubernetes `managedFields`, or replaced with oversized-JSON structural metadata carry a visible shield
-indicator and describe the applied filtering in the detail sheet. Each shell detail states whether the
-runner executed it and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
+The retained excerpts and operation metadata are operator-inspectable beneath the answer in the
+expandable **Agent evidence ledger** section. Each shell row states whether the runner executed it
+and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
 are recorded and executed like any other agent-selected operation; there is no separate duplicate-command
 or retry-reason contract.
 The agent has only a lightweight presentation preference: lists of comparable items should use a
