@@ -1362,6 +1362,35 @@ def _agent_final_answer_quality_issue(content: str) -> str | None:
     return None
 
 
+_ACTION_MODE_BLOCKED_WRITE_CLAIM = re.compile(
+    r"(?is)(?:"
+    r"write(?:-type)?\s+(?:commands?|operations?)\s+(?:are\s+)?blocked|"
+    r"(?:cannot|can't|unable\s+to)\s+(?:run|execute|perform|make)\s+(?:the\s+)?(?:write|change)|"
+    r"(?:grant|enable)\s+write\s+permission|"
+    r"explicitly\s+approve\s+(?:the\s+)?(?:write|change)|"
+    r"(?:session|mode)\s+is\s+read[- ]only"
+    r")"
+)
+
+
+def _action_mode_answer_quality_issue(
+    content: str, activity: list[dict[str, object]],
+) -> str | None:
+    """Reject invented write restrictions that contradict an Action conversation."""
+
+    if not _ACTION_MODE_BLOCKED_WRITE_CLAIM.search(content):
+        return None
+    writes = [
+        item for item in activity
+        if item.get("operation_kind") == "write"
+    ]
+    if any(item.get("failure_category") == "forbidden" for item in writes):
+        return None
+    if any(item.get("status") == "completed" for item in writes):
+        return "action_mode_write_capability_contradiction"
+    return "action_mode_write_capability_not_tested"
+
+
 _AGENT_WRITE_COMMAND = re.compile(
     r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:oc|kubectl)\s+"
     r"(?:(?:(?:--context|--namespace|--kubeconfig|--server|--as|-n)(?:=\S+|\s+\S+))\s+)*"
@@ -8196,10 +8225,85 @@ def _bounded_utf8_text(value: object, limit: int, *, label: str) -> str:
     return prefix.decode("utf-8", errors="ignore").rstrip() + marker
 
 
+def _json_field_paths(value: object, *, limit: int = 80) -> list[str]:
+    """Describe available JSON fields without selecting values on the agent's behalf."""
+
+    paths: list[str] = []
+
+    def visit(item: object, prefix: str, depth: int) -> None:
+        if len(paths) >= limit or depth > 5:
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if path not in paths:
+                    paths.append(path)
+                visit(child, path, depth + 1)
+                if len(paths) >= limit:
+                    return
+        elif isinstance(item, list) and item:
+            path = f"{prefix}[]"
+            if path not in paths:
+                paths.append(path)
+            visit(item[0], path, depth + 1)
+
+    visit(value, "", 0)
+    return paths
+
+
+def _prepare_agent_provider_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Replace oversized JSON with an explicit request for an agent-chosen projection."""
+
+    safe_payload = dict(payload)
+    rendered = redact_text(json.dumps(safe_payload, sort_keys=True, default=str))
+    original_bytes = len(rendered.encode("utf-8", errors="replace"))
+    if original_bytes <= AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES:
+        return safe_payload
+    stdout = str(safe_payload.get("stdout") or "")
+    try:
+        document = json.loads(stdout)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return safe_payload
+
+    root_summary: dict[str, object] = {
+        "json_root_type": "object" if isinstance(document, dict) else "array",
+        "available_field_paths": _json_field_paths(document),
+    }
+    if isinstance(document, dict):
+        if document.get("kind"):
+            root_summary["kind"] = str(document["kind"])[:160]
+        items = document.get("items")
+        if isinstance(items, list):
+            metadata = document.get("metadata")
+            continuation = (
+                str(metadata.get("continue") or "")
+                if isinstance(metadata, dict) else ""
+            )
+            root_summary.update({
+                "item_count": len(items),
+                "kubernetes_page_complete": not continuation,
+                "kubernetes_continue_present": bool(continuation),
+            })
+    elif isinstance(document, list):
+        root_summary["item_count"] = len(document)
+
+    safe_payload["stdout"] = ""
+    safe_payload["provider_result_requires_refinement"] = True
+    safe_payload["provider_payload_original_bytes"] = original_bytes
+    safe_payload["provider_result_summary"] = root_summary
+    safe_payload["retry_guidance"] = (
+        "The command succeeded, but its complete JSON output is too large for one model tool result. "
+        "No partial JSON was supplied. Choose the fields needed for the operator's request and rerun "
+        "a narrower command using custom-columns, JSONPath, jq, a name, a selector, or pagination. "
+        "Do not answer the inventory from this metadata summary alone."
+    )
+    return safe_payload
+
+
 def _bounded_agent_provider_result(payload: dict[str, object]) -> str:
     """Bound a shell result before it becomes provider conversation state."""
 
-    safe_payload = dict(payload)
+    safe_payload = _prepare_agent_provider_payload(payload)
     rendered = redact_text(json.dumps(safe_payload, sort_keys=True, default=str))
     if len(rendered.encode("utf-8", errors="replace")) <= AGENT_PROVIDER_TOOL_RESULT_MAX_BYTES:
         return rendered
@@ -8256,14 +8360,24 @@ def _agent_tool_ledger_entry(
         "status": status[:80],
     }
     if tool_name == "execute_shell":
+        retained_result = _prepare_agent_provider_payload(result)
+        requires_refinement = bool(
+            retained_result.get("provider_result_requires_refinement")
+        )
         entry.update({
-            "operation_kind": str(result.get("operation_kind") or "read")[:32],
-            "executed": result.get("exit_code") is not None,
-            "exit_code": result.get("exit_code"),
+            "operation_kind": str(retained_result.get("operation_kind") or "read")[:32],
+            "executed": retained_result.get("exit_code") is not None,
+            "exit_code": retained_result.get("exit_code"),
             "command": _agent_ledger_excerpt(request, 500),
-            "stdout_excerpt": _agent_ledger_excerpt(result.get("stdout"), 1_200),
-            "stderr_excerpt": _agent_ledger_excerpt(result.get("stderr"), 600),
+            "stdout_excerpt": _agent_ledger_excerpt(
+                retained_result.get("stdout"), 1_200,
+            ),
+            "stderr_excerpt": _agent_ledger_excerpt(retained_result.get("stderr"), 600),
         })
+        if requires_refinement:
+            entry["provider_result_requires_refinement"] = True
+            entry["provider_result_summary"] = retained_result.get("provider_result_summary")
+            entry["retry_guidance"] = retained_result.get("retry_guidance")
     else:
         entry["request"] = _compact_provider_value(
             request, string_limit=300, list_limit=12,
@@ -10549,13 +10663,20 @@ def create_app(
                     "attach, proxy, port-forward, and Secret reads. Treat a broker rejection as an "
                     "enforced limitation and continue with other useful read-only checks. "
                     if read_only else
-                    "You are PodPilot running in explicitly accepted delegated read-write mode. "
+                    "You are PodPilot running in explicitly accepted delegated Action mode. "
+                    "Cluster writes and privileged operations are enabled and must be attempted when they "
+                    "are necessary to fulfill the operator's request, subject only to the signed-in user's "
+                    "OpenShift RBAC and admission controls. The operator already selected Action mode; execute "
+                    "requested remediation without asking for another approval or permission grant. Never claim "
+                    "that this session blocks writes unless an actual tool call returns a forbidden or rejected "
+                    "result, and then report that exact result. "
                     "A patch, apply, create, delete, edit, scale, rollout, exec, or similar operation "
                     "is a cluster write or privileged operation even when it is narrowly scoped or successful. "
                 )
                 +
-                "Investigator and Action conversations use the same investigation tools; the broker alone decides "
-                "whether writes can run. Use the supplied tools autonomously until the request is resolved. "
+                "Investigator and Action conversations use the same investigation tools, while the persisted "
+                "conversation mode determines the broker capability. Use the supplied tools autonomously until "
+                "the request is resolved. "
                 "The runner uses the OpenShift oc CLI through an API broker; the signed-in operator token "
                 "is never available to your shell. Do not ask for approval before a command. RBAC and "
                 "admission responses are authoritative: report a forbidden operation rather than claiming "
@@ -10580,6 +10701,12 @@ def create_app(
                 "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. Never dump Secrets or credentials. "
+                "Prefer custom-columns, JSONPath, or a compact jq projection over broad raw JSON. If a successful "
+                "JSON result is too large for one model tool result, PodPilot supplies no partial JSON; it returns "
+                "provider_result_requires_refinement with the item count and available field paths. Treat that as "
+                "a requirement to choose the relevant fields and rerun a narrower command. Do not answer an "
+                "inventory from the metadata summary alone, and do not claim completeness until the refined "
+                "command succeeds without Kubernetes pagination or runner truncation. "
                 "When using jq, write an inline filter with shell-safe quoting; PodPilot validates it "
                 "without cluster input before the command runs. In an object constructor, parenthesize "
                 "fallback expressions, for example `{value: (.path // \"unknown\")}`. "
@@ -10693,6 +10820,7 @@ def create_app(
         agent_actions_used = 0
         completion_contract_rejections = 0
         finalization_attempts = 0
+        action_answer_rejections = 0
         deadline_finalization_requested = False
         while True:
             effective_finalization_reserve = min(
@@ -10872,6 +11000,46 @@ def create_app(
                     if not agent_content else
                     _agent_final_answer_quality_issue(agent_content)
                 )
+                if answer_issue is None and not read_only:
+                    answer_issue = _action_mode_answer_quality_issue(
+                        agent_content, activity,
+                    )
+                if (
+                    answer_issue is not None
+                    and answer_issue.startswith("action_mode_write_capability_")
+                    and action_answer_rejections < 2
+                    and not deadline_finalization_requested
+                ):
+                    action_answer_rejections += 1
+                    successful_writes = sum(
+                        1 for item in activity
+                        if item.get("operation_kind") == "write"
+                        and item.get("status") == "completed"
+                    )
+                    messages.append({
+                        "role": "system",
+                        "content": (
+                            "Your proposed answer incorrectly says that this Action conversation "
+                            "blocks write operations or needs another approval. Action mode is already "
+                            "accepted and forwards commands under the signed-in user's RBAC and admission "
+                            f"controls. The operation ledger records {successful_writes} successful write "
+                            "operation(s). Continue with any remaining requested remediation using the "
+                            "available tools. Claim a write is blocked only after that exact operation "
+                            "returns a forbidden or rejected result."
+                        ),
+                    })
+                    LOGGER.warning(
+                        "podpilot.agentic.action_answer_rejected actor=%s conversation_id=%s "
+                        "attempt=%s issue=%s successful_writes=%s",
+                        username, conversation_id, action_answer_rejections,
+                        answer_issue, successful_writes,
+                    )
+                    if progress:
+                        await progress(
+                            "agent_thinking",
+                            "The agent misstated Action-mode permissions; continuing the requested work.",
+                        )
+                    continue
                 forced_fallback: dict[str, object] | None = None
                 if answer_issue is not None:
                     if include_raw_response and agent_content:
@@ -10903,6 +11071,11 @@ def create_app(
                                 "requesting a bounded finalization retry.",
                             )
                         correction_message = (
+                            "This is an accepted Action conversation. Do not claim writes are blocked or "
+                            "require another approval unless the exact attempted operation returned forbidden. "
+                            "Use the retained operation results and return an accurate concise final answer."
+                            if answer_issue is not None
+                            and answer_issue.startswith("action_mode_write_capability_") else
                             "Your previous turn did not contain a usable operator-facing answer. It was "
                             "empty or serialized tool-call arguments as JSON. Use the command and collector "
                             "results already present in this conversation and return a concise final answer "

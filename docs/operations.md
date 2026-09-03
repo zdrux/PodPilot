@@ -732,9 +732,19 @@ signed-in user's OpenShift RBAC and admission controls; there is no PodPilot pre
 step. The Ask session-cautions disclosure reflects this persisted conversation mode rather than
 the internal agent-loop mode. PodPilot classifies each completed `oc`/`kubectl` command as a read or
 write operation in the tool result and command audit. The Action-mode prompt must call successful
-patches and other mutations writes, even when they are safe or narrowly scoped; final-answer
-validation rejects claims that all commands were read-only when a successful write was recorded.
+patches and other mutations writes, even when they are safe or narrowly scoped. It explicitly states
+that Action mode is already approved and that requested writes must be attempted under the user's
+RBAC and admission controls. Final-answer validation rejects invented claims that writes are blocked
+or need another approval unless an actual write returned `forbidden`; the agent is returned to its
+tools so it can continue unfinished remediation.
 Within one agent turn, each raw tool result is returned to the model once so it can be interpreted.
+Oversized valid JSON is never sent to the model as a byte-truncated document. PodPilot leaves the
+captured runner result unchanged and replaces only the provider-facing copy with an explicit
+refinement request containing its byte size, root type, item count, Kubernetes continuation state,
+and available field paths. The agent must choose the fields relevant to the question and rerun a
+narrower custom-columns, JSONPath, `jq`, named-object, selector, or paginated command. PodPilot does
+not choose or discard domain fields on the agent's behalf, and the agent may not answer an inventory
+from the metadata-only refinement response.
 Subsequent model calls receive a bounded rolling evidence ledger instead of replaying completed raw
 logs, object YAML, stdout/stderr, and tool-call arguments. Later user turns continue to use the
 bounded visible chat history and persisted typed evidence, not an earlier turn's raw tool transcript.
@@ -744,7 +754,7 @@ write results, or failures, preserving the findings most likely to matter later 
 One app-wide 50-unit default action budget is configured with
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
 and Action conversations and may be set from 1 to 100.
-The same retained excerpts and operation metadata are operator-inspectable beneath the answer in the
+The retained excerpts and operation metadata are operator-inspectable beneath the answer in the
 expandable **Agent evidence ledger** section. Each shell row states whether the runner executed it
 and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
 are recorded and executed like any other agent-selected operation; there is no separate duplicate-command

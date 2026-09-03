@@ -389,7 +389,7 @@
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>
-          <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+          <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{% if active_run.status == 'queued' %}Your request is waiting for an available worker.{% else %}PodPilot is choosing and running useful checks.{% endif %}</p></div>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
           {% set progress = namespace(phases=[], seen_messages=[]) %}

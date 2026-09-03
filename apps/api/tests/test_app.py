@@ -25,6 +25,7 @@ from podpilot_api.main import (
     _adhoc_evidence_view,
     _agent_collector_error_detail,
     _agent_collector_failure_category,
+    _action_mode_answer_quality_issue,
     _command_failure_category,
     _agent_tool_retry_guidance,
     _agent_final_answer_quality_issue,
@@ -986,7 +987,10 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "delegated read-only investigation mode" in system_prompt
         assert "broker will reject Kubernetes writes" in system_prompt
     else:
-        assert "delegated read-write mode" in system_prompt
+        assert "delegated Action mode" in system_prompt
+        assert "Cluster writes and privileged operations are enabled" in system_prompt
+        assert "execute requested remediation without asking for another approval" in system_prompt
+        assert "Never claim that this session blocks writes unless an actual tool call" in system_prompt
         assert "cluster write or privileged operation" in system_prompt
         assert "identify successful writes accurately" not in system_prompt
     assert "same investigation tools" in system_prompt
@@ -1279,6 +1283,79 @@ def test_agent_provider_result_compacts_large_shell_output() -> None:
     assert payload["provider_payload_original_bytes"] > 400_000
     assert "compacted stdout" in payload["stdout"]
     assert len(rendered.encode()) <= 48 * 1024
+
+
+def test_agent_provider_result_requires_agent_projection_for_oversized_json() -> None:
+    pod_names = ["network-client", "web-a", "web-b", "web-c", "web-d"]
+    rendered = _bounded_agent_provider_result({
+        "command": "oc get pods -n podpilot-test -o json",
+        "exit_code": 0,
+        "stdout": json.dumps({
+            "apiVersion": "v1",
+            "kind": "PodList",
+            "metadata": {"resourceVersion": "12345"},
+            "items": [
+                {
+                    "metadata": {
+                        "name": name,
+                        "namespace": "podpilot-test",
+                        "creationTimestamp": "2026-09-02T20:15:00Z",
+                        "annotations": {"large": "x" * 12_000},
+                    },
+                    "spec": {"nodeName": "worker-0" if name == "network-client" else ""},
+                    "status": {
+                        "phase": "Running" if name == "network-client" else "Pending",
+                        "containerStatuses": [{
+                            "name": "client" if name == "network-client" else "web",
+                            "ready": False,
+                            "restartCount": 3 if name == "network-client" else 0,
+                            "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                        }],
+                    },
+                }
+                for name in pod_names
+            ],
+        }),
+        "stderr": "",
+        "stdout_truncated": False,
+    })
+
+    payload = json.loads(rendered)
+    assert payload["stdout"] == ""
+    assert payload["provider_result_requires_refinement"] is True
+    assert payload["provider_result_summary"]["kind"] == "PodList"
+    assert payload["provider_result_summary"]["item_count"] == 5
+    assert payload["provider_result_summary"]["kubernetes_page_complete"] is True
+    assert "items[].metadata.name" in payload["provider_result_summary"]["available_field_paths"]
+    assert "No partial JSON was supplied" in payload["retry_guidance"]
+    assert not any(name in rendered for name in pod_names)
+    assert len(rendered.encode()) < 8_000
+
+    ledger_entry = _agent_tool_ledger_entry(
+        sequence=1,
+        tool_name="execute_shell",
+        tool_call_id="call-pods",
+        cluster_id="cluster-a",
+        cluster_name="cluster-a",
+        status="completed",
+        request="oc get pods -n podpilot-test -o json",
+        result={
+            "exit_code": 0,
+            "stdout": json.dumps({
+                "kind": "PodList",
+                "metadata": {},
+                "items": [
+                    {"metadata": {"name": name, "large": "x" * 12_000}}
+                    for name in pod_names
+                ],
+            }),
+            "stderr": "",
+            "stdout_truncated": False,
+        },
+    )
+    assert ledger_entry["provider_result_requires_refinement"] is True
+    assert ledger_entry["stdout_excerpt"] == ""
+    assert ledger_entry["provider_result_summary"]["item_count"] == 5
 
 
 def test_deterministic_resource_health_answer_reports_anomaly() -> None:
@@ -2787,6 +2864,27 @@ def test_agent_final_answer_quality_rejects_serialized_tool_arguments() -> None:
     )
     assert _agent_final_answer_quality_issue(
         "The LokiStack is healthy based on the collected Pod status."
+    ) is None
+
+
+def test_action_mode_answer_rejects_invented_write_restriction() -> None:
+    blocked_claim = (
+        "In the current delegated session, write-type commands are blocked. "
+        "Please explicitly approve the changes."
+    )
+
+    assert _action_mode_answer_quality_issue(blocked_claim, []) == (
+        "action_mode_write_capability_not_tested"
+    )
+    assert _action_mode_answer_quality_issue(blocked_claim, [{
+        "operation_kind": "write", "status": "completed",
+    }]) == "action_mode_write_capability_contradiction"
+    assert _action_mode_answer_quality_issue(blocked_claim, [{
+        "operation_kind": "write", "status": "failed", "failure_category": "forbidden",
+    }]) is None
+    assert _action_mode_answer_quality_issue(
+        "The requested patch succeeded.",
+        [{"operation_kind": "write", "status": "completed"}],
     ) is None
 
 
@@ -13012,6 +13110,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert ".cluster-picker-required-icon" in styles
     assert "updateAskSubmitAvailability" in script
     assert 'clusterPicker?.querySelector("[data-cluster-checkbox]:checked")' in script
+    assert 'showToast("Select at least one cluster before starting an investigation.")' in script
+    assert 'requestBody.set("cluster_ids", JSON.stringify(selectedClusters.map((item) => item.value)))' in script
+    assert "toastTimeoutId = window.setTimeout" in script
+    assert ".toast { position: fixed; z-index: 50; top: 72px; right: 24px;" in styles
     assert 'data-cluster-filter="connected">Signed-In</button>' in template
     assert 'data-cluster-filter="all">All</button>' in template
     assert 'let clusterFilter = filterTabs.find' in script
@@ -13049,6 +13151,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-progress-current" in template
     assert "data-progress-title" in template
     assert 'event.phase === "queued" ? "Waiting to investigate" : "Live investigation"' in script
+    assert "PodPilot is choosing and running useful checks." in template
+    assert "PodPilot is choosing and running useful checks." in script
+    assert "active_run.events[-1].message if active_run.events" not in template
+    assert 'current.textContent = event.message || "Investigation in progress."' not in script
     assert "data-progress-phase" in template
     assert "event.message not in progress.seen_messages" in template
     assert "unique_phase.events[-5:] if phase == 'agent_command'" in template

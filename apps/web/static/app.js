@@ -13,8 +13,10 @@
 
   const csrf = document.querySelector('meta[name="podpilot-csrf"]')?.content;
   const toast = document.querySelector("#action-toast");
+  let toastTimeoutId = null;
   const showToast = (message, tone = "error", timeout = 8000) => {
     if (!toast) return;
+    if (toastTimeoutId !== null) window.clearTimeout(toastTimeoutId);
     toast.replaceChildren();
     const copy = document.createElement("span");
     copy.textContent = message;
@@ -28,7 +30,12 @@
     toast.classList.toggle("success", tone === "success");
     toast.classList.toggle("warning", tone === "warning");
     toast.hidden = false;
-    if (timeout > 0) window.setTimeout(() => { toast.hidden = true; }, timeout);
+    if (timeout > 0) {
+      toastTimeoutId = window.setTimeout(() => {
+        toast.hidden = true;
+        toastTimeoutId = null;
+      }, timeout);
+    }
   };
   const pendingNotice = window.sessionStorage.getItem("podpilot-action-notice");
   if (pendingNotice && toast) {
@@ -723,10 +730,7 @@
       );
       if (!selected.length) {
         if (clusterPicker) clusterPicker.open = true;
-        if (toast) {
-          toast.textContent = "Select at least one cluster before starting an investigation.";
-          toast.hidden = false;
-        }
+        showToast("Select at least one cluster before starting an investigation.");
         return;
       }
       const textarea = adhocForm.querySelector("textarea[name='message']");
@@ -899,7 +903,7 @@
     const thinkingTitle = document.createElement("strong");
     thinkingTitle.textContent = "Live investigation";
     const thinkingStatus = document.createElement("p");
-    thinkingStatus.textContent = "Submitting the investigation…";
+    thinkingStatus.textContent = "PodPilot is choosing and running useful checks.";
     thinkingCopy.append(thinkingTitle, thinkingStatus);
     thinking.append(spinner, thinkingCopy);
     pending.append(pendingMeta, thinking);
@@ -987,7 +991,11 @@
       if (progressTitle && event.phase) {
         progressTitle.textContent = event.phase === "queued" ? "Waiting to investigate" : "Live investigation";
       }
-      if (current) current.textContent = event.message || "Investigation in progress.";
+      if (current) {
+        current.textContent = event.phase === "queued"
+          ? "Your request is waiting for an available worker."
+          : "PodPilot is choosing and running useful checks.";
+      }
       appendPhaseUpdate(event, seq);
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
@@ -1083,7 +1091,17 @@
       const reasoningSelect = adhocForm.querySelector('select[name="reasoning_effort"]');
       const question = textarea?.value.trim() || "";
       if (!question) return;
+      const selectedClusters = Array.from(
+        adhocForm.querySelectorAll("[data-cluster-checkbox]:checked")
+      );
+      if (!selectedClusters.length) {
+        if (clusterPicker) clusterPicker.open = true;
+        showToast("Select at least one cluster before starting an investigation.");
+        updateAskSubmitAvailability();
+        return;
+      }
       const requestBody = new URLSearchParams(new FormData(adhocForm));
+      requestBody.set("cluster_ids", JSON.stringify(selectedClusters.map((item) => item.value)));
       requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
       if (textarea) {
@@ -1108,7 +1126,7 @@
         }
         window.location.assign(response.url);
       } catch (error) {
-        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        showToast(error.message);
         optimistic?.nodes.forEach((node) => node.remove());
         if (optimistic?.empty) optimistic.empty.hidden = false;
         if (textarea) {
@@ -1118,7 +1136,7 @@
         if (composerDraftKey) window.sessionStorage.setItem(composerDraftKey, question);
         if (rawResponseToggle) rawResponseToggle.disabled = false;
         if (reasoningSelect) reasoningSelect.disabled = false;
-        if (submit) { submit.disabled = false; submit.textContent = "Submit"; }
+        updateAskSubmitAvailability();
       }
     });
     const textarea = adhocForm.querySelector("textarea");

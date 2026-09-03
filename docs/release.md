@@ -455,6 +455,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   `max_input_tokens`. Irreducible requests must fail locally without provider transmission, the
   operator must see the configured input-token limit rather than an internal exception type even
   when prior evidence exists, and bounded redacted 4xx/5xx error details must be retained.
+- Oversized-JSON tests must prove the provider receives no byte-truncated JSON or server-selected
+  domain fields. The refinement response must expose bounded structural metadata and direct the
+  agent to choose and run a narrower projection before answering the inventory.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
   A raw tool result and its assistant call may be sent through one subsequent model request only;
@@ -462,8 +465,9 @@ summary must preserve the complete-coverage rule before confirming absence.
   pressure must reduce successful read-only shell details before mutation, typed-observation, or
   failure details. Manifest tests must keep the single app-wide action budget at 50 for delegated
   agents and typed planning.
-  Successful mutations must be marked as writes, and a final answer that describes them as
-  read-only or merely “safe patches” must be rejected and corrected before display.
+  Successful mutations must be marked as writes. In Action mode, a final answer that describes
+  writes as blocked, claims the session is read-only, or asks for another approval without an actual
+  forbidden write result must be rejected and returned to the tool-capable loop before display.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
   token reaches the loopback runner, tokens never enter model messages or logs, the temporary
   kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
