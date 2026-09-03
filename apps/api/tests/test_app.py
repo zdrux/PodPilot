@@ -15183,6 +15183,18 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                 }],
             }),
         ))
+        db_session.add(AdHocRun(
+            id="00000000-0000-0000-0000-000000000192",
+            conversation_id=conversation_id,
+            created_by="ivy",
+            message_text="Show diagnostics.",
+            status="succeeded",
+            phase="complete",
+            assistant_message_id="00000000-0000-0000-0000-000000000191",
+            created_at=datetime(2026, 9, 2, 20, 0, 0, tzinfo=timezone.utc),
+            started_at=datetime(2026, 9, 2, 20, 0, 1, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 9, 2, 20, 2, 12, 300000, tzinfo=timezone.utc),
+        ))
         db_session.commit()
     engine.dispose()
 
@@ -15194,6 +15206,8 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert rendered.status_code == 200
     assert '<details class="message-model-diagnostics">' in rendered.text
     assert "Model usage" in rendered.text
+    assert "Reply time" in rendered.text
+    assert "2 min 12.3 s" in rendered.text
     assert "50,000" in rendered.text
     assert "Largest input" in rendered.text
     assert "3 model calls; usage reported for 2" in rendered.text

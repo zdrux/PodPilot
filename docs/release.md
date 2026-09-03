@@ -85,7 +85,8 @@ the same result shape across repeated runs.
   output and cannot exhaust the bounded HTTP response for a small requested result count.
 - Model-call diagnostics normalize Responses and Chat Completions usage fields, aggregate them per
   Ask turn, and keep the largest individual input visible without treating summed inputs as one
-  context window. Fixtures must prove request bodies and authorization values are never captured.
+  context window. The Model usage disclosure reports end-to-end reply time from durable run
+  timestamps. Fixtures must prove request bodies and authorization values are never captured.
 - Model connection tests retain a collapsed latest-probe trace with operation, schema, HTTP status,
   duration, usage, and a bounded redacted response preview; saving the profile clears the old trace.
 

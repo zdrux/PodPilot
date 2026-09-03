@@ -51,22 +51,26 @@
           {% elif message.role == 'assistant' and message.answer_mode == 'evidence_based' %}
           <span class="answer-status answer-status-grounded" tabindex="0" data-tooltip="Cluster-specific claims are backed by the cited observations{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, but the overall conclusion remains unresolved{% endif %}." aria-label="Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, unresolved conclusion{% endif %}.">Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %} · unresolved{% endif %}</span>
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
-          {% if message.role == 'assistant' and message.model_diagnostics and message.model_diagnostics.call_count %}
+          {% if message.role == 'assistant' and ((message.model_diagnostics and message.model_diagnostics.call_count) or message.reply_duration_ms is not none) %}
           <details class="message-model-diagnostics">
             <summary>Model usage</summary>
-            {% if message.model_diagnostics.usage %}
             <dl>
+              {% if message.reply_duration_label %}<div><dt>Reply time</dt><dd>{{ message.reply_duration_label }}</dd></div>{% endif %}
+              {% if message.model_diagnostics.usage %}
               <div><dt>Input</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.input_tokens) }}</dd></div>
               <div><dt>Output</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.output_tokens) }}</dd></div>
               <div><dt>Reasoning</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.reasoning_tokens) }}</dd></div>
               <div><dt>Cached</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.cached_tokens) }}</dd></div>
               <div><dt>Total</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.total_tokens) }}</dd></div>
               <div><dt>Largest input</dt><dd>{{ '{:,}'.format(message.model_diagnostics.largest_input_tokens) }}</dd></div>
+              {% endif %}
             </dl>
-            {% else %}<p>The provider did not report token usage.</p>{% endif %}
+            {% if message.model_diagnostics.call_count and not message.model_diagnostics.usage %}<p>The provider did not report token usage.</p>{% endif %}
+            {% if message.model_diagnostics.call_count %}
             <small>{{ message.model_diagnostics.call_count }} model call{% if message.model_diagnostics.call_count != 1 %}s{% endif %}; usage reported for {{ message.model_diagnostics.usage_reported_calls }}.</small>
             {% if message.model_diagnostics.finish_reasons %}
             <small>Provider termination: {{ message.model_diagnostics.finish_reasons | join(', ') }}.</small>
+            {% endif %}
             {% endif %}
             {% if message.tool_usage %}
             <div class="message-model-tools">

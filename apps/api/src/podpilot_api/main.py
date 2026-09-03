@@ -414,6 +414,17 @@ def _format_est_time(value: object, pattern: str = "%H:%M") -> str:
     return f"{eastern.strftime(pattern)} EST (-4)"
 
 
+def _format_reply_duration(duration_ms: int) -> str:
+    """Render an end-to-end reply duration without losing sub-minute precision."""
+
+    total_seconds = max(0, duration_ms) / 1000
+    if total_seconds < 60:
+        return f"{total_seconds:.1f} s"
+    minutes = int(total_seconds // 60)
+    remaining_seconds = total_seconds - (minutes * 60)
+    return f"{minutes} min {remaining_seconds:.1f} s"
+
+
 def _make_alert_source(settings: Settings) -> AlertSource:
     return AlertmanagerClient(
         base_url=settings.alertmanager_url,
@@ -13260,6 +13271,17 @@ def create_app(
                 .limit(app_settings.adhoc_display_messages)
             ))
             rows.reverse()
+            assistant_message_ids = [row.id for row in rows if row.role == "assistant"]
+            completed_runs = list(db_session.scalars(
+                select(AdHocRun).where(
+                    AdHocRun.assistant_message_id.in_(assistant_message_ids),
+                    AdHocRun.completed_at.is_not(None),
+                )
+            )) if assistant_message_ids else []
+            run_by_assistant_message_id = {
+                str(run.assistant_message_id): run for run in completed_runs
+                if run.assistant_message_id
+            }
             evidence = json.loads(conversation.evidence_json)
             evidence_by_id = {
                 str(item["id"]): _adhoc_evidence_view(item)
@@ -13291,6 +13313,14 @@ def create_app(
             ))
         messages = []
         for row in rows:
+            reply_run = run_by_assistant_message_id.get(row.id)
+            reply_duration_ms = (
+                max(0, int(
+                    (_aware(reply_run.completed_at) - _aware(reply_run.created_at)).total_seconds()
+                    * 1000
+                ))
+                if reply_run is not None and reply_run.completed_at is not None else None
+            )
             citations = json.loads(row.citations_json)
             raw_activity_view = json.loads(row.tool_activity_json)
             activity_view = raw_activity_view if isinstance(raw_activity_view, dict) else {}
@@ -13335,6 +13365,11 @@ def create_app(
                 "command_failures": command_failures,
                 "raw_responses": json.loads(row.raw_responses_json or "[]"),
                 "model_diagnostics": json.loads(row.model_diagnostics_json or "{}"),
+                "reply_duration_ms": reply_duration_ms,
+                "reply_duration_label": (
+                    _format_reply_duration(reply_duration_ms)
+                    if reply_duration_ms is not None else None
+                ),
                 "prefer_metric_card": prefer_metric_card,
                 "resource_presentation": resource_presentation,
                 "answer_blocks": answer_blocks,

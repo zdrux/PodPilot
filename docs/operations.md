@@ -321,7 +321,9 @@ the outer limit for the complete agent run.
 Completed Ask replies persist a bounded model-diagnostics record for the calls made during that
 turn. The collapsed **Model usage** control beneath the PodPilot author rail shows aggregate input,
 output, reasoning, cached, and total tokens when the provider reports them, plus the largest
-single-call input. Aggregate usage measures processing across the turn; only the largest individual
+single-call input. It also shows end-to-end reply time from request submission through queueing,
+model calls, cluster tools, and final persistence, using minutes and seconds for replies lasting at
+least one minute. Aggregate usage measures processing across the turn; only the largest individual
 request is relevant to context-window pressure. Compatible providers may omit some or all usage
 fields, which PodPilot reports without estimating them.
 PodPilot also records provider termination metadata when it is supplied: Chat Completions
