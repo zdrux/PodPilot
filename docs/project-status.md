@@ -632,7 +632,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   validation; discovery is preferred when an exact name is not known. Model activation probes verify a
   synthetic discovery-to-exact-log-candidate sequence.
 - Ask PodPilot opens the bounded conversation viewport at the newest response. The conversation uses
-  a compact Mission Control layout with a persistent activity sidebar. Completed agent operations retain
+  a compact Mission Control layout with an activity sidebar that operators can hide or restore from the
+  conversation header; that browser preference persists across conversations and reloads. Completed agent operations retain
   start/stop timestamps, duration, cluster, status, bounded request/result detail, and a visible filtering
   indicator whenever credential redaction or output reduction occurred.
   Chat messages render safe CommonMark with readable system prose typography,

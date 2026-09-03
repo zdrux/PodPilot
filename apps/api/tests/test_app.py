@@ -13202,6 +13202,13 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
     assert 'data-activity-tab="timeline"' in template
     assert 'data-activity-tab="details"' in template
+    assert "data-activity-sidebar-toggle" in template
+    assert 'aria-controls="investigation-activity-sidebar"' in template
+    assert 'id="investigation-activity-sidebar"' in template
+    assert "podpilot-evidence-panel-open" in script
+    assert 'activitySidebar.hidden = !open' in script
+    assert '.activity-sidebar[hidden] { display: none; }' in styles
+    assert ".ask-layout.activity-sidebar-collapsed" in styles
     assert "data-operation-open" in template
     assert "filtered-output-indicator" in template
     assert 'document.querySelectorAll("[data-operation-open]")' in script
