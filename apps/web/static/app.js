@@ -1,4 +1,23 @@
 (() => {
+  const themePreferenceKey = "podpilot-color-theme";
+  const supportedThemes = new Set(["classic", "dark", "light"]);
+  let activeTheme = "classic";
+  try {
+    const savedTheme = window.localStorage.getItem(themePreferenceKey);
+    if (supportedThemes.has(savedTheme)) activeTheme = savedTheme;
+  } catch (_error) { /* Preference storage is optional. */ }
+  document.documentElement.dataset.theme = activeTheme;
+
+  const themeSelect = document.querySelector("[data-theme-select]");
+  if (themeSelect) {
+    themeSelect.value = activeTheme;
+    themeSelect.addEventListener("change", () => {
+      const nextTheme = supportedThemes.has(themeSelect.value) ? themeSelect.value : "classic";
+      document.documentElement.dataset.theme = nextTheme;
+      try { window.localStorage.setItem(themePreferenceKey, nextTheme); } catch (_error) { /* Preference storage is optional. */ }
+    });
+  }
+
   const renderTime = document.querySelector("#render-time");
   if (renderTime) {
     const parsed = new Date(renderTime.dateTime);
@@ -560,7 +579,6 @@
       setActivitySidebarVisibility(activitySidebar.hidden, {persist: true});
     });
   }
-  const cautionSummary = document.querySelector(".caution-summary");
   const actionModeNotice = document.querySelector("[data-action-mode-notice]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
   const resizeComposerTextarea = () => {
@@ -614,18 +632,6 @@
     const updateModeAvailability = () => {
       const actionModeSelected = executionMode.value === "action";
       askLayout?.classList.toggle("action-session", actionModeSelected);
-      cautionSummary?.classList.toggle("action-caution-pill", actionModeSelected);
-      if (cautionSummary) {
-        cautionSummary.dataset.tooltip = actionModeSelected
-          ? cautionSummary.dataset.actionTooltip
-          : cautionSummary.dataset.readOnlyTooltip;
-        cautionSummary.setAttribute(
-          "aria-label",
-          actionModeSelected
-            ? cautionSummary.dataset.actionAriaLabel
-            : cautionSummary.dataset.readOnlyAriaLabel
-        );
-      }
       if (actionModeNotice) actionModeNotice.hidden = !actionModeSelected;
       updateAskSubmitAvailability();
     };
@@ -1194,65 +1200,6 @@
       }
     });
   }
-  const evidenceDialog = document.querySelector("[data-evidence-dialog]");
-  const evidenceToggle = document.querySelector("[data-evidence-open]");
-  const openEvidence = () => {
-    if (!evidenceDialog) return false;
-    if (!evidenceDialog.open) evidenceDialog.showModal();
-    evidenceToggle?.setAttribute("aria-expanded", "true");
-    return true;
-  };
-  const focusEvidence = (target, {smooth = true} = {}) => {
-    if (!target || !openEvidence()) return;
-    document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
-    target.classList.add("evidence-focus");
-    const technicalDetails = target.querySelector(".evidence-technical");
-    document.querySelectorAll(".evidence-technical[open]").forEach((item) => {
-      if (item !== technicalDetails) item.open = false;
-    });
-    if (technicalDetails) technicalDetails.open = true;
-    requestAnimationFrame(() => {
-      target.scrollIntoView({behavior: smooth ? "smooth" : "auto", block: "start"});
-      target.focus({preventScroll: true});
-    });
-  };
-  evidenceToggle?.addEventListener("click", openEvidence);
-  document.querySelector("[data-evidence-close]")?.addEventListener("click", () => evidenceDialog?.close());
-  evidenceDialog?.addEventListener("close", () => {
-    evidenceToggle?.setAttribute("aria-expanded", "false");
-    evidenceToggle?.focus();
-  });
-  evidenceDialog?.addEventListener("click", (event) => {
-    if (event.target === evidenceDialog) evidenceDialog.close();
-  });
-  document.querySelectorAll('.chat-citations a[href^="#evidence-"]').forEach((link) => {
-    link.addEventListener("click", (event) => {
-      const target = document.getElementById(link.hash.slice(1));
-      if (!target) return;
-      event.preventDefault();
-      focusEvidence(target);
-      window.history.replaceState(null, "", link.hash);
-    });
-  });
-  document.querySelectorAll('.answer-evidence a[href^="#evidence-"]').forEach((link) => {
-    link.addEventListener("click", (event) => {
-      const target = document.getElementById(link.hash.slice(1));
-      if (!target) return;
-      event.preventDefault();
-      focusEvidence(target);
-      window.history.replaceState(null, "", link.hash);
-    });
-  });
-  document.querySelectorAll("[data-activity-tab]").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll("[data-activity-tab]").forEach((candidate) => {
-        candidate.setAttribute("aria-selected", candidate === tab ? "true" : "false");
-      });
-      document.querySelectorAll("[data-activity-panel]").forEach((panel) => {
-        panel.hidden = panel.dataset.activityPanel !== tab.dataset.activityTab;
-      });
-    });
-  });
   document.querySelectorAll("[data-operation-open]").forEach((button) => {
     button.addEventListener("click", () => {
       const dialog = document.getElementById(button.dataset.operationOpen);
@@ -1265,16 +1212,6 @@
       if (event.target === dialog) dialog.close();
     });
   });
-  document.querySelectorAll("[data-evidence-ref]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = document.getElementById(button.dataset.evidenceRef);
-      if (target) focusEvidence(target);
-    });
-  });
-  if (window.location.hash.startsWith("#evidence-")) {
-    const target = document.getElementById(window.location.hash.slice(1));
-    if (target) focusEvidence(target, {smooth: false});
-  }
   document.querySelectorAll("[data-csv-table]").forEach((button) => {
     button.addEventListener("click", () => {
       const table = document.getElementById(button.dataset.csvTable);

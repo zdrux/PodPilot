@@ -17,30 +17,19 @@
         {% if is_delegated_mode %}
         {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
         {% endif %}
+        <label class="theme-picker" for="color-theme"><span>Theme</span>
+          <select id="color-theme" data-theme-select aria-label="Color theme">
+            <option value="classic">Classic</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
         <button class="button secondary compact-button activity-sidebar-toggle" type="button"
           data-activity-sidebar-toggle aria-controls="investigation-activity-sidebar" aria-expanded="true"
           title="Hide evidence panel">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
           <span data-activity-sidebar-toggle-label>Hide evidence</span>
         </button>
-        <span class="boundary-pill caution-summary{% if delegated_action_session %} action-caution-pill{% endif %}" tabindex="0"
-          data-tooltip="Session cautions:&#10;&#10;{% if delegated_action_session %}• Delegated Action mode — The agent may create, patch, apply, or delete objects directly. There is no PodPilot preview or approval step. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC and admission controls apply as you.&#10;&#10;{% else %}• Delegated read-only mode — PodPilot's broker blocks Kubernetes mutations, exec, attach, proxy, port-forward, and Secret reads. Allowed read requests use your connected identity and remain subject to OpenShift RBAC.&#10;&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if not delegated_action_session %} This conversation remains read-only.{% endif %}"
-          aria-label="Session cautions. {% if delegated_action_session %}Delegated Action mode: the agent may change cluster objects directly using your OpenShift identity and RBAC; there is no PodPilot preview or approval step. {% else %}Delegated read-only mode: PodPilot's broker blocks Kubernetes mutations and other prohibited operations. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."
-          {% if is_delegated_mode and not conversation %}data-read-only-tooltip="Session cautions:&#10;&#10;• Delegated read-only mode — PodPilot's broker blocks Kubernetes mutations, exec, attach, proxy, port-forward, and Secret reads. Allowed read requests use your short-lived in-memory login token and remain subject to OpenShift RBAC.&#10;&#10;{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. This conversation remains read-only."
-          data-action-tooltip="Session cautions:&#10;&#10;• Delegated Action mode — The agent may create, patch, apply, or delete objects directly. There is no PodPilot preview or approval step. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC and admission controls apply as you.&#10;&#10;{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history."
-          data-read-only-aria-label="Session cautions. Delegated read-only mode: PodPilot's broker blocks Kubernetes mutations and other prohibited operations. {% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."
-          data-action-aria-label="Session cautions. Delegated Action mode: the agent may change cluster objects directly using your OpenShift identity and RBAC; there is no PodPilot preview or approval step. {% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."{% endif %}>
-          <span class="boundary-pill-icon" aria-hidden="true">!</span>
-          <span>Session cautions</span>
-        </span>
-        {% if evidence_by_id %}
-        <button class="evidence-toggle" type="button" data-evidence-open
-          aria-haspopup="dialog" aria-controls="evidence-dialog" aria-expanded="false">
-          <span>Collected evidence</span><strong>{{ evidence_by_id | length }}</strong>
-        </button>
-        {% else %}
-        <span class="tag">Evidence first</span>
-        {% endif %}
       </div>
     </div>
 
@@ -319,14 +308,15 @@
           <ol class="answer-evidence-timeline">
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
-            <li><a href="#evidence-{{ id }}"{% if cited %} aria-label="Open evidence {{ id }}: {{ cited.summary }}"{% endif %}>
+            <li><div class="evidence-reference">
               <span class="evidence-tool">{% if cited and cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ cited.tool if cited else 'evidence' }}</span>
               <span class="evidence-link-copy">
                 <strong>{{ cited.summary if cited else id }}</strong>
-                {% if cited and cited.facts %}<small>{{ cited.facts[0].label }}: {{ cited.facts[0].value }}</small>{% endif %}
+                {% if cited and cited.facts %}<dl class="evidence-reference-facts">{% for fact in cited.facts %}<div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}</dl>{% endif %}
+                {% if cited %}<small>Collected {{ cited.collected_at | est_time('%Y-%m-%d %H:%M:%S') }} · {{ cited.source }}</small>{% endif %}
                 <code>{{ id }}</code>
               </span>
-            </a></li>
+            </div></li>
           {% endfor %}
           </ol>
         </details>
@@ -541,12 +531,7 @@
       <div><span class="activity-kicker">Evidence</span><h2>Investigation activity</h2></div>
       <span class="activity-count">{{ activity_summary.operation_count }} operation{% if activity_summary.operation_count != 1 %}s{% endif %}</span>
     </div>
-    <div class="activity-tabs" role="tablist" aria-label="Investigation activity views">
-      <button type="button" role="tab" aria-selected="true" aria-controls="activity-timeline-panel" id="activity-timeline-tab" data-activity-tab="timeline">Timeline</button>
-      <button type="button" role="tab" aria-selected="false" aria-controls="activity-details-panel" id="activity-details-tab" data-activity-tab="details">Details</button>
-    </div>
-
-    <section class="activity-tab-panel" id="activity-timeline-panel" role="tabpanel" aria-labelledby="activity-timeline-tab" data-activity-panel="timeline">
+    <section class="activity-tab-panel activity-timeline-panel" id="activity-timeline-panel" aria-label="Investigation timeline">
       {% if active_run %}
       <div class="activity-live" aria-live="polite">
         <div class="activity-live-heading"><span class="thinking-spinner" aria-hidden="true"></span><strong>Live investigation</strong></div>
@@ -584,12 +569,15 @@
           {% for item in message.activity.evidence_ledger %}
           {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
           <li class="operation-event operation-status-{{ item.status }}">
-            <span class="operation-marker" aria-hidden="true"></span>
-            <div class="operation-event-body">
+            <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
+              aria-haspopup="dialog" aria-controls="{{ operation_id }}"
+              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. Some retained content was filtered{% endif %}">
+              <span class="operation-marker" aria-hidden="true"></span>
+              <div class="operation-event-body">
               <div class="operation-event-heading">
                 <strong>{{ item.tool | replace('_', ' ') }}</strong>
                 {% if item.content_filtered %}
-                <span class="filtered-output-indicator" tabindex="0" title="{{ item.filter_reasons | join(' ') }}" aria-label="Some retained content was filtered: {{ item.filter_reasons | join(' ') }}">
+                <span class="filtered-output-indicator" title="{{ item.filter_reasons | join(' ') }}">
                   <img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt="">
                 </span>
                 {% endif %}
@@ -601,8 +589,8 @@
                 {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
               </div>
               {% if item.command %}<code>{{ item.command }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
-              <button class="button secondary operation-view-button" type="button" data-operation-open="{{ operation_id }}">View</button>
-            </div>
+              </div>
+            </button>
           </li>
           {% endfor %}
         {% endfor %}
@@ -612,62 +600,9 @@
       {% endif %}
     </section>
 
-    <section class="activity-tab-panel" id="activity-details-panel" role="tabpanel" aria-labelledby="activity-details-tab" data-activity-panel="details" hidden>
-      <div class="activity-detail-summary">
-        <span>Collected evidence</span><strong>{{ evidence_by_id | length }} source{% if evidence_by_id | length != 1 %}s{% endif %}</strong>
-        <p>Observed fields remain separate from model conclusions and retain their collection provenance.</p>
-      </div>
-      {% if evidence_by_id %}
-      <ul class="activity-evidence-list">
-        {% for id, item in evidence_by_id.items() %}
-        <li><div><strong>{{ item.tool | replace('_', ' ') }}</strong><span>{{ item.cluster_name or 'PodPilot runtime' }}</span><small>{{ item.collected_at | est_time('%Y-%m-%d %H:%M:%S') }}</small></div><button class="button secondary operation-view-button" type="button" data-evidence-ref="evidence-{{ id }}">View</button></li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-      <div class="activity-session-boundary">
-        <strong>{{ 'Action session' if delegated_action_session else 'Read-only session' }}</strong>
-        <p>{% if delegated_action_session %}Operations use your delegated OpenShift permissions and are retained for auditability.{% else %}Mutation, exec, attach, proxy, port-forward, and Secret reads are blocked by the broker.{% endif %}</p>
-      </div>
-    </section>
   </aside>
 
 </div>
-
-{% if evidence_by_id %}
-<dialog id="evidence-dialog" class="evidence-dialog" data-evidence-dialog
-  aria-labelledby="evidence-dialog-title" aria-describedby="evidence-dialog-description">
-  <div class="evidence-dialog-header">
-    <div><p class="eyebrow">Provenance</p><h2 id="evidence-dialog-title">Collected evidence</h2></div>
-    <button type="button" data-evidence-close aria-label="Close collected evidence">×</button>
-  </div>
-  <p class="evidence-dialog-intro" id="evidence-dialog-description">Open an evidence card to inspect the exact redacted OpenShift fields, probe diagnostics, metric samples, or bounded log excerpt. Evidence links beneath replies open and focus the cited card.</p>
-  <div class="evidence-list">
-  {% for id, item in evidence_by_id.items() %}
-    <article id="evidence-{{ id }}" tabindex="-1" class="evidence-card">
-      <div class="evidence-card-heading">
-        <span class="evidence-id">{{ item.tool }}</span>
-        <code>{{ id }}</code>
-      </div>
-      <h3>{{ item.summary }}</h3>
-      {% if item.cluster_name %}<span class="evidence-cluster">{{ item.cluster_name }}</span>{% endif %}
-      <p class="evidence-source">{{ item.source }}</p>
-      {% if item.facts %}
-      <dl class="evidence-facts">
-        {% for fact in item.facts %}<div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}
-      </dl>
-      {% endif %}
-      <small>Collected {{ item.collected_at | est_time('%Y-%m-%d %H:%M:%S') }}</small>
-      <details class="evidence-technical">
-        <summary>View technical details</summary>
-        {% if item.excerpt %}<h4>Bounded log excerpt</h4><pre><code>{{ item.excerpt }}</code></pre>{% endif %}
-        <h4>Redacted collected payload</h4>
-        <pre><code class="language-json">{{ item.data_json }}</code></pre>
-      </details>
-    </article>
-  {% endfor %}
-  </div>
-</dialog>
-{% endif %}
 
 {% for message in messages if message.activity and message.activity.evidence_ledger %}
   {% for item in message.activity.evidence_ledger %}

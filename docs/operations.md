@@ -757,7 +757,8 @@ One app-wide 50-unit default action budget is configured with
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
 and Action conversations and may be set from 1 to 100.
 The retained excerpts and operation metadata are operator-inspectable in the Ask activity sidebar.
-Each operation row shows start and completion timing, duration, cluster, status, and a detail action.
+Each operation row shows start and completion timing, duration, cluster, and status; the full row opens
+the retained detail sheet and uses a subtle hover treatment to disclose that interaction.
 Rows whose retained request or response was credential-redacted, truncated, excerpted, stripped of
 Kubernetes `managedFields`, or replaced with oversized-JSON structural metadata carry a visible shield
 indicator and describe the applied filtering in the detail sheet. Each shell detail states whether the
@@ -1096,12 +1097,10 @@ leaving deterministic evidence and checks usable.
 
 For evidence-based Ask replies, the collapsed **Evidence used in this answer**
 rounded control replaces the separate inspected-target activity disclosure and expands into a
-compact vertical timeline of supporting observations.
-Selecting one opens and focuses its
-card in **Collected evidence**. The drawer shows normalized OpenShift coordinates
-and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
-the exact Pod/container and bounded log excerpt as applicable. **View technical
-details** displays the complete persisted redacted payload used by the answer.
+compact vertical timeline of supporting observations. Each observation keeps its summary, material
+facts, collection time, source, and evidence identifier inline. The former separate collected-evidence
+drawer is intentionally omitted; retained agent request and response details are available from their
+corresponding activity-sidebar operation rows.
 Replies that cite a top-consumer metric render its persisted ranking directly as
 an operator-visible horizontal bar table with average, current, and peak values.
 The table can be downloaded as CSV; neither the visualization nor the export depends

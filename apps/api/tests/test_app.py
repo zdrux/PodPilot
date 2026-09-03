@@ -9516,9 +9516,8 @@ def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert 'class="boundary-pill caution-summary"' in page.text
-        assert "Session cautions" in page.text
-        assert "Delegated read-only mode" in page.text
+        assert 'data-theme-select' in page.text
+        assert "Session cautions" not in page.text
         assert "Delegated session ended" not in page.text
         assert 'data-starter-available="true"' in page.text
         composer = re.search(r'<textarea id="adhoc-message"[^>]*>', page.text)
@@ -12415,9 +12414,8 @@ def test_delegated_operator_connects_and_stamps_action_conversation(
         )
         assert "execution-mode-read-only" in conversation_page.text
         assert "execution-mode-read-write" not in conversation_page.text
-        assert "Delegated read-only mode" in conversation_page.text
-        assert "broker blocks Kubernetes mutations" in conversation_page.text
-        assert "This conversation remains read-only" in conversation_page.text
+        assert "Investigate · read-only" in conversation_page.text
+        assert "Session cautions" not in conversation_page.text
         assert "Delegated Action mode" not in conversation_page.text
         assert "action-caution-pill" not in conversation_page.text
         client.cookies.delete("podpilot_delegated_session")
@@ -12898,11 +12896,10 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert 'class="ask-layout action-session"' in action_page.text
         assert "execution-mode-read-write" in action_page.text
         assert "execution-mode-read-only" not in action_page.text
-        assert "Delegated Action mode" in action_page.text
-        assert "may create, patch, apply, or delete objects directly" in action_page.text
-        assert "There is no PodPilot preview or approval step" in action_page.text
+        assert "ACTION MODE - Cluster WRITES Permitted" in action_page.text
+        assert "Session cautions" not in action_page.text
         assert "change selected clusters using your OpenShift identity" not in action_page.text
-        assert "action-caution-pill" in action_page.text
+        assert "action-caution-pill" not in action_page.text
     engine.dispose()
 
 
@@ -13100,19 +13097,13 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '>Cancel</button>' in template
     assert 'pendingRun.querySelector("[data-run-cancel]")' not in script
     assert "appendOptimisticTurn" in script
-    assert 'class="boundary-pill caution-summary' in template
-    assert template.count('class="boundary-pill caution-summary') == 1
+    assert 'class="boundary-pill caution-summary' not in template
     assert template.count('class="boundary-pill execution-mode-badge ') == 1
-    assert "Session cautions" in template
+    assert "Session cautions" not in template
     assert "data-action-mode-notice" in template
     assert 'class="ask-session-heading-row"' in template
     assert "ACTION MODE - Cluster WRITES Permitted" in template
-    assert "data-action-tooltip" in template
-    assert "data-read-only-tooltip" in template
-    assert ".action-caution-pill" in styles
     assert ".action-mode-notice[hidden]" in styles
-    assert ".boundary-pill.caution-summary::after" in styles
-    assert "Session cautions:&#10;&#10;" in template
     assert "execution-mode-read-write" in template
     assert "execution-mode-read-only" in template
     assert ".execution-mode-badge { min-height: 34px; padding: 0 11px; border-radius: 7px;" in styles
@@ -13168,7 +13159,6 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "resizeComposerTextarea" in script
     assert 'composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"' in script
     assert ".ask-layout.action-session .composer-controls > [data-ask-submit]" in styles
-    assert 'cautionSummary.dataset.tooltip = actionModeSelected' in script
     assert "actionModeNotice.hidden = !actionModeSelected" in script
     assert ".composer-input-wrap > [data-run-cancel]" not in styles
     assert "Each question: up to" not in template
@@ -13200,8 +13190,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "displayedProgressMessages.has(event.message)" in script
     assert '.progress-phase-updates li::before' not in styles
     assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
-    assert 'data-activity-tab="timeline"' in template
-    assert 'data-activity-tab="details"' in template
+    assert 'aria-label="Investigation timeline"' in template
+    assert 'data-activity-tab="details"' not in template
+    assert 'id="activity-details-panel"' not in template
     assert "data-activity-sidebar-toggle" in template
     assert 'aria-controls="investigation-activity-sidebar"' in template
     assert 'id="investigation-activity-sidebar"' in template
@@ -13210,14 +13201,20 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '.activity-sidebar[hidden] { display: none; }' in styles
     assert ".ask-layout.activity-sidebar-collapsed" in styles
     assert "data-operation-open" in template
+    assert 'class="operation-event-button"' in template
+    assert ".operation-event-button:hover" in styles
+    assert '>View</button>' not in template
     assert "filtered-output-indicator" in template
     assert 'document.querySelectorAll("[data-operation-open]")' in script
-    assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
-    assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
-    assert "target.scrollIntoView" in script
-    assert "technicalDetails.open = true" in script
-    assert 'aria-expanded", "true"' in script
-    assert 'tabindex="-1"' in template
+    assert "data-theme-select" in template
+    assert 'option value="classic"' in template
+    assert 'option value="dark"' in template
+    assert 'option value="light"' in template
+    assert 'data-theme="classic"' in base_template
+    assert "podpilot-color-theme" in script
+    assert 'document.documentElement.dataset.theme = activeTheme' in script
+    assert 'html[data-theme="light"] .ask-page' in styles
+    assert 'html[data-theme="dark"] .ask-page' in styles
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template
@@ -13228,7 +13225,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
         'class="chat-thread ask-thread"'
     )
     assert "ask-sidebar" not in template
-    assert "data-evidence-dialog" in template and "data-evidence-open" in template
+    assert "data-evidence-dialog" not in template and "data-evidence-open" not in template
     assert "tool-activity" not in template
     assert "Inspected {{ message.activity.reads" not in template
     assert 'class="answer-status answer-status-limited"' in template
@@ -13240,7 +13237,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "recent_conversations" in base_template
     assert "nav-session-list" in base_template
     assert "nav-session-delete" in base_template
-    assert "evidenceDialog.showModal()" in script
+    assert "evidenceDialog.showModal()" not in script
     assert 'name="include_raw_response"' in template
     assert "Show raw model response" in template
     assert 'class="raw-model-response"' in template
@@ -13276,7 +13273,7 @@ def test_recent_ask_sessions_remain_visible_outside_ask_routes(tmp_path: Path) -
     assert 'href="/memory"' not in dashboard.text
 
 
-def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
+def test_ask_evidence_ui_exposes_inline_citations_without_redundant_drawer(
     tmp_path: Path,
 ) -> None:
     app, settings = make_app(
@@ -13348,15 +13345,14 @@ def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
     assert "Evidence-backed" in rendered.text
     assert "Cluster-specific claims are backed by the cited observations" in rendered.text
     assert "20:51:27 EST (-4)" in rendered.text
-    assert f'href="#evidence-{evidence_id}"' in rendered.text
+    assert f'href="#evidence-{evidence_id}"' not in rendered.text
     assert f">{evidence_id}</code>" in rendered.text
     assert "TLS termination" in rendered.text
     assert "passthrough" in rendered.text
-    assert "Route target port" in rendered.text
-    assert "View technical details" in rendered.text
-    assert "Redacted collected payload" in rendered.text
-    assert "Evidence links beneath replies open and focus the cited card" in rendered.text
-    assert 'aria-controls="evidence-dialog"' in rendered.text
+    assert "kubernetes:route.openshift.io/v1:Route:openshift-ingress/*" in rendered.text
+    assert "View technical details" not in rendered.text
+    assert "Redacted collected payload" not in rendered.text
+    assert 'aria-controls="evidence-dialog"' not in rendered.text
 
 
 def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Path) -> None:
