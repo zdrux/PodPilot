@@ -1162,8 +1162,6 @@ body { background-image: none; }
   .ask-page .shell { grid-template-columns: 210px minmax(0, 1fr); }
   .ask-layout { display: block; overflow-y: auto; }
   .ask-page .ask-panel { height: min(100dvh, 900px); border-right: 0; }
-  .ask-page .ask-session-header { align-items: stretch; flex-direction: column; gap: 12px; }
-  .ask-page .ask-session-header .panel-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .ask-session-heading-row h2 { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   .ask-composer .composer-toolbar { align-items: stretch !important; flex-direction: column; gap: 9px !important; }
   .ask-composer .question-cluster-row { width: 100%; }
