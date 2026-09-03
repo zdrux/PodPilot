@@ -1,6 +1,6 @@
 # PodPilot Architecture
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 
 ## Overview
@@ -10,9 +10,10 @@ investigations. Deterministic clients gather cluster resources, events, logs,
 PromQL results, alert rules, and active alerts. Diagnostic tools normalize and
 correlate that evidence before an AI layer explains likely causes and next steps.
 
-The initial product is investigative by default and supports a small catalog of
-approved remediations. Mutations cross a dedicated policy boundary and must not
-be smuggled in through generic shell or unrestricted Kubernetes tools.
+The product is investigative by default. Delegated Investigator and Action conversations use the
+same agent loop and investigation tools; mutations cross a broker capability boundary. Investigator
+requests are read-only, while Action requests are evaluated with the signed-in user's Kubernetes
+RBAC and admission policy.
 
 ## Components
 
@@ -33,8 +34,9 @@ or optional grounded candidates only. Their completion, failure, result shape, o
 presentation hint cannot stop, continue, cancel, replace, or redirect an investigation.
 
 The orchestrator retains enforcement authority rather than investigative authority. It validates
-schemas and exact targets, denies sensitive resources and mutations, applies RBAC, redaction,
-read/time/output bounds, and requires approval at the mutation boundary. An invalid target may be
+schemas and exact targets, denies sensitive resources, applies the selected read-only or read-write
+proxy capability, RBAC, redaction, and time/output bounds, and retains preview plus explicit
+approval at the mutation boundary. An invalid target may be
 returned to the agent for correction, but the server does not substitute a different read. A valid
 agent decision to answer is accepted even when other candidates exist. A valid final answer is
 stored after redaction and safe-Markdown normalization without style rewrites, deterministic prose
@@ -42,23 +44,46 @@ injection, or server-directed gap recovery. Citation conflicts change evidence s
 limitations; they do not erase the agent's text. Deterministic answer generation is reserved for a
 model-provider or structured-contract failure after evidence has already been collected.
 
-Native resource tables, metric cards, and parsed dynamic-column Markdown tables are presentation
-views. They are additive and never suppress the complete agent response. `list_resources`,
-`search_resources`, and `watch_resources` return bounded projections with
-`fullObjectsIncluded=false`; the agent decides whether exact object reads are material. Raw bounded
+Metric cards and parsed dynamic-column Markdown tables are presentation views. They are additive
+and never suppress the complete agent response. The unified agent does not receive generic
+`list_resources` or `search_resources` tools and does not receive an unsolicited native inventory
+table; it gathers Kubernetes objects with bounded brokered `oc` reads and authors the result shape.
+Purpose-built legacy collectors may still use bounded projected object reads internally. Raw bounded
 log tails remain available to the final agent instead of being replaced by a separate server-side
-log interpretation.
+log interpretation. Safe-Markdown rendering recognizes attribute-free `<br>`, `<br/>`, and
+`<br />` tags as line breaks in ordinary text and table cells. All other raw HTML remains escaped,
+and break-like text inside inline or fenced code remains literal. Answer-table cells also receive a
+bounded structured-output cleanup: unmatched braces are removed only at item boundaries, and a
+leading `unknown` placeholder is discarded only when real cell content follows. Balanced object and
+OpenShift template braces are preserved.
 
 ## Current Runtime
 
-The SNO milestone overlay and optional remote agentic overlay provide an explicit unrestricted
-agent path. The Chat Completions model can select typed `list_resources`, `search_resources`,
-`http_probe`, `query_audit_events`, and `query_metrics` helpers in the same iterative loop as its unrestricted
-shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
+Delegated and shared-credential Investigator and Action conversations share the same agent tool
+contract. The Chat Completions model can select typed `http_probe`, `query_audit_events`, and
+`query_metrics` helpers in the same iterative loop as its brokered
+shell escape hatch. The helpers reuse the typed readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit
 projection, and registered metric backends without making a collector the orchestrator.
+The model ends this loop through a structured `finish_investigation` call with `complete`,
+`blocked`, or `budget_exhausted`. A claimed completion is returned to the loop when it declares
+remaining safe reads or delegates an available read-only check to the operator. PodPilot does not
+de-duplicate model-selected shell commands or require model-authored retry metadata: the agent may
+re-observe state as needed, and every attempt remains bounded by the action budget, command timeout,
+outer run deadline, broker authorization, and audit trail. PodPilot does not prescribe a diagnostic sequence.
+Collector transport failures retain a safe category such as `tls_verification_failed`, `timeout`,
+or `transport_unavailable` so the model does not confuse failed trust verification with backend
+absence.
+Before the first delegated-agent decision, normal code performs the same reviewed, enabled,
+unexpired, non-restricted lexical memory retrieval used by standalone Ask. It de-duplicates matches
+across selected clusters and supplies at most four 1,200-character chunks with applicable-cluster
+labels. The chunks are a separate untrusted data message: they cannot define tools, authorize an
+operation, replace live evidence, or prove current cluster state.
+The generic LIST and SEARCH helpers are absent from every unified-agent schema. Enumeration and
+general object-field filtering use bounded `oc get` commands in both conversation modes. The agent
+must project or filter large responses in the runner before returning them to model context.
 Thanos remains the preferred trend source. Node rankings and namespace-scoped Pod CPU/memory
 rankings fall back to a normalized current `metrics.k8s.io/v1beta1` snapshot when Thanos is
 unavailable. The fallback is explicitly current-only; average and peak equal current and the
@@ -82,14 +107,16 @@ namespace and compile the `strimzi.io/cluster=<name>` selector through the live 
 topic telemetry, lag, throughput, and health questions remain outside this inventory shortcut.
 
 The API then sends OpenAI-compatible Chat Completions requests with bounded typed read helpers and
-one `execute_shell` function. Broad Pod health questions use the anomaly-first
-`pod_health_summary` helper, optionally scoped by namespace and label selector. A universal healthy
-conclusion requires its complete-scan flag; a resource inventory with compacted status detail cannot
-substitute for complete health coverage.
-Each call identifies one cluster from the conversation's immutable selection. Runtime-cluster calls
-use the projected service-account identity. For a registered remote cluster the API resolves that
-cluster's stored token and brokers the API origin, token, and effective TLS mode over Pod loopback
-for that call only. The `oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
+one `execute_shell` function. The anomaly-first `pod_health_summary` helper is available with optional
+namespace and label-selector scope, but it is not mandatory. Its output, shell observations, and other
+tool results are returned as evidence to the agent. PodPilot does not replace a valid agent answer with
+a server-authored Pod-health conclusion or impose a typed-scan completion requirement on that answer.
+Each call identifies one cluster from the conversation's immutable selection. The API resolves that
+cluster's token from the conversation owner's in-memory delegated session and brokers the API origin,
+token, execution capability, and effective TLS mode over Pod loopback for that call only. Read-only
+capabilities allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while blocking writes and
+Secret reads; Action capabilities retain the user's full Kubernetes permissions. The
+`oc-runner` creates a mode-0600 temporary kubeconfig, executes Bash with the
 Linux `oc` binary, deletes the kubeconfig, and returns
 exit code, stdout, and stderr as a Chat Completions `tool` message. The loop continues until the
 model returns a final assistant message or the durable Ask run reaches its outer execution
@@ -98,13 +125,56 @@ when to invoke them, how to interpret their observations, and whether to continu
 helper or shell. The shell path is not constrained to `ReadIntent`, typed remediation, preview, or
 approval. The loop retains conversation ownership, provider credentials, redaction before model
 reuse/persistence, progress, command metadata audit, and the run deadline.
+Before first reinjection, a shell result is capped to a 48 KiB provider payload with separate bounded
+stdout and stderr prefixes. The model receives that raw result once. After the next model response,
+PodPilot removes the completed assistant tool-call and tool-result protocol pair and replaces it with
+a deterministic rolling evidence ledger: a compact index of all completed operations plus bounded
+detail for up to the full 50-operation window. If the 80 KiB ledger ceiling requires reduction,
+successful read-only shell excerpts are discarded before typed observations, mutations, or failed
+operations. Exact command execution remains available in the activity and audit records, while raw
+logs and object YAML do not accumulate as hidden provider conversation state.
+The latest conversation messages are sent verbatim after redaction. Once older messages roll out of
+that window, their existing bounded transcript digest is also supplied to the agent as continuity
+data rather than silently omitted.
+Every Chat Completions call estimates the complete messages-plus-tools token count using lexical BPE-
+style fragments, JSON punctuation, and a protocol safety margin. This avoids treating each UTF-8 byte
+as a token while remaining tokenizer-independent for OpenAI-compatible gateways that front different
+models. Older tool/history messages are compacted when needed, and PodPilot refuses local transmission
+if the estimate still exceeds the profile's `max_input_tokens` ceiling. The estimate is content-
+agnostic: PodPilot does not infer an investigation's intent from question wording to require particular
+shell fields or command shapes.
+Lazy delegated typed-reader construction, including Kubernetes dynamic-client discovery through the
+loopback broker, runs in a worker thread. It must not block the ASGI event loop that serves that same
+broker or the health endpoints. Delegated metric and audit adapters resolve the current token from
+the memory-only capability vault for each request, use the registered cluster TLS policy, and become
+unavailable as soon as that capability is revoked or expires.
+Agent tool schemas enumerate the conversation's selected cluster IDs and require one target per
+call. Malformed arguments are rejected before cluster execution with bounded correction guidance.
+Those model-formatting mistakes remain audited and appear only in collapsed tool-call diagnostics;
+actual collector denials, unavailable sources, and non-zero commands remain visible limitations.
+An empty label-filtered workload query is treated only as a zero-match selector result. Health or
+absence conclusions for operator-managed stacks require the exact discovered custom resource status
+and its owned or selected workloads; the agent may not substitute a guessed conventional label.
 The standing agent instructions require initial Pod and container log reads to use an exact scope
 when known and a bounded `oc logs --tail=200 --timestamps` sample, optionally constrained by time.
 The agent may narrow or expand subsequent reads in bounded increments when that sample is
 insufficient, rather than placing an arbitrary full log stream into every later model request.
-If a Chat Completions turn returns neither content nor a tool call, the API issues one bounded
-finalization retry using the command results already in context. A second empty turn fails the run;
-successful commands are not automatically repeated and the loop cannot retry indefinitely.
+Successful `oc get ... -o yaml` shell results are parsed before model reinjection and have
+`metadata.managedFields` removed recursively from objects and list items. The executed command and
+cluster response semantics remain unchanged; non-YAML output and YAML-producing non-GET commands
+are left untouched.
+If a Chat Completions turn returns neither content nor a tool call, or serializes tool arguments as
+the final answer, the API issues up to two bounded finalization attempts using the command results
+already in context. Successful commands are not automatically repeated. If both attempts remain
+empty or tool-shaped, PodPilot renders deterministic collected evidence (or a safe unresolved
+message when only shell reads exist) instead of exposing the malformed model output. When the
+operator enabled raw-response capture for that turn, rejected non-empty final answers remain
+available in the untrusted raw-response panel.
+Otherwise, the agent's redacted prose and its chosen completion point are preserved. PodPilot does
+not reject a conclusion for offering optional follow-up work, rewrite it based on semantic claims
+about prior writes, remove recommendation sections, or replace a valid structured-workflow answer
+with a server-authored audit, access-review, or configuration-comparison conclusion. Evidence status,
+audited operations, limitations, and native evidence views remain separate metadata and presentation.
 No retrieval enrichment is authoritative over the agent and no collector suppresses a model-proposed
 read. Collection completeness is evidence about the bounded read, not answer completeness. Native
 resource cards remain additive while the agent can explain selectors, rules, effects, and other
@@ -133,15 +203,22 @@ The registered Loki audit reader and Strimzi Kafka inventory are grounded capabi
 routes. Their success, timeout, denial, or API-missing result is returned to the agent with exact
 cluster attribution. Candidate validation prevents misspelled or invented resource types, while the
 agent remains free to select another safe read or explain the limitation.
-Namespace-scoped Kafka topic-storage requests are a registered two-stage read. PodPilot first lists
+Namespace-scoped Kafka topic-disk-utilization requests are a registered two-stage read. PodPilot first lists
 exact `Kafka` CR coordinates in the requested namespace, then issues one bounded
-`kafka_topic_storage` query per observed CR and groups the result by topic. An empty namespace,
+`kafka_topic_disk_utilization` query per observed CR and groups the result by topic. The query
+compares replicated topic log bytes with aggregate capacity from that Kafka cluster's broker PVCs.
+When the operator names one topic, the typed request keeps the owning `Kafka` CR as its target and
+adds an exact `topic` selector, so that topic's byte and partition details do not depend on its rank.
+An empty namespace,
 partial metric failure, or denied monitoring read remains visible evidence. This resolves the Kafka
 name from observed API evidence instead of requiring the model or operator to supply it, without
 forcing the agent to stop.
 Each shell process group also has an independent runner-side deadline. While it is active, the
-runner polls the process silently and the API records changing elapsed-time progress events so the
-SSE timeline remains visibly live without periodic container-log heartbeats. Timeout returns exit code `124` and a redacted operator-visible
+runner polls the process silently. Before dispatch, the API deterministically reduces the selected
+`oc`/`kubectl` command to a safe operation, resource, name, namespace, and cluster description. The
+SSE timeline reports that description at start, during changing elapsed-time updates, and at
+completion or failure without exposing command bodies, inline manifests, or model-authored
+narration. Timeout returns exit code `124` and a redacted operator-visible
 limitation instead of leaving the run indefinitely on `agent_command`.
 Dedicated drain threads consume stdout and stderr as the process runs, retain a bounded prefix of
 each stream, and discard overflow with an explicit truncation marker. This prevents `communicate()`
@@ -152,22 +229,36 @@ provider timeout and transient retry count (default three); the SDK retries time
 connection failures, rate limits, and transient server responses while the durable Ask deadline
 remains the outer bound.
 
-The sidecar shares the Pod-level `podpilot-investigator` service account for runtime-cluster calls. In the composed SNO
-agentic overlay that identity remains bound to `cluster-reader` plus monitoring/logging views; the
-separate `ai-observer` cluster-admin overlay is not included. The remote agentic overlay inherits
-the standard remote identity and grants no additional RBAC. Consequently the model may ask for
-any shell or `oc` operation, but Kubernetes RBAC and admission decide whether it succeeds. The
-portable base and standard remote overlay keep `PODPILOT_AGENT_MODE=guarded` and do not deploy the sidecar.
-The optional remote agentic overlay also forces registered remote-cluster TLS verification off; the
-secure default remains on everywhere else.
+In the current Ask architecture the sidecar has no projected service-account credential. FastAPI passes it only
+a random, cluster-specific read-only or action loopback proxy capability; the proxy injects the user-owned in-memory
+OAuth token for each Kubernetes request and applies the cluster entry's TLS choice and optional CA
+trust. Conversation rows retain only `read_only` or `action`, the owning session ID, and immutable
+cluster IDs—never the token. After the applicable preview and approval controls, Action conversations
+can therefore issue CREATE, PATCH, APPLY, and DELETE requests when the remote user's RBAC permits
+them, while Investigator conversations receive broker HTTP 403 responses for those operations
+without receiving the bearer token itself.
+The picker reads shared entries plus the current user's private entries. Credentials are submitted
+for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
+the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
+the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
+Owners can permanently delete private registry entries; this revokes matching live delegated
+connections while historical conversations retain their immutable cluster references. Shared
+entries remain disable-only so their lifecycle stays under configuration-administrator control.
 
-The guarded single Pod contains two containers; either unrestricted overlay adds the runner as a
-third. The OpenShift OAuth proxy is the
+Active workload and remote overlays enable delegated access and deploy a tokenless runner. The
+Pod-level `podpilot-investigator` service account is not bound to `cluster-reader`; its custom
+`podpilot-role-reader` ClusterRole permits only exact OpenShift Group GETs for application-role
+resolution. Each runner command receives a conversation capability, and Kubernetes RBAC and
+admission evaluate the signed-in user. Legacy feature-flag-off agent mode therefore requires an
+explicit separately reviewed cluster-read identity and is not furnished by the active overlays.
+No active deployment reads a remote cluster-token Secret; TLS policy is stored per cluster entry.
+
+The current Pod contains the API, OAuth proxy, and tokenless runner. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
-`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves the
-highest matching elevated role from deployment-configured OpenShift Group lists
-or defaults the authenticated user to Viewer, renders the dashboard,
-and persists schema state in SQLite on the `podpilot-data` PVC. An init container
+`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves Investigator or Read-Write
+from deployment-configured OpenShift groups, resolves configuration administration independently,
+and denies unmatched users. The landing route redirects to Ask; Cluster Health is not active.
+The API persists schema state in SQLite on the `podpilot-data` PVC. An init container
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.
 
@@ -203,20 +294,22 @@ or an explicitly insecure TLS mode can be selected per endpoint; insecure mode i
 reported as accepted rather than verified.
 
 Only a profile that passes endpoint, TLS acceptance, authentication, model,
-structured-output, and configured embedding checks is usable. Streaming and tool
-calling are recorded capabilities but are not required because the current agent
+structured-output, and configured embedding checks is ready. The workflow-schema probe is an
+informational compatibility smoke test: it verifies schema parsing without grading synthetic
+investigation choices, and it does not degrade an otherwise ready profile. Runtime code still
+validates every model-authored structure and retains deterministic fallback behavior. Streaming and
+tool calling are recorded capabilities but are not required because the current agent
 loop exchanges schema-validated read plans rather than provider-native tool calls.
 Schema-validated interpretation is displayed separately from deterministic facts.
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
-The Ask-only cluster registry stores API origins, tags, lifecycle state, TLS policy,
-and opaque credential keys in SQLite. Remote bearer tokens live under those keys in
-the resourceName-restricted `ai-ops/podpilot-cluster-credentials` Secret. The runtime
-cluster is registered automatically and continues to use its projected service-account
-identity; an Approver may update only its display name and tags. An Approver can create,
-update, test, and disable remote entries; disabling removes the usable token but retains
-metadata and historical attribution.
+The Ask-only cluster registry stores API origins, environment, ownership/visibility,
+tags, lifecycle state, and per-cluster TLS policy in SQLite. Shared entries are managed
+by configuration administrators; each user may also maintain private entries. The
+registry never stores a remote-cluster credential. At conversation connect time the API
+exchanges the user's environment credentials with every selected cluster and keeps only
+the resulting tokens in the in-memory delegated-session vault.
 
 Every standalone Ask conversation stores an immutable ordered selection of one to ten
 cluster IDs. Changing selection starts another conversation and preserves the old session.
@@ -226,7 +319,7 @@ and attributes every observation, read record, citation, limitation, and compari
 source cluster. A failed or disabled target becomes a cluster-specific limitation instead
 of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
 health, alert investigations, or remediation in this release. Typed Ask metrics use each
-remote cluster's registered bearer token: PodPilot discovers the cluster's
+remote cluster's delegated user token: PodPilot discovers the cluster's
 `openshift-monitoring/thanos-querier` Route through its Kubernetes API, then queries that
 authenticated Route through the same bounded metrics adapter used by the runtime cluster.
 Aggregate application-log rankings similarly discover the conventional
@@ -287,7 +380,7 @@ Milestone 8 adds durable `ChatMessage` records and a provider-level structured
 chat contract. The API composes bounded context from one investigation, redacts
 the operator message before storage, and sends no Kubernetes credentials or
 generic Kubernetes client to the provider. Incident chat now shares Ask
-PodPilot's bounded read-plan broker: up to ten planning rounds and 25 weighted
+PodPilot's bounded read-plan broker: up to ten planning rounds and 50 weighted
 investigation units cover resource, ConfigMap, Event, Pod-log, metric, HTTP-probe, and
 bounded-watch reads under the same read-only identity,
 deny policy, normalization, redaction, and evidence cap. Trusted alert labels seed
@@ -361,7 +454,7 @@ is supplied.
 
 Milestone 10 adds standalone Ask PodPilot conversations and the reusable read
 broker later shared by incident chat. Up to ten
-schema-validated planning rounds may spend at most 25 weighted units on
+schema-validated planning rounds may spend at most 50 weighted units on
 `discover_resources`, `get_resource`, `list_resources`, `search_resources`,
 `watch_resources`, `pod_logs`, `http_probe`, and `query_metrics`; each round receives the bounded
 observations from earlier rounds so resource discovery can lead to exact log reads.
@@ -441,7 +534,9 @@ fact cards; LIST responses continue to expose metadata only.
 For `cluster_audit_events`, normal code compiles the grounded namespace, username, operation,
 outcome, period, and limit into a fixed Loki audit query. Loki applies those filters before its
 backward result limit and compact line projection; PodPilot revalidates them while projecting
-events and never sends model-authored LogQL.
+events and never sends model-authored LogQL. Reviewed query profiles cover a direct audit event,
+JSON audit text in the OpenShift log record's `message` field, and a parsed event under `structured`;
+projected results are deduplicated by audit ID.
 The model owns troubleshooting direction, but selects rather than authors each ordinary read.
 Normal code derives up to twelve opaque actions from exact operator coordinates, observed
 relationship frontiers, unresolved evidence needs, implicated Pod-log targets, and bounded matches
@@ -669,12 +764,14 @@ and completion transactions from concurrent runs can coexist. A restart changes 
 `running` jobs back to `queued`, so the workers
 can recover them from the PVC. The browser receives an immediate redirect, renders
 the submitted question optimistically, and follows owner-authorized Server-Sent
-Events for durable `starting`, `discovering`, `planning`, `hypothesis`, `next_check`,
-`collecting`, `finding`, `answering`,
+Events for durable `discovering`, `planning`, `hypothesis`, `next_check`,
+`collecting`, `agent_thinking`, `agent_command`, `finding`, `answering`,
 and terminal updates. Reloading reconstructs the same state from SQLite, and an
 SSE heartbeat keeps the OpenShift Route connection active. These events describe
 short operator-visible hypotheses and server-observed workflow actions; PodPilot does not
-expose hidden model chain-of-thought. The rolling journal exists only while a run is active.
+expose hidden model chain-of-thought. Queued state remains visible in the live header, while
+one-time queued and starting events are omitted from the phase journal. Agent command retains five
+recent updates and other visible phases retain three. The rolling journal exists only while a run is active.
 The final schema-validated answer remains a complete response rather than token
 streaming.
 For an individual Ask question, the operator may opt in to retaining the raw final-answer

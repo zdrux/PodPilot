@@ -1,4 +1,8 @@
-from podpilot_api.markdown import render_safe_markdown, split_markdown_tables
+from podpilot_api.markdown import (
+    render_safe_markdown,
+    render_safe_table_markdown,
+    split_markdown_tables,
+)
 
 
 def test_chat_markdown_renders_tables_and_common_prose() -> None:
@@ -19,6 +23,27 @@ def test_chat_markdown_escapes_html_and_rejects_unsafe_links() -> None:
     assert "&lt;script&gt;" in rendered
     assert "javascript:" in rendered
     assert '<a href="javascript:' not in rendered
+
+
+def test_safe_html_breaks_render_in_markdown_tables_without_enabling_html() -> None:
+    rendered = str(render_safe_markdown(
+        "| Cluster | Outputs |\n|---|---|\n"
+        "| Central | Kafka<br>Syslog<BR />Loki<br/>Archive |"
+    ))
+
+    assert "Kafka<br>\nSyslog<br>\nLoki<br>\nArchive" in rendered
+    assert "&lt;br" not in rendered
+
+
+def test_html_break_allowlist_does_not_apply_inside_code_or_to_other_tags() -> None:
+    rendered = str(render_safe_markdown(
+        "`<br>` <script>alert(1)</script> <br class=\"unsafe\">"
+    ))
+
+    assert "<code>&lt;br&gt;</code>" in rendered
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "&lt;br class=&quot;unsafe&quot;&gt;" in rendered
 
 
 def test_chat_markdown_pretty_prints_fenced_and_standalone_json() -> None:
@@ -55,6 +80,27 @@ def test_markdown_tables_become_ordered_bounded_native_blocks() -> None:
     assert blocks[2]["content"] == "The policy effect remains visible."
 
 
+def test_flat_json_summary_becomes_an_ordered_native_table() -> None:
+    blocks = split_markdown_tables(
+        "## Current pod health (post-fix)\n\n"
+        '```json\n{"anomalies":[],"anomalyCount":0,"scanComplete":true,"scannedCount":5}\n```\n\n'
+        "All matching Pods are healthy."
+    )
+
+    assert [block["type"] for block in blocks] == [
+        "markdown", "answer_table", "markdown",
+    ]
+    table = blocks[1]
+    assert table["source"] == "answer_json"
+    assert table["rows"] == [
+        {"cells": ["`anomalies`", "`[]`"]},
+        {"cells": ["`anomalyCount`", "`0`"]},
+        {"cells": ["`scanComplete`", "`true`"]},
+        {"cells": ["`scannedCount`", "`5`"]},
+    ]
+    assert blocks[2]["content"] == "All matching Pods are healthy."
+
+
 def test_markdown_table_extraction_is_bounded_and_leaves_extra_tables_in_prose() -> None:
     blocks = split_markdown_tables(
         "| A |\n|---|\n| 1 |\n| 2 |\n\n| B |\n|---|\n| 3 |",
@@ -80,3 +126,68 @@ def test_extracted_markdown_cells_remain_safe_markdown_not_trusted_html() -> Non
     assert "<script>" not in rendered
     assert "&lt;script&gt;" in rendered
     assert "<strong>blocked</strong>" in rendered
+
+
+def test_extracted_markdown_table_cells_render_safe_html_breaks() -> None:
+    table = split_markdown_tables(
+        "| Cluster | Outputs |\n|---|---|\n"
+        "| Central | Kafka<br>Syslog<br />Loki |"
+    )[0]
+    cell = table["rows"][0]["cells"][1]
+    rendered = str(render_safe_markdown(cell))
+
+    assert rendered == "<p>Kafka<br>\nSyslog<br>\nLoki</p>\n"
+
+
+def test_table_cells_repair_break_tags_wrapped_in_model_code_spans() -> None:
+    rendered = str(render_safe_table_markdown(
+        "`unknown`} `<br>` **tm-vault-output**<BR />`next<br/>line`"
+    ))
+
+    assert "unknown" not in rendered
+    assert "}" not in rendered
+    assert "&lt;br" not in rendered.lower()
+    assert "<code><br>" not in rendered
+    assert rendered.count("<br>") == 2
+    assert "<strong>tm-vault-output</strong>" in rendered
+    assert "<code>next<br>\nline</code>" in rendered
+
+
+def test_table_cell_break_repair_does_not_enable_other_raw_html() -> None:
+    rendered = str(render_safe_table_markdown(
+        "`<script>alert(1)</script>` <img src=x onerror=alert(1)> `<br>`"
+    ))
+
+    assert "<script>" not in rendered
+    assert "<img" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
+    assert rendered.count("<br>") == 1
+
+
+def test_table_cells_remove_unmatched_serialization_braces_but_keep_templates() -> None:
+    table = split_markdown_tables(
+        "| Filters defined |\n|---|\n"
+        "| `\"unknown\"`} `<br>` • **forward-syslog** – `tcp://logs:10517`{<br>"
+        "• topic `logs-{kubernetes.namespace_name}`<br>• literal `{}`<br>"
+        "• JSON `{\"mode\":\"strict\"}` |"
+    )[0]
+    cell = table["rows"][0]["cells"][0]
+    rendered = str(render_safe_table_markdown(cell))
+
+    assert "unknown" not in cell
+    assert "10517{" not in cell
+    assert "{kubernetes.namespace_name}" in cell
+    assert "`{}`" in cell
+    assert '`{\"mode\":\"strict\"}`' in cell
+    assert "unknown" not in rendered
+    assert "10517{" not in rendered
+    assert "{kubernetes.namespace_name}" in rendered
+    assert "<code>{}</code>" in rendered
+    assert '<code>{&quot;mode&quot;:&quot;strict&quot;}</code>' in rendered
+
+
+def test_table_cell_keeps_unknown_when_it_is_the_only_value() -> None:
+    rendered = str(render_safe_table_markdown('"unknown"'))
+
+    assert rendered == '<p>unknown</p>\n'

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Connect clusters · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Your cluster identity</p><h1>Cluster sign-ins</h1><p class="subtitle">Add clusters from one environment to this PodPilot browser session at a time; your password is discarded immediately after OAuth. Existing sign-ins stay connected across conversations for up to {{ session_hours }} hours, and their tokens are revoked when you sign out.</p></div></header>
+<section class="delegated-connect-panel{% if connections %} has-connections{% endif %}" aria-labelledby="cluster-signin-title">
+  {% if connections %}
+  <div class="connected-cluster-section">
+    <div class="connected-cluster-heading"><div><p class="eyebrow">Active identities</p><h2>Connected clusters</h2></div><span class="tag">{{ connections | length }} connected</span></div>
+    <div class="connected-cluster-list">
+    {% for connection in connections %}
+    <div class="connected-cluster-item">
+      <span class="connected-cluster-status" aria-hidden="true"></span>
+      <span><strong>{{ connection.cluster_name }}</strong><small>Signed in as {{ connection.remote_username }} · available until {{ connection.expires_at | est_time('%H:%M') }}</small></span>
+      <button class="button danger compact" type="button" data-delegated-remove-url="/api/v1/delegated-sessions/connections/{{ connection.cluster_id }}/disconnect" data-cluster-name="{{ connection.cluster_name }}">Remove</button>
+    </div>
+    {% endfor %}
+    </div>
+    <button class="button danger compact connected-cluster-clear" type="button" data-delegated-disconnect-url="/api/v1/delegated-sessions/disconnect">Remove all sign-ins</button>
+  </div>
+  {% endif %}
+  <div class="cluster-signin-stage">
+    <div class="cluster-signin-card">
+      <div class="cluster-signin-accent" aria-hidden="true"></div>
+      <div class="cluster-signin-heading">
+        <span class="cluster-signin-emblem" aria-hidden="true"><svg viewBox="0 0 32 36"><path d="M16 2.5 28 7v9.2c0 8.1-4.8 14.3-12 17.3-7.2-3-12-9.2-12-17.3V7l12-4.5Z"/><path d="M12 16v-2.2a4 4 0 0 1 8 0V16"/><rect x="10" y="16" width="12" height="9" rx="2"/><path d="M16 19.5v2.5"/></svg></span>
+        <div><p class="eyebrow">Secure connection</p><h2 id="cluster-signin-title">Connect your cluster identity</h2><p>Choose an approved target, then authenticate directly with its OpenShift OAuth service.</p></div>
+        <span class="tag">{{ clusters | length }} available</span>
+      </div>
+      <form class="settings-form cluster-signin-form" data-delegated-connect-form data-connect-url="/api/v1/delegated-sessions/connect">
+        <div class="cluster-signin-step"><span class="cluster-signin-step-number" aria-hidden="true">1</span><div><strong>Select cluster targets</strong><small>Clusters must belong to the same environment.</small></div></div>
+        <details class="cluster-picker cluster-signin-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}">
+          <summary><span class="cluster-picker-selection" data-cluster-picker-label><span class="cluster-picker-placeholder">Choose one or more clusters</span></span><small data-cluster-picker-count></small></summary>
+          <div class="cluster-picker-menu">
+            <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search>
+            <div class="cluster-options">
+            {% for cluster in clusters %}
+              {% set is_connected = cluster.id in connected_cluster_ids %}
+              <label data-cluster-option data-search="{{ cluster.environment }} {{ cluster.name }} {{ cluster.tags | tojson }}">
+                <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox data-environment="{{ cluster.environment }}" data-connected="{{ 'true' if is_connected else 'false' }}" {% if cluster.id in retry_cluster_ids and not is_connected %}checked{% endif %} {% if is_connected %}disabled{% endif %}>
+                <span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment | upper }} · {% if cluster.is_system %}PodPilot system cluster{% else %}{{ cluster.api_url }}{% if cluster.has_custom_ca %} · custom CA{% endif %}{% if not cluster.tls_verify %} · TLS verification disabled{% endif %}{% endif %}</small></span>
+                {% if is_connected %}<em>Connected</em>{% endif %}
+              </label>
+            {% endfor %}
+            </div>
+          </div>
+        </details>
+        <input type="hidden" name="cluster_ids" data-cluster-ids value="[]">
+        <div class="cluster-signin-step credentials-step"><span class="cluster-signin-step-number" aria-hidden="true">2</span><div><strong>Enter your OpenShift credentials</strong><small>Your password is exchanged for temporary tokens and immediately discarded.</small></div></div>
+        <label class="cluster-signin-field"><span>Remote username</span><span class="cluster-input-frame"><span class="cluster-input-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6"/></svg></span><input name="username" autocomplete="username" required maxlength="253" placeholder="Your cluster username"></span></label>
+        <label class="cluster-signin-field"><span>Remote password</span><span class="cluster-input-frame"><span class="cluster-input-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M12 14v2.5"/></svg></span><input name="password" type="password" autocomplete="current-password" required maxlength="4096" placeholder="Your cluster password"></span></label>
+        <label class="checkbox-field cluster-consent"><input type="checkbox" name="consent" required><span><strong>Authorize temporary access</strong><small>I authorize PodPilot to create temporary user tokens for the selected clusters. Action conversations may use every permission granted to this identity.</small></span></label>
+        <input type="hidden" name="next_url" value="{{ next_url }}">
+        <div class="form-actions cluster-signin-actions"><button class="button primary" type="submit"><span aria-hidden="true">→</span> Add selected clusters</button></div>
+      </form>
+      <div class="cluster-signin-trust"><span aria-hidden="true">◇</span><span>Encrypted in transit</span><i></i><span>Password never stored</span><i></i><span>Tokens revoked at sign-out</span></div>
+    </div>
+  </div>
+</section>
+<div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+{% endblock %}

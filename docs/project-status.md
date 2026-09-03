@@ -1,16 +1,33 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-08-29
+Last reviewed: 2026-09-02
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
 ## Resume Here
 
-PodPilot 0.12.0 from feature branch `codex/unrestricted-agentic-mode` is deployed on the
-disposable SNO lab at schema head `0013_raw_model_responses`. The lab deployment has
-unrestricted agent mode enabled with OpenRouter Chat Completions, exact model
-`openai/gpt-oss-120b`, and the localhost `oc-runner` sidecar. It also adds Ask-only
+PodPilot 0.12.0 from the delegated-sessions feature branch is deployed on the
+disposable SNO lab at schema head `0021_user_delegated_access`. The 2026-09-01 rollout uses
+application image digest `sha256:02b041afb5824019941cc1e62067dd90748063992f9514106d83c4464fced061`
+and runner digest `sha256:fc7c654ea5f3ea9c86b69e698f2640f038aab511d6de360edb4f1742ccaac05e`.
+The deployed implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,
+supports per-cluster TLS policy and private user-owned registry entries, and removes stored remote
+cluster credentials. Successful cluster sign-ins are reused across new conversations for the
+browser session. Partial login failures remain retryable without discarding successful connections;
+users can append clusters, revoke one sign-in, or clear all sign-ins independently of durable chat history, and an owned
+conversation can resume after its required clusters are reconnected.
+The Workspace navigation also exposes visible clusters as a sidebar tree with connected and
+sign-in-required indicators. A cluster click starts a fresh preselected conversation or routes
+through the existing credential form first; the tree's add control opens a dedicated **My clusters**
+page for owner-scoped ad hoc entries. Shared registry administration now appears only to
+configuration administrators as **Cluster Management** in the Manage section.
+The Ask composer keeps the prompt and its cluster, mode, reasoning, raw-response, and submit
+controls inside one frame. It starts at two text rows, grows through ten as the operator adds
+lines, then scrolls internally; the desktop toolbar stays on one row and Submit matches the
+32-pixel control height.
+OpenRouter Chat Completions with exact model `openai/gpt-oss-120b`, and the localhost tokenless
+`oc-runner` sidecar. It also adds Ask-only
 multi-cluster routing, secret-backed cluster
 management, immutable one-to-ten-cluster conversation selections, cluster-attributed
 evidence, and curated-memory prompt integration governed by explicit cluster targets,
@@ -25,35 +42,109 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 ## Implemented
 
+- The model-facing metric catalog is reduced to 15 CPU, memory, node-utilization, application-log,
+  and Kafka signals. `top_log_volume_by_namespace` again provides the dedicated cluster-level Loki
+  namespace ranking, while `application_log_volume` provides scoped namespace and Pod reads from
+  aggregate byte counts without reading log lines. Kafka topic disk utilization
+  compares replicated topic bytes with the shared allocated broker-PVC capacity. Topic-grouped reads
+  now add bounded topic-byte and partition-replica companion evidence, and Ask renders a topic-first
+  ranking with expandable partition ID, replica bytes, broker ID, and broker Pod placement. Kafka
+  consumer lag remains available. Legacy server-side templates remain readable for persisted evidence
+  but are no longer advertised to the model.
+
+- Dynamic answer tables now use a stricter equal-cell prompt contract and bounded display cleanup
+  for strict-JSON leakage. Redundant leading `unknown` placeholders and unmatched boundary braces
+  are removed while balanced `{}` and OpenShift Logging templates remain literal.
+
+- The pending workload requests an eight-hour projected service-account token for the OAuth client
+  and supervises the pinned proxy's startup-only client-secret cache. Token rotation restarts only
+  `oauth-proxy`, retaining the API process, SQLite state, and stable OAuth cookie key so later fresh
+  browser logins do not fail with `unauthorized_client`.
+
+- The front-door OAuth proxy now uses a fixed eight-hour signed cookie with refresh disabled. The
+  pinned OpenShift provider cannot renew access tokens, so the former one-hour refresh only
+  revalidated the original token and forced relogin on clusters with a one-hour OAuth token TTL.
+
+- Ask now redirects every authorized role through user-owned cluster connections. Investigator is
+  read-only; Read-Write chooses read-only or Action at conversation creation. Configuration
+  administration is orthogonal. Cluster Health is removed from active navigation.
+
+- Cluster, model, and curated-memory configuration now share one explicit management boundary:
+  only Approver and Breakglass sessions see the **Manage** navigation or may open and modify those
+  sections. Investigator, Viewer, and Delegated Operator requests are rejected server-side.
+
+- The delegated-sessions work adds explicit Delegated Operator sessions for users
+  outside every configured PodPilot role group. The delegated picker uses the same enabled cluster
+  registry as cluster management, including the runtime system cluster. Approvers register additional
+  DEV cluster API origins and optional custom CA bundles; users multi-select clusters, complete one-time username/password
+  challenge logins, and receive up to 24-hour memory-only delegated sessions. New conversations lock
+  their cluster set and execution mode. All agent-selected `oc` requests traverse a random loopback API
+  capability whose broker injects the user's token; the runner receives neither that token nor the
+  Pod service-account token. Logout, expiry, replacement, disable, and graceful shutdown attempt
+  OAuth revocation. Investigator and Action sessions use the same agent loop; Investigator receives
+  the read-only proxy capability and Action receives the read-write capability.
+
+- New Ask sessions replace fictional prompt examples with real read-only starter actions. All
+  eligible users can start a failing-workload investigation against the selected clusters or open
+  a namespace/resource workload troubleshooter; the broad recent-warning starter is omitted to
+  avoid placing unprojected cluster-wide Event output into model context. Delegated sessions also
+  expose effective-access and visible-project checks. Starters
+  use the normal conversation API and stay disabled until cluster, model, and session prerequisites
+  are satisfied.
+
 - The Ask orchestration boundary now makes collectors evidence-only. Registered compilers,
-  `list_resources`, search/watch projections, catalogs, relationship graphs, findings, and
+  search/watch projections, catalogs, relationship graphs, findings, and
   enrichment packs can expose grounded candidates and native views but cannot force a read,
-  continue/stop decision, terminal result, or replacement conclusion. Valid agent stops are
-  respected even when unread candidates remain. Automatic TLS retries, referenced-ConfigMap reads,
+  continue/stop decision, terminal result, or replacement conclusion. The agent now terminates
+  through a structured complete/blocked/budget-exhausted contract, and PodPilot accepts the agent's
+  chosen stopping point without semantic deferral detection. Exact same-cluster shell commands require an explicit retry/comparison reason, while
+  the evidence sequence remains model-selected. Automatic TLS retries, referenced-ConfigMap reads,
   Pod-log recovery, answer-gap collection, and style-based answer retries have been removed from
   runtime orchestration. The final agent sees bounded raw log evidence directly.
+  The generic `list_resources` and `search_resources` helpers are absent from the unified agent
+  schema and have no runtime feature flag. Existing resource evidence and low-level object reads
+  inside purpose-built typed collectors remain supported. Both delegated modes can enumerate and
+  filter with deliberately bounded read-only `oc get` commands and then fetch the exact object
+  details required for comparison. The
+  broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
+- Agent tool schemas now enumerate selected cluster IDs. Rejected model-formatting attempts receive retry guidance and render
+  as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
+  and command failures remain visible. Loki transport normalization preserves
+  `tls_verification_failed`, timeout, and transport-unavailable categories rather than reporting
+  certificate failures as generic gateway downtime.
+- Delegated and shared-credential unified-agent conversations expose the same purpose-built HTTP,
+  metric, and audit collectors on every model turn. Delegated
+  Thanos and Loki reads resolve the current memory-only user
+  token per request and stop working immediately after capability revocation; read-only versus
+  read-write behavior is enforced by the Kubernetes broker rather than by different tool menus.
+- Delegated typed collectors initialize their Kubernetes discovery clients in the worker pool. A
+  collector can therefore call the loopback token broker without deadlocking the ASGI event loop or
+  starving liveness and readiness probes while an investigation is running.
 - Agent prose is preserved after redaction and safe-Markdown normalization. Missing or conflicting
   citations lower evidence status and add limitations instead of erasing the response. Native
   resource tables, metric cards, and dynamic-column answer tables are additive and no longer hide
-  prose. Deterministic conclusions remain only as provider/contract-failure fallbacks.
+  prose. Older operator-visible conversation messages remain available through the bounded transcript
+  digest after they leave the recent-message window. Recommendation sections and valid audit, access,
+  or configuration conclusions are no longer removed or replaced by semantic output guards.
+  Flat standalone JSON summaries are transformed into native property/value tables without changing
+  their values. Deterministic conclusions remain only as provider/contract-failure fallbacks.
 
-- A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
+- The delegated agent runtime uses OpenRouter Chat Completions with
   exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
   function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
   typed read/remediation approval inside the explicit agentic mode while retaining the durable run deadline,
-  output redaction before provider reuse, progress, and command metadata audit. The base and
-  standard remote deployments remain guarded; unrestricted remote deployment is an explicit
-  additive overlay.
+  output redaction before provider reuse, progress, and command metadata audit. The SNO and remote
+  agentic deployments include the command runner.
 - The runner image copies a digest-pinned Linux `oc` binary into the pinned UBI Python runtime. The
   SNO overlay runs it non-root under the existing `podpilot-investigator` Pod service account. The
   deploy helper refuses to proceed if that identity can patch Deployments, builds both images,
   deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
-  passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
+  passed over stdin. The `remote-poc-agentic` overlay reuses the remote PoC,
   promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
-  Each unrestricted shell call names one selected cluster. The API brokers only that registered
-  cluster's stored token to the loopback runner, which uses and deletes a per-command kubeconfig.
-  The remote agentic overlay forces remote TLS verification off, while guarded deployments keep
-  the secure default. Runner/API logs expose redacted target, TLS, exit, duration, and byte-count
+  Each Action-mode shell call names one selected cluster. The API brokers only that cluster's
+  in-memory delegated user token to the loopback runner, which uses and deletes a per-command
+  kubeconfig. Per-cluster TLS policy is honored consistently. Runner/API logs expose redacted
+  target, TLS, exit, duration, and byte-count
   metadata, periodic heartbeat logs are suppressed in both containers, failed-command summaries appear in
   Ask, and a 300-second runner deadline terminates the complete shell process group with exit code
   124. The API still publishes changing live Ask progress while the outer run retains
@@ -61,7 +152,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   concurrently with independent 256 KiB retained prefixes, preventing verbose commands from
   exhausting the sidecar through unbounded `communicate()` buffers; completion logs expose true
   byte counts and truncation flags.
-  The model-free suite passes locally with 665 tests and 82% aggregate coverage.
+  The model-free suite passes locally with 767 tests and 80% aggregate coverage.
   Both images were built in-cluster and the profile capability probe reported `ready`. Live runner
   verification returned the exact `podpilot-investigator` identity, `yes` for reading Pods, and
   `no` for patching Deployments, creating ClusterRoleBindings, and wildcard access.
@@ -87,13 +178,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   fails, normal code reports the exact failures and suppresses unsupported model explanations such
   as claiming a metrics add-on is absent.
 - Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
-  path. If that authoritative read fails, unrestricted mode renders the collection limitation
+  path. If that authoritative read fails, the delegated workflow renders the collection limitation
   directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
 - Namespace-scoped Kafka topic-storage wording now discovers exact Strimzi Kafka CRs in the named
   namespace and fans out one registered storage query per observed CR, grouped by topic. The path
   bypasses fragile metric classification, renders successful results directly, and preserves empty,
-  denied, or partially unavailable states without entering the unrestricted shell loop.
-- An empty unrestricted model turn now receives one tool-free finalization request. If that request
+  denied, or partially unavailable states without entering the delegated command loop.
+- An empty delegated model turn now receives one tool-free finalization request. If that request
   is also empty, PodPilot reports an invalid agent response rather than mislabeling it as provider
   unavailability.
 - Imperative Kafka deployment inventory wording now routes to the registered Strimzi Kafka reader.
@@ -103,7 +194,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Remote Thanos and LokiStack authorization failures now preserve the literal `HTTP 403` status in
   per-cluster Ask limitations and name the relevant read-only role. Log-volume queries correctly
   identify `cluster-logging-application-view`; Thanos metrics identify `cluster-monitoring-view`.
-- Successful terminal registered enrichments now render once and suppress a competing unrestricted
+- Successful terminal registered enrichments now render once and suppress a competing delegated
   shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
   outcome, username, and time range; an all-user Pod deletion query no longer shows an appended
   `events.audit.k8s.io` RBAC failure or the misleading phrase “the supplied user.”
@@ -113,7 +204,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Unnumbered “recent” audit requests now query only the initial bounded window instead of repeatedly
   widening toward the audit ceiling to fill a model/default limit. Explicit “last N” requests retain
   bounded backward expansion until N matches are found.
-- Registered Loki audit reads now fail closed in unrestricted mode. A timeout, denial, or partial
+- Registered Loki audit reads now fail closed in the delegated workflow. A timeout, denial, or partial
   multi-cluster result is rendered directly instead of falling through to an invalid
   `events.audit.k8s.io`/`jq` shell attempt.
 - Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
@@ -121,10 +212,27 @@ records remain, but execution now awaits a separate approval-gated action servic
   replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting
   `pods/exec` or `logcli`. The shipped log-analytics range ceiling is now seven days, allowing the
   requested three-day window while retaining a bounded server-owned LogQL query.
-- Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
+- Delegated Chat Completions finalization tolerates one empty assistant turn after tool use. The
   API logs the anomaly, sends one corrective request using the existing tool results, and then
   either persists the recovered answer or fails explicitly after a second empty turn. It does not
   automatically repeat completed shell commands.
+
+- Some Chat Completions providers occasionally serialize valid `finish_investigation` arguments in
+  assistant content instead of returning a native tool call. The unified agent now validates that
+  exact completion envelope and persists only its operator-facing Markdown `answer`; malformed
+  envelopes remain rejected model output and enter the bounded finalization retry.
+
+- Failed exploratory shell reads no longer render their raw stderr as a stack of answer
+  limitations. Ask groups them by cluster and failure category in a collapsed **Exploratory
+  checks** disclosure. Command bodies and diagnostic references remain in persisted activity and
+  audit records, while redacted stderr remains in server logs. This also prevents delegated-proxy
+  HTML error pages from leaking into the answer surface. When the agent stops blocked or exhausts
+  its budget, the grouped failures also remain visible as answer limitations.
+
+- Explicit namespace log-volume ranking questions now repair model-invented log metric names at
+  the typed collector boundary and route them to `top_log_volume_by_namespace`. This preserves the
+  agent-owned investigation sequence while preventing Pod-count approximations when the registered
+  aggregate Loki reader is available.
 
 - Ask PodPilot cluster registry with Approver/Breakglass management, plain-text label and key/value
   tags, connection testing, soft disable, a dedicated resourceName-restricted cluster
@@ -134,6 +242,18 @@ records remain, but execution now awaits a separate approval-gated action servic
   identity or connection.
 - New Ask conversations select one to ten clusters through a searchable picker. The
   immutable selection is retained in history; changing it starts another conversation.
+  The picker defaults to a Signed-In tab and offers All for clusters that still need authentication;
+  text search composes with either filter. Generic new-chat links start with an empty selection and
+  keep Submit disabled until the user chooses at least one cluster; a sidebar cluster-name link
+  remains an explicit single-cluster preselection.
+- Delegated Ask exposes the existing policy-filtered Kubernetes discovery catalog as a
+  delegated typed tool. The agent is directed to search it before guessing unfamiliar CRD names or
+  after a NoMatch error; deterministic matching recognizes compound fragments such as
+  `logforwarder` while returning only exact, discovered API coordinates. Discovery remains
+  session-user scoped and does not imply object authorization.
+- Answer-derived table cells now normalize model-authored HTML break variants, including breaks
+  accidentally wrapped in inline-code spans, without enabling raw HTML. This keeps multi-line
+  summaries readable while every other tag remains escaped by the Markdown trust boundary.
   One shared 25-unit weighted investigation budget fans out across selected clusters, partial failures remain
   scoped limitations, and all evidence/citations identify their source cluster. Alert,
   investigation, dashboard, remote metrics, and remediation routing are unchanged.
@@ -151,7 +271,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 
 - OpenShift OAuth-protected dashboard with Viewer, Investigator, Approver, and
   Breakglass attribution through disposable htpasswd lab users.
-- Standalone Ask now supports a model-directed loop of ten planning rounds within 25 weighted
+- Standalone Ask now supports a model-directed loop of ten planning rounds within 50 weighted
   investigation units, with no default server-follow-up reserve. The model dynamically selects
   evidence-grounded object, owner, log, Event, metric, probe, and configuration traversal while
   the broker retains all sensitivity, verb, budget, redaction, and RBAC enforcement. It can
@@ -233,7 +353,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   must use the separate existing check control and its CSRF, atomic claim, scope,
   and audit gates.
 - Standalone Ask PodPilot conversations can investigate symptoms without an alert.
-  Up to ten schema-validated planning rounds spend at most 25 weighted units on adaptive
+  Up to ten schema-validated planning rounds spend at most 50 weighted units on adaptive
   discovery, bounded resource/search/watch, ConfigMap, Pod-log, metric, or HTTP-probe reads.
   Earlier observations feed later rounds so
   discovery can lead to exact container logs; a final pass answers from persisted, redacted evidence with
@@ -364,7 +484,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   Questions are unlimited per
   conversation: the model receives the ten most recent messages plus a bounded
   deterministic digest of earlier messages. Per-question collection remains
-  bounded to 25 weighted investigation units, and each user is throttled to ten questions per minute.
+  bounded to 50 weighted investigation units, and each user is throttled to ten questions per minute.
 - The chat UI uses larger operational text, exposes New conversation and Delete
   conversation controls, and submits with Enter while reserving Shift+Enter for
   a newline. The Ask screen now uses one mellow slate-blue surface across its
@@ -411,9 +531,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   and collapse cited observations into one rounded on-demand vertical timeline; the redundant
   inspected-target disclosure is no longer rendered. Ask session,
   reply, and evidence timestamps display in fixed `EST (-4)` while persistence stays UTC.
-- The Ask composer now keeps the question label, cluster picker, and raw-response toggle on one
-  row and places the Investigate button inside the text box; the former per-question budget and
-  keyboard-hint row is no longer rendered.
+- The Ask composer keeps its question label above one shared prompt frame. Cluster, execution-mode,
+  reasoning, raw-response, and Submit/Cancel controls occupy the frame's bottom toolbar; the former
+  per-question budget and keyboard-hint row is no longer rendered.
 - Final-answer evidence is compacted into a provider-only bounded view that prioritizes
   current reads and caps Pod logs, objects, findings, and total bytes without changing
   persisted provenance. Citation-bearing heading-only or extremely brief answers receive
@@ -515,9 +635,16 @@ records remain, but execution now awaits a separate approval-gated action servic
   Chat messages render safe CommonMark with readable system prose typography,
   distinct monospace code, and styled tables; raw HTML remains escaped and unsafe
   link schemes are not activated.
-- The application runs as `ai-ops/podpilot-investigator`, bound to OpenShift
-  `cluster-reader`. The separate `ai-observer` identity retains cluster-admin only
-  as disposable-lab development and break-glass access.
+- Delegated agent shell calls no longer require `repeat_reason` and are not de-duplicated by PodPilot.
+  The model may poll or re-run an observation as needed within the existing action budget and deadlines;
+  broker authorization and cluster RBAC remain authoritative. Ledger rows expose runner execution,
+  safe failure categories, errors, and diagnostic references. A provider failure after completed agent
+  work preserves the activity and reports completed, non-rolled-back writes instead of claiming that no
+  cluster changes were attempted.
+- The application runs as `ai-ops/podpilot-investigator`, bound only to the custom
+  `podpilot-role-reader` for OpenShift Group lookup plus explicit supporting platform views.
+  It has no `cluster-reader` binding. The separate `ai-observer` identity retains cluster-admin
+  only as disposable-lab development and break-glass access.
 - The monitoring check submits only fixed `ALERTS` and `up` instant-query shapes
   to the TLS-validated, authenticated in-cluster Thanos endpoint. Exact alert
   labels are escaped, responses are capped at 64 KiB and 20 retained series, and
@@ -629,9 +756,9 @@ current repository and cluster state.
 
 ## Important Safety State
 
-- The normal runtime is `podpilot-investigator` with `cluster-reader`. Live audit
-  confirmed Pod-log and ConfigMap reads and denied Secrets, `pods/exec`, and
-  Deployment patch. `ai-observer` has cluster-admin only through the explicit
+- The normal runtime is `podpilot-investigator` with `podpilot-role-reader`, not
+  `cluster-reader`. Ask Pod-log, ConfigMap, and other Kubernetes reads use delegated-user
+  broker capabilities. `ai-observer` has cluster-admin only through the explicit
   `poc-cluster-admin` overlay and is not the application identity.
 - Model output, alert text, events, logs, annotations, and retrieved memory are
   untrusted evidence and cannot define executable operations.
@@ -742,8 +869,14 @@ current repository and cluster state.
 - Explicit reasoning uses the profile's full maximum-output budget because hidden reasoning tokens
   count against that allowance. Migration `0017_user_reasoning_preferences` adds the supported-level
   metadata, queued-run snapshot, and per-user/per-model preference.
-- Reduced-capability profiles now remain usable when their probe proves the core safe text contract;
-  semantic Ask-probe failures are shown as warnings and continue through typed validation and fallback.
+- Model connection testing treats workflow-schema checks as an informational compatibility smoke
+  test rather than a synthetic quality benchmark. It no longer grades inquiry classification,
+  grounded action choice, or citations, and a workflow-smoke failure does not degrade an otherwise
+  ready profile or display a persistent warning in Ask. Runtime typed validation and deterministic
+  fallback remain authoritative during real conversations.
+- Ask no longer shows reduced-capability warnings for usable profiles; detailed connection-test
+  status remains on Model settings. Operator messages now default to the supported 4,000-character
+  ceiling, including the OpenShift runtime configuration.
 - The model-free suite and a fresh SQLite migration through the new head pass locally; this change
   has not yet been rolled out to the SNO workload.
 
@@ -840,8 +973,9 @@ current repository and cluster state.
 - Investigation chat is limited to one investigation, a 20-message history, one
   non-executing safe-check intent, and non-streaming responses. Standalone Ask
   PodPilot conversations are unlimited and use rolling context, but responses
-  remain non-streaming. Curated memory can now be managed and searched, but is not
-  yet retrieved into investigation or chat model context.
+  remain non-streaming. Curated memory is retrieved into delegated-agent context as bounded
+  untrusted guidance; it does not enter investigation-chat or
+  remediation prompts.
 - The first executable plan is fixed to scoped `TargetDown` passive monitoring
   signals, Service topology, and Pod events. It does not inspect full rule
   definitions or perform an active DNS, TCP, TLS, or HTTP probe.
@@ -858,8 +992,8 @@ current repository and cluster state.
 
 No next milestone is formally selected. The highest-value candidates are:
 
-1. Add bounded answer-time memory retrieval and a server-validated knowledge
-   citation contract without allowing memory to influence tool or action policy.
+1. Add a server-validated knowledge citation contract without allowing memory to authorize tools,
+   actions, or current-state claims.
 2. Add the next diagnostic capability pack with fixtures and release gates;
    Routes and ClusterOperators are narrower choices than Service Mesh.
 3. Design an administrator-owned probe-target registry and dedicated no-token,

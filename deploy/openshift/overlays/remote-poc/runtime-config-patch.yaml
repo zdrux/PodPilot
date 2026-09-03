@@ -11,5 +11,7 @@ data:
   # Group resource names only for elevated roles. JSON arrays permit more than
   # one LDAP-synchronized group per role; use [] for an unused role.
   role_investigator_groups: '["replace-with-ldap-investigator-group"]'
-  role_approver_groups: '["replace-with-ldap-approver-group"]'
-  role_breakglass_groups: '["replace-with-ldap-breakglass-group"]'
+  role_read_write_groups: '["replace-with-ldap-read-write-group"]'
+  configuration_admin_groups: '["replace-with-ldap-configuration-admin-group"]'
+  role_approver_groups: '[]'
+  role_breakglass_groups: '[]'

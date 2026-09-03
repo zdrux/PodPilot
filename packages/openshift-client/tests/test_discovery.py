@@ -146,6 +146,26 @@ def test_prompt_catalog_matches_operator_domain_term_without_full_kind_name() ->
     assert prompt[0]["kind"] == "IngressController"
 
 
+def test_prompt_catalog_matches_invented_compound_inside_discovered_kind() -> None:
+    catalog = ResourceCatalog(lambda **_kwargs: [
+        resource("deployments", "apps/v1", "Deployment"),
+        resource(
+            "clusterlogforwarders", "observability.openshift.io/v1",
+            "ClusterLogForwarder",
+        ),
+    ])
+
+    prompt = catalog.prompt_entries(query="logforwarder", limit=1)
+
+    assert prompt[0] == {
+        "resource": "clusterlogforwarders",
+        "apiVersion": "observability.openshift.io/v1",
+        "kind": "ClusterLogForwarder",
+        "namespaced": True,
+        "verbs": ["get", "list"],
+    }
+
+
 def test_catalog_skips_lazy_resource_list_without_resolving_its_base_resource() -> None:
     class FailingResources:
         def get(self, **_kwargs):

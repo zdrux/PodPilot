@@ -82,6 +82,67 @@ def test_remote_cluster_client_sends_bearer_scheme_and_honors_tls_mode(
     assert suppressed == ([] if tls_verify else [InsecureRequestWarning])
 
 
+def test_loopback_broker_client_omits_https_only_hostname_option(monkeypatch):
+    captured = {}
+    suppressed = []
+
+    class FakeDynamicClient:
+        def __init__(self, api_client):
+            captured["configuration"] = api_client.configuration
+            self.resources = SimpleNamespace(search=lambda **_kwargs: [])
+
+    monkeypatch.setattr("podpilot_openshift.explorer.DynamicClient", FakeDynamicClient)
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.urllib3.disable_warnings", suppressed.append,
+    )
+
+    KubernetesReadOnlyExplorer.for_remote_cluster(
+        api_url="http://127.0.0.1:8080/internal/delegated-proxy/capability",
+        token="broker-injected",
+        tls_verify=False,
+    )
+
+    configuration = captured["configuration"]
+    assert configuration.verify_ssl is False
+    assert configuration.assert_hostname is None
+    assert suppressed == []
+
+
+def test_access_review_summary_checks_cluster_wide_workload_verbs(monkeypatch):
+    requested = []
+
+    class AuthorizationApi:
+        def __init__(self, _api_client):
+            pass
+
+        def create_self_subject_access_review(self, body):
+            requested.append(body["spec"]["resourceAttributes"])
+            return SimpleNamespace(status=SimpleNamespace(
+                allowed=True, evaluation_error=None,
+            ))
+
+    monkeypatch.setattr(
+        "podpilot_openshift.explorer.client.AuthorizationV1Api", AuthorizationApi,
+    )
+    explorer = KubernetesReadOnlyExplorer(
+        dynamic_client=SimpleNamespace(),
+        core_api=SimpleNamespace(api_client=object()),
+    )
+
+    result = explorer.execute(ReadIntent(tool="access_review_summary"))
+
+    assert len(requested) == 35
+    assert all("namespace" not in attributes for attributes in requested)
+    assert {item["verb"] for item in requested} == {
+        "get", "list", "create", "patch", "delete",
+    }
+    observation = result.observations[0]
+    assert observation.tool == "access_review_summary"
+    assert observation.data["allPermissionsAllowed"] is True
+    assert observation.data["scope"] == "all_namespaces"
+    assert len(observation.data["resources"]) == 7
+
+
 def test_audit_query_routes_to_dedicated_reader_without_kubernetes_discovery() -> None:
     class AuditReader:
         def __init__(self) -> None:
@@ -317,6 +378,7 @@ def test_get_configmap_preserves_configuration_and_redacts_sensitive_keys():
     assert result.observations[0].data["data"] == {
         "UPSTREAM_DNS": "10.0.0.2", "password": "[REDACTED]"
     }
+    assert result.observations[0].data["podpilotEvidenceRole"] == "object_detail"
     assert "managedFields" not in result.observations[0].data["metadata"]
     assert dynamic.resources.calls == [{"api_version": "v1", "kind": "ConfigMap"}]
     assert resource.calls == [{"name": "api", "namespace": "payments"}]
@@ -488,6 +550,7 @@ def test_resource_name_resolves_from_discovery_and_compacts_list_payload():
 
     assert resources.calls == [{"api_version": "route.openshift.io/v1", "kind": "Route"}]
     assert result.observations[0].data["kind"] == "Route"
+    assert result.observations[0].data["podpilotEvidenceRole"] == "inventory"
     assert result.observations[0].data["items"][0]["spec"]["host"] == "api.example.test"
 
 
@@ -845,6 +908,37 @@ def test_pod_health_summary_includes_init_failures_and_excludes_completed_pods()
     assert data["anomalyCount"] == 1
     assert data["anomalies"][0]["name"] == "migrating-api"
     assert data["anomalies"][0]["issues"][0]["containerType"] == "initContainer"
+
+
+def test_pod_health_summary_includes_fresh_pending_and_preserves_evicted_reason() -> None:
+    fresh_pending = FakeObject(payload={
+        "metadata": {
+            "name": "starting-web", "namespace": "apps",
+            "creationTimestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "status": {
+            "phase": "Pending",
+            "containerStatuses": [{
+                "name": "web", "ready": False, "restartCount": 0,
+                "state": {"waiting": {"reason": "ContainerCreating"}},
+            }],
+        },
+    })
+    evicted = FakeObject(payload={
+        "metadata": {"name": "evicted-worker", "namespace": "jobs"},
+        "status": {"phase": "Failed", "reason": "Evicted"},
+    })
+    target, _, _ = explorer(FakeResource([fresh_pending, evicted]))
+
+    result = target.execute(ReadIntent(tool="pod_health_summary", limit=20))
+
+    data = result.observations[0].data
+    assert data["healthSummaryVersion"] == 2
+    assert data["anomalyCount"] == 2
+    assert data["byReason"] == {"Evicted": 1, "Pending": 1}
+    assert {item["name"] for item in data["anomalies"]} == {
+        "starting-web", "evicted-worker",
+    }
 
 
 def test_pod_health_summary_separates_scan_and_anomaly_result_ceilings() -> None:

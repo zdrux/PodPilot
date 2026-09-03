@@ -319,7 +319,7 @@ An Investigator can ask follow-up questions inside one durable investigation.
 PodPilot supplies only that investigation's redacted alert, deterministic analysis,
 persisted evidence, bounded conversation history, alert-scoped read policy, and
 available registered intent names to the configured model. Up to ten planning
-rounds may spend at most 25 weighted investigation units through the same typed broker as
+rounds may spend at most 50 weighted investigation units through the same typed broker as
 standalone Ask; successful observations are persisted into the investigation
 before the answer pass. Factual incident answers must cite observation IDs
 that the server can resolve in the investigation; an evidence-based response with
@@ -333,7 +333,7 @@ which re-enters the role, CSRF, claim-once, scope, and audit gates. Read-plan
 output is advisory data validated and executed by the API; chat cannot directly
 submit Kubernetes calls, query text, shell, YAML, credentials, or cluster
 mutations. Messages are attributed, redacted before persistence/model use, capped
-at 1,000 characters each and 20 messages per investigation, and audited without
+at 4,000 characters each and 20 messages per investigation, and audited without
 copying message content into the audit record.
 
 ### 5.11 Standalone Ask PodPilot
@@ -522,7 +522,7 @@ executor service account performs approved changes and the application correlate
 them with the authenticated approver in its audit record.
 
 Keep collection and action tools as explicit internal functions with typed inputs.
-Do not expose a generic `oc`, shell, or unrestricted Kubernetes proxy tool to the model.
+Do not expose a generic `oc`, shell, or general-purpose Kubernetes proxy tool to the model.
 
 ### Model interaction boundary
 

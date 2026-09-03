@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-27
+Last reviewed: 2026-08-30
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -52,44 +52,179 @@ local development. Rotate any credential exposed in source control or chat.
 
 ## Initial Authorization Policy
 
-### Explicit unrestricted agent exception
+### User-delegated Ask sessions
 
-`deploy/openshift/overlays/sno-milestone-one/` and the optional
-`deploy/openshift/overlays/remote-poc-agentic/` deliberately enable
-`PODPILOT_AGENT_MODE=unrestricted` and add a localhost-only `oc-runner` sidecar. In this mode a
-Chat Completions model may execute arbitrary Bash and `oc` commands without PodPilot's read
-schemas, mutation preview, or approval workflow. This is an explicit test fixture, not a production
-security boundary. The base and standard `remote-poc` overlays remain guarded. The remote agentic
-overlay adds no RBAC of its own and therefore exercises every permission already granted to
-`podpilot-investigator` on that target cluster.
+All deployed Ask sessions use the selected user's OpenShift identity on every selected cluster.
+PodPilot has two execution entitlements: Investigator is permanently read-only; Read-Write may
+choose **Investigate · read-only** or **Action · my cluster permissions** when creating a
+conversation. Cluster selection and mode are immutable for that conversation. Unmatched users are
+denied. Configuration administration is a separate group-derived capability.
 
-The unrestricted loop exposes registered resource-list, object-field-search, HTTP-probe, metric,
-and audit collectors as model-callable helpers alongside the arbitrary shell tool. Those reads retain their
+Users submit one username/password pair for clusters in one declared environment at a time.
+PodPilot performs the challenging-client OAuth exchange against each exact registered origin,
+validates `/users/~`, and immediately discards the password. Tokens remain only in API-process
+memory for at most 24 hours, keyed by an HttpOnly session cookie, owner, and cluster. They are never
+stored in SQLite, Kubernetes Secrets, browser storage, model input, runner JSON, commands, or logs.
+Logout, replacement, local expiry, disable, and graceful shutdown attempt revocation. A remote
+`401` removes the affected connection; the conversation remains durable and resumes after its owner
+reconnects the affected clusters. On the next turn, the conversation binds to that owner's current
+memory-only delegated session; ownership and the immutable cluster set are still enforced.
+Additional cluster logins append to that browser session without replacing its existing
+connections. Removing one connection revokes that token and invalidates only that cluster's proxy
+capabilities; conversations that require the removed cluster remain durable but cannot continue
+until it is reconnected.
+Sidebar connection indicators are derived only from the current owner and HttpOnly delegated
+session cookie. They expose no token material. Opening an unconnected cluster carries only its
+registered ID through the login redirect; credentials are still submitted solely to the existing
+bounded OAuth exchange and are discarded immediately afterward.
+
+The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
+allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
+methods and every Secret API read are rejected before the request reaches the cluster. Both modes
+use the same agent loop and expose the same investigation tools; the capability is the enforcement
+difference. Action capabilities inject the same
+user token without reducing its permissions, so Kubernetes RBAC, admission, quota, and policy are
+authoritative. The runner has neither the user token nor a projected service-account token.
+
+The cluster registry stores API metadata only. Shared entries are configuration-admin managed;
+each authorized user may also create private entries visible only to that owner and configuration
+administrators. Entries carry an environment, HTTPS API origin, tags, optional public CA bundle,
+and a per-entry TLS verification choice. Users may disable certificate and hostname verification;
+the UI and conversation mark that interception risk and saves/tests are audited. There is no
+deployment-wide TLS policy override and no stored remote bearer token.
+The administrative Cluster Management route is configuration-admin only. Personal cluster routes
+query and mutate only `visibility=private` entries owned by the authenticated user; removing one
+revokes its in-memory delegated connection before deleting its metadata and retains an audit record.
+
+The runtime system cluster follows the same delegated-user path. PodPilot uses the internal API and
+OAuth service origins plus projected public CA bundles, but never substitutes the Pod service
+account for an interactive Ask request.
+
+The following historical design is superseded and retained only as migration context.
+
+### Delegated sessions
+
+When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
+configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
+Operator application role. This is not inferred inside a conversation. The user must select only
+enabled entries from PodPilot's configured cluster registry, including the runtime system cluster,
+enter one username/password pair, and accept the
+delegated-session warning. PodPilot performs the OpenShift challenging-client OAuth exchange,
+validates `/users/~`, and immediately discards the password.
+The API sends Basic credentials only after a Basic challenge from the exact HTTPS origin advertised
+by that cluster's verified OAuth discovery document and refuses later cross-origin redirects.
+Because all selected DEV clusters receive the same credentials, Approvers and users must trust every
+selected remote-cluster registration and its CA; a malicious but trusted API registration can advertise a
+credential-capturing OAuth endpoint.
+
+The returned OAuth token is retained only in API-process memory, keyed by a random HttpOnly
+PodPilot session cookie, the authenticated PodPilot username, and the registered cluster ID. It is
+never persisted in SQLite, a Kubernetes Secret, browser storage, a model prompt, a shell command,
+or runner JSON. The API gives `oc-runner` a random loopback capability URL; the API proxy resolves
+that capability and injects the bearer token on each Kubernetes request. The runner container has
+no projected Pod service-account token. Kubernetes/OpenShift RBAC, admission, quotas, and policy
+therefore evaluate writes as the signed-in remote user.
+
+Delegated conversations persist `read_only` or `action` plus the originating session ID and an
+immutable cluster list. They cannot be continued after that exact in-memory session expires, is
+lost, or signs out; the user must reconnect and start a new conversation. Investigator, Approver,
+and Breakglass sessions use the same role-authorized workflow. The API service account retains its read roles for typed collection and
+group resolution, but its projected credential is mounted only into the API and OAuth-proxy
+containers—not the command runner.
+
+The OAuth proxy receives its OAuth client secret through a projected, expiring service-account
+token rather than a static token Secret. The pinned proxy does not reload that file itself, so its
+container snapshots the startup credential into a private memory-backed volume and watches the
+projection for rotation. A changed token terminates and restarts only the proxy container, which
+loads the new credential. Neither the snapshot nor either token value is logged, persisted, mounted
+into the runner, or included in a manifest.
+
+PodPilot removes delegated tokens after 24 hours by default and attempts remote OAuth token
+revocation on expiry, replacement, cluster disable, logout, and graceful shutdown. The remote
+cluster's standard OAuth token TTL remains authoritative (normally 24 hours). Because no token is
+persisted, an API-process or node crash destroys PodPilot's only copy before it can revoke it; the
+remote token can then remain valid until the cluster TTL or administrator revocation. This is an
+explicit availability-versus-recoverability consequence of memory-only storage.
+
+Each registered remote cluster may carry an Approver-managed PEM CA bundle (maximum 64 KiB;
+private keys rejected). PodPilot appends it to system trust for OAuth discovery/login, identity
+validation, delegated API proxying, revocation, and tokenless connection tests. TLS verification
+remains enabled; a custom CA is not an insecure-mode fallback.
+For the runtime system cluster, PodPilot uses the in-cluster Kubernetes API and OpenShift OAuth
+service endpoints with their projected API and service CA bundles; the user's token still crosses
+the same memory-only broker and is evaluated by normal OpenShift RBAC.
+
+### Unified delegated agent loop
+
+Delegated Investigator and Action conversations use the same Chat Completions agent loop and the
+same tokenless localhost `oc-runner` sidecar. Investigator commands receive only the random
+read-only proxy capability; Action commands receive the action capability. The runner and model
+never receive the user's token. The behavioral distinction is read-only versus role-authorized
+Action; both use the same delegated agent workflow.
+The API assigns each shell execution a random runner request ID before dispatch. An owner-requested
+Ask cancellation may send only that identifier over Pod loopback to terminate the matching process
+group; it cannot target another command by cluster name or expose the delegated token. Cancellation
+does not reverse an API write that reached Kubernetes before process termination, so the UI and
+persisted cancellation result state this limitation explicitly.
+
+For operational diagnosis, the API logs a best-effort credential-redacted command preview capped
+at 4 KiB together with its 12-character SHA-256 fingerprint. Operators must still treat
+application logs as sensitive because arbitrary shell text cannot be proven secret-free. The
+localhost runner client's HTTP response log contains only the runner-protocol status and body size.
+The API's delegated Kubernetes proxy records the actual OpenShift API status; 4xx and 5xx bodies
+are represented only by a redacted 2 KiB preview, truncation flag, and full-body digest while the
+original response streams unchanged to `oc`. Successful response bodies and full error pages are
+not logged.
+Model-provider diagnostics follow the same bounded-error principle. Successful response content
+remains excluded from ordinary Ask diagnostics, but every provider HTTP 4xx/5xx records a redacted
+2,000-character error preview when a body is present. The normalized exception may expose that same
+bounded redacted provider message to the operator; authorization headers, request messages, and
+unbounded response bodies are never retained. A 4xx is categorized as a rejected request rather
+than a provider outage.
+
+The shared agent loop exposes registered HTTP-probe, audit, and metric collectors as model-callable
+helpers alongside the arbitrary shell tool. Generic object LIST and SEARCH collectors are not
+model-callable; the agent uses bounded brokered `oc get` commands and authors its own presentation.
+Those typed reads retain their
 normal fixed query construction, normalization, redaction, evidence persistence, read budget, and
 bounded presentation. The API never invokes them merely because a classifier or enrichment pack
 recognized a request. Their observations return to the model, which alone chooses the next tool or
-the final answer.
+the final answer. The final answer uses a structured stop contract (`complete`, `blocked`, or
+`budget_exhausted`). The API rejects a claimed completion that declares remaining safe reads or
+uses operator-deferral wording while action budget remains. It also blocks an exact same-cluster
+shell-command repeat unless the model supplies one of the reviewed retry/comparison reasons. These
+are loop-safety controls, not a deterministic runbook; the model still selects the evidence path.
 Registered-source failures are authoritative only as failures: the model may not infer that an
 add-on, API, or resource is absent from an unavailable adapter. If neither a registered reader nor
 a successful shell verification produces evidence, normal code replaces the model prose with the
 exact redacted collection failures.
+Normalized failures retain a browser-safe category. In particular, Loki certificate verification
+failures reach the model as `tls_verification_failed` rather than generic service unavailability;
+certificate contents and endpoint secrets remain excluded.
 Conversely, a successful registered observation is authoritative only for its declared scope.
 Collector completion never disconnects, cancels, or terminates the model loop; the model may
 interpret it, correlate it with another helper, verify it through shell, or answer.
+Delegated Thanos and Loki clients resolve a fresh bearer token from the selected capability for each
+request. The token is never placed in model or runner messages, and revoking or expiring the
+memory-only capability immediately makes those adapters unavailable. Investigator and Action use
+the same adapters; only the Kubernetes broker capability permits or rejects writes.
 
-For the runtime cluster, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
+In legacy non-delegated mode, the runner uses the Pod's `podpilot-investigator` service account, not `ai-observer`, and the SNO
 deployment helper fails before building if that identity can patch Deployments. Remote operators
 must perform the equivalent authorization review before applying the optional agentic overlay. Cluster RBAC and
 admission therefore remain the authoritative execution boundary. For a selected registered remote
 cluster, the API reads only that cluster's token and brokers it over Pod loopback for one command.
 The runner writes a mode-0600 per-command kubeconfig under `/tmp` and deletes it after execution;
 the broker never places the token or kubeconfig in the model tool schema, command, result, or logs.
-This is not container-level credential isolation: the unrestricted sidecar shares the Pod service
+This is not container-level credential isolation: the command-runner sidecar shares the Pod service
 account, whose RBAC can read the two resourceName-restricted credential Secrets, and can inspect its
 projected token. Output redaction is defense in depth, not a guarantee against a model deliberately
 transforming secret bytes. Command text, target cluster, and exit status are
 audited. A bounded redacted stderr summary is retained only for failed commands; full shell output
 is secret-pattern redacted before it is returned to the provider and is not persisted as evidence.
+Provider reinjection applies a smaller 48 KiB shell-result ceiling and the configured model-input
+ceiling independently of the runner's transport/output ceiling. Exceeding the input ceiling fails
+locally before credentials or request content are transmitted to the provider.
 Normalized deterministic enrichment is persisted as
 evidence under the existing policy. Cluster output remains untrusted data and may contain
 prompt injection. The runner binds only to Pod loopback, runs non-root with a read-only root
@@ -110,26 +245,24 @@ a production cluster or compose it with `poc-cluster-admin`.
 - The disposable SNO development lab deliberately adds `cluster-admin` through
   `deploy/openshift/overlays/poc-cluster-admin/` so implementation and remediation
   experiments are not blocked by evolving RBAC.
-- Outside the explicitly enabled unrestricted SNO fixture above, the PoC exception does not relax
+- Outside the explicitly enabled SNO fixture above, the PoC exception does not relax
   product-level approval requirements: every
   proposed mutation must show its target, patch or command, risks, and rollback,
   then require a fresh explicit approval.
 - Production packaging must not install the PoC overlay. It should use separate
   read and action identities with a small action allowlist.
 
-Milestone 10 separates the normal runtime from the break-glass exception. The
-`ai-ops/podpilot-investigator` ServiceAccount runs the application and is bound to
-OpenShift `cluster-reader`; `ai-ops/ai-observer` retains the disposable lab
-cluster-admin overlay only for development access. Ask PodPilot permits bounded
-resource, ConfigMap, and Pod-log reads through an application broker, while denying
-Secrets, access-review resources, exec/attach/port-forward/proxy paths, and every
-mutation. Because `cluster-reader` is aggregated, release checks audit its effective
-permissions as well as the broker policy.
+The normal runtime and break-glass identities are separate. The
+`ai-ops/podpilot-investigator` ServiceAccount runs the application and receives the custom
+`podpilot-role-reader` ClusterRole, which permits only `get` on OpenShift Group objects for
+application-role resolution. It is not bound to `cluster-reader`. Ask Kubernetes requests use
+the signed-in user's memory-only delegated token through a read-only or Action broker capability.
+`ai-ops/ai-observer` retains the disposable lab cluster-admin overlay only for development access.
 
-Cluster audit queries use the same Ask authorization boundary: Investigator, Approver, and
-Breakglass roles may request them; Viewer may not. Human application roles do not receive direct
-Loki credentials or RBAC. The runtime ServiceAccount performs the read through its existing
-`cluster-logging-audit-view` binding.
+Cluster audit queries use the same Ask authorization boundary: Investigator and Read-Write users
+may request them; Viewer may not. Human application roles receive no direct Loki credentials from
+PodPilot. Delegated adapters authenticate as the signed-in user; supporting platform-view bindings
+on the runtime identity do not authorize Ask Kubernetes reads.
 
 Model diagnostics follow the existing conversation and model-management authorization boundaries.
 An Ask turn stores only normalized call metadata and token counts; it does not store provider request
@@ -153,28 +286,27 @@ evidence but preserves an audit record containing the conversation ID and actor,
 not message content. A per-user rate limit applies across all of that user's
 conversations.
 
-Standalone Ask conversations also pin an immutable cluster-ID selection. The browser
-cannot change routing on a continuation request. Normal code loads only those registered
-entries, refuses disabled or missing targets, reads each opaque bearer token immediately
-before use, and attributes retained evidence to the source cluster. Remote tokens are
-stored only in `ai-ops/podpilot-cluster-credentials`; SQLite and API responses contain
-only opaque keys. RBAC restricts the runtime to `get`, `patch`, and `update` that exact
-Secret and does not allow Secret creation or enumeration. Cluster create, update, token
-rotation, connection test, and disable operations require Approver-or-higher, CSRF, and
-content-free audit metadata. Disabling removes the Secret key but preserves historical
-conversation and evidence attribution.
+Standalone Ask conversations also pin an immutable cluster-ID selection and execution
+mode. The browser cannot change either value on a continuation request. Normal code loads
+only entries visible to the owner, refuses disabled or disconnected targets, obtains the
+user token from the in-memory delegated-session vault, and attributes retained evidence
+to the source cluster. Shared cluster metadata requires configuration-administrator
+capability; users may create, update, test, and permanently delete their own private entries.
+Deletion removes any credential held by the configured credential store before removing the
+registry metadata, revokes live delegated connections for that cluster, and retains historical
+conversation records. Shared entries remain disable-only. These operations require CSRF and
+content-free audit metadata and never return a bearer token.
 
-Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
+Remote Kubernetes API TLS verification defaults on in portable deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
 stores the exception, connection tests audit it, and every affected Ask session displays one
 compact connection-boundary indicator instead of repeating a limitation under each answer. The
-`remote-poc-agentic` overlay is an explicit broader lab exception:
-it sets `PODPILOT_REMOTE_CLUSTER_TLS_VERIFY=false`, forcing registered remote readers and runner
-commands in that deployment to skip certificate and hostname verification. The management page
-displays the environment override. This does not change model-provider or ordinary application TLS
-policy and should not be used in production.
+chosen per-cluster setting is used for delegated login, typed Kubernetes reads, runner commands,
+Route discovery, and the discovered Thanos and Loki endpoints used by registered telemetry tools.
+There is no project-wide remote-cluster TLS override. This does not change model-provider or
+ordinary application TLS policy.
 
 Each Ask turn is an owner-scoped persisted job. Status and Server-Sent Event
 endpoints return not found to every identity except the conversation creator,
@@ -200,14 +332,10 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
 - Model endpoint metadata, TLS mode, and optional public CA certificates are stored
   in SQLite. API tokens are not: each profile references an opaque key in the one
   resourceName-restricted credential Secret.
-- Remote cluster origins, tags, and TLS mode are stored in SQLite. Their bearer tokens
-  are not: each cluster references an opaque key in the separate fixed
-  `ai-ops/podpilot-cluster-credentials` Secret.
-- The OAuth-protected GUI sends a new token once to FastAPI. The runtime uses its
-  projected ServiceAccount identity to patch only that Secret key, never returns
-  the value, and rereads it before inference. Kubernetes Secret `data` is base64
-  encoding, not application-level encryption; cluster encryption-at-rest and
-  Secret-access controls remain administrator responsibilities.
+- Remote cluster origins, environment, ownership/visibility, tags, and TLS mode are
+  stored in SQLite. User passwords are used only for the selected environment login
+  exchange and discarded; resulting cluster tokens remain only in process memory for
+  the OAuth-backed delegated session and are never returned to the browser.
 - `insecure` TLS mode is an explicit PoC compatibility escape hatch. It disables
   server certificate and hostname verification, so a bearer token and model data
   can be intercepted. Prefer system trust or a custom CA and do not enable this
@@ -233,10 +361,10 @@ applies global, explicit-cluster, required-tag, and namespace filters before ran
 restricted entries require
 the Approver role. Search text is converted to a bounded quoted FTS expression,
 so operators and cluster-derived text cannot supply SQLite FTS instructions.
-Retrieved memory remains untrusted guidance rather than live evidence. Ask planning
-and answering receive eligible internal chunks annotated with their applicable cluster;
-memory cannot define a tool, authorize a read, support a live-state citation, or enter
-investigation/remediation workflows in this release.
+Retrieved memory remains untrusted guidance rather than live evidence. Delegated-agent context
+receives eligible internal chunks annotated with their
+applicable clusters; memory cannot define a tool, authorize a read, support a live-state citation,
+or enter investigation-chat/remediation workflows in this release.
 
 ## OpenShift Authentication And Application Roles
 
@@ -250,8 +378,8 @@ its local `podpilot-htpasswd` provider.
 | --- | --- |
 | Any authenticated OpenShift user | Viewer: view health, alerts, investigations, collected evidence, and audit history |
 | Investigator groups | Start analyses and use investigation-scoped chat |
-| Approver groups | Approve registered low/moderate-risk actions |
-| Breakglass groups | Enter future high-risk approval workflows; no direct cluster-admin grant |
+| Approver groups | Manage cluster, model, and curated-memory configuration; approve registered low/moderate-risk actions |
+| Breakglass groups | The same configuration access as Approver plus future high-risk approval workflows; no direct cluster-admin grant |
 
 The GUI RoleBinding admits the built-in `system:authenticated` group to the exact
 PodPilot Service. The application defaults authenticated users to Viewer, accepts
@@ -260,12 +388,23 @@ assigns the highest match. Human users
 do not receive `cluster-reader` or mutation RBAC; the application records the
 authenticated actor separately from its runtime ServiceAccount.
 
+The **Manage** navigation and the cluster, model, and cluster-memory configuration
+pages are hidden from other roles and independently reject their API requests.
+
 The Route and Service expose only the OAuth proxy. FastAPI listens on Pod loopback,
 so clients cannot directly forge `X-Forwarded-User`. The proxy does not forward
 access tokens or bearer tokens upstream, uses secure same-site cookies, and
 performs a SubjectAccessReview for `get` on the `ai-ops/podpilot` Service before
 granting access. The API reads only configured elevated-role Group objects; no
 Group lookup is required to assign Viewer.
+
+The front-door proxy cookie has a fixed eight-hour lifetime and uses a stable Secret-backed signing
+key so it remains readable across Pod restarts. Cookie refresh is disabled because the OpenShift
+provider in the pinned proxy cannot renew the original OAuth access token; enabling refresh merely
+revalidates that token and can turn a cluster's one-hour access-token policy into an unintended
+one-hour PodPilot logout. This means front-door OAuth token revocation is not observed by the proxy
+until the bounded cookie expires or the user explicitly logs out. Current OpenShift Group membership
+is still resolved by FastAPI for application-role authorization.
 
 OpenShift usernames may contain colons, including virtual users and service-account
 identities. PodPilot accepts that identity syntax. A valid proxy-authenticated

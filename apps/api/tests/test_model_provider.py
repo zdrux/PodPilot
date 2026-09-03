@@ -28,6 +28,8 @@ from podpilot_api.model_provider import (
     _model_request_context,
     _minimal_action_payload,
     _minimal_answer_payload,
+    _chat_input_token_estimate,
+    _prepare_chat_input,
     _record_model_failure,
     _validation_failure_details,
     capture_model_diagnostics,
@@ -352,7 +354,6 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
         "secret-token",
         {"observations": [{"id": "cluster-pod-1"}]},
     )
-
     assert isinstance(answer, AdHocAnswer)
     assert answer.cited_evidence_ids == ["cluster-pod-1"]
     assert answer.recommended_next_checks == []
@@ -368,21 +369,33 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["reasoning_effort"] == "high"
 
 
-def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> None:
+def test_chat_completions_delegated_agent_returns_structured_shell_call() -> None:
     completions = ToolCallingCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()
     provider._client = lambda _profile, _key: client  # type: ignore[method-assign]
 
+    selected_cluster_ids = [
+        "47de8d71-b582-4017-8d5a-c542c79ab709",
+        "921fbbe6-6bb0-4879-bd64-ede839e2f3d9",
+    ]
     step = provider.next_agent_step(
         profile(
             base_url="https://openrouter.ai/api/v1",
             chat_model="openai/gpt-oss-120b",
         ),
         "secret-token",
-        [{"role": "user", "content": "Inspect the cluster."}],
+        [{
+            "role": "system",
+            "content": (
+                "Agent instructions.\nSelected clusters:\n"
+                + json.dumps([
+                    {"cluster_id": item, "cluster_name": f"Cluster {index}"}
+                    for index, item in enumerate(selected_cluster_ids, 1)
+                ])
+            ),
+        }, {"role": "user", "content": "Inspect the cluster."}],
     )
-
     assert step.content is None
     assert step.tool_calls[0].name == "execute_shell"
     assert json.loads(step.tool_calls[0].arguments)["command"] == "oc get pods -A"
@@ -392,23 +405,48 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "list_resources", "search_resources",
-        "pod_health_summary", "http_probe", "query_audit_events", "query_metrics",
+        "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
+        "query_audit_events", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
+    assert "repeat_reason" not in parameters["properties"]
     assert "cluster_id" in parameters["properties"]
+    assert parameters["properties"]["cluster_id"]["enum"] == selected_cluster_ids
+    assert "one tool call per cluster" in parameters["properties"]["cluster_id"]["description"]
     tools_by_name = {
         item["function"]["name"]: item["function"] for item in request["tools"]
     }
+    assert tools_by_name["execute_shell"]["strict"] is True
+    assert all(
+        "strict" not in item["function"]
+        for item in request["tools"]
+        if item["function"]["name"] not in {"execute_shell", "finish_investigation"}
+    )
+    assert tools_by_name["finish_investigation"]["strict"] is True
+    assert all(
+        item["function"]["parameters"]["properties"]["cluster_id"]["enum"]
+        == selected_cluster_ids
+        for item in request["tools"]
+        if item["function"]["name"] != "finish_investigation"
+    )
+    assert tools_by_name["finish_investigation"]["parameters"]["required"] == [
+        "stop_reason", "answer", "unresolved_safe_reads",
+    ]
     health_tool = tools_by_name["pod_health_summary"]
     assert health_tool["parameters"]["required"] == ["cluster_id"]
     assert "label_selector" in health_tool["parameters"]["properties"]
     assert "complete zero-anomaly result" in health_tool["description"]
+    assert "search_resources" not in tools_by_name
+    discovery_tool = tools_by_name["discover_resources"]
+    assert discovery_tool["parameters"]["required"] == [
+        "cluster_id", "discovery_query",
+    ]
+    assert "before guessing" in discovery_tool["description"]
+    assert "NoMatch" in discovery_tool["description"]
     probe_tool = tools_by_name["http_probe"]
     assert probe_tool["parameters"]["required"] == ["cluster_id", "url"]
     assert "Host and TLS SNI" in probe_tool["description"]
-    assert "never ends the investigation" in probe_tool["description"]
     audit_tool = tools_by_name["query_audit_events"]
     assert "Kubernetes Events" in audit_tool["description"]
     assert audit_tool["parameters"]["required"] == [
@@ -418,12 +456,67 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     assert metric_tool["parameters"]["required"] == [
         "cluster_id", "metric", "metric_scope",
     ]
-    assert "metric=top_log_volume_by_namespace" in metric_tool["description"]
-    assert "metric=application_log_volume" in metric_tool["description"]
-    assert "rank Pods within one namespace" in metric_tool["description"]
-    assert "default is 300 seconds" in metric_tool["description"]
+    assert "application-log volume" in metric_tool["description"]
+    assert "Kafka requires kafka_cluster scope" in metric_tool["description"]
+    assert "default period is 300 seconds" in metric_tool["description"]
+    assert metric_tool["parameters"]["properties"]["metric"]["anyOf"][0]["enum"] == [
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
+        "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
+    ]
 
 
+def test_delegated_agent_timeout_records_effective_transport_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class APITimeoutError(Exception):
+        pass
+
+    class TimeoutCompletions:
+        def create(self, **_kwargs):
+            raise APITimeoutError("timed out")
+
+    provider = OpenAIChatCompletionsProvider()
+    monkeypatch.setattr(
+        provider,
+        "_client",
+        lambda *_args: SimpleNamespace(
+            chat=SimpleNamespace(completions=TimeoutCompletions())
+        ),
+    )
+    selected_cluster_id = "00000000-0000-0000-0000-000000000001"
+    messages = [{
+        "role": "system",
+        "content": (
+            "Agent instructions.\nSelected clusters:\n"
+            + json.dumps([{
+                "cluster_id": selected_cluster_id,
+                "cluster_name": "Cluster 1",
+            }])
+        ),
+    }, {"role": "user", "content": "Inspect the cluster."}]
+
+    with capture_model_diagnostics() as calls:
+        with pytest.raises(ModelProviderError, match="30s per attempt") as raised:
+            provider.next_agent_step(
+                profile(max_retries=2), "secret-token", messages,
+            )
+
+    assert raised.value.failure_type == "timeout"
+    summary = summarize_model_diagnostics(calls)
+    assert summary["failures"] == [{
+        "operation": "workflow.delegated_agent",
+        "failure_type": "timeout",
+        "schema": "AgentStep",
+        "attempt": 1,
+        "duration_ms": raised.value.failure["duration_ms"],
+        "timeout_seconds": 30,
+        "max_retries": 2,
+        "fields": [],
+    }]
 def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -438,7 +531,23 @@ def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
     assert captured["max_retries"] == 5
 
 
-def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:
+def test_inquiry_schema_advertises_only_focused_metric_semantics() -> None:
+    definitions = InquirySemantics.model_json_schema()["$defs"]
+
+    assert definitions["MetricRequestSemantics"]["properties"]["signals"]["items"]["enum"] == [
+        "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+        "memory_working_set", "memory_requests", "memory_limits",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+        "application_log_volume",
+        "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
+    ]
+    assert definitions["MetricTargetSemantics"]["properties"]["scope"]["enum"] == [
+        "cluster", "pod", "namespace", "node", "node_role", "kafka_cluster",
+    ]
+
+
+def test_chat_completions_delegated_finalization_exposes_no_shell_tool() -> None:
     completions = RecordingCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()
@@ -610,6 +719,86 @@ def test_model_diagnostics_omit_response_content_for_normal_ask_turns() -> None:
     assert "response_preview" not in calls[0]
 
 
+def test_model_diagnostics_always_capture_bounded_redacted_http_error() -> None:
+    request = httpx.Request("POST", "https://models.example.test/v1/chat/completions")
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"content-type": "application/json"},
+        json={"error": {
+            "code": "context_length_exceeded",
+            "message": "Input is too large; token=provider-secret-value",
+        }},
+    )
+
+    with capture_model_diagnostics() as calls:
+        _model_http_response_hook(response)
+
+    assert calls[0]["http_status"] == 400
+    assert "context_length_exceeded" in calls[0]["error_preview"]
+    assert "provider-secret-value" not in calls[0]["error_preview"]
+    assert "[REDACTED]" in calls[0]["error_preview"]
+    assert "response_preview" not in calls[0]
+
+
+def test_chat_input_budget_compacts_large_tool_results_before_provider_call() -> None:
+    messages = [
+        {"role": "system", "content": "Agent instructions."},
+        {"role": "user", "content": "Inspect Routes."},
+        {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "execute_shell", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "x" * 300_000},
+    ]
+
+    prepared = _prepare_chat_input(profile(max_input_tokens=20_000), messages)
+
+    tool_content = str(prepared[-1]["content"])
+    assert "compacted this message" in tool_content
+    assert len(json.dumps({"messages": prepared}).encode()) <= 20_000
+
+
+def test_chat_input_budget_counts_estimated_tokens_instead_of_utf8_bytes() -> None:
+    messages = [{"role": "user", "content": "check the current pod status " * 2_000}]
+    serialized_bytes = len(json.dumps({"messages": messages}).encode())
+    estimated_tokens = _chat_input_token_estimate(messages)
+
+    assert estimated_tokens < serialized_bytes // 2
+    prepared = _prepare_chat_input(profile(max_input_tokens=64_000), messages)
+    assert prepared == messages
+
+
+def test_chat_input_budget_stops_request_when_fixed_context_exceeds_limit() -> None:
+    with pytest.raises(ModelProviderError) as failure:
+        _prepare_chat_input(
+            profile(max_input_tokens=1_024),
+            [{"role": "system", "content": "s" * 5_000}],
+        )
+
+    assert failure.value.failure_type == "input_limit"
+    assert "before transmission" in str(failure.value)
+
+
+def test_safe_provider_error_includes_bounded_redacted_response_detail() -> None:
+    class BadRequestError(Exception):
+        status_code = 400
+        body = {"error": {
+            "code": "context_length_exceeded",
+            "message": "Too many tokens; api_key=must-not-leak",
+        }}
+
+    detail = OpenAIResponsesProvider._safe_error(BadRequestError())
+
+    assert "HTTP 400" in detail
+    assert "context_length_exceeded" in detail
+    assert "must-not-leak" not in detail
+    assert "[REDACTED]" in detail
+
+
 def test_model_diagnostics_capture_responses_incomplete_reason() -> None:
     request = httpx.Request("POST", "https://models.example.test/v1/responses")
     response = httpx.Response(
@@ -745,6 +934,33 @@ def test_minimal_answer_payload_includes_bounded_guidance_and_inquiry() -> None:
     }]
 
 
+def test_minimal_answer_payload_keeps_structural_object_comparisons() -> None:
+    comparison = {
+        "kind": "ClusterLogForwarder",
+        "namespace": "openshift-logging",
+        "name": "instance",
+        "specs_equal": False,
+        "sources": [
+            {"cluster": "Central", "evidence_id": "central-detail"},
+            {"cluster": "East", "evidence_id": "east-detail"},
+        ],
+        "differing_paths": [{
+            "path": "spec.outputs[0].name",
+            "values": [
+                {"cluster": "Central", "value": "default"},
+                {"cluster": "East", "value": "east-loki"},
+            ],
+        }],
+    }
+
+    payload = _minimal_answer_payload({
+        "question": "Compare ClusterLogForwarders.",
+        "object_comparisons": [comparison],
+    })
+
+    assert payload["object_comparisons"] == [comparison]
+
+
 def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
     answer = ConciseAdHocAnswer(
         answer_mode="general_guidance",
@@ -756,10 +972,11 @@ def test_concise_general_guidance_does_not_require_cluster_citation() -> None:
     assert answer.cited_evidence_ids == []
 
 
-def test_authored_collection_read_normalizes_model_wildcards() -> None:
+def test_authored_search_read_normalizes_model_wildcards() -> None:
     authored = AuthoredObjectRead(
-        tool="list_resources", resource="configmaps", api_version="v1",
+        tool="search_resources", resource="configmaps", api_version="v1",
         kind="ConfigMap", namespace="*", name="*",
+        match_field="metadata.name", match_value="application",
     )
 
     assert authored.namespace is None
@@ -1029,12 +1246,11 @@ def test_related_inventory_capability_preserves_opaque_scope_contract() -> None:
 def test_metric_capability_preserves_composable_multi_signal_contract() -> None:
     selected = CapabilitySelection(
         capability="cluster_metrics",
-        evidence_goal="Compare CPU and memory for the supplied StatefulSet.",
+        evidence_goal="Compare CPU and memory for the supplied Pod.",
         metric_request=MetricRequestSemantics(
             signals=["cpu_usage", "memory_working_set"],
             target=MetricTargetSemantics(
-                scope="workload", kind="StatefulSet",
-                namespace="kafka", name="broker",
+                scope="pod", kind="Pod", namespace="kafka", name="broker-0",
             ),
             operation="compare",
             statistic="maximum",
@@ -1048,7 +1264,7 @@ def test_metric_capability_preserves_composable_multi_signal_contract() -> None:
     assert inquiry.operation == "metrics"
     assert inquiry.metric_request is not None
     assert inquiry.metric_request.signals == ["cpu_usage", "memory_working_set"]
-    assert inquiry.metric_request.target.kind == "StatefulSet"
+    assert inquiry.metric_request.target.kind == "Pod"
 
 
 def test_capability_classifier_maps_audit_actions_to_typed_audit_semantics() -> None:
@@ -1232,12 +1448,13 @@ def test_action_selection_uses_exact_ids_as_the_safe_continuation_signal() -> No
     assert empty_plan.stop_reason == "no_material_read"
 
 
-def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None:
+def test_action_selection_can_author_bounded_object_search_and_gets() -> None:
     selected = ActionSelection.model_validate({
         "object_reads": [
             {
-                "tool": "list_resources", "resource": "authconfigs.authorino.kuadrant.io",
+                "tool": "search_resources", "resource": "authconfigs.authorino.kuadrant.io",
                 "kind": "AuthConfig", "namespace": "kuadrant-system", "limit": 20,
+                "match_field": "metadata.name", "match_value": "application",
             },
             {
                 "tool": "get_resource", "resource": "configmaps", "kind": "ConfigMap",
@@ -1247,7 +1464,7 @@ def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None
     })
 
     plan = selected.to_read_plan()
-    assert [intent.tool for intent in plan.intents] == ["list_resources", "get_resource"]
+    assert [intent.tool for intent in plan.intents] == ["search_resources", "get_resource"]
     assert plan.intents[0].resource == "authconfigs.authorino.kuadrant.io"
     assert plan.intents[1].name == "authorino-config"
 
@@ -1258,15 +1475,24 @@ def test_action_selection_can_author_bounded_object_discovery_and_gets() -> None
                 "namespace": "kuadrant-system",
             }],
         })
+    with pytest.raises(ValueError):
+        ActionSelection.model_validate({
+            "object_reads": [{
+                "tool": "list_resources", "resource": "configmaps",
+                "namespace": "kuadrant-system",
+            }],
+        })
 
 
 def test_action_selection_normalizes_cluster_wide_namespace_placeholder() -> None:
     selected = ActionSelection.model_validate({
         "object_reads": [{
-            "tool": "list_resources",
+            "tool": "search_resources",
             "resource": "kafkas.kafka.strimzi.io",
             "kind": "Kafka",
             "namespace": "*",
+            "match_field": "metadata.name",
+            "match_value": "application",
         }],
     })
 
@@ -1300,6 +1526,31 @@ def test_action_selection_salvage_retains_valid_reads_after_failed_correction() 
     assert plan._discarded_intent_count == 1
 
 
+def test_action_selection_salvage_safely_stops_when_every_object_read_is_invalid() -> None:
+    selected = OpenAIChatCompletionsProvider._salvage_action_selection(
+        ActionSelection,
+        json.dumps({
+            "action_ids": [],
+            "object_reads": [
+                {
+                    "tool": "search_resources", "resource": "clusterlogforwarders",
+                    "namespace": "openshift-logging",
+                },
+                {
+                    "tool": "get_resource", "resource": "clusterlogforwarders",
+                    "name": "first object",
+                },
+            ],
+        }),
+    )
+
+    assert selected is not None
+    plan = selected.to_read_plan()
+    assert plan.decision == "answer_from_evidence"
+    assert plan.intents == []
+    assert plan._discarded_intent_count == 2
+
+
 def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> None:
     context = {
         "question": "Why is this workload failing?",
@@ -1327,7 +1578,7 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
             "supporting_evidence_ids": ["evidence-1"],
         }],
         "completed_reads": [{
-            "tool": "list_resources",
+            "tool": "search_resources",
             "status": "succeeded",
             "target": "Pods in namespace production",
             "evidence_ids": ["evidence-1"],
@@ -1354,7 +1605,7 @@ def test_modular_payloads_exclude_orchestrator_state_and_bound_evidence() -> Non
         "supporting_evidence_ids": ["evidence-1"],
     }]
     assert planner["completed_reads"] == [{
-        "tool": "list_resources",
+        "tool": "search_resources",
         "status": "succeeded",
         "target": "Pods in namespace production",
         "evidence_ids": ["evidence-1"],
@@ -1477,7 +1728,7 @@ def test_incident_chat_prompt_keeps_read_work_inside_podpilot() -> None:
     assert "do not tell the operator to run kubectl" in instructions
 
 
-def test_capability_report_requires_ask_schemas_for_ready_state() -> None:
+def test_capability_report_treats_ask_schema_probe_as_informational() -> None:
     base = dict(
         reachable=True,
         tls_valid=True,
@@ -1485,11 +1736,11 @@ def test_capability_report_requires_ask_schemas_for_ready_state() -> None:
         model_available=True,
         structured_output=True,
     )
-    assert CapabilityReport(**base, ask_schemas=False).ready is False
+    assert CapabilityReport(**base, ask_schemas=False).ready is True
     assert CapabilityReport(**base, ask_schemas=True).ready is True
 
 
-def _configure_valid_probe_classifier(provider: OpenAIChatCompletionsProvider) -> None:
+def _configure_valid_probe_workflow(provider: OpenAIChatCompletionsProvider) -> None:
     provider.classify_ad_hoc = lambda *_args: InquirySemantics(  # type: ignore[method-assign]
         mode="logs",
         operation="logs",
@@ -1499,11 +1750,21 @@ def _configure_valid_probe_classifier(provider: OpenAIChatCompletionsProvider) -
         needs_object_details=True,
         evidence_goal="Discover the failing Pod and inspect its recent logs.",
     )
+    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
+        scope_summary="Use the supplied evidence or action."
+    )
+    provider.answer_ad_hoc = lambda *_args: AdHocAnswer(  # type: ignore[method-assign]
+        answer_mode="general_guidance",
+        answer="The workflow schema is supported.",
+    )
+    provider.analyze_logs = lambda *_args: AdHocLogAnalysis(  # type: ignore[method-assign]
+        overview="The bounded log schema is supported.",
+    )
 
 
-def test_ask_schema_probe_reports_operational_contract_failure() -> None:
+def test_ask_schema_probe_reports_schema_contract_failure() -> None:
     provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
+    _configure_valid_probe_workflow(provider)
     provider.plan_ad_hoc = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
         ModelProviderError("Provider response does not match ActionSelection.")
     )
@@ -1517,66 +1778,57 @@ def test_ask_schema_probe_reports_operational_contract_failure() -> None:
     )
 
 
-def test_ask_schema_probe_identifies_inquiry_phase() -> None:
+def test_ask_schema_probe_does_not_grade_operational_choices() -> None:
     provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_workflow(provider)
     provider.classify_ad_hoc = lambda *_args: InquirySemantics(  # type: ignore[method-assign]
         mode="explain",
         operation="explain",
         evidence_goal="Explain Pod logs.",
     )
-
-    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
-
-    assert passed is False
-    assert detail == (
-        "InquirySemantics probe failed. The model did not preserve the "
-        "namespace-scoped log request without inventing a Pod name."
+    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
+        scope_summary="Search for the Pod again.",
+        intents=[ReadIntent(
+            tool="search_resources", resource="pods", namespace="payments",
+            match_field="metadata.name", match_value="api-probe-1",
+        )],
     )
-
-
-def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
-    provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
-    planning_contexts: list[dict[str, object]] = []
-
-    def grounded_probe_plan(_profile, _key, context):
-        planning_contexts.append(context)
-        if context["investigation_round"] == 1:
-            return ReadPlan(
-                scope_summary="Discover Pods before reading logs.",
-                intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
-                )],
-            )
-        return ReadPlan(
-            scope_summary="Read the exact observed Pod logs.",
-            candidate_ids=["read-0123456789abcdefabcd"],
-        )
-
-    provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
     provider.answer_ad_hoc = lambda *_args: AdHocAnswer(  # type: ignore[method-assign]
-        answer_mode="evidence_based",
-        answer="The observed Pod restarted and its latest log reports successful startup.",
-        cited_evidence_ids=["probe-pods", "probe-log"],
-    )
-    provider.analyze_logs = lambda *_args: AdHocLogAnalysis(  # type: ignore[method-assign]
-        overview="The bounded log excerpt contains no error.",
+        answer_mode="general_guidance",
+        answer="No citation is required by the compatibility smoke test.",
     )
 
     passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
 
     assert passed is True
     assert detail is None
-    assert len(planning_contexts) == 2
-    assert planning_contexts[0]["read_candidates"] == []
+
+
+def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
+    provider = OpenAIChatCompletionsProvider()
+    _configure_valid_probe_workflow(provider)
+    planning_contexts: list[dict[str, object]] = []
+
+    def capture_probe_plan(_profile, _key, context):
+        planning_contexts.append(context)
+        return ReadPlan(
+            scope_summary="Return any schema-valid action selection."
+        )
+
+    provider.plan_ad_hoc = capture_probe_plan  # type: ignore[method-assign]
+
+    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
+
+    assert passed is True
+    assert detail is None
+    assert len(planning_contexts) == 1
     assert planning_contexts[0]["inquiry"]["mode"] == "logs"
-    assert planning_contexts[0]["resource_catalog"][0]["resource"] == "pods"
-    assert planning_contexts[1]["read_candidates"][0]["id"] == (
+    assert planning_contexts[0]["read_candidates"][0]["id"] == (
         "read-0123456789abcdefabcd"
     )
-    assert planning_contexts[1]["read_candidates"][0]["capability"] == "pod_logs"
-    assert planning_contexts[1]["completed_reads"] == [{
-        "tool": "list_resources",
+    assert planning_contexts[0]["read_candidates"][0]["capability"] == "pod_logs"
+    assert planning_contexts[0]["completed_reads"] == [{
+        "tool": "search_resources",
         "status": "succeeded",
         "target": "Pods in namespace payments",
         "evidence_ids": ["probe-pods"],
@@ -1585,21 +1837,7 @@ def test_ask_schema_probe_uses_modular_production_planning_shape() -> None:
 
 def test_ask_schema_probe_identifies_answer_phase() -> None:
     provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
-    def grounded_probe_plan(_profile, _key, context):
-        if context["investigation_round"] == 1:
-            return ReadPlan(
-                scope_summary="Discover Pods before reading logs.",
-                intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
-                )],
-            )
-        return ReadPlan(
-            scope_summary="Read the exact observed Pod logs.",
-            candidate_ids=["read-0123456789abcdefabcd"],
-        )
-
-    provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
+    _configure_valid_probe_workflow(provider)
     provider.answer_ad_hoc = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
         ModelProviderError("Provider request failed (InternalServerError, HTTP 504).")
     )
@@ -1613,70 +1851,9 @@ def test_ask_schema_probe_identifies_answer_phase() -> None:
     )
 
 
-def test_ask_schema_probe_rejects_direct_ungrounded_log_plan() -> None:
-    provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
-    provider.plan_ad_hoc = lambda *_args: ReadPlan(  # type: ignore[method-assign]
-        scope_summary="Read a guessed Pod.",
-        intents=[ReadIntent(
-            tool="pod_logs", namespace="payments", name="guessed-pod", container="app",
-        )],
-    )
-
-    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
-
-    assert passed is False
-    assert detail == (
-        "ActionSelection probe failed. "
-        "The model did not plan discovery before an ungrounded Pod log read."
-    )
-
-
-def test_ask_schema_probe_rejects_repeated_discovery_instead_of_grounded_action() -> None:
-    provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
-
-    def repeated_discovery_plan(_profile, _key, context):
-        return ReadPlan(
-            scope_summary="List the namespace Pods again.",
-            intents=[ReadIntent(
-                tool="list_resources", resource="pods", namespace="payments",
-            )],
-        )
-
-    provider.plan_ad_hoc = repeated_discovery_plan  # type: ignore[method-assign]
-
-    passed, detail = provider._probe_ask_schemas(profile(), "secret-token")
-
-    assert passed is False
-    assert detail == (
-        "ActionSelection probe failed. "
-        "The model did not select the exact grounded read candidate."
-    )
-
-
 def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
     provider = OpenAIChatCompletionsProvider()
-    _configure_valid_probe_classifier(provider)
-
-    def grounded_probe_plan(_profile, _key, context):
-        if context["investigation_round"] == 1:
-            return ReadPlan(
-                scope_summary="Discover Pods before reading logs.",
-                intents=[ReadIntent(
-                    tool="list_resources", resource="pods", namespace="payments",
-                )],
-            )
-        return ReadPlan(
-            scope_summary="Read the exact observed Pod logs.",
-            candidate_ids=["read-0123456789abcdefabcd"],
-        )
-
-    provider.plan_ad_hoc = grounded_probe_plan  # type: ignore[method-assign]
-    provider.answer_ad_hoc = lambda *_args: AdHocAnswer(  # type: ignore[method-assign]
-        answer_mode="evidence_based", answer="Schema probe passed.",
-        cited_evidence_ids=["probe-log"], limitations=[],
-    )
+    _configure_valid_probe_workflow(provider)
     provider.analyze_logs = lambda *_args: (_ for _ in ()).throw(  # type: ignore[method-assign]
         ModelProviderError("Provider response does not match AdHocLogAnalysis.")
     )

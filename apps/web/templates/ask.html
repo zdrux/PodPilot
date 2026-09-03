@@ -2,14 +2,28 @@
 {% block title %}Ask PodPilot{% endblock %}
 {% block body_class %}ask-page{% endblock %}
 {% block content %}
-<div class="ask-layout">
+{% set delegated_action_session = conversation and conversation.execution_mode == 'action' %}
+<div class="ask-layout{% if delegated_action_session %} action-session{% endif %}" data-ask-layout>
   <section class="panel ask-panel">
     <div class="panel-header ask-session-header">
-      <div><p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p><h2>Cluster conversation</h2></div>
+      <div class="ask-session-title">
+        <p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p>
+        <div class="ask-session-heading-row">
+          <h2>Cluster conversation</h2>
+          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE - Cluster WRITES Permitted</span>
+        </div>
+      </div>
       <div class="panel-header-actions">
-        <span class="boundary-pill caution-summary{% if agent_mode == 'unrestricted' %} agent-mode-pill{% endif %}" tabindex="0"
-          data-tooltip="Session cautions:&#10;{% if agent_mode == 'unrestricted' %}• Unrestricted lab mode — The model can execute arbitrary Linux shell and oc commands without PodPilot approval. OpenShift RBAC still applies to the podpilot-investigator service account.&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;{% endif %}• Cluster selection locked — Investigation mode cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if agent_mode == 'unrestricted' %} The lab agent may execute shell and oc commands with the Pod service account's RBAC.{% else %} PodPilot remains read-only.{% endif %}"
-          aria-label="Session cautions. {% if agent_mode == 'unrestricted' %}Unrestricted lab mode: the model can execute arbitrary Linux shell and oc commands without PodPilot approval; OpenShift RBAC still applies. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: changing clusters starts a new conversation.">
+        {% if is_delegated_mode %}
+        {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
+        {% endif %}
+        <span class="boundary-pill caution-summary{% if delegated_action_session %} action-caution-pill{% endif %}" tabindex="0"
+          data-tooltip="Session cautions:&#10;&#10;{% if delegated_action_session %}• Delegated Action mode — The agent may create, patch, apply, or delete objects directly. There is no PodPilot preview or approval step. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC and admission controls apply as you.&#10;&#10;{% else %}• Delegated read-only mode — PodPilot's broker blocks Kubernetes mutations, exec, attach, proxy, port-forward, and Secret reads. Allowed read requests use your connected identity and remain subject to OpenShift RBAC.&#10;&#10;{% endif %}{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history.{% if not delegated_action_session %} This conversation remains read-only.{% endif %}"
+          aria-label="Session cautions. {% if delegated_action_session %}Delegated Action mode: the agent may change cluster objects directly using your OpenShift identity and RBAC; there is no PodPilot preview or approval step. {% else %}Delegated read-only mode: PodPilot's broker blocks Kubernetes mutations and other prohibited operations. {% endif %}{% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."
+          {% if is_delegated_mode and not conversation %}data-read-only-tooltip="Session cautions:&#10;&#10;• Delegated read-only mode — PodPilot's broker blocks Kubernetes mutations, exec, attach, proxy, port-forward, and Secret reads. Allowed read requests use your short-lived in-memory login token and remain subject to OpenShift RBAC.&#10;&#10;{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history. This conversation remains read-only."
+          data-action-tooltip="Session cautions:&#10;&#10;• Delegated Action mode — The agent may create, patch, apply, or delete objects directly. There is no PodPilot preview or approval step. Every remote request uses your short-lived in-memory login token, so OpenShift RBAC and admission controls apply as you.&#10;&#10;{% if has_unverified_cluster_tls %}• Cluster TLS exception — One or more selected remote clusters use an approved TLS verification exception. Review the cluster configuration for connection details.&#10;&#10;{% endif %}• Cluster selection locked — The agent cannot change the cluster selection. Choose up to {{ max_selected_clusters }} clusters before the first question. Changing clusters starts a new conversation and keeps this session in history."
+          data-read-only-aria-label="Session cautions. Delegated read-only mode: PodPilot's broker blocks Kubernetes mutations and other prohibited operations. {% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."
+          data-action-aria-label="Session cautions. Delegated Action mode: the agent may change cluster objects directly using your OpenShift identity and RBAC; there is no PodPilot preview or approval step. {% if has_unverified_cluster_tls %}Cluster TLS exception: one or more selected remote clusters use an approved TLS verification exception. {% endif %}Cluster selection locked: the agent cannot change selected clusters; changing clusters starts a new conversation."{% endif %}>
           <span class="boundary-pill-icon" aria-hidden="true">!</span>
           <span>Session cautions</span>
         </span>
@@ -37,22 +51,39 @@
           {% elif message.role == 'assistant' and message.answer_mode == 'evidence_based' %}
           <span class="answer-status answer-status-grounded" tabindex="0" data-tooltip="Cluster-specific claims are backed by the cited observations{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, but the overall conclusion remains unresolved{% endif %}." aria-label="Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %}, unresolved conclusion{% endif %}.">Evidence-backed{% if message.activity and message.activity.conclusion_status == 'unresolved' %} · unresolved{% endif %}</span>
           {% elif message.answer_mode %}<span>{{ message.answer_mode | replace('_', ' ') }}</span>{% endif %}
-          {% if message.role == 'assistant' and message.model_diagnostics and message.model_diagnostics.call_count %}
+          {% if message.role == 'assistant' and ((message.model_diagnostics and message.model_diagnostics.call_count) or message.reply_duration_ms is not none) %}
           <details class="message-model-diagnostics">
             <summary>Model usage</summary>
-            {% if message.model_diagnostics.usage %}
             <dl>
+              {% if message.reply_duration_label %}<div><dt>Reply time</dt><dd>{{ message.reply_duration_label }}</dd></div>{% endif %}
+              {% if message.model_diagnostics.usage %}
               <div><dt>Input</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.input_tokens) }}</dd></div>
               <div><dt>Output</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.output_tokens) }}</dd></div>
               <div><dt>Reasoning</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.reasoning_tokens) }}</dd></div>
               <div><dt>Cached</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.cached_tokens) }}</dd></div>
               <div><dt>Total</dt><dd>{{ '{:,}'.format(message.model_diagnostics.usage.total_tokens) }}</dd></div>
               <div><dt>Largest input</dt><dd>{{ '{:,}'.format(message.model_diagnostics.largest_input_tokens) }}</dd></div>
+              {% endif %}
             </dl>
-            {% else %}<p>The provider did not report token usage.</p>{% endif %}
+            {% if message.model_diagnostics.call_count and not message.model_diagnostics.usage %}<p>The provider did not report token usage.</p>{% endif %}
+            {% if message.model_diagnostics.call_count %}
             <small>{{ message.model_diagnostics.call_count }} model call{% if message.model_diagnostics.call_count != 1 %}s{% endif %}; usage reported for {{ message.model_diagnostics.usage_reported_calls }}.</small>
             {% if message.model_diagnostics.finish_reasons %}
             <small>Provider termination: {{ message.model_diagnostics.finish_reasons | join(', ') }}.</small>
+            {% endif %}
+            {% endif %}
+            {% if message.tool_usage %}
+            <div class="message-model-tools">
+              <strong>Tool activity</strong>
+              <ul>
+                {% for tool in message.tool_usage %}
+                <li>
+                  <code>{{ tool.name }}</code>
+                  <span>{{ tool.count }} call{% if tool.count != 1 %}s{% endif %}{% for status in tool.statuses %} · {{ status.count }} {{ status.name | replace('_', ' ') }}{% endfor %}</span>
+                </li>
+                {% endfor %}
+              </ul>
+            </div>
             {% endif %}
             {% if message.model_diagnostics.failures %}
             <div class="message-model-failures">
@@ -61,12 +92,22 @@
                 {% for failure in message.model_diagnostics.failures %}
                 <li>
                   <span>{{ failure.failure_type | replace('_', ' ') }}{% if failure.schema %} · {{ failure.schema }}{% endif %}{% if failure.attempt %} · attempt {{ failure.attempt }}{% endif %}</span>
+                  {% if failure.duration_ms is not none %}<small>{{ failure.duration_ms }} ms elapsed{% if failure.timeout_seconds is not none %} · {{ failure.timeout_seconds }}s per-attempt timeout{% endif %}{% if failure.max_retries is not none %} · up to {{ failure.max_retries }} transient retries{% endif %}</small>{% endif %}
                   {% for field in failure.fields %}<small><code>{{ field.path }}</code> · {{ field.code }} — {{ field.message }}</small>{% endfor %}
                 </li>
                 {% endfor %}
               </ul>
             </div>
             {% endif %}
+            {% for call in message.model_diagnostics.calls %}
+              {% if call.error_preview %}
+              <div class="message-model-failures">
+                <strong>Provider HTTP error{% if call.http_status %} · {{ call.http_status }}{% endif %}</strong>
+                <small>{{ call.operation or 'model request' }}{% if call.request_id %} · request {{ call.request_id }}{% endif %}</small>
+                <pre><code>{{ call.error_preview }}</code></pre>
+              </div>
+              {% endif %}
+            {% endfor %}
           </details>
           {% endif %}
         </div>
@@ -75,9 +116,9 @@
         <section class="resource-result" aria-labelledby="resource-result-{{ message.id }}">
           <div class="resource-result-heading">
             <div>
-              <span class="evidence-tool">Observed resources</span>
+              <span class="evidence-tool">Observed inventory</span>
               <h3 id="resource-result-{{ message.id }}">{{ presentation.title }}</h3>
-              <p>{{ presentation.total_count }} matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster result{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
+              <p>{{ presentation.total_count }} unique matching resource{% if presentation.total_count != 1 %}s{% endif %} across {{ presentation.groups | length }} cluster/resource group{% if presentation.groups | length != 1 %}s{% endif %}.{% if presentation.omitted_count %} {{ presentation.omitted_count }} row{% if presentation.omitted_count != 1 %}s{% endif %} omitted from this bounded display.{% endif %}</p>
             </div>
           </div>
           <div class="resource-result-groups">
@@ -86,7 +127,7 @@
               <summary>
                 <span><strong>{{ group.cluster_name }}</strong><small>{{ group.kind }}{% if group.match_field %} · <code>{{ group.match_field }}</code> {{ group.match_operator }} <code>{{ group.match_value }}</code>{% endif %}</small></span>
                 <span class="resource-result-count">{{ group.count }} match{% if group.count != 1 %}es{% endif %}</span>
-                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Complete{% else %}Incomplete{% endif %}</span>
+                <span class="resource-result-coverage {% if not group.complete %}incomplete{% endif %}">{% if group.complete %}Inventory complete{% else %}Inventory incomplete{% endif %}</span>
               </summary>
               {% if group.rows %}
               <div class="resource-result-toolbar">
@@ -138,10 +179,10 @@
             </div>
             <div class="resource-table-wrap">
               <table id="answer-table-data-{{ message.id }}-{{ answer_table_index }}" class="resource-result-table answer-table-data">
-                <thead><tr>{% for column in block.columns %}<th><div class="answer-table-markdown">{{ column.label | safe_markdown }}</div></th>{% endfor %}</tr></thead>
+                <thead><tr>{% for column in block.columns %}<th><div class="answer-table-markdown">{{ column.label | safe_table_markdown }}</div></th>{% endfor %}</tr></thead>
                 <tbody>
                 {% for row in block.rows %}
-                  <tr>{% for cell in row.cells %}<td><div class="answer-table-markdown">{{ cell | safe_markdown }}</div></td>{% endfor %}</tr>
+                  <tr>{% for cell in row.cells %}<td><div class="answer-table-markdown">{{ cell | safe_table_markdown }}</div></td>{% endfor %}</tr>
                 {% endfor %}
                 </tbody>
               </table>
@@ -169,22 +210,25 @@
         {% if message.role == 'assistant' and message.citations %}
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
-            {% if cited and cited.metric_ranking %}
+            {% if cited and (cited.metric_ranking or cited.kafka_topic_storage) %}
+            {% set metric_presentation = cited.kafka_topic_storage or cited.metric_ranking %}
             <section class="metric-result" aria-labelledby="metric-result-{{ message.id }}-{{ id }}">
               <div class="metric-result-heading">
                 <div>
                   <span class="evidence-tool">Observed metric</span>
-                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }}</h3>
-                  <p>{{ cited.metric_ranking.description }}</p>
+                  <h3 id="metric-result-{{ message.id }}-{{ id }}">{% if cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ metric_presentation.title }}</h3>
+                  <p>{{ metric_presentation.description }}</p>
                 </div>
+                {% if not cited.kafka_topic_storage %}
                 <button class="button secondary compact-button" type="button"
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
                   data-csv-filename="podpilot-{{ cited.data.metric if cited.data else 'metrics' }}.csv">Download CSV</button>
+                {% endif %}
               </div>
               {% if cited.metric_trend %}
-              <figure class="metric-trend" aria-label="{{ cited.metric_ranking.title }} over time">
+              <figure class="metric-trend" aria-label="{{ metric_presentation.title }} over time">
                 <svg viewBox="0 0 1000 232" role="img" aria-labelledby="metric-trend-title-{{ message.id }}-{{ id }} metric-trend-desc-{{ message.id }}-{{ id }}">
-                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ cited.metric_ranking.title }} over time</title>
+                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ metric_presentation.title }} over time</title>
                   <desc id="metric-trend-desc-{{ message.id }}-{{ id }}">Bounded metric samples from {{ cited.metric_trend.start }} through {{ cited.metric_trend.end }}. Peak {{ cited.metric_trend.peak }} at {{ cited.metric_trend.peak_at }}.</desc>
                   <g class="metric-trend-grid" aria-hidden="true">
                     <line x1="42" y1="30" x2="958" y2="30"></line>
@@ -209,6 +253,38 @@
                 {% endif %}
               </figure>
               {% endif %}
+              {% if cited.kafka_topic_storage %}
+              <div class="kafka-topic-storage-list">
+                <div class="kafka-topic-storage-columns" aria-hidden="true">
+                  <span>Rank / topic</span><span>Replicated disk usage</span><span>Aggregate PVC capacity share</span><span>Placement</span>
+                </div>
+                {% for row in cited.kafka_topic_storage.rows %}
+                <details class="kafka-topic-storage-group" {% if loop.first %}open{% endif %}>
+                  <summary>
+                    <span class="kafka-topic-storage-identity"><b>{{ row.rank }}</b><code>{{ row.topic }}</code>{% if row.internal %}<em>Internal</em>{% endif %}</span>
+                    <strong>{{ row.current_bytes }}</strong>
+                    <span class="kafka-topic-storage-share"><progress max="{{ cited.kafka_topic_storage.scale_max }}" value="{{ row.progress }}" aria-label="{{ row.topic }} aggregate broker PVC capacity share {{ row.utilization }}"></progress><strong>{{ row.utilization }}</strong></span>
+                    <span>{{ row.placement_summary }}</span>
+                  </summary>
+                  {% if row.partitions %}
+                  <div class="metric-table-wrap kafka-partition-table-wrap">
+                    <table class="metric-ranking-table kafka-partition-table">
+                      <thead><tr><th>Partition</th><th>Broker ID</th><th>Broker Pod</th><th>Replica disk usage</th></tr></thead>
+                      <tbody>
+                      {% for partition in row.partitions %}
+                        <tr><td><code>{{ partition.partition }}</code></td><td><code>{{ partition.broker_id }}</code></td><td><code>{{ partition.broker_pod }}</code></td><td class="metric-current"><strong>{{ partition.current_bytes }}</strong></td></tr>
+                      {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <p class="kafka-topic-storage-empty">No partition replica detail was retained for this topic.</p>
+                  {% endif %}
+                </details>
+                {% endfor %}
+              </div>
+              <p class="metric-result-note">{{ cited.kafka_topic_storage.capacity_note }}</p>
+              {% else %}
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
                   <thead><tr><th>Rank</th>{% for column in cited.metric_ranking.columns %}<th>{{ column.label }}</th>{% endfor %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if cited.metric_ranking.show_maximum %}<th>Peak</th>{% endif %}</tr></thead>
@@ -225,7 +301,8 @@
                   </tbody>
                 </table>
               </div>
-              <small>{% if cited.metric_ranking.complete %}Complete bounded result{% else %}Result reached a collection limit and may be incomplete{% endif %} · Source: {{ cited.source }}</small>
+              {% endif %}
+              <small>{% if metric_presentation.complete %}Complete bounded result{% else %}Result reached a collection limit and may be incomplete{% endif %} · Source: {{ cited.source }}</small>
             </section>
             {% endif %}
           {% endfor %}
@@ -250,6 +327,40 @@
         {% endif %}
         {% if message.activity and message.activity.limitations %}
         <ul class="answer-limitations">{% for item in message.activity.limitations %}<li>{{ item }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if message.activity and message.activity.diagnostics %}
+        <details class="answer-diagnostics">
+          <summary>Tool-call diagnostics <small>{{ message.activity.diagnostics | length }} rejected attempt{% if message.activity.diagnostics | length != 1 %}s{% endif %}</small></summary>
+          <p>PodPilot rejected these malformed agent calls before execution and returned correction guidance to the model.</p>
+          <ul>{% for item in message.activity.diagnostics %}<li>{{ item }}</li>{% endfor %}</ul>
+        </details>
+        {% endif %}
+        {% if message.activity and message.activity.evidence_ledger %}
+        <details class="answer-diagnostics retained-agent-evidence">
+          <summary>Agent evidence ledger <small>{{ message.activity.evidence_ledger | length }} recorded operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
+          <p>This is the bounded operation trail the agent retained after each raw tool result was interpreted once.</p>
+          <ol>
+          {% for item in message.activity.evidence_ledger %}
+            <li>
+              <strong>{{ item.cluster_name or item.cluster_id }} · {{ item.tool }} · {{ item.status }}</strong>
+              {% if item.executed is defined %}<small>Runner executed: {{ 'yes' if item.executed else 'no' }}{% if item.failure_category %} · {{ item.failure_category | replace('_', ' ') }}{% endif %}{% if item.diagnostic_ref %} · diagnostic {{ item.diagnostic_ref }}{% endif %}</small>{% endif %}
+              {% if item.error %}<small class="ledger-stderr">{{ item.error }}</small>{% endif %}
+              {% if item.command %}<code>{{ item.command }}</code>{% endif %}
+              {% if item.stdout_excerpt %}<pre>{{ item.stdout_excerpt }}</pre>{% endif %}
+              {% if item.stderr_excerpt %}<pre class="ledger-stderr">{{ item.stderr_excerpt }}</pre>{% endif %}
+              {% if item.observations %}<pre>{{ item.observations | tojson(indent=2) }}</pre>{% endif %}
+              {% if item.limitations %}<pre class="ledger-stderr">{{ item.limitations | tojson(indent=2) }}</pre>{% endif %}
+            </li>
+          {% endfor %}
+          </ol>
+        </details>
+        {% endif %}
+        {% if message.command_failures %}
+        <details class="answer-diagnostics exploratory-failures">
+          <summary>Exploratory checks <small>{{ message.command_failures | sum(attribute='count') }} unsuccessful attempt{% if message.command_failures | sum(attribute='count') != 1 %}s{% endif %}</small></summary>
+          <p>These agent-selected checks did not return usable evidence. They are retained for auditability{% if message.activity.stop_reason == 'complete' %} but did not prevent the agent from completing this answer{% else %} and contributed to the incomplete investigation{% endif %}.</p>
+          <ul>{% for item in message.command_failures %}<li>{{ item.cluster }}: {{ item.label }}{% if item.count != 1 %} ({{ item.count }} attempts){% endif %}</li>{% endfor %}</ul>
+        </details>
         {% endif %}
         {% if message.activity and message.activity.recommended_next_checks %}
         <section class="recommended-checks">
@@ -282,12 +393,12 @@
         <div class="chat-meta"><strong>PodPilot</strong><span>investigating</span></div>
         <div class="thinking-state" role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span>
-          <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{{ active_run.events[-1].message if active_run.events else 'Starting investigation.' }}</p></div>
+          <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{% if active_run.status == 'queued' %}Your request is waiting for an available worker.{% else %}PodPilot is choosing and running useful checks.{% endif %}</p></div>
         </div>
         <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
           {% set progress = namespace(phases=[], seen_messages=[]) %}
           {% for event in active_run.events %}
-            {% if event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
+            {% if event.phase not in ['queued', 'starting'] and event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
           {% endfor %}
           {% for phase in progress.phases %}
             {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
@@ -302,7 +413,8 @@
             <li class="progress-phase" data-progress-phase="{{ phase }}">
               <div class="progress-phase-heading"><span aria-hidden="true"></span><small>{{ phase | replace('_', ' ') }}</small></div>
               <ul class="progress-phase-updates" data-progress-items>
-                {% for event in unique_phase.events[-3:] %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
+                {% set visible_phase_events = unique_phase.events[-5:] if phase == 'agent_command' else unique_phase.events[-3:] %}
+                {% for event in visible_phase_events %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
               </ul>
             </li>
             {% endif %}
@@ -315,49 +427,101 @@
     <div class="ask-empty">
       <div class="radar" aria-hidden="true"></div>
       <h3>What should I investigate?</h3>
-      <p>Include the namespace and resource name when you know them. PodPilot will ask for narrower scope when a safe read cannot be planned.</p>
-      <div class="prompt-examples">
-        <span>Why is pod api-7d9 pending in payments?</span>
-        <span>Compare cluster DNS configuration with pod billing-worker</span>
-        <span>Check the logs for pod checkout-54b in store</span>
+      <p>Choose a read-only investigation to begin with the selected clusters, or enter a specific question below.</p>
+      {% if can_ask %}
+      <div class="prompt-starters" aria-label="Start an investigation">
+        <button type="button" data-starter-prompt="Find currently failing or unhealthy workloads across the selected clusters. Treat every Pod outside Running or Succeeded as unhealthy, and also include Running Pods with unhealthy container or readiness state. Check Pending, Failed, Evicted, Unknown, CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, and other startup failures, plus Deployments, StatefulSets, and DaemonSets with unavailable replicas. Group findings by cluster and namespace, cite observed evidence, and do not make changes."
+          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
+          <strong>Find failing workloads</strong><small>Pending, crashing, image-pull, and unavailable workloads</small>
+        </button>
+        <button type="button" data-workload-starter-open
+          data-starter-available="{{ 'true' if read_only_model_ready and not active_run and not (is_delegated_mode and not delegated_session_active) else 'false' }}" disabled>
+          <strong>Troubleshoot a workload…</strong><small>Inspect a specific namespace and resource</small>
+        </button>
+        {% if is_delegated_mode %}
+        <button type="button" data-starter-prompt="Using read-only commands only, summarize what my delegated OpenShift identity can access on each selected cluster. Report relevant namespace scope and whether I can get, list, create, patch, and delete common workload resources. Do not make changes."
+          data-starter-available="{{ 'true' if model_ready and delegated_session_active and not active_run else 'false' }}" disabled>
+          <strong>Show my access</strong><small>Summarize the effective RBAC of your delegated identity</small>
+        </button>
+        <button type="button" data-starter-prompt="Using read-only commands only, list the OpenShift projects or Kubernetes namespaces visible to my delegated identity on each selected cluster. Include the cluster name and do not make changes."
+          data-starter-available="{{ 'true' if model_ready and delegated_session_active and not active_run else 'false' }}" disabled>
+          <strong>List my projects</strong><small>Show projects visible to your delegated identity</small>
+        </button>
+        {% endif %}
       </div>
+      <form class="workload-starter-form" data-workload-starter-form hidden>
+        <label>Namespace<input name="namespace" required maxlength="253" placeholder="Namespace"></label>
+        <label>Resource<input name="resource" required maxlength="253" placeholder="Pod, Deployment, or workload name"></label>
+        <div class="form-actions">
+          <button class="button primary compact-button" type="submit">Start investigation</button>
+          <button class="button secondary compact-button" type="button" data-workload-starter-cancel>Cancel</button>
+        </div>
+      </form>
+      {% endif %}
     </div>
     {% endif %}
 
     <div class="ask-composer">
-      {% if user.role.value >= 20 %}
+      {% if is_delegated_mode and not delegated_session_active %}
+      <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}&amp;retry={{ missing_delegated_cluster_ids | join(',') }}{% endif %}">Reconnect the missing clusters</a> to continue this conversation, or <a href="/ask?new=1">start a new conversation</a> with the clusters that are still connected.</p></div>
+      {% endif %}
+      {% if can_ask %}
       <form class="chat-form adhoc-chat-form" method="post"
+        data-read-only-model-ready="{{ 'true' if read_only_model_ready else 'false' }}"
+        data-action-model-ready="{{ 'true' if action_model_ready else 'false' }}"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
-        <div class="composer-meta-row">
-          <div class="question-cluster-row">
-            <label for="adhoc-message">Question or symptom</label>
+        <label class="composer-prompt-label" for="adhoc-message">Question or symptom</label>
+        <div class="composer-input-wrap">
+          <textarea id="adhoc-message" name="message" rows="2" data-min-rows="2" data-max-rows="10" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>
+          <div class="composer-toolbar">
+            <div class="question-cluster-row">
             <span class="cluster-inline-label">Send requests to</span>
-            <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if conversation or active_run %}data-locked="true"{% endif %}>
+            <details class="cluster-picker" data-cluster-picker data-max-selected="{{ max_selected_clusters }}" {% if not conversation %}data-cluster-selection-required{% endif %} {% if conversation or active_run %}data-locked="true"{% endif %}>
               <summary>
                 <span class="cluster-picker-selection" data-cluster-picker-label aria-label="Selected clusters">
+                  {% if not conversation and not selected_cluster_ids %}
+                  <span class="cluster-picker-required"><span class="cluster-picker-required-icon" aria-hidden="true">!</span><span>Select cluster(s) first</span></span>
+                  {% else %}
                   <span class="cluster-picker-placeholder">Select clusters</span>
+                  {% endif %}
                 </span>
                 <small data-cluster-picker-count></small>
               </summary>
               <div class="cluster-picker-menu">
+                <div class="cluster-filter-tabs" role="tablist" aria-label="Filter clusters by sign-in status">
+                  <button type="button" role="tab" aria-selected="true" data-cluster-filter="connected">Signed-In</button>
+                  <button type="button" role="tab" aria-selected="false" data-cluster-filter="all">All</button>
+                </div>
                 <input type="search" placeholder="Search clusters or tags…" aria-label="Search clusters" data-cluster-search {% if conversation %}disabled{% endif %}>
                 <div class="cluster-options">
                 {% for cluster in clusters %}
                   <label data-cluster-option data-search="{{ cluster.name }} {{ cluster.tags | tojson }}">
                     <input type="checkbox" value="{{ cluster.id }}" data-cluster-checkbox
+                      data-connected="{{ 'true' if cluster.id in connected_cluster_ids else 'false' }}"
+                      data-login-url="/delegated/connect?retry={{ cluster.id }}&amp;next=/ask?new=1%26cluster_id={{ cluster.id }}"
                       {% if cluster.id in selected_cluster_ids %}checked{% endif %}
                       {% if conversation or not cluster.is_enabled %}disabled{% endif %}>
                     <span><strong>{{ cluster.name }}</strong><small>{% if cluster.is_system %}runtime cluster{% else %}{{ cluster.api_url }}{% endif %}</small></span>
-                    {% if not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
+                    {% if cluster.id not in connected_cluster_ids %}<em>Sign in</em>{% elif not cluster.tls_verify %}<em>Unverified TLS</em>{% endif %}
                   </label>
                 {% endfor %}
                 </div>
               </div>
             </details>
             <input type="hidden" name="cluster_ids" data-cluster-ids value='{{ selected_cluster_ids | tojson }}'>
-            {% if conversation %}<a class="button secondary compact-button" href="/ask">Change</a>{% endif %}
-          </div>
-          <div class="composer-controls">
+            {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">Change</a>{% endif %}
+            </div>
+            <div class="composer-controls">
+            {% if not conversation and is_delegated_mode %}
+            <label class="reasoning-effort-picker" for="execution-mode">Mode
+              <select id="execution-mode" name="execution_mode">
+                <option value="read_only" selected>Investigate · read-only</option>
+                {% if can_use_action_mode %}<option value="action">Action · my cluster permissions</option>{% endif %}
+              </select>
+            </label>
+            {% elif conversation and is_delegated_mode %}
+            <span class="boundary-pill execution-mode-badge {{ 'execution-mode-read-write' if conversation.execution_mode == 'action' else 'execution-mode-read-only' }}"><strong>{{ 'Action' if conversation.execution_mode == 'action' else 'Investigate · read-only' }}</strong></span>
+            {% endif %}
             <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
               <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>
                 <option value="provider_default" {% if not selected_reasoning_effort %}selected{% endif %}>Provider default</option>
@@ -369,17 +533,19 @@
               <span aria-hidden="true"></span>
               <strong>Show raw model response</strong>
             </label>
+              {% if active_run %}
+              <button class="button primary" type="button" data-ask-submit data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" aria-label="Cancel current request">Cancel</button>
+              {% else %}
+              <button class="button primary" type="submit" data-ask-submit {% if not model_ready or not selected_cluster_ids or (is_delegated_mode and not delegated_session_active) %}disabled{% endif %}>Submit</button>
+              {% endif %}
+            </div>
           </div>
         </div>
-        <div class="composer-input-wrap">
-          <textarea id="adhoc-message" name="message" rows="3" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}PodPilot is completing the current investigation…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if active_run %}disabled{% endif %}></textarea>
-          <button class="button primary" type="submit" {% if not model_ready or active_run %}disabled{% endif %}>{% if active_run %}Investigating…{% else %}Investigate{% endif %}</button>
-        </div>
       </form>
-      {% elif user.role.value < 20 %}
+      {% else %}
       <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after an Approver saves and tests a model profile with the required connection and {% if agent_mode == 'unrestricted' %}tool-calling{% else %}structured-output{% endif %} capabilities.</p></div>{% elif model_status == 'reduced_capability' %}<div class="chat-budget"><strong>Model running with reduced capability</strong><p>{{ model_detail or 'One or more optional or semantic workflow probes did not pass. PodPilot will retain typed validation and deterministic fallbacks.' }}</p></div>{% endif %}
+      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after a configuration administrator saves and tests a model profile with the required connection and tool-calling capabilities.</p></div>{% endif %}
     </div>
   </section>
 

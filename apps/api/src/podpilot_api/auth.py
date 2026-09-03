@@ -17,6 +17,7 @@ USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,252}$")
 
 class Role(IntEnum):
     VIEWER = 10
+    DELEGATED_OPERATOR = 15
     INVESTIGATOR = 20
     APPROVER = 30
     BREAKGLASS = 40
@@ -30,6 +31,7 @@ class Role(IntEnum):
 class AuthContext:
     username: str
     role: Role
+    can_manage_configuration: bool = False
 
 
 class RoleResolver(Protocol):
@@ -42,6 +44,9 @@ class StaticRoleResolver:
 
     def resolve(self, username: str) -> Role | None:
         return self._assignments.get(username)
+
+    def can_manage(self, username: str) -> bool:
+        return self._assignments.get(username) in {Role.APPROVER, Role.BREAKGLASS}
 
 
 def auth_dependency(settings: Settings, resolver: RoleResolver):
@@ -66,6 +71,20 @@ def auth_dependency(settings: Settings, resolver: RoleResolver):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="This OpenShift user has no PodPilot application role.",
             )
-        return AuthContext(username=username, role=role)
+        can_manage = False
+        capability_resolver = getattr(resolver, "can_manage", None)
+        if callable(capability_resolver):
+            try:
+                can_manage = bool(await run_in_threadpool(capability_resolver, username))
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="OpenShift capability resolution is temporarily unavailable.",
+                ) from exc
+        return AuthContext(
+            username=username,
+            role=role,
+            can_manage_configuration=can_manage,
+        )
 
     return current_user

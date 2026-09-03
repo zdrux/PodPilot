@@ -172,6 +172,8 @@ def test_remote_query_discovers_route_and_uses_in_memory_token() -> None:
         api_tls_verify=False,
         transport=httpx.MockTransport(handler),
     )
+    assert query_client._route_discovery_tls_verify is False
+    assert query_client._tls_verify is False
     start = datetime.fromtimestamp(1_777_000_000, tz=timezone.utc)
 
     snapshot = query_client.query_range(
@@ -238,3 +240,25 @@ def test_query_requires_exactly_one_token_source(tmp_path: Path) -> None:
             token_path=token_path,
             token="duplicate",
         )
+
+
+def test_query_resolves_a_fresh_bearer_token_for_each_request() -> None:
+    supplied = iter(("delegated-one", "delegated-two"))
+    observed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.headers["authorization"])
+        return httpx.Response(200, json={
+            "status": "success", "data": {"resultType": "vector", "result": []},
+        })
+
+    query_client = ThanosQueryClient(
+        base_url="https://thanos.example.test",
+        token_provider=lambda: next(supplied),
+        transport=httpx.MockTransport(handler),
+    )
+
+    query_client.query("up")
+    query_client.query("up")
+
+    assert observed == ["Bearer delegated-one", "Bearer delegated-two"]

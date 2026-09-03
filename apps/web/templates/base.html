@@ -6,13 +6,13 @@
   <meta name="color-scheme" content="dark">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=quiet-ledger-4">
-  <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=action-notice-alignment-11-1">
+  <script src="{{ url_for('static', path='/app.js') }}?v=composer-autogrow-10-1" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <a class="brand" href="/" aria-label="PodPilot home">
+      <a class="brand" href="/ask?new=1" aria-label="PodPilot home">
         <span class="brand-mark" aria-hidden="true">P</span>
         <span>
           <strong>PodPilot</strong>
@@ -22,12 +22,14 @@
 
       <nav class="nav-list">
         <p class="nav-label">Workspace</p>
+        {% if not ask_first %}
         <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
           <span class="nav-icon" aria-hidden="true">⌁</span>
           Cluster health
         </a>
+        {% endif %}
         <div class="nav-tree {% if recent_conversations is defined and recent_conversations %}expanded{% endif %}">
-          <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask">
+          <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask?new=1">
             <span class="nav-icon" aria-hidden="true">✦</span>
             Ask PodPilot
           </a>
@@ -35,7 +37,7 @@
           <div class="nav-subtree" aria-label="Ask PodPilot conversations">
             <div class="nav-subtree-heading">
               <span>Sessions</span>
-              <a href="/ask" title="New conversation" aria-label="New conversation">+</a>
+              <a href="/ask?new=1" title="New conversation" aria-label="New conversation">+</a>
             </div>
             <ul class="nav-session-list">
               {% for item in recent_conversations %}
@@ -55,13 +57,38 @@
           </div>
           {% endif %}
         </div>
+        {% if ask_first and user is defined %}
+        <div class="nav-tree cluster-nav-tree {% if workspace_clusters %}expanded{% endif %}">
+          <a class="nav-link {% if request.url.path.startswith('/clusters/') or request.url.path == '/delegated/connect' %}active{% endif %}" href="/delegated/connect">
+            <span class="nav-icon" aria-hidden="true">⌘</span>
+            Clusters
+          </a>
+          <div class="nav-subtree" aria-label="Available clusters">
+            <div class="nav-subtree-heading">
+              <span>Available</span>
+              {% if user is defined and user.role.value >= 15 %}<a href="/clusters/personal?new=1" title="Add a personal cluster" aria-label="Add a personal cluster">+</a>{% endif %}
+            </div>
+            <ul class="nav-session-list nav-cluster-list">
+              {% for cluster in workspace_clusters %}
+              <li>
+                <a class="nav-session-link nav-cluster-link" href="/clusters/{{ cluster.id }}/ask" title="Start a conversation with {{ cluster.name }}">
+                  <span class="cluster-session-status {% if cluster.session_connected %}connected{% else %}disconnected{% endif %}" aria-hidden="true"></span>
+                  <span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment | upper }} · {{ 'Signed in' if cluster.session_connected else 'Sign-in required' }}</small></span>
+                </a>
+              </li>
+              {% else %}
+              <li class="nav-session-empty">No clusters are available.</li>
+              {% endfor %}
+            </ul>
+          </div>
+        </div>
+        {% endif %}
+        {% if user is defined and user.can_manage_configuration %}
         <p class="nav-label section-gap">Manage</p>
-        {% if user is defined and user.role.value >= 30 %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
-          Clusters
+          Cluster Management
         </a>
-        {% endif %}
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
           <span class="nav-icon" aria-hidden="true">◇</span>
           Cluster memory
@@ -70,6 +97,7 @@
           <span class="nav-icon" aria-hidden="true">⚙</span>
           Model settings
         </a>
+        {% endif %}
       </nav>
 
       {% if user is defined %}
@@ -77,9 +105,9 @@
         <div class="avatar" aria-hidden="true">{{ user.username[0] | upper }}</div>
         <div class="identity-copy">
           <strong title="{{ user.username }}">{{ user.username }}</strong>
-          <span>{{ user.role.label }}</span>
+          <span>{% if ask_first and user.role.value >= 30 %}Read-Write{% else %}{{ user.role.label }}{% endif %}</span>
         </div>
-        <a class="signout" href="/oauth/sign_out" title="Clear PodPilot session" aria-label="Clear PodPilot session">↪</a>
+        <a class="signout" href="/session/logout" title="Clear PodPilot session" aria-label="Clear PodPilot session">↪</a>
       </div>
       {% endif %}
     </aside>

@@ -6,6 +6,33 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_runtime_has_only_narrow_application_role_group_access() -> None:
+    documents = list(yaml.safe_load_all(
+        (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()
+    ))
+    role = next(
+        item for item in documents
+        if item.get("kind") == "ClusterRole"
+        and item["metadata"]["name"] == "podpilot-role-reader"
+    )
+    assert role["rules"] == [{
+        "apiGroups": ["user.openshift.io"],
+        "resources": ["groups"],
+        "verbs": ["get"],
+    }]
+    bindings = {
+        item["roleRef"]["name"]: item
+        for item in documents
+        if item.get("kind") == "ClusterRoleBinding"
+    }
+    assert "cluster-reader" not in bindings
+    assert bindings["podpilot-role-reader"]["subjects"] == [{
+        "kind": "ServiceAccount",
+        "name": "podpilot-investigator",
+        "namespace": "ai-ops",
+    }]
+
+
 def test_investigator_has_monitoring_and_logging_view_bindings() -> None:
     documents = list(yaml.safe_load_all(
         (ROOT / "deploy" / "openshift" / "base" / "rbac.yaml").read_text()
@@ -75,21 +102,83 @@ def test_remote_pvc_requests_the_default_storage_class() -> None:
     assert pvc["spec"]["resources"]["requests"]["storage"] == "5Gi"
 
 
-def test_cluster_credentials_use_one_fixed_resource_named_secret() -> None:
+def test_user_delegated_access_has_no_cluster_credential_secret_or_rbac() -> None:
     workload = ROOT / "deploy" / "openshift" / "workload"
-    documents = list(yaml.safe_load_all((workload / "cluster-credentials-rbac.yaml").read_text()))
-    role = next(item for item in documents if item["kind"] == "Role")
-    assert role["rules"] == [{
-        "apiGroups": [""],
-        "resources": ["secrets"],
-        "resourceNames": ["podpilot-cluster-credentials"],
-        "verbs": ["get", "patch", "update"],
-    }]
+    assert not (workload / "cluster-credentials-rbac.yaml").exists()
+    assert not (workload / "cluster-credentials.yaml").exists()
+    kustomization = yaml.safe_load((workload / "kustomization.yaml").read_text())
+    assert all("cluster-credentials" not in item for item in kustomization["resources"])
     deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
-    assert next(
-        item for item in env if item["name"] == "PODPILOT_CLUSTER_CREDENTIAL_STORE"
-    )["value"] == "kubernetes"
+    assert all(item["name"] != "PODPILOT_CLUSTER_CREDENTIAL_STORE" for item in env)
+
+
+def test_oauth_proxy_restarts_when_its_projected_client_token_rotates() -> None:
+    deployment = yaml.safe_load(
+        (ROOT / "deploy" / "openshift" / "workload" / "deployment.yaml").read_text()
+    )
+    pod_spec = deployment["spec"]["template"]["spec"]
+    oauth_proxy = next(
+        container for container in pod_spec["containers"]
+        if container["name"] == "oauth-proxy"
+    )
+    api = next(
+        container for container in pod_spec["containers"]
+        if container["name"] == "api"
+    )
+    projected = next(
+        volume for volume in pod_spec["volumes"]
+        if volume["name"] == "podpilot-service-account"
+    )
+    token_projection = next(
+        source["serviceAccountToken"]
+        for source in projected["projected"]["sources"]
+        if "serviceAccountToken" in source
+    )
+    runtime = next(
+        volume for volume in pod_spec["volumes"]
+        if volume["name"] == "oauth-runtime"
+    )
+    supervisor = oauth_proxy["command"][2]
+
+    assert token_projection == {"path": "token", "expirationSeconds": 28800}
+    assert runtime["emptyDir"] == {"medium": "Memory", "sizeLimit": "1Mi"}
+    assert oauth_proxy["command"][:2] == ["/bin/sh", "-ec"]
+    assert oauth_proxy["command"][3] == "oauth-proxy"
+    assert "cp /var/run/secrets/kubernetes.io/serviceaccount/token" in supervisor
+    assert '/usr/bin/oauth-proxy "$@" &' in supervisor
+    assert "proxy_pid=$!" in supervisor
+    assert "trap shutdown TERM INT" in supervisor
+    assert "while kill -0 \"$proxy_pid\"" in supervisor
+    assert "sleep 1" in supervisor
+    assert '$(cat /var/run/podpilot-oauth/client-secret)' in supervisor
+    assert '$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)' in supervisor
+    assert 'kill -TERM "$proxy_pid"' in supervisor
+    assert 'wait "$proxy_pid"' in supervisor
+    assert "--client-secret-file=/var/run/podpilot-oauth/client-secret" in oauth_proxy["args"]
+    assert "--cookie-refresh=0" in oauth_proxy["args"]
+    assert "--cookie-refresh=1h" not in oauth_proxy["args"]
+    assert "--cookie-expire=8h" in oauth_proxy["args"]
+    assert any(
+        mount["name"] == "oauth-runtime"
+        and mount["mountPath"] == "/var/run/podpilot-oauth"
+        for mount in oauth_proxy["volumeMounts"]
+    )
+    assert all(mount["name"] != "oauth-runtime" for mount in api["volumeMounts"])
+
+
+def test_workload_preprovisions_empty_model_credential_secret() -> None:
+    workload = ROOT / "deploy" / "openshift" / "workload"
+    kustomization = yaml.safe_load((workload / "kustomization.yaml").read_text())
+    secret = yaml.safe_load((workload / "model-credentials.yaml").read_text())
+
+    assert "model-credentials.yaml" in kustomization["resources"]
+    assert secret["kind"] == "Secret"
+    assert secret["metadata"]["name"] == "podpilot-model-credentials"
+    assert secret["metadata"]["namespace"] == "ai-ops"
+    assert secret["type"] == "Opaque"
+    assert "data" not in secret
+    assert "stringData" not in secret
 
 
 def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
@@ -98,7 +187,14 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
+    assert runtime["data"]["chat_max_chars"] == "4000"
+    chat_limit = next(item for item in env if item["name"] == "PODPILOT_CHAT_MAX_CHARS")
+    assert chat_limit["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "chat_max_chars",
+    }
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
+    assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"
     assert runtime["data"]["adhoc_max_payload_bytes"] == "96000"
     assert runtime["data"]["adhoc_search_max_scan_objects"] == "2000"
     assert runtime["data"]["adhoc_metrics_max_range_seconds"] == "2592000"
@@ -113,6 +209,14 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     assert configured["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_inventory_max_objects",
+    }
+    detail_fanout = next(
+        item for item in env
+        if item["name"] == "PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS"
+    )
+    assert detail_fanout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_detail_fanout_max_objects",
     }
     payload_bytes = next(
         item for item in env if item["name"] == "PODPILOT_ADHOC_MAX_PAYLOAD_BYTES"
@@ -155,16 +259,26 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "name": "podpilot-runtime",
         "key": "adhoc_metrics_max_response_bytes",
     }
-    assert runtime["data"]["adhoc_run_timeout_seconds"] == "300"
-    assert runtime["data"]["agent_mode"] == "guarded"
+    assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
+    assert runtime["data"]["adhoc_finalization_reserve_seconds"] == "60"
+    assert runtime["data"]["delegated_access_enabled"] == "true"
+    assert runtime["data"]["delegated_session_lifetime_seconds"] == "86400"
     assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
-    assert runtime["data"]["agent_command_timeout_seconds"] == "300"
+    assert runtime["data"]["agent_command_timeout_seconds"] == "240"
     assert runtime["data"]["agent_command_max_output_bytes"] == "262144"
     assert runtime["data"]["agent_heartbeat_seconds"] == "10"
     timeout = next(item for item in env if item["name"] == "PODPILOT_ADHOC_RUN_TIMEOUT_SECONDS")
     assert timeout["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "adhoc_run_timeout_seconds",
+    }
+    finalization_reserve = next(
+        item for item in env
+        if item["name"] == "PODPILOT_ADHOC_FINALIZATION_RESERVE_SECONDS"
+    )
+    assert finalization_reserve["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "adhoc_finalization_reserve_seconds",
     }
     assert runtime["data"]["model_timeout_max_seconds"] == "240"
     model_timeout = next(
@@ -175,7 +289,7 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
         "key": "model_timeout_max_seconds",
     }
     assert runtime["data"]["adhoc_max_rounds"] == "10"
-    assert runtime["data"]["adhoc_max_reads_per_turn"] == "25"
+    assert runtime["data"]["adhoc_max_reads_per_turn"] == "50"
     assert runtime["data"]["adhoc_followup_reserve_units"] == "0"
     reserve = next(
         item for item in env if item["name"] == "PODPILOT_ADHOC_FOLLOWUP_RESERVE_UNITS"
@@ -227,8 +341,8 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
     deployment = yaml.safe_load((root / "workload" / "deployment.yaml").read_text())
     rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
 
-    assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
+    assert "../../base" in kustomization["resources"]
     assert "../../../overlays/poc-cluster-admin" not in kustomization["resources"]
     assert kustomization["components"] == ["../../components/agentic-runner"]
     assert deployment["spec"]["template"]["spec"]["serviceAccountName"] == (
@@ -237,6 +351,7 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
     runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
     assert runner["name"] == "oc-runner"
     assert runner["image"] == "podpilot-oc-runner:latest"
+    assert runner["resources"]["limits"]["memory"] == "4Gi"
     assert all(
         document.get("roleRef", {}).get("name") != "cluster-admin"
         for document in rbac_documents
@@ -248,13 +363,12 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
     overlay = root / "overlays" / "remote-poc-agentic"
     kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
     runtime = yaml.safe_load((overlay / "runtime-config-patch.yaml").read_text())
-    image_stream = yaml.safe_load((overlay / "image-stream.yaml").read_text())
     runner_patch = yaml.safe_load(
         (root / "components" / "agentic-runner" / "deployment-patch.yaml").read_text()
     )
     rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
 
-    assert kustomization["resources"] == ["../remote-poc", "image-stream.yaml"]
+    assert kustomization["resources"] == ["../remote-poc"]
     assert kustomization["images"] == [{
         "name": "podpilot-oc-runner",
         "newName": (
@@ -263,13 +377,10 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
         ),
         "newTag": "0.12.0",
     }]
-    assert kustomization["components"] == ["../../components/agentic-runner"]
     assert runtime["data"] == {
-        "agent_mode": "unrestricted",
+        "delegated_access_enabled": "true",
         "adhoc_run_timeout_seconds": "900",
-        "remote_cluster_tls_verify": "false",
     }
-    assert image_stream["metadata"]["name"] == "podpilot-oc-runner"
     runner = runner_patch["spec"]["template"]["spec"]["containers"][0]
     assert runner["name"] == "oc-runner"
     assert {item["name"] for item in runner["env"]} == {
@@ -301,6 +412,9 @@ def test_oc_runner_build_pins_cli_image_and_uses_separate_image_stream() -> None
 def test_agentic_deploy_restarts_latest_tag_workload_after_build() -> None:
     script = (ROOT / "scripts" / "deploy-agentic-sno.ps1").read_text()
 
+    assert "oc apply -k deploy/openshift/base" in script
+    assert "oc auth can-i get groups.user.openshift.io" in script
+    assert "podpilot-investigator can read workload Pods" in script
     assert "--from-archive=$buildArchive" in script
     assert "oc rollout restart deployment/podpilot -n ai-ops" in script
     assert "oc rollout status deployment/podpilot -n ai-ops --timeout=600s" in script
@@ -311,15 +425,16 @@ def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> No
     kustomization = yaml.safe_load((overlay / "kustomization.yaml").read_text())
     image_stream = yaml.safe_load((overlay / "image-stream.yaml").read_text())
 
+    assert "../../base" in kustomization["resources"]
     assert "image-stream.yaml" in kustomization["resources"]
-    assert kustomization["images"] == [{
-        "name": "podpilot",
-        "newName": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot",
-        "newTag": "0.12.0",
-    }]
-    assert image_stream["kind"] == "ImageStream"
-    assert image_stream["metadata"]["namespace"] == "ai-ops"
-    assert image_stream["metadata"]["name"] == "podpilot"
+    assert {item["name"] for item in kustomization["images"]} == {
+        "podpilot", "podpilot-oc-runner"
+    }
+    assert kustomization["components"] == ["../../components/agentic-runner"]
+    assert image_stream["kind"] == "List"
+    assert {item["metadata"]["name"] for item in image_stream["items"]} == {
+        "podpilot", "podpilot-oc-runner"
+    }
 
 
 def test_remote_gui_access_is_local_and_allows_authenticated_users() -> None:
@@ -355,6 +470,8 @@ def test_poc_gui_access_uses_same_authenticated_user_boundary() -> None:
     }]
     assert {group["metadata"]["name"] for group in groups} == {
         "podpilot-investigators",
+        "podpilot-read-write",
+        "podpilot-configuration-admins",
         "podpilot-approvers",
         "podpilot-breakglass",
     }
@@ -369,6 +486,8 @@ def test_remote_ldap_group_config_only_maps_elevated_roles() -> None:
         if key.startswith("role_") and key.endswith("_groups")
     } == {
         "role_investigator_groups",
+        "role_read_write_groups",
         "role_approver_groups",
         "role_breakglass_groups",
     }
+    assert "configuration_admin_groups" in runtime["data"]

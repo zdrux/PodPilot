@@ -4,6 +4,10 @@ from pydantic import ValidationError
 from podpilot_api.settings import Settings
 
 
+def test_chat_message_limit_defaults_to_supported_maximum() -> None:
+    assert Settings(_env_file=None).chat_max_chars == 4000
+
+
 def test_role_groups_are_loaded_from_json_environment_lists(monkeypatch) -> None:
     monkeypatch.setenv(
         "PODPILOT_ROLE_INVESTIGATOR_GROUPS",
@@ -52,6 +56,18 @@ def test_inventory_object_ceiling_is_configurable(monkeypatch) -> None:
     assert settings.adhoc_inventory_max_objects == 1000
     with pytest.raises(ValidationError):
         Settings(adhoc_inventory_max_objects=1001)
+
+
+def test_detail_fanout_ceiling_is_small_and_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("PODPILOT_ADHOC_DETAIL_FANOUT_MAX_OBJECTS", "12")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.adhoc_detail_fanout_max_objects == 12
+    with pytest.raises(ValidationError):
+        Settings(adhoc_detail_fanout_max_objects=0)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_detail_fanout_max_objects=26)
 
 
 def test_evidence_payload_ceiling_is_configurable(monkeypatch) -> None:
@@ -121,34 +137,35 @@ def test_audit_query_defaults_and_bounds_are_configurable() -> None:
 
 
 def test_adhoc_run_deadline_is_bounded() -> None:
+    defaults = Settings(_env_file=None)
+    assert defaults.adhoc_run_timeout_seconds == 900
+    assert defaults.adhoc_finalization_reserve_seconds == 60
     assert Settings(adhoc_run_timeout_seconds=45).adhoc_run_timeout_seconds == 45
     with pytest.raises(ValidationError):
         Settings(adhoc_run_timeout_seconds=0)
     with pytest.raises(ValidationError):
-        Settings(adhoc_run_timeout_seconds=901)
+        Settings(adhoc_run_timeout_seconds=1801)
+    with pytest.raises(ValidationError):
+        Settings(adhoc_finalization_reserve_seconds=301)
 
 
 def test_model_timeout_ceiling_is_bounded() -> None:
     assert Settings(model_timeout_max_seconds=240).model_timeout_max_seconds == 240
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=29)
+
+
+def test_app_wide_action_budget_defaults_to_fifty_and_is_configurable() -> None:
+    assert Settings(_env_file=None).adhoc_max_reads_per_turn == 50
+    assert Settings(adhoc_max_reads_per_turn=75).adhoc_max_reads_per_turn == 75
+    with pytest.raises(ValidationError):
+        Settings(adhoc_max_reads_per_turn=101)
     with pytest.raises(ValidationError):
         Settings(model_timeout_max_seconds=301)
 
 
-def test_agent_mode_defaults_guarded_and_rejects_unknown_values() -> None:
-    assert Settings(_env_file=None).agent_mode == "guarded"
-    assert Settings(agent_mode="unrestricted").agent_mode == "unrestricted"
-    with pytest.raises(ValidationError):
-        Settings(agent_mode="unbounded")
-
-
-def test_remote_cluster_tls_verification_defaults_secure_and_can_be_disabled() -> None:
-    assert Settings(_env_file=None).remote_cluster_tls_verify is True
-    assert Settings(remote_cluster_tls_verify=False).remote_cluster_tls_verify is False
-
-
 def test_agent_command_timeout_and_heartbeat_are_bounded() -> None:
+    assert Settings(_env_file=None).agent_command_timeout_seconds == 240
     settings = Settings(agent_command_timeout_seconds=120, agent_heartbeat_seconds=5)
     assert settings.agent_command_timeout_seconds == 120
     assert settings.agent_heartbeat_seconds == 5

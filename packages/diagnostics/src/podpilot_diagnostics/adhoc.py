@@ -131,6 +131,22 @@ def looks_like_deferred_target(value: str | None) -> bool:
     return bool(value and _DEFERRED_TARGET.search(value))
 
 
+PUBLIC_METRICS = (
+    "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
+    "memory_working_set", "memory_requests", "memory_limits",
+    "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
+    "application_log_volume",
+    "node_cpu_utilization", "node_memory_utilization",
+    "kafka_topic_disk_utilization", "kafka_consumer_lag",
+)
+PUBLIC_METRIC_SCOPES = (
+    "cluster", "pod", "namespace", "node", "node_role", "kafka_cluster",
+)
+PUBLIC_METRIC_GROUPINGS = (
+    "namespace", "pod", "container", "node", "topic", "partition", "consumer_group",
+)
+
+
 class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
@@ -139,7 +155,7 @@ class ReadIntent(BaseModel):
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
         "query_audit_events", "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
-        "workload_health_summary",
+        "workload_health_summary", "access_review_summary",
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -152,6 +168,7 @@ class ReadIntent(BaseModel):
     match_value: str | None = Field(default=None, max_length=512)
     match_operator: Literal["exact", "contains"] = "exact"
     container: str | None = Field(default=None, max_length=253)
+    topic: str | None = Field(default=None, max_length=249)
     candidate_id: str | None = Field(default=None, max_length=80)
     url: str | None = Field(default=None, max_length=2048)
     connect_host: str | None = Field(default=None, max_length=253)
@@ -161,27 +178,25 @@ class ReadIntent(BaseModel):
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
         "memory_working_set", "memory_requests", "memory_limits",
         "network_receive", "network_transmit", "container_restarts",
-        "persistent_volume_usage", "pod_readiness", "top_cpu_consumers",
-        "top_memory_consumers", "top_log_volume_by_namespace",
+        "persistent_volume_usage", "pod_readiness",
+        "top_cpu_consumers", "top_memory_consumers", "top_log_volume_by_namespace",
         "application_log_volume",
         "node_cpu_utilization", "node_memory_utilization",
+        "kafka_topic_disk_utilization", "kafka_consumer_lag",
         "kafka_topic_messages_in", "kafka_topic_bytes_in", "kafka_topic_bytes_out",
-        "kafka_topic_storage", "kafka_consumer_lag", "kafka_under_replicated_partitions",
-        "ingress_request_rate", "ingress_error_rate",
-        "ingress_bytes_in", "ingress_bytes_out",
+        "kafka_topic_storage", "kafka_under_replicated_partitions",
+        "ingress_request_rate", "ingress_error_rate", "ingress_bytes_in", "ingress_bytes_out",
         "machineconfigpool_updated", "machineconfigpool_degraded",
         "hpa_current_replicas", "hpa_desired_replicas", "hpa_max_replicas",
         "workload_availability", "persistent_volume_inode_usage",
-        "cluster_operator_available", "cluster_operator_degraded",
-        "cluster_operator_progressing", "apiserver_request_rate",
-        "apiserver_error_rate", "apiserver_latency", "etcd_db_size",
-        "etcd_fsync_latency", "apiserver_inflight_requests",
+        "cluster_operator_available", "cluster_operator_degraded", "cluster_operator_progressing",
+        "apiserver_request_rate", "apiserver_error_rate", "apiserver_latency",
+        "etcd_db_size", "etcd_fsync_latency", "apiserver_inflight_requests",
         "scheduler_pending_pods", "scheduler_attempt_rate", "scheduler_error_rate",
         "scheduler_latency", "etcd_has_leader", "etcd_leader_changes",
-        "monitoring_targets_up", "monitoring_targets_down",
-        "prometheus_head_series", "prometheus_ingestion_rate",
-        "prometheus_rule_evaluation_failures", "alertmanager_active_alerts",
-        "logging_ingestion_rate", "logging_query_latency",
+        "monitoring_targets_up", "monitoring_targets_down", "prometheus_head_series",
+        "prometheus_ingestion_rate", "prometheus_rule_evaluation_failures",
+        "alertmanager_active_alerts", "logging_ingestion_rate", "logging_query_latency",
     ] | None = None
     metric_scope: Literal[
         "cluster", "pod", "namespace", "deployment", "workload", "node", "node_role",
@@ -192,8 +207,8 @@ class ReadIntent(BaseModel):
     metric_operation: Literal["show", "trend", "rank", "compare", "threshold"] = "show"
     metric_statistic: Literal["current", "average", "maximum", "minimum"] = "current"
     metric_group_by: list[Literal[
-        "cluster", "namespace", "pod", "container", "node", "topic", "partition",
-        "consumer_group", "route", "pool", "operator", "code",
+        "namespace", "pod", "container", "node", "topic", "partition",
+        "consumer_group", "cluster", "route", "pool", "operator", "code",
         "job", "instance", "queue", "result", "component", "tenant", "request_kind",
     ]] = Field(default_factory=list, max_length=3)
     threshold_operator: Literal["gt", "gte", "lt", "lte"] | None = None
@@ -210,6 +225,17 @@ class ReadIntent(BaseModel):
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
 
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        """Keep legacy server-owned reads valid while advertising only the focused catalog."""
+
+        schema = handler(core_schema)
+        properties = schema.get("properties", {})
+        properties["metric"]["anyOf"][0]["enum"] = list(PUBLIC_METRICS)
+        properties["metric_scope"]["anyOf"][0]["enum"] = list(PUBLIC_METRIC_SCOPES)
+        properties["metric_group_by"]["items"]["enum"] = list(PUBLIC_METRIC_GROUPINGS)
+        return schema
+
     @field_validator(
         "resource", "api_version", "kind", "namespace", "name", "container", "candidate_id"
     )
@@ -218,6 +244,20 @@ class ReadIntent(BaseModel):
         if looks_like_deferred_target(value):
             raise ValueError("must be an exact target, not a deferred placeholder")
         return value
+
+    @field_validator("topic")
+    @classmethod
+    def require_exact_kafka_topic(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else ""
+        if not normalized:
+            return None
+        if looks_like_deferred_target(normalized):
+            raise ValueError("must be an exact target, not a deferred placeholder")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", normalized):
+            raise ValueError(
+                "Kafka topic must contain only letters, digits, dots, underscores, or hyphens"
+            )
+        return normalized
 
     @field_validator("match_field")
     @classmethod
@@ -261,88 +301,41 @@ class ReadIntent(BaseModel):
         if self.tool == "query_metrics":
             if not self.metric or not self.metric_scope:
                 raise ValueError("query_metrics requires metric and metric_scope")
-            cluster_scopes = {
-                "cluster", "node", "node_role", "ingress_controller",
-                "machine_config_pool", "cluster_operator", "control_plane",
-                "monitoring", "logging",
-            }
+            if self.metric not in PUBLIC_METRICS:
+                return self
+            cluster_scopes = {"cluster", "node", "node_role"}
             if self.metric_scope not in cluster_scopes and not self.namespace:
                 raise ValueError("the selected metric scope requires an exact namespace")
-            if self.metric_scope in {
-                "pod", "deployment", "workload", "node", "node_role",
-                "persistent_volume_claim", "kafka_cluster", "route",
-                "ingress_controller", "machine_config_pool",
-                "horizontal_pod_autoscaler", "cluster_operator",
-            } and not self.name:
+            if self.metric_scope in {"pod", "node", "node_role", "kafka_cluster"} and not self.name:
                 raise ValueError("the selected metric scope requires an exact name")
-            if self.metric_scope in {
-                "ingress_controller", "machine_config_pool", "cluster_operator",
-                "control_plane", "monitoring", "logging",
-            } and self.namespace:
+            if self.metric_scope in {"node", "node_role"} and self.namespace:
                 raise ValueError("the selected cluster metric scope does not accept a namespace")
-            if self.metric_scope == "workload" and self.kind not in {
-                "Deployment", "StatefulSet", "DaemonSet", "Job"
-            }:
-                raise ValueError("workload metric scope requires a registered controller kind")
-            expected_scope_kinds = {
-                "kafka_cluster": "Kafka", "route": "Route",
-                "ingress_controller": "IngressController",
-                "machine_config_pool": "MachineConfigPool",
-                "horizontal_pod_autoscaler": "HorizontalPodAutoscaler",
-                "cluster_operator": "ClusterOperator",
-            }
-            expected_kind = expected_scope_kinds.get(self.metric_scope)
-            if expected_kind and self.kind != expected_kind:
+            if self.metric_scope == "kafka_cluster" and self.kind != "Kafka":
                 raise ValueError(
-                    f"{self.metric_scope} metric scope requires kind {expected_kind}"
+                    "kafka_cluster metric scope requires kind Kafka and name must identify "
+                    "the owning Kafka custom resource; use topic for an exact Kafka topic"
                 )
+            if self.topic and not self.metric.startswith("kafka_"):
+                raise ValueError("topic is valid only for registered Kafka metrics")
             metric_scopes = {
-                "kafka_topic_messages_in": {"kafka_cluster"},
-                "kafka_topic_bytes_in": {"kafka_cluster"},
-                "kafka_topic_bytes_out": {"kafka_cluster"},
-                "kafka_topic_storage": {"kafka_cluster"},
+                "cpu_usage": {"cluster", "namespace", "pod", "node"},
+                "cpu_requests": {"cluster", "namespace", "pod", "node"},
+                "cpu_limits": {"cluster", "namespace", "pod", "node"},
+                "cpu_throttling": {"cluster", "namespace", "pod", "node"},
+                "memory_working_set": {"cluster", "namespace", "pod", "node"},
+                "memory_requests": {"cluster", "namespace", "pod", "node"},
+                "memory_limits": {"cluster", "namespace", "pod", "node"},
+                "top_cpu_consumers": {"cluster", "namespace", "node"},
+                "top_memory_consumers": {"cluster", "namespace", "node"},
+                "top_log_volume_by_namespace": {"cluster"},
+                "application_log_volume": {"cluster", "namespace", "pod", "node"},
+                "node_cpu_utilization": {"cluster", "node", "node_role"},
+                "node_memory_utilization": {"cluster", "node", "node_role"},
+                "kafka_topic_disk_utilization": {"kafka_cluster"},
                 "kafka_consumer_lag": {"kafka_cluster"},
-                "kafka_under_replicated_partitions": {"kafka_cluster"},
-                "ingress_request_rate": {"route", "ingress_controller"},
-                "ingress_error_rate": {"route", "ingress_controller"},
-                "ingress_bytes_in": {
-                    "cluster", "namespace", "route", "ingress_controller",
-                },
-                "ingress_bytes_out": {
-                    "cluster", "namespace", "route", "ingress_controller",
-                },
-                "machineconfigpool_updated": {"machine_config_pool"},
-                "machineconfigpool_degraded": {"machine_config_pool"},
-                "hpa_current_replicas": {"horizontal_pod_autoscaler"},
-                "hpa_desired_replicas": {"horizontal_pod_autoscaler"},
-                "hpa_max_replicas": {"horizontal_pod_autoscaler"},
-                "workload_availability": {"deployment", "workload"},
-                "cluster_operator_available": {"cluster_operator", "cluster"},
-                "cluster_operator_degraded": {"cluster_operator", "cluster"},
-                "cluster_operator_progressing": {"cluster_operator", "cluster"},
-                "apiserver_request_rate": {"control_plane"},
-                "apiserver_error_rate": {"control_plane"},
-                "apiserver_latency": {"control_plane"},
-                "etcd_db_size": {"control_plane"},
-                "etcd_fsync_latency": {"control_plane"},
-                "apiserver_inflight_requests": {"control_plane"},
-                "scheduler_pending_pods": {"control_plane"},
-                "scheduler_attempt_rate": {"control_plane"},
-                "scheduler_error_rate": {"control_plane"},
-                "scheduler_latency": {"control_plane"},
-                "etcd_has_leader": {"control_plane"},
-                "etcd_leader_changes": {"control_plane"},
-                "monitoring_targets_up": {"monitoring"},
-                "monitoring_targets_down": {"monitoring"},
-                "prometheus_head_series": {"monitoring"},
-                "prometheus_ingestion_rate": {"monitoring"},
-                "prometheus_rule_evaluation_failures": {"monitoring"},
-                "alertmanager_active_alerts": {"monitoring"},
-                "logging_ingestion_rate": {"logging"},
-                "logging_query_latency": {"logging"},
             }
-            allowed_scopes = metric_scopes.get(self.metric)
-            if allowed_scopes and self.metric_scope not in allowed_scopes:
+            allowed_scopes = metric_scopes[self.metric]
+            if self.metric_scope not in allowed_scopes:
                 raise ValueError(
                     f"{self.metric} does not support {self.metric_scope} scope"
                 )
@@ -352,25 +345,23 @@ class ReadIntent(BaseModel):
                 raise ValueError("metric scope coordinates must be exact Kubernetes identifiers")
             if self.metric in {
                 "top_cpu_consumers", "top_memory_consumers",
-            }:
-                if self.metric_scope not in {
-                    "cluster", "namespace", "deployment", "workload", "node"
-                }:
-                    raise ValueError(
-                        "the selected top-consumer metric requires cluster, namespace, workload, or node scope"
-                    )
-            if self.metric == "top_log_volume_by_namespace" and self.metric_scope != "cluster":
+            } and self.metric_scope not in {"cluster", "namespace", "node"}:
                 raise ValueError(
-                    "top_log_volume_by_namespace requires cluster scope"
+                    "the selected top-consumer metric requires cluster, namespace, or node scope"
+                )
+            if self.metric == "top_log_volume_by_namespace" and (
+                self.metric_scope != "cluster"
+                or self.metric_operation != "rank"
+                or tuple(self.metric_group_by) != ("namespace",)
+            ):
+                raise ValueError(
+                    "top_log_volume_by_namespace requires cluster scope, rank operation, "
+                    "and namespace grouping"
                 )
             if self.metric == "application_log_volume":
-                if self.metric_scope not in {"cluster", "namespace", "pod", "node"}:
-                    raise ValueError(
-                        "application_log_volume requires cluster, namespace, pod, or node scope"
-                    )
                 grouping = tuple(self.metric_group_by)
                 valid_groupings = {
-                    "cluster": {("namespace",), ("node",), ("namespace", "pod")},
+                    "cluster": {(), ("namespace",), ("node",), ("namespace", "pod")},
                     "namespace": {(), ("pod",)},
                     "pod": {()},
                     "node": {()},
@@ -394,28 +385,9 @@ class ReadIntent(BaseModel):
             if self.metric in {"node_cpu_utilization", "node_memory_utilization"}:
                 if self.metric_scope not in {"node", "node_role"} and not cluster_node_ranking:
                     raise ValueError(
-                        "the selected node utilization metric requires node or node-role scope, "
+                        "the selected node utilization metric requires node scope, "
                         "or a cluster ranking grouped by node"
                     )
-            if self.metric == "persistent_volume_usage":
-                if self.metric_scope not in {
-                    "persistent_volume_claim", "namespace", "cluster"
-                }:
-                    raise ValueError(
-                        "persistent_volume_usage requires claim, namespace, or cluster scope"
-                    )
-            if self.metric == "persistent_volume_inode_usage" and self.metric_scope not in {
-                "persistent_volume_claim", "namespace", "cluster"
-            }:
-                raise ValueError(
-                    "persistent_volume_inode_usage requires claim, namespace, or cluster scope"
-                )
-            elif self.metric_scope == "persistent_volume_claim" and self.metric not in {
-                "persistent_volume_usage", "persistent_volume_inode_usage"
-            }:
-                raise ValueError(
-                    "persistent_volume_claim scope supports only volume utilization metrics"
-                )
             if (
                 self.metric != "application_log_volume"
                 and self.metric_scope in {"node", "node_role"}
@@ -431,13 +403,18 @@ class ReadIntent(BaseModel):
                 and self.metric != "application_log_volume"
             ):
                 raise ValueError(
-                    "node grouping requires node or node-role scope, or a cluster Node ranking"
+                    "node grouping requires node scope or a cluster Node ranking"
                 )
-            if self.metric_scope == "persistent_volume_claim" and self.metric_group_by:
-                raise ValueError("PVC utilization does not support grouping")
-            if self.metric in {"network_receive", "network_transmit", "pod_readiness"}:
-                if "container" in self.metric_group_by or self.container:
-                    raise ValueError("the selected metric does not expose container-level series")
+            if self.metric == "kafka_topic_disk_utilization" and any(
+                grouping not in {"topic", "partition"}
+                for grouping in self.metric_group_by
+            ):
+                raise ValueError("Kafka disk utilization groups only by topic or partition")
+            if self.metric == "kafka_consumer_lag" and any(
+                grouping not in {"topic", "partition", "consumer_group"}
+                for grouping in self.metric_group_by
+            ):
+                raise ValueError("Kafka consumer lag uses topic, partition, or consumer_group grouping")
             has_threshold = self.threshold_operator is not None or self.threshold_value is not None
             if self.metric_operation == "threshold" and (
                 self.threshold_operator is None or self.threshold_value is None
@@ -450,6 +427,7 @@ class ReadIntent(BaseModel):
             or self.metric_statistic != "current" or self.metric_group_by
             or self.threshold_operator is not None
             or self.threshold_value is not None
+            or self.topic is not None
         ):
             raise ValueError("metric fields are valid only for query_metrics")
         if self.tool == "query_audit_events":
@@ -1418,6 +1396,11 @@ _KAFKA_TOPIC_STORAGE_QUERY = re.compile(
     r"(?=.*\b(?:disk|storage|space|size|bytes?|usage|utili[sz]ation)\b)",
     re.IGNORECASE,
 )
+_EXACT_KAFKA_TOPIC_QUERY = re.compile(
+    r"\b(?:for\s+(?:the\s+)?topic|topic\s+(?:named\s+|called\s+)?)"
+    r"[`'\"]?(?P<topic>[A-Za-z0-9._-]+)[`'\"]?\b",
+    re.IGNORECASE,
+)
 _EXACT_KAFKA_CLUSTER_QUERY = re.compile(
     r"\b(?:on|for)\s+(?:the\s+)?[`'\"]?"
     r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?[`'\"]?\s+Kafka\b|"
@@ -1491,7 +1474,7 @@ _POD_HEALTH_QUERY = re.compile(
     r"(?=.*\bpods\b)(?=.*\b(?:health|healthy|unhealthy|status|states?|"
     r"crash(?:ed|es|ing|loop(?:backoff)?)?|fail(?:ed|ing|ures?)?|"
     r"restart(?:ed|ing|s)?|not\s+ready|imagepullbackoff|errimagepull|"
-    r"pending|problems?|issues?)\b)",
+    r"pending|evict(?:ed|ion)?|not\s+running|problems?|issues?)\b)",
     re.IGNORECASE,
 )
 _POD_HEALTH_NAMESPACE_STOP_WORDS = {
@@ -1715,7 +1698,7 @@ def plan_kafka_topic_storage_metrics(
     *,
     now: datetime | None = None,
 ) -> ReadPlan | None:
-    """Compile bounded per-Kafka topic-storage reads from observed CR coordinates."""
+    """Compile bounded Kafka topic disk-utilization reads from observed CR coordinates."""
 
     coordinates = list(dict.fromkeys(
         (namespace.lower(), name.lower())
@@ -1730,26 +1713,35 @@ def plan_kafka_topic_storage_metrics(
     result_limit = _requested_metric_result_limit(
         question, default=_DEFAULT_METRIC_RESULT_LIMIT,
     )
+    topic_match = _EXACT_KAFKA_TOPIC_QUERY.search(question)
+    topic = topic_match.group("topic") if topic_match else None
+    if topic and topic.casefold() in {
+        "disk", "storage", "space", "size", "bytes", "usage", "utilization", "utilisation",
+    }:
+        topic = None
+    if topic:
+        result_limit = 1
     limitations = []
     if len(coordinates) > len(selected):
         limitations.append(
-            "Topic storage was queried for the first 6 observed Kafka clusters; "
+            "Topic disk utilization was queried for the first 6 observed Kafka clusters; "
             f"{len(coordinates) - len(selected)} additional cluster(s) were omitted by the read ceiling."
         )
     return ReadPlan(
         goal_type="compare",
         scope_summary=(
-            "Read topic storage for observed Strimzi Kafka clusters over "
+            "Read topic disk utilization for observed Strimzi Kafka clusters over "
             f"{range_seconds} seconds."
         ),
         intents=[
             ReadIntent(
                 tool="query_metrics",
-                metric="kafka_topic_storage",
+                metric="kafka_topic_disk_utilization",
                 metric_scope="kafka_cluster",
                 kind="Kafka",
                 namespace=namespace,
                 name=name,
+                topic=topic,
                 range_seconds=range_seconds,
                 limit=result_limit,
                 metric_operation="show",
@@ -1960,6 +1952,8 @@ def plan_known_read(
                     tool="query_metrics",
                     metric="top_log_volume_by_namespace",
                     metric_scope="cluster",
+                    metric_operation="rank",
+                    metric_group_by=["namespace"],
                     range_seconds=metric_range_seconds,
                     limit=metric_result_limit,
                 )],

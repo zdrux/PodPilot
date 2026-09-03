@@ -13,8 +13,10 @@
 
   const csrf = document.querySelector('meta[name="podpilot-csrf"]')?.content;
   const toast = document.querySelector("#action-toast");
+  let toastTimeoutId = null;
   const showToast = (message, tone = "error", timeout = 8000) => {
     if (!toast) return;
+    if (toastTimeoutId !== null) window.clearTimeout(toastTimeoutId);
     toast.replaceChildren();
     const copy = document.createElement("span");
     copy.textContent = message;
@@ -28,7 +30,12 @@
     toast.classList.toggle("success", tone === "success");
     toast.classList.toggle("warning", tone === "warning");
     toast.hidden = false;
-    if (timeout > 0) window.setTimeout(() => { toast.hidden = true; }, timeout);
+    if (timeout > 0) {
+      toastTimeoutId = window.setTimeout(() => {
+        toast.hidden = true;
+        toastTimeoutId = null;
+      }, timeout);
+    }
   };
   const pendingNotice = window.sessionStorage.getItem("podpilot-action-notice");
   if (pendingNotice && toast) {
@@ -376,7 +383,8 @@
           tone: "success",
           message: payload.detail || clusterSettingsForm.dataset.successMessage || "Cluster connection saved. Test it before using it for Ask PodPilot.",
         }));
-        window.location.assign(`/settings/clusters?edit=${encodeURIComponent(payload.cluster_id)}`);
+        const redirectBase = clusterSettingsForm.dataset.redirectBase || "/settings/clusters";
+        window.location.assign(`${redirectBase}?edit=${encodeURIComponent(payload.cluster_id)}`);
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = priorSubmitText; }
@@ -389,15 +397,25 @@
       if (button.dataset.confirm && !window.confirm(button.dataset.confirm)) return;
       button.disabled = true;
       const prior = button.textContent;
-      button.textContent = button.dataset.actionKind === "test" ? "Testing…" : "Disabling…";
+      button.textContent = button.dataset.actionKind === "test"
+        ? "Testing…"
+        : button.dataset.actionKind === "delete" ? "Deleting…" : "Disabling…";
       try {
         const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
         const passed = payload.status === "ready";
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
-          tone: passed ? "success" : payload.status === "disabled" ? "success" : "error",
-          message: payload.detail || (payload.status === "disabled" ? "Cluster disabled and token removed." : "Cluster connection tested."),
+          tone: passed || ["disabled", "deleted"].includes(payload.status) ? "success" : "error",
+          message: payload.detail || (
+            payload.status === "deleted" ? "Private cluster deleted."
+              : payload.status === "disabled" ? "Cluster disabled and token removed."
+                : "Cluster connection tested."
+          ),
         }));
-        window.location.reload();
+        if (button.dataset.redirectUrl) {
+          window.location.assign(button.dataset.redirectUrl);
+        } else {
+          window.location.reload();
+        }
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         button.disabled = false;
@@ -513,17 +531,121 @@
     });
   }
   const adhocForm = document.querySelector(".adhoc-chat-form");
+  const starterButtons = Array.from(document.querySelectorAll("[data-starter-prompt]"));
+  const starterActions = Array.from(document.querySelectorAll("[data-starter-available]"));
   const clusterPicker = document.querySelector("[data-cluster-picker]");
+  const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
+  const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
+  const askLayout = document.querySelector("[data-ask-layout]");
+  const cautionSummary = document.querySelector(".caution-summary");
+  const actionModeNotice = document.querySelector("[data-action-mode-notice]");
+  const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
+  const resizeComposerTextarea = () => {
+    if (!composerTextarea) return;
+    const styles = window.getComputedStyle(composerTextarea);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 23;
+    const verticalChrome = Number.parseFloat(styles.paddingTop)
+      + Number.parseFloat(styles.paddingBottom)
+      + Number.parseFloat(styles.borderTopWidth)
+      + Number.parseFloat(styles.borderBottomWidth);
+    const minRows = Number.parseInt(composerTextarea.dataset.minRows || "2", 10);
+    const maxRows = Number.parseInt(composerTextarea.dataset.maxRows || "4", 10);
+    const minHeight = Math.ceil((lineHeight * minRows) + verticalChrome);
+    const maxHeight = Math.ceil((lineHeight * maxRows) + verticalChrome);
+    composerTextarea.style.height = "auto";
+    const contentHeight = composerTextarea.scrollHeight
+      + Number.parseFloat(styles.borderTopWidth)
+      + Number.parseFloat(styles.borderBottomWidth);
+    composerTextarea.style.height = `${Math.min(Math.max(contentHeight, minHeight), maxHeight)}px`;
+    composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden";
+  };
+  const updateAskSubmitAvailability = () => {
+    if (!askSubmit || askSubmit.type !== "submit") return;
+    const ready = executionMode?.value === "action"
+      ? adhocForm.dataset.actionModelReady === "true"
+      : adhocForm.dataset.readOnlyModelReady === "true";
+    const hasSelectedCluster = Boolean(
+      clusterPicker?.querySelector("[data-cluster-checkbox]:checked")
+    );
+    askSubmit.disabled = !ready || !hasSelectedCluster;
+    askSubmit.textContent = "Submit";
+  };
+  const composerDraftKey = adhocForm?.dataset.chatUrl
+    ? `podpilot-composer-draft:${adhocForm.dataset.chatUrl}`
+    : null;
+  if (composerTextarea && !composerTextarea.disabled) {
+    const savedDraft = composerDraftKey ? window.sessionStorage.getItem(composerDraftKey) : "";
+    if (!composerTextarea.value && savedDraft) composerTextarea.value = savedDraft;
+    composerTextarea.addEventListener("input", () => {
+      resizeComposerTextarea();
+      if (!composerDraftKey) return;
+      if (composerTextarea.value) window.sessionStorage.setItem(composerDraftKey, composerTextarea.value);
+      else window.sessionStorage.removeItem(composerDraftKey);
+    });
+    window.requestAnimationFrame(() => {
+      resizeComposerTextarea();
+      composerTextarea.focus({preventScroll: true});
+    });
+  }
+  if (executionMode && askSubmit) {
+    const updateModeAvailability = () => {
+      const actionModeSelected = executionMode.value === "action";
+      askLayout?.classList.toggle("action-session", actionModeSelected);
+      cautionSummary?.classList.toggle("action-caution-pill", actionModeSelected);
+      if (cautionSummary) {
+        cautionSummary.dataset.tooltip = actionModeSelected
+          ? cautionSummary.dataset.actionTooltip
+          : cautionSummary.dataset.readOnlyTooltip;
+        cautionSummary.setAttribute(
+          "aria-label",
+          actionModeSelected
+            ? cautionSummary.dataset.actionAriaLabel
+            : cautionSummary.dataset.readOnlyAriaLabel
+        );
+      }
+      if (actionModeNotice) actionModeNotice.hidden = !actionModeSelected;
+      updateAskSubmitAvailability();
+    };
+    executionMode.addEventListener("change", updateModeAvailability);
+    updateModeAvailability();
+  }
   if (clusterPicker) {
     const checkboxes = Array.from(clusterPicker.querySelectorAll("[data-cluster-checkbox]"));
     const hidden = document.querySelector("[data-cluster-ids]");
     const pickerLabel = clusterPicker.querySelector("[data-cluster-picker-label]");
     const pickerCount = clusterPicker.querySelector("[data-cluster-picker-count]");
+    const clusterSearch = clusterPicker.querySelector("[data-cluster-search]");
+    const filterTabs = Array.from(clusterPicker.querySelectorAll("[data-cluster-filter]"));
+    let clusterFilter = filterTabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.clusterFilter || "all";
     const maxSelected = Number.parseInt(clusterPicker.dataset.maxSelected || "10", 10);
+    document.addEventListener("pointerdown", (event) => {
+      if (clusterPicker.open && !clusterPicker.contains(event.target)) {
+        clusterPicker.open = false;
+      }
+    });
+    const applyClusterFilters = () => {
+      const query = clusterSearch?.value.trim().toLowerCase() || "";
+      clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
+        const checkbox = option.querySelector("[data-cluster-checkbox]");
+        const matchesStatus = clusterFilter === "all" || checkbox?.dataset.connected === "true";
+        const matchesSearch = !query || option.dataset.search.toLowerCase().includes(query);
+        option.hidden = !matchesStatus || !matchesSearch;
+      });
+    };
     const updatePicker = (changed) => {
       const selected = checkboxes.filter((item) => item.checked);
       if (selected.length > maxSelected && changed) changed.checked = false;
       const bounded = checkboxes.filter((item) => item.checked);
+      if (clusterPicker.closest("[data-delegated-connect-form]")) {
+        const selectedEnvironment = bounded[0]?.dataset.environment || "";
+        checkboxes.forEach((item) => {
+          if (!item.checked) {
+            item.disabled = item.dataset.connected === "true" || Boolean(
+              selectedEnvironment && item.dataset.environment !== selectedEnvironment
+            );
+          }
+        });
+      }
       if (hidden) hidden.value = JSON.stringify(bounded.map((item) => item.value));
       const names = bounded.map((item) => item.closest("label")?.querySelector("strong")?.textContent || "cluster");
       if (pickerLabel) {
@@ -536,24 +658,206 @@
             pickerLabel.append(chip);
           });
         } else {
-          const placeholder = document.createElement("span");
-          placeholder.className = "cluster-picker-placeholder";
-          placeholder.textContent = "Select clusters";
-          pickerLabel.append(placeholder);
+          if (clusterPicker.hasAttribute("data-cluster-selection-required")) {
+            const required = document.createElement("span");
+            required.className = "cluster-picker-required";
+            const icon = document.createElement("span");
+            icon.className = "cluster-picker-required-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.textContent = "!";
+            const label = document.createElement("span");
+            label.textContent = "Select cluster(s) first";
+            required.append(icon, label);
+            pickerLabel.append(required);
+          } else {
+            const placeholder = document.createElement("span");
+            placeholder.className = "cluster-picker-placeholder";
+            placeholder.textContent = "Select clusters";
+            pickerLabel.append(placeholder);
+          }
         }
-        pickerLabel.setAttribute("aria-label", names.length ? `Selected clusters: ${names.join(", ")}` : "No clusters selected");
+        pickerLabel.setAttribute(
+          "aria-label",
+          names.length
+            ? `Selected clusters: ${names.join(", ")}`
+            : clusterPicker.hasAttribute("data-cluster-selection-required")
+              ? "Select cluster(s) first"
+              : "No clusters selected",
+        );
       }
       if (pickerCount) pickerCount.textContent = `${bounded.length}/${maxSelected}`;
-    };
-    checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => updatePicker(checkbox)));
-    clusterPicker.querySelector("[data-cluster-search]")?.addEventListener("input", (event) => {
-      const query = event.target.value.trim().toLowerCase();
-      clusterPicker.querySelectorAll("[data-cluster-option]").forEach((option) => {
-        option.hidden = Boolean(query) && !option.dataset.search.toLowerCase().includes(query);
+      updateAskSubmitAvailability();
+      starterActions.forEach((button) => {
+        button.disabled = button.dataset.starterAvailable !== "true" || bounded.length === 0;
       });
-    });
+    };
+    checkboxes.forEach((checkbox) => checkbox.addEventListener("change", () => {
+      if (
+        checkbox.checked
+        && checkbox.dataset.connected === "false"
+        && checkbox.dataset.loginUrl
+        && !clusterPicker.closest("[data-delegated-connect-form]")
+      ) {
+        const requestedIds = checkboxes.filter((item) => item.checked).map((item) => item.value);
+        const loginUrl = new URL(checkbox.dataset.loginUrl, window.location.origin);
+        loginUrl.searchParams.set("retry", checkbox.value);
+        loginUrl.searchParams.set(
+          "next",
+          `/ask?new=1&cluster_ids=${requestedIds.join(",")}`,
+        );
+        checkbox.checked = false;
+        window.location.assign(loginUrl.toString());
+        return;
+      }
+      updatePicker(checkbox);
+    }));
+    clusterSearch?.addEventListener("input", applyClusterFilters);
+    filterTabs.forEach((tab) => tab.addEventListener("click", () => {
+      clusterFilter = tab.dataset.clusterFilter || "all";
+      filterTabs.forEach((item) => {
+        item.setAttribute("aria-selected", String(item === tab));
+      });
+      applyClusterFilters();
+    }));
+    applyClusterFilters();
     updatePicker();
   }
+  starterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!adhocForm || button.disabled) return;
+      const selected = Array.from(
+        adhocForm.querySelectorAll("[data-cluster-checkbox]:checked")
+      );
+      if (!selected.length) {
+        if (clusterPicker) clusterPicker.open = true;
+        showToast("Select at least one cluster before starting an investigation.");
+        return;
+      }
+      const textarea = adhocForm.querySelector("textarea[name='message']");
+      if (!textarea) return;
+      textarea.value = button.dataset.starterPrompt || "";
+      textarea.dispatchEvent(new Event("input", {bubbles: true}));
+      adhocForm.requestSubmit();
+    });
+  });
+  const workloadStarterForm = document.querySelector("[data-workload-starter-form]");
+  document.querySelector("[data-workload-starter-open]")?.addEventListener("click", () => {
+    if (!workloadStarterForm) return;
+    workloadStarterForm.hidden = false;
+    workloadStarterForm.querySelector("input[name='namespace']")?.focus();
+  });
+  document.querySelector("[data-workload-starter-cancel]")?.addEventListener("click", () => {
+    if (workloadStarterForm) workloadStarterForm.hidden = true;
+  });
+  workloadStarterForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!adhocForm || !workloadStarterForm.checkValidity()) return;
+    const namespace = workloadStarterForm.elements.namespace.value.trim();
+    const resource = workloadStarterForm.elements.resource.value.trim();
+    const textarea = adhocForm.querySelector("textarea[name='message']");
+    if (!namespace || !resource || !textarea) return;
+    textarea.value = `Troubleshoot the workload or Pod named ${resource} in namespace ${namespace} across the selected clusters. Use read-only checks to inspect status, owner relationships, events, readiness, and relevant bounded logs. Cite observed evidence and do not make changes.`;
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+    adhocForm.requestSubmit();
+  });
+  const delegatedConnectForm = document.querySelector("[data-delegated-connect-form]");
+  if (delegatedConnectForm?.dataset.connectUrl) {
+    delegatedConnectForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const submit = delegatedConnectForm.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Connecting…"; }
+      try {
+        const response = await fetch(delegatedConnectForm.dataset.connectUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
+          credentials: "same-origin",
+          body: new URLSearchParams(new FormData(delegatedConnectForm)),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const failedNames = Array.isArray(payload.failed)
+            ? payload.failed.map((item) => item.cluster_name).filter(Boolean)
+            : [];
+          throw new Error(
+            failedNames.length
+              ? `${payload.detail || "Cluster login failed"} ${failedNames.join(", ")}. Check the credentials and retry.`
+              : payload.detail || "PodPilot could not connect the selected clusters.",
+          );
+        }
+        const failedItems = Array.isArray(payload.failed) ? payload.failed : [];
+        const failed = failedItems.length;
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: failed ? "warning" : "success",
+          message: failed
+            ? `${payload.connected.length} cluster(s) connected. Retry required for: ${failedItems.map((item) => item.cluster_name).join(", ")}.`
+            : `${payload.connected.length} cluster(s) connected.`,
+        }));
+        const nextUrl = delegatedConnectForm.elements.next_url?.value || "/ask?new=1";
+        if (failed) {
+          const retryUrl = new URL("/delegated/connect", window.location.origin);
+          retryUrl.searchParams.set("retry", failedItems.map((item) => item.cluster_id).join(","));
+          retryUrl.searchParams.set("next", nextUrl.startsWith("/ask") ? nextUrl : "/ask?new=1");
+          window.location.assign(`${retryUrl.pathname}${retryUrl.search}`);
+        } else {
+          window.location.assign(nextUrl.startsWith("/ask") ? nextUrl : "/ask?new=1");
+        }
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+      if (submit) { submit.disabled = false; submit.textContent = "Add selected clusters"; }
+    }
+  });
+}
+  document.querySelectorAll("[data-delegated-remove-url]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const clusterName = button.dataset.clusterName || "this cluster";
+      if (!csrf || !window.confirm(`Remove and revoke the ${clusterName} sign-in? Existing conversations that use it will require reconnection.`)) return;
+      button.disabled = true;
+      button.textContent = "Removing…";
+      try {
+        const response = await fetch(button.dataset.delegatedRemoveUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "PodPilot could not remove the cluster sign-in.");
+        window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+          tone: "success",
+          message: `${clusterName} was removed from this PodPilot session.`,
+        }));
+        window.location.assign("/delegated/connect");
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        button.disabled = false;
+        button.textContent = "Remove";
+      }
+    });
+  });
+  document.querySelector("[data-delegated-disconnect-url]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (!csrf || !window.confirm("Clear and revoke every current cluster sign-in? Your saved cluster list and conversations will remain.")) return;
+    button.disabled = true;
+    button.textContent = "Removing…";
+    try {
+      const response = await fetch(button.dataset.delegatedDisconnectUrl, {
+        method: "POST",
+        headers: {"X-PodPilot-CSRF": csrf},
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || "PodPilot could not clear the cluster sign-ins.");
+      window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
+        tone: "success",
+        message: "Cluster sign-ins cleared. Select clusters and sign in again.",
+      }));
+      window.location.assign("/delegated/connect");
+    } catch (error) {
+      if (toast) { toast.textContent = error.message; toast.hidden = false; }
+      button.disabled = false;
+      button.textContent = "Remove all sign-ins";
+    }
+  });
   const appendOptimisticTurn = (question) => {
     const panel = document.querySelector(".ask-panel");
     if (!panel) return null;
@@ -599,7 +903,7 @@
     const thinkingTitle = document.createElement("strong");
     thinkingTitle.textContent = "Live investigation";
     const thinkingStatus = document.createElement("p");
-    thinkingStatus.textContent = "Submitting the investigation…";
+    thinkingStatus.textContent = "PodPilot is choosing and running useful checks.";
     thinkingCopy.append(thinkingTitle, thinkingStatus);
     thinking.append(spinner, thinkingCopy);
     pending.append(pendingMeta, thinking);
@@ -641,14 +945,17 @@
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
-    const progressItemsPerPhase = 3;
+    const hiddenProgressPhases = new Set(["queued", "starting"]);
     const displayedProgressMessages = new Set(
       Array.from(log?.querySelectorAll("[data-progress-items] li") || [], (item) => item.textContent)
     );
     const appendPhaseUpdate = (event, seq) => {
-      if (!log || !event.message || displayedProgressMessages.has(event.message)) return;
-      displayedProgressMessages.add(event.message);
       const phaseName = event.phase || "investigating";
+      if (
+        !log || !event.message || hiddenProgressPhases.has(phaseName)
+        || displayedProgressMessages.has(event.message)
+      ) return;
+      displayedProgressMessages.add(event.message);
       const phaseGroups = Array.from(log.querySelectorAll("[data-progress-phase]"));
       let group = phaseGroups.find((item) => item.dataset.progressPhase === phaseName);
       if (!group) {
@@ -674,6 +981,7 @@
       if (Number.isFinite(seq)) item.dataset.seq = String(seq);
       item.textContent = event.message;
       items.append(item);
+      const progressItemsPerPhase = phaseName === "agent_command" ? 5 : 3;
       while (items.children.length > progressItemsPerPhase) items.firstElementChild?.remove();
     };
     const addProgress = (event) => {
@@ -683,7 +991,11 @@
       if (progressTitle && event.phase) {
         progressTitle.textContent = event.phase === "queued" ? "Waiting to investigate" : "Live investigation";
       }
-      if (current) current.textContent = event.message || "Investigation in progress.";
+      if (current) {
+        current.textContent = event.phase === "queued"
+          ? "Your request is waiting for an available worker."
+          : "PodPilot is choosing and running useful checks.";
+      }
       appendPhaseUpdate(event, seq);
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
@@ -694,6 +1006,34 @@
     let source = null;
     let poll = null;
     let progressStopped = false;
+    const cancelRun = askSubmit?.matches("[data-run-cancel]") ? askSubmit : null;
+    cancelRun?.addEventListener("click", async () => {
+      if (!csrf || !cancelRun.dataset.cancelUrl) return;
+      if (!window.confirm(
+        "Cancel this investigation? PodPilot will attempt to stop the active model request and oc command. Operations that already completed cannot be rolled back."
+      )) return;
+      cancelRun.disabled = true;
+      cancelRun.textContent = "Cancelling…";
+      if (current) current.textContent = "Requesting best-effort cancellation…";
+      try {
+        const response = await fetch(cancelRun.dataset.cancelUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || "PodPilot could not cancel this request.");
+        progressStopped = true;
+        source?.close();
+        if (poll) window.clearInterval(poll);
+        window.clearTimeout(progressWatchdog);
+        window.location.assign(payload.location || window.location.pathname);
+      } catch (error) {
+        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        cancelRun.disabled = false;
+        cancelRun.textContent = "Cancel";
+      }
+    });
     const configuredTimeout = Number.parseInt(pendingRun.dataset.runTimeoutMs || "180000", 10);
     const reconcileStatus = async () => {
       if (progressStopped || !pendingRun.dataset.statusUrl) return false;
@@ -702,7 +1042,7 @@
         if (!response.ok) return false;
         const payload = await response.json();
         payload.events?.forEach(addProgress);
-        if (!["succeeded", "failed"].includes(payload.status)) return false;
+        if (!["succeeded", "failed", "cancelled"].includes(payload.status)) return false;
         progressStopped = true;
         source?.close();
         if (poll) window.clearInterval(poll);
@@ -751,13 +1091,28 @@
       const reasoningSelect = adhocForm.querySelector('select[name="reasoning_effort"]');
       const question = textarea?.value.trim() || "";
       if (!question) return;
+      const selectedClusters = Array.from(
+        adhocForm.querySelectorAll("[data-cluster-checkbox]:checked")
+      );
+      if (!selectedClusters.length) {
+        if (clusterPicker) clusterPicker.open = true;
+        showToast("Select at least one cluster before starting an investigation.");
+        updateAskSubmitAvailability();
+        return;
+      }
       const requestBody = new URLSearchParams(new FormData(adhocForm));
+      requestBody.set("cluster_ids", JSON.stringify(selectedClusters.map((item) => item.value)));
       requestBody.set("message", question);
       const optimistic = appendOptimisticTurn(question);
-      if (textarea) textarea.value = "";
+      if (textarea) {
+        textarea.value = "";
+        resizeComposerTextarea();
+      }
+      if (composerDraftKey) window.sessionStorage.removeItem(composerDraftKey);
+      textarea?.focus({preventScroll: true});
       if (rawResponseToggle) rawResponseToggle.disabled = true;
       if (reasoningSelect) reasoningSelect.disabled = true;
-      if (submit) { submit.disabled = true; submit.textContent = "Investigating…"; }
+      if (submit) { submit.disabled = true; submit.textContent = "Submitting…"; }
       try {
         const response = await fetch(adhocForm.dataset.chatUrl, {
           method: "POST",
@@ -771,18 +1126,23 @@
         }
         window.location.assign(response.url);
       } catch (error) {
-        if (toast) { toast.textContent = error.message; toast.hidden = false; }
+        showToast(error.message);
         optimistic?.nodes.forEach((node) => node.remove());
         if (optimistic?.empty) optimistic.empty.hidden = false;
-        if (textarea) textarea.value = question;
+        if (textarea) {
+          textarea.value = question;
+          resizeComposerTextarea();
+        }
+        if (composerDraftKey) window.sessionStorage.setItem(composerDraftKey, question);
         if (rawResponseToggle) rawResponseToggle.disabled = false;
         if (reasoningSelect) reasoningSelect.disabled = false;
-        if (submit) { submit.disabled = false; submit.textContent = "Investigate"; }
+        updateAskSubmitAvailability();
       }
     });
     const textarea = adhocForm.querySelector("textarea");
     textarea?.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        if (askSubmit?.matches("[data-run-cancel]")) return;
         event.preventDefault();
         if (adhocForm.checkValidity()) adhocForm.requestSubmit();
       }

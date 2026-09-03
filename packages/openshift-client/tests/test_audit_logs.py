@@ -209,7 +209,7 @@ def test_last_n_query_expands_backward_until_it_finds_requested_events() -> None
         audit_search_until_limit=True, range_seconds=3600, limit=1,
     ))
 
-    assert source.ranges == [3600, 7200]
+    assert source.ranges == [3600] * 3 + [7200]
     assert result.observations[0].data["rangeSeconds"] == 7200
     assert result.observations[0].data["rangeExpanded"] is True
     assert result.observations[0].data["count"] == 1
@@ -228,7 +228,7 @@ def test_last_n_query_stops_at_configured_ceiling_and_reports_it() -> None:
     ))
 
     searched = [int((call["end"] - call["start"]).total_seconds()) for call in source.calls]
-    assert searched == [3600, 7200, 14_400]
+    assert searched == [3600] * 3 + [7200] * 3 + [14_400] * 3
     assert any("configured 14400-second audit ceiling" in item for item in result.limitations)
 
 
@@ -323,6 +323,47 @@ def test_reader_accepts_compact_loki_line_projection() -> None:
         "outcome": "succeeded",
         "auditID": "compact-delete-1",
     }
+
+
+@pytest.mark.parametrize(
+    ("profile_marker", "expected_profile"),
+    [
+        ('audit_payload="message"', "message"),
+        ('audit_id="structured.auditID"', "structured"),
+    ],
+)
+def test_reader_supports_open_shift_audit_record_envelopes(
+    profile_marker: str, expected_profile: str,
+) -> None:
+    class ProfileSource:
+        def query_audit_entries(self, logql, *, start, end, limit):
+            entries = (
+                (("1787831940000000000", _event("druciare-adm", verb="patch")),)
+                if profile_marker in logql else ()
+            )
+            return AuditLogEntries(entries=entries, is_complete=True)
+
+    result = BoundedAuditEventReader(ProfileSource(), clock=lambda: NOW).execute(ReadIntent(
+        tool="query_audit_events", audit_operation_scope="all", audit_outcome="all",
+        range_seconds=3600, limit=10,
+    ))
+
+    assert result.observations[0].data["count"] == 1
+    assert result.observations[0].data["matchedRecordProfiles"] == [expected_profile]
+
+
+def test_empty_audit_result_is_inconclusive_about_cluster_activity() -> None:
+    result = BoundedAuditEventReader(
+        FakeAuditSource(()), clock=lambda: NOW,
+    ).execute(ReadIntent(
+        tool="query_audit_events", audit_operation_scope="all", audit_outcome="all",
+        range_seconds=3600, limit=10,
+    ))
+
+    assert any(
+        "does not prove that no cluster activity occurred" in limitation
+        for limitation in result.limitations
+    )
 
 
 def test_loki_audit_denial_names_required_role(tmp_path: Path) -> None:

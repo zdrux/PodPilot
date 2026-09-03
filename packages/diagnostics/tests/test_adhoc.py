@@ -806,6 +806,8 @@ def test_pod_health_summary_accepts_scope_selector_and_result_limit() -> None:
 @pytest.mark.parametrize("question", [
     "Are any pods on the cluster crashing currently?",
     "Show unhealthy pods",
+    "Show Evicted pods",
+    "Show pods that are not running",
     "What is the health status of the pods?",
 ])
 def test_known_pod_health_questions_compile_to_typed_summary(question: str) -> None:
@@ -1442,17 +1444,6 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
     assert intent.metric == "cpu_usage"
     with pytest.raises(ValidationError, match="requires metric and metric_scope"):
         ReadIntent(tool="query_metrics")
-    namespace_volumes = ReadIntent(
-        tool="query_metrics", metric="persistent_volume_usage",
-        metric_scope="namespace", namespace="payments",
-        metric_operation="rank", limit=5,
-    )
-    assert namespace_volumes.limit == 5
-    with pytest.raises(ValidationError, match="claim, namespace, or cluster"):
-        ReadIntent(
-            tool="query_metrics", metric="persistent_volume_usage",
-            metric_scope="pod", namespace="payments", name="api-1",
-        )
     node = ReadIntent(
         tool="query_metrics", metric="top_cpu_consumers",
         metric_scope="node", name="worker-2",
@@ -1484,24 +1475,19 @@ def test_metrics_query_requires_typed_scope_and_registered_metric() -> None:
             tool="query_metrics", metric="node_cpu_utilization",
             metric_scope="cluster",
         )
-    with pytest.raises(ValidationError, match="requires cluster, namespace, workload, or node scope"):
+    with pytest.raises(ValidationError, match="does not support pod scope"):
         ReadIntent(
             tool="query_metrics", metric="top_memory_consumers",
             metric_scope="pod", namespace="payments", name="api-1",
         )
-    log_volume = ReadIntent(
-        tool="query_metrics", metric="top_log_volume_by_namespace",
-        metric_scope="cluster", limit=10,
-    )
-    assert log_volume.namespace is None
-    with pytest.raises(ValidationError, match="requires cluster scope"):
-        ReadIntent(
-            tool="query_metrics", metric="top_log_volume_by_namespace",
-            metric_scope="namespace", namespace="payments",
-        )
 
 
 def test_application_log_volume_supports_exact_targets_and_bounded_rankings() -> None:
+    cluster_namespaces = ReadIntent(
+        tool="query_metrics", metric="top_log_volume_by_namespace",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace"],
+    )
     exact_namespace = ReadIntent(
         tool="query_metrics", metric="application_log_volume",
         metric_scope="namespace", namespace="payments",
@@ -1528,13 +1514,19 @@ def test_application_log_volume_supports_exact_targets_and_bounded_rankings() ->
         tool="query_metrics", metric="application_log_volume",
         metric_scope="cluster", metric_operation="rank", metric_group_by=["node"],
     )
+    cluster_total = ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster",
+    )
 
+    assert cluster_namespaces.metric == "top_log_volume_by_namespace"
     assert exact_namespace.metric_scope == "namespace"
     assert exact_pod.name == "api-1"
     assert exact_node.name == "worker-0"
     assert namespace_pods.metric_group_by == ["pod"]
     assert cluster_pods.metric_group_by == ["namespace", "pod"]
     assert cluster_nodes.metric_group_by == ["node"]
+    assert cluster_total.metric_operation == "show"
 
     with pytest.raises(ValidationError, match="approved group_by dimension"):
         ReadIntent(
@@ -1546,6 +1538,12 @@ def test_application_log_volume_supports_exact_targets_and_bounded_rankings() ->
             tool="query_metrics", metric="application_log_volume",
             metric_scope="cluster", metric_operation="rank", metric_group_by=["pod"],
         )
+    with pytest.raises(ValidationError, match="does not support namespace scope"):
+        ReadIntent(
+            tool="query_metrics", metric="top_log_volume_by_namespace",
+            metric_scope="namespace", namespace="payments",
+            metric_operation="rank", metric_group_by=["namespace"],
+        )
 
 
 def test_platform_metric_scopes_require_typed_coordinates() -> None:
@@ -1556,38 +1554,30 @@ def test_platform_metric_scopes_require_typed_coordinates() -> None:
         metric_operation="rank", metric_group_by=["topic", "consumer_group"],
     )
     assert kafka.kind == "Kafka"
-    route = ReadIntent(
-        tool="query_metrics", metric="ingress_request_rate",
-        metric_scope="route", kind="Route",
-        namespace="payments", name="api",
-    )
-    assert route.name == "api"
-    monitoring = ReadIntent(
-        tool="query_metrics", metric="monitoring_targets_down",
-        metric_scope="monitoring", metric_operation="rank",
-        metric_group_by=["job", "instance"],
-    )
-    assert monitoring.namespace is None
-    logging = ReadIntent(
-        tool="query_metrics", metric="logging_ingestion_rate",
-        metric_scope="logging", metric_group_by=["tenant"],
-    )
-    assert logging.metric_scope == "logging"
     with pytest.raises(ValidationError, match="requires kind Kafka"):
         ReadIntent(
-            tool="query_metrics", metric="kafka_topic_storage",
-            metric_scope="kafka_cluster", kind="Route",
+            tool="query_metrics", metric="kafka_topic_disk_utilization",
+            metric_scope="kafka_cluster", kind="Pod",
             namespace="vc-streams", name="vc-cluster",
         )
     with pytest.raises(ValidationError, match="does not support"):
         ReadIntent(
-            tool="query_metrics", metric="etcd_db_size",
-            metric_scope="route", kind="Route", namespace="payments", name="api",
+            tool="query_metrics", metric="cpu_usage",
+            metric_scope="kafka_cluster", kind="Kafka",
+            namespace="vc-streams", name="vc-cluster",
         )
-    with pytest.raises(ValidationError, match="does not support"):
+    exact_topic = ReadIntent(
+        tool="query_metrics", metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster", kind="Kafka",
+        namespace="vc-streams", name="vc-cluster",
+        topic="ep.ticket.status.updated.events",
+        metric_operation="rank", metric_group_by=["topic"], limit=1,
+    )
+    assert exact_topic.topic == "ep.ticket.status.updated.events"
+    with pytest.raises(ValidationError, match="topic is valid only"):
         ReadIntent(
-            tool="query_metrics", metric="logging_query_latency",
-            metric_scope="monitoring",
+            tool="query_metrics", metric="cpu_usage", metric_scope="cluster",
+            topic="orders",
         )
 
 
@@ -1610,6 +1600,8 @@ def test_cluster_log_volume_question_compiles_to_typed_metric_query(
         tool="query_metrics",
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=300,
         limit=expected_limit,
     )]
@@ -1627,6 +1619,8 @@ def test_exact_weekly_log_producer_question_is_a_terminal_registered_read() -> N
         tool="query_metrics",
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=604_800,
         limit=10,
     )]
@@ -1694,7 +1688,7 @@ def test_namespace_kafka_topic_storage_compiles_discovery_then_metric_reads() ->
     assert metric_plan is not None
     assert metric_plan.intents == [ReadIntent(
         tool="query_metrics",
-        metric="kafka_topic_storage",
+        metric="kafka_topic_disk_utilization",
         metric_scope="kafka_cluster",
         kind="Kafka",
         namespace="kafka-observability",
@@ -1707,6 +1701,27 @@ def test_namespace_kafka_topic_storage_compiles_discovery_then_metric_reads() ->
         "show me the disk usage of kafka topics in kafka-observability namespace",
         [],
     ) is None
+
+
+def test_named_kafka_topic_storage_plan_preserves_cluster_target_and_topic_filter() -> None:
+    plan = plan_kafka_topic_storage_metrics(
+        "show me disk usage for topic ep.ticket.status.updated.events in tm-streams-sit2 namespace",
+        [("tm-streams-sit2", "tm-streams-sit2-cluster")],
+    )
+
+    assert plan is not None
+    assert plan.intents == [ReadIntent(
+        tool="query_metrics",
+        metric="kafka_topic_disk_utilization",
+        metric_scope="kafka_cluster",
+        kind="Kafka",
+        namespace="tm-streams-sit2",
+        name="tm-streams-sit2-cluster",
+        topic="ep.ticket.status.updated.events",
+        range_seconds=300,
+        limit=1,
+        metric_group_by=["topic"],
+    )]
 
 
 def test_worker_node_cpu_and_memory_utilization_compiles_to_two_role_queries() -> None:
@@ -1853,26 +1868,6 @@ def test_audit_query_accepts_cluster_wide_filters_without_username() -> None:
 
     assert intent.audit_username is None
     assert intent.audit_operation_scope == "deletes"
-
-
-@pytest.mark.parametrize("metric", ["ingress_bytes_in", "ingress_bytes_out"])
-def test_ingress_bandwidth_accepts_cluster_route_and_namespace_scopes(metric: str) -> None:
-    cluster = ReadIntent(
-        tool="query_metrics", metric=metric, metric_scope="cluster",
-        metric_operation="trend", range_seconds=259_200,
-    )
-    namespace = ReadIntent(
-        tool="query_metrics", metric=metric, metric_scope="namespace",
-        namespace="payments", metric_operation="trend",
-    )
-    route = ReadIntent(
-        tool="query_metrics", metric=metric, metric_scope="route", kind="Route",
-        namespace="payments", name="api", metric_operation="trend",
-    )
-
-    assert cluster.range_seconds == 259_200
-    assert namespace.namespace == "payments"
-    assert route.name == "api"
 
 
 @pytest.mark.parametrize(

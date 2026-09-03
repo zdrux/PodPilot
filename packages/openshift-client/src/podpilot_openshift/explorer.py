@@ -26,6 +26,10 @@ from podpilot_openshift.metric_trends import BoundedMetricTrendReader, MetricTre
 class ReadOnlyExplorerError(RuntimeError):
     """A safe error from the ad-hoc evidence boundary."""
 
+    def __init__(self, message: str, *, failure_category: str = "read_failed") -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
 _API_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(?:/[A-Za-z0-9][A-Za-z0-9.-]*)?$")
@@ -244,7 +248,7 @@ def _nonnegative_int(value: object) -> int:
 def _pod_health_anomaly(
     raw: dict[str, Any], *, collected_at: datetime,
 ) -> dict[str, Any] | None:
-    """Classify current Pod/container state without treating Pod phase as health."""
+    """Classify non-running/non-succeeded Pods and unhealthy container state."""
 
     metadata = raw.get("metadata") or {}
     status = raw.get("status") or {}
@@ -325,13 +329,13 @@ def _pod_health_anomaly(
                     container_type=container_type,
                 )
 
+    status_reason = str(status.get("reason") or "")[:128]
     if phase in {"Failed", "Unknown"}:
-        add_issue(f"PodPhase{phase}", severity="critical")
-    elif (
-        phase == "Pending"
-        and (age_seconds is None or age_seconds >= _POD_HEALTH_GRACE_SECONDS)
-    ):
+        add_issue(status_reason or f"PodPhase{phase}", severity="critical")
+    elif phase == "Pending":
         add_issue("Pending", severity="warning")
+    elif phase not in {"Running", "Succeeded"}:
+        add_issue(status_reason or f"PodPhase{phase}", severity="warning")
 
     conditions = status.get("conditions") or []
     if isinstance(conditions, list):
@@ -988,8 +992,12 @@ class KubernetesReadOnlyExplorer:
         configuration.api_key = {"BearerToken": token}
         configuration.api_key_prefix = {"BearerToken": "Bearer"}
         configuration.verify_ssl = tls_verify
-        configuration.assert_hostname = tls_verify
-        if not tls_verify:
+        is_https = api_url.casefold().startswith("https://")
+        # urllib3 forwards assert_hostname to its connection constructor. That
+        # option is valid for HTTPSConnection but raises TypeError for the
+        # plain-HTTP loopback broker used by delegated read-only sessions.
+        configuration.assert_hostname = tls_verify if is_https else None
+        if is_https and not tls_verify:
             # The accepted risk remains visible in settings, Ask limitations, and audit
             # events. Repeating urllib3's identical warning for every request only obscures
             # actionable logs.
@@ -1090,6 +1098,8 @@ class KubernetesReadOnlyExplorer:
                 return self._machine_health_summary(intent)
             if intent.tool == "workload_health_summary":
                 return self._workload_health_summary(intent)
+            if intent.tool == "access_review_summary":
+                return self._access_review_summary()
             if intent.tool == "pod_logs":
                 return self._pod_logs(intent)
             if intent.tool == "watch_resources":
@@ -1102,7 +1112,9 @@ class KubernetesReadOnlyExplorer:
         except MetricTrendError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except LogMetricsQueryError as exc:
-            raise ReadOnlyExplorerError(str(exc)) from exc
+            raise ReadOnlyExplorerError(
+                str(exc), failure_category=exc.failure_category,
+            ) from exc
         except AuditQueryError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except ApiException as exc:
@@ -1142,6 +1154,87 @@ class KubernetesReadOnlyExplorer:
                 "The requested cluster evidence could not be collected because the Kubernetes API "
                 f"client failed ({type(exc).__name__})."
             ) from exc
+
+    def _access_review_summary(self) -> ReadResult:
+        """Review the delegated identity's cluster-wide workload permissions."""
+
+        assert self._core is not None
+        authorization = client.AuthorizationV1Api(self._core.api_client)
+        resources = (
+            ("Pods", "", "pods"),
+            ("Services", "", "services"),
+            ("Deployments", "apps", "deployments"),
+            ("StatefulSets", "apps", "statefulsets"),
+            ("DaemonSets", "apps", "daemonsets"),
+            ("Jobs", "batch", "jobs"),
+            ("CronJobs", "batch", "cronjobs"),
+        )
+        verbs = ("get", "list", "create", "patch", "delete")
+        rows: list[dict[str, object]] = []
+        evaluation_errors: list[str] = []
+        for label, api_group, resource in resources:
+            permissions: dict[str, bool] = {}
+            for verb in verbs:
+                review = authorization.create_self_subject_access_review(body={
+                    "apiVersion": "authorization.k8s.io/v1",
+                    "kind": "SelfSubjectAccessReview",
+                    "spec": {
+                        "resourceAttributes": {
+                            "group": api_group,
+                            "resource": resource,
+                            "verb": verb,
+                        }
+                    },
+                })
+                status = review.status
+                permissions[verb] = bool(status and status.allowed)
+                evaluation_error = str(
+                    getattr(status, "evaluation_error", "") or ""
+                ).strip()
+                if evaluation_error:
+                    evaluation_errors.append(f"{label}/{verb}: {evaluation_error}")
+            rows.append({
+                "kind": label,
+                "apiGroup": api_group or "core",
+                "resource": resource,
+                "verbs": permissions,
+            })
+
+        allowed_count = sum(
+            1 for row in rows for allowed in row["verbs"].values() if allowed
+        )
+        total_count = len(rows) * len(verbs)
+        all_allowed = allowed_count == total_count
+        return ReadResult(
+            observations=(AdHocObservation(
+                id=f"access-review-{uuid4()}",
+                tool="access_review_summary",
+                summary=(
+                    f"Reviewed {total_count} cluster-wide workload permissions; "
+                    f"{allowed_count} are allowed."
+                ),
+                source=(
+                    "kubernetes:authorization.k8s.io/v1:"
+                    "SelfSubjectAccessReview"
+                ),
+                collected_at=datetime.now(timezone.utc),
+                data={
+                    "scope": (
+                        "all_namespaces" if allowed_count else "no_cluster_wide_access"
+                    ),
+                    "allPermissionsAllowed": all_allowed,
+                    "allowedCount": allowed_count,
+                    "checkCount": total_count,
+                    "verbs": list(verbs),
+                    "resources": rows,
+                    "complete": not evaluation_errors,
+                },
+            ),),
+            limitations=tuple(
+                f"Authorization review evaluation error: {item}"
+                for item in evaluation_errors[:5]
+            ),
+        )
 
     def _current_metrics_fallback(
         self, intent: ReadIntent, *, primary_error: str,
@@ -1342,7 +1435,7 @@ class KubernetesReadOnlyExplorer:
             id=f"cluster-discovery-{uuid4()}",
             tool="discover_resources",
             summary=(
-                f"Discovered {len(entries)} readable API resource type"
+                f"Discovered {len(entries)} policy-filtered API resource type"
                 f"{'s' if len(entries) != 1 else ''} relevant to "
                 f"{str(intent.discovery_query or 'the investigation')[:120]}."
             ),
@@ -1352,7 +1445,10 @@ class KubernetesReadOnlyExplorer:
                 "query": str(intent.discovery_query or "")[:253],
                 "resources": entries,
                 "count": len(entries),
-                "policy": "dynamic discovery with sensitive resource types excluded",
+                "policy": (
+                    "dynamic API discovery with sensitive resource types excluded; "
+                    "object authorization is not implied"
+                ),
             },
         ),))
 
@@ -1563,6 +1659,7 @@ class KubernetesReadOnlyExplorer:
                     "names": object_names,
                     "objects": object_refs,
                     "items": projections,
+                    "podpilotEvidenceRole": "inventory",
                     "detailProjection": "kind_specific_bounded",
                     "fullObjectsIncluded": False,
                     "logCandidates": log_candidates,
@@ -1580,6 +1677,8 @@ class KubernetesReadOnlyExplorer:
         for obj in items:
             raw = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
             payload = _sanitize(raw)
+            if isinstance(payload, dict):
+                payload["podpilotEvidenceRole"] = "object_detail"
             if isinstance(payload, dict) and kind in {
                 "Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob",
             }:
@@ -1976,7 +2075,7 @@ class KubernetesReadOnlyExplorer:
             data={
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "healthSummaryVersion": 1,
+                "healthSummaryVersion": 2,
                 "scope": scope,
                 "labelSelector": intent.label_selector,
                 "scannedCount": scanned,

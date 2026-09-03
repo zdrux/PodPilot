@@ -29,8 +29,8 @@ def main() -> int:
     parser.add_argument("--credential-stdin", action="store_true")
     args = parser.parse_args()
     settings = get_settings()
-    if settings.environment != "sno-lab" or settings.agent_mode != "unrestricted":
-        print("The OpenRouter bootstrap is restricted to the unrestricted sno-lab deployment.")
+    if settings.environment != "sno-lab":
+        print("The OpenRouter bootstrap is restricted to the SNO lab deployment.")
         return 2
 
     store = KubernetesSecretCredentialStore(
@@ -70,8 +70,8 @@ def main() -> int:
         profile.custom_ca_pem = None
         profile.max_input_tokens = 131_072
         profile.max_output_tokens = 16_384
-        profile.timeout_seconds = 240
-        profile.max_retries = 3
+        profile.timeout_seconds = 180
+        profile.max_retries = 1
         profile.temperature = None
         profile.reasoning_effort = "high"
         profile.reasoning_efforts_json = json.dumps(["low", "medium", "high"])
@@ -95,12 +95,13 @@ def main() -> int:
         base_url=BASE_URL,
         chat_model=CHAT_MODEL,
         embedding_model=None,
-        timeout_seconds=240,
+        timeout_seconds=180,
         max_output_tokens=16_384,
         api_type=API_TYPE,
         tls_mode="system",
         max_input_tokens=131_072,
         reasoning_effort="high",
+        max_retries=1,
     )
     try:
         report = OpenAIProviderRouter().probe(config, credential)

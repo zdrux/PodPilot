@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,31 @@ from podpilot_openshift.audit_logs import AuditLogEntries, AuditQueryError
 
 class LogMetricsQueryError(RuntimeError):
     """A normalized, browser-safe Loki metric-query failure."""
+
+    def __init__(self, message: str, *, failure_category: str = "query_failed") -> None:
+        super().__init__(message)
+        self.failure_category = failure_category
+
+
+def _loki_transport_failure_category(exc: BaseException) -> str:
+    """Classify transport failures without exposing endpoint or certificate details."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    details: list[str] = []
+    while current is not None and id(current) not in seen and len(details) < 5:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return "tls_verification_failed"
+        details.append(str(current).casefold())
+        current = current.__cause__ or current.__context__
+    combined = " ".join(details)
+    if any(marker in combined for marker in (
+        "certificate_verify_failed", "certificate verify failed",
+        "self-signed certificate", "hostname mismatch",
+    )):
+        return "tls_verification_failed"
+    return "transport_unavailable"
 
 
 @dataclass(frozen=True)
@@ -47,6 +73,7 @@ class LokiQueryClient:
         base_url: str,
         token_path: Path | None = None,
         token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         ca_path: Path | None = None,
         tls_verify: bool = True,
         route_discovery_url: str | None = None,
@@ -57,11 +84,12 @@ class LokiQueryClient:
         tenant: str = "application",
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if (token_path is None) == (token is None):
+        if sum(source is not None for source in (token_path, token, token_provider)) != 1:
             raise ValueError("Configure exactly one Loki bearer-token source.")
         normalized_base_url = base_url.rstrip("/")
         self._token_path = token_path
         self._token = token
+        self._token_provider = token_provider
         self._ca_path = ca_path
         self._tls_verify = tls_verify
         self._route_discovery_url = (
@@ -87,16 +115,19 @@ class LokiQueryClient:
         cls,
         *,
         api_url: str,
-        token: str,
+        token: str | None = None,
+        token_provider: Callable[[], str] | None = None,
         api_tls_verify: bool = True,
         route_name: str = "logging-loki",
         tenant: str = "application",
         **kwargs: Any,
     ) -> "LokiQueryClient":
         """Discover the conventional LokiStack Route on one registered cluster."""
+        kwargs.setdefault("tls_verify", api_tls_verify)
         return cls(
             base_url=f"https://logging-loki.invalid/api/logs/v1/{tenant}",
             token=token,
+            token_provider=token_provider,
             tenant=tenant,
             route_discovery_url=(
                 f"{api_url.rstrip('/')}"
@@ -216,6 +247,8 @@ class LokiQueryClient:
             token = (
                 self._token_path.read_text(encoding="utf-8").strip()
                 if self._token_path is not None
+                else self._token_provider().strip()
+                if self._token_provider is not None
                 else (self._token or "").strip()
             )
             if not token:
@@ -247,7 +280,8 @@ class LokiQueryClient:
             raise
         except httpx.TimeoutException as exc:
             raise LogMetricsQueryError(
-                f"The Loki query exceeded the configured {self._timeout_seconds:g}-second timeout."
+                f"The Loki query exceeded the configured {self._timeout_seconds:g}-second timeout.",
+                failure_category="timeout",
             ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
@@ -270,7 +304,15 @@ class LokiQueryClient:
                 message = "The LokiStack gateway returned an HTTP error."
             raise LogMetricsQueryError(message) from exc
         except (OSError, httpx.HTTPError, ValueError) as exc:
-            raise LogMetricsQueryError("The LokiStack gateway is temporarily unavailable.") from exc
+            failure_category = _loki_transport_failure_category(exc)
+            message = (
+                "TLS certificate verification failed while connecting to the LokiStack gateway."
+                if failure_category == "tls_verification_failed" else
+                "The LokiStack gateway transport is unavailable."
+            )
+            raise LogMetricsQueryError(
+                message, failure_category=failure_category,
+            ) from exc
 
     def _resolve_base_url(self, token: str) -> str:
         if self._route_discovery_url is None:
@@ -335,19 +377,19 @@ class BoundedLogVolumeReader:
         self._clock = clock
 
     def execute(self, intent: ReadIntent) -> ReadResult:
-        legacy_namespace_ranking = (
+        namespace_ranking = (
             intent.metric == "top_log_volume_by_namespace"
             and intent.metric_scope == "cluster"
         )
         if intent.tool != "query_metrics" or not (
-            legacy_namespace_ranking or intent.metric == "application_log_volume"
+            namespace_ranking or intent.metric == "application_log_volume"
         ):
             raise ValueError(
                 "BoundedLogVolumeReader requires a registered application-log volume intent."
             )
         range_seconds = min(intent.range_seconds, self._max_range_seconds)
         dimensions = (
-            ("namespace",) if legacy_namespace_ranking else tuple(intent.metric_group_by)
+            ("namespace",) if namespace_ranking else tuple(intent.metric_group_by)
         )
         loki_dimensions = {
             "namespace": "kubernetes_namespace_name",

@@ -4,6 +4,5 @@ metadata:
   name: podpilot-runtime
   namespace: ai-ops
 data:
-  agent_mode: unrestricted
+  delegated_access_enabled: "true"
   adhoc_run_timeout_seconds: "900"
-  remote_cluster_tls_verify: "false"

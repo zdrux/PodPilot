@@ -9,7 +9,11 @@ from typing import Callable
 from uuid import uuid4
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
-from podpilot_openshift.metrics import MonitoringQueryError, MonitoringRangeQuerySource
+from podpilot_openshift.metrics import (
+    MetricRange,
+    MonitoringQueryError,
+    MonitoringRangeQuerySource,
+)
 
 
 class MetricTrendError(RuntimeError):
@@ -36,7 +40,7 @@ _UNITS = {
     "kafka_topic_messages_in": "messages_per_second",
     "kafka_topic_bytes_in": "bytes_per_second",
     "kafka_topic_bytes_out": "bytes_per_second",
-    "kafka_topic_storage": "bytes",
+    "kafka_topic_disk_utilization": "percent",
     "kafka_consumer_lag": "records",
     "kafka_under_replicated_partitions": "partitions",
     "ingress_request_rate": "requests_per_second",
@@ -79,7 +83,9 @@ _PREREQUISITES = {
     "kafka_topic_messages_in": "Strimzi broker JMX Prometheus metrics",
     "kafka_topic_bytes_in": "Strimzi broker JMX Prometheus metrics",
     "kafka_topic_bytes_out": "Strimzi broker JMX Prometheus metrics",
-    "kafka_topic_storage": "Strimzi broker JMX Prometheus metrics",
+    "kafka_topic_disk_utilization": (
+        "Strimzi broker JMX log-size metrics and kubelet Kafka PVC capacity metrics"
+    ),
     "kafka_consumer_lag": "Strimzi Kafka Exporter metrics",
     "kafka_under_replicated_partitions": "Strimzi Kafka Exporter metrics",
     "ingress_request_rate": "OpenShift router HAProxy metrics",
@@ -225,6 +231,154 @@ def _metric_selector(**values: str | None) -> str:
     return ",".join(
         f"{key}={json.dumps(value)}" for key, value in values.items() if value
     )
+
+
+def _kafka_broker_metric(
+    metric_names: tuple[str, ...], intent: ReadIntent, *, extra_selector: str,
+) -> str:
+    """Select one exact Strimzi cluster across supported scrape profiles."""
+    namespace = json.dumps(intent.namespace)
+    cluster = json.dumps(intent.name)
+    cluster_pattern = re.escape(str(intent.name)).replace(r"\-", "-")
+    pod_pattern = json.dumps(rf"{cluster_pattern}-.+-[0-9]+")
+    expressions: list[str] = []
+    for metric_name in metric_names:
+        expressions.extend([
+            f"{metric_name}{{namespace={namespace},strimzi_io_cluster={cluster},{extra_selector}}}",
+            (
+                f"{metric_name}{{namespace={namespace},strimzi_io_cluster=\"\","
+                f"pod=~{pod_pattern},{extra_selector}}}"
+            ),
+        ])
+    return f"({' or '.join(expressions)})"
+
+
+def _kafka_topic_storage_detail_query(
+    intent: ReadIntent,
+    *,
+    topics: list[str],
+    partitions: bool,
+) -> str:
+    """Build a bounded companion query for topic bytes or partition replicas."""
+
+    topic_pattern = "^(?:" + "|".join(re.escape(topic) for topic in topics) + ")$"
+    log_size = _kafka_broker_metric(
+        ("kafka_log_log_size", "kafka_log_log_size_value"),
+        intent,
+        extra_selector=f"topic=~{json.dumps(topic_pattern)}",
+    )
+    if not partitions:
+        return f"topk({len(topics)}, sum by (topic) ({log_size}))"
+    # One selected internal topic can legitimately have dozens of partitions
+    # (for example, __consumer_offsets defaults to 50). Use the reader's
+    # reviewed series ceiling so the common case is not silently truncated.
+    replica_limit = 100
+    return (
+        f"topk({replica_limit}, sum by (topic, partition, pod, kubernetes_pod_name) "
+        f"({log_size}))"
+    )
+
+
+def _latest_metric_value(series: object) -> float | None:
+    points = getattr(series, "points", ())
+    values = [point.value for point in points if point.value is not None]
+    return values[-1] if values else None
+
+
+def _kafka_topic_storage_data(
+    ranking: list[dict[str, object]],
+    *,
+    topic_snapshot: MetricRange | None,
+    partition_snapshot: MetricRange | None,
+    selected_topics: list[str],
+    selected_topics_complete: bool,
+    primary_complete: bool,
+    incomplete_partition_topics: set[str] | None = None,
+) -> dict[str, object] | None:
+    if not selected_topics:
+        return None
+
+    topic_bytes: dict[str, float] = {}
+    for series in topic_snapshot.series if topic_snapshot is not None else ():
+        topic = str(series.labels.get("topic") or "")
+        current = _latest_metric_value(series)
+        if topic and current is not None:
+            topic_bytes[topic] = current
+
+    partitions_by_topic: dict[str, list[dict[str, object]]] = {
+        topic: [] for topic in selected_topics
+    }
+    for series in partition_snapshot.series if partition_snapshot is not None else ():
+        topic = str(series.labels.get("topic") or "")
+        if topic not in partitions_by_topic:
+            continue
+        current = _latest_metric_value(series)
+        if current is None:
+            continue
+        partition = str(series.labels.get("partition") or "")
+        broker_pod = str(
+            series.labels.get("pod")
+            or series.labels.get("kubernetes_pod_name")
+            or ""
+        )
+        broker_match = re.search(r"-(\d+)$", broker_pod)
+        partitions_by_topic[topic].append({
+            "partition": partition,
+            "brokerPod": broker_pod,
+            "brokerId": broker_match.group(1) if broker_match else None,
+            "currentBytes": current,
+        })
+
+    def partition_key(item: dict[str, object]) -> tuple[int, int | str, str]:
+        partition = str(item.get("partition") or "")
+        try:
+            return (0, int(partition), str(item.get("brokerPod") or ""))
+        except ValueError:
+            return (1, partition, str(item.get("brokerPod") or ""))
+
+    utilization_by_topic = {
+        str(item.get("labels", {}).get("topic")): item.get("current")
+        for item in ranking
+        if isinstance(item.get("labels"), dict)
+        and item.get("labels", {}).get("topic") not in (None, "")
+    }
+    incomplete_topics = incomplete_partition_topics or set()
+    topics: list[dict[str, object]] = []
+    for topic in selected_topics:
+        partitions = sorted(partitions_by_topic.get(topic, []), key=partition_key)
+        topics.append({
+            "topic": topic,
+            "internal": topic.startswith("__"),
+            "currentBytes": topic_bytes.get(topic),
+            "utilizationPercent": utilization_by_topic.get(topic),
+            "partitionCount": len({
+                str(item.get("partition")) for item in partitions
+                if item.get("partition") not in (None, "")
+            }),
+            "replicaCount": len(partitions),
+            "partitionsComplete": (
+                partition_snapshot is not None and topic not in incomplete_topics
+            ),
+            "partitions": partitions,
+        })
+    return {
+        "unit": "bytes",
+        "topics": topics,
+        "topicBytesComplete": topic_snapshot is not None and topic_snapshot.is_complete,
+        "partitionDetailsComplete": (
+            partition_snapshot is not None and partition_snapshot.is_complete
+        ),
+        "selectedTopicsComplete": selected_topics_complete,
+        "primaryComplete": primary_complete,
+        "complete": bool(
+            primary_complete
+            and topic_snapshot is not None
+            and topic_snapshot.is_complete
+            and partition_snapshot is not None
+            and partition_snapshot.is_complete
+            and selected_topics_complete
+        ),
+    }
 
 
 def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
@@ -409,33 +563,57 @@ def _promql(intent: ReadIntent, *, rate_window_seconds: int) -> str:
         }[metric]
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"rate({source_metric}{{{selector},topic!=\"\"}}[{window}])",
+            f"rate({source_metric}{{{selector}}}[{window}])",
             intent, default_labels=("topic",),
         )
-    if metric == "kafka_topic_storage":
-        selector = _metric_selector(
-            namespace=intent.namespace, strimzi_io_cluster=intent.name,
+    if metric == "kafka_topic_disk_utilization":
+        log_size = _kafka_broker_metric(
+            ("kafka_log_log_size", "kafka_log_log_size_value"), intent,
+            extra_selector=(
+                f"topic={json.dumps(intent.topic)}" if intent.topic else 'topic!=""'
+            ),
         )
-        return _domain_aggregate(
-            f"kafka_log_log_size_value{{{selector},topic!=\"\"}}",
-            intent, default_labels=("topic",),
+        usage = _domain_aggregate(
+            log_size, intent,
+            default_labels=("topic",), apply_rank=False,
         )
+        cluster_name = re.escape(str(intent.name)).replace(r"\-", "-")
+        pvc_pattern = (
+            rf"data(?:-[0-9]+)?-{cluster_name}-"
+            r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?-[0-9]+"
+        )
+        capacity_selector = _metric_selector(
+            namespace=intent.namespace, persistentvolumeclaim=f"~{pvc_pattern}",
+        ).replace("persistentvolumeclaim=\"~", "persistentvolumeclaim=~\"")
+        ratio = (
+            f"100 * ({usage}) / ignoring(topic, partition) group_left "
+            "clamp_min(sum("
+            f"kubelet_volume_stats_capacity_bytes{{{capacity_selector}}}"
+            "), 1)"
+        )
+        return f"topk({intent.limit}, {ratio})" if intent.metric_operation == "rank" else ratio
     if metric == "kafka_consumer_lag":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"kafka_consumergroup_lag{{{selector},topic!=\"\"}}",
+            f"kafka_consumergroup_lag{{{selector}}}",
             intent, default_labels=("topic", "consumergroup"),
         )
     if metric == "kafka_under_replicated_partitions":
         selector = _metric_selector(
             namespace=intent.namespace, strimzi_io_cluster=intent.name,
+            topic=intent.topic,
         )
+        selector = _with_labels(selector, None if intent.topic else 'topic!=""')
         return _domain_aggregate(
-            f"kafka_topic_partition_under_replicated_partition{{{selector},topic!=\"\"}}",
+            f"kafka_topic_partition_under_replicated_partition{{{selector}}}",
             intent, default_labels=("topic",),
         )
     if metric in {"ingress_request_rate", "ingress_error_rate"}:
@@ -723,6 +901,95 @@ class BoundedMetricTrendReader:
         if is_ranking and ranking:
             stats["current"] = ranking[0]["current"]
         limitations: list[str] = []
+        topic_storage: dict[str, object] | None = None
+        if (
+            intent.metric == "kafka_topic_disk_utilization"
+            and "topic" in intent.metric_group_by
+            and "partition" not in intent.metric_group_by
+        ):
+            ranked_topic_names = list(dict.fromkeys(
+                str(item.get("labels", {}).get("topic"))
+                for item in ranking
+                if isinstance(item.get("labels"), dict)
+                and item.get("labels", {}).get("topic") not in (None, "")
+            ))
+            selected_topics = ranked_topic_names[: min(intent.limit, 5)]
+            selected_topics_complete = len(selected_topics) == len(ranked_topic_names)
+            topic_snapshot: MetricRange | None = None
+            partition_snapshot: MetricRange | None = None
+            if selected_topics:
+                try:
+                    topic_snapshot = self._source.query_range(
+                        _kafka_topic_storage_detail_query(
+                            intent, topics=selected_topics, partitions=False,
+                        ),
+                        start=start,
+                        end=end,
+                        step_seconds=step_seconds,
+                    )
+                except MonitoringQueryError as exc:
+                    limitations.append(
+                        "Kafka topic byte totals were unavailable; the utilization result "
+                        f"remains valid. {str(exc)}"
+                    )
+                partition_series = []
+                partition_complete = True
+                incomplete_partition_topics: set[str] = set()
+                partition_collected_at = snapshot.collected_at
+                for topic in selected_topics:
+                    try:
+                        topic_partition_snapshot = self._source.query_range(
+                            _kafka_topic_storage_detail_query(
+                                intent, topics=[topic], partitions=True,
+                            ),
+                            start=start,
+                            end=end,
+                            step_seconds=step_seconds,
+                        )
+                        partition_series.extend(topic_partition_snapshot.series)
+                        partition_complete = (
+                            partition_complete and topic_partition_snapshot.is_complete
+                        )
+                        if not topic_partition_snapshot.is_complete:
+                            incomplete_partition_topics.add(topic)
+                        partition_collected_at = max(
+                            partition_collected_at,
+                            topic_partition_snapshot.collected_at,
+                        )
+                    except MonitoringQueryError as exc:
+                        partition_complete = False
+                        incomplete_partition_topics.add(topic)
+                        limitations.append(
+                            "Kafka partition placement details were unavailable for topic "
+                            f"{topic}; the topic result remains valid. {str(exc)}"
+                        )
+                partition_snapshot = MetricRange(
+                    series=tuple(partition_series),
+                    collected_at=partition_collected_at,
+                    is_complete=partition_complete,
+                )
+                topic_storage = _kafka_topic_storage_data(
+                    ranking,
+                    topic_snapshot=topic_snapshot,
+                    partition_snapshot=partition_snapshot,
+                    selected_topics=selected_topics,
+                    selected_topics_complete=selected_topics_complete,
+                    primary_complete=snapshot.is_complete,
+                    incomplete_partition_topics=incomplete_partition_topics,
+                )
+                if not selected_topics_complete:
+                    limitations.append(
+                        "Partition details were retained for the first "
+                        f"{len(selected_topics)} ranked topics."
+                    )
+                if topic_snapshot is not None and not topic_snapshot.is_complete:
+                    limitations.append(
+                        "Kafka topic byte totals reached the configured series or point ceiling."
+                    )
+                if partition_snapshot is not None and not partition_snapshot.is_complete:
+                    limitations.append(
+                        "Kafka partition details reached the configured series or point ceiling."
+                    )
         if range_seconds != intent.range_seconds:
             limitations.append(
                 f"The requested period was reduced to {range_seconds} seconds by the metrics range policy."
@@ -745,6 +1012,12 @@ class BoundedMetricTrendReader:
             limitations.append(
                 f"The requested resolution was increased to {step_seconds} seconds to keep the trend bounded."
             )
+        if intent.metric == "kafka_topic_disk_utilization":
+            limitations.append(
+                "Kafka topics share broker PVCs rather than receiving private disk allocations. "
+                "This percentage compares replicated topic log bytes with aggregate allocated "
+                "Kafka broker PVC capacity; inspect broker-local headroom when placement skew matters."
+            )
         target = (
             "cluster" if intent.metric_scope == "cluster" else
             intent.namespace if intent.metric_scope == "namespace" else
@@ -766,6 +1039,7 @@ class BoundedMetricTrendReader:
                 "name": intent.name,
                 "kind": intent.kind,
                 "container": intent.container,
+                "topic": intent.topic,
                 "unit": _UNITS[intent.metric],
                 "operation": intent.metric_operation,
                 "statistic": intent.metric_statistic,
@@ -781,6 +1055,11 @@ class BoundedMetricTrendReader:
                 "statistics": stats,
                 "complete": snapshot.is_complete,
                 "limit": intent.limit,
+                **({"topicStorage": topic_storage} if topic_storage is not None else {}),
+                **({
+                    "capacityBasis": "aggregate_kafka_broker_pvc_capacity",
+                    "consumptionBasis": "replicated_topic_log_bytes",
+                } if intent.metric == "kafka_topic_disk_utilization" else {}),
             },
         ),), limitations=tuple(limitations))
 

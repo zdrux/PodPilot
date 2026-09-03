@@ -3,6 +3,21 @@
 Last reviewed: 2026-08-24
 Update when: release surfaces, QA coverage, migrations, rollback, or deployment gates change.
 
+Current releases must verify that no active manifest grants access to a remote cluster-credential
+Secret, every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
+select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
+and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
+Verify the Workspace cluster tree is owner-filtered, reflects current in-memory connection state,
+preselects exactly one connected cluster in a fresh composer, and sends an unconnected selection
+through login before returning to that composer. Configuration administrators must receive a
+separate **Cluster Management** navigation entry, while authorized users retain the ad hoc cluster
+add control. The add control must open the separate **My clusters** route; non-admin users must be
+denied from Cluster Management and must be unable to view, edit, test, or delete another user's
+private entries.
+Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
+selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
+the same result shape across repeated runs.
+
 ## Release Surfaces
 
 - Single API/web container with Alembic migrations and an OpenShift Deployment.
@@ -28,6 +43,12 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
   and rollback instructions.
 - Confirm the mounted OAuth `session_secret` decodes to exactly 16, 24, or 32
   raw bytes; Base64 text passed through `--from-literal` is not valid key material.
+- Confirm the OAuth proxy renders `--cookie-refresh=0` and `--cookie-expire=8h`. Exercise an existing
+  browser session after one hour and after a Pod restart; neither should require a new front-door
+  login while the stable cookie Secret is unchanged.
+- Confirm the OAuth proxy uses its proxy-only memory-backed client-secret snapshot and that changing
+  the projected service-account token terminates and restarts only the proxy container. A fresh
+  browser login must complete after the restart without an `unauthorized_client` callback failure.
 - For a remote PoC, confirm the rendered overlay contains no static PV,
   `storageClassName`, node selector, lab hostname, cluster-admin binding, or
   credential value; verify the target has exactly one suitable default
@@ -64,7 +85,8 @@ Update when: release surfaces, QA coverage, migrations, rollback, or deployment 
   output and cannot exhaust the bounded HTTP response for a small requested result count.
 - Model-call diagnostics normalize Responses and Chat Completions usage fields, aggregate them per
   Ask turn, and keep the largest individual input visible without treating summed inputs as one
-  context window. Fixtures must prove request bodies and authorization values are never captured.
+  context window. The Model usage disclosure reports end-to-end reply time from durable run
+  timestamps. Fixtures must prove request bodies and authorization values are never captured.
 - Model connection tests retain a collapsed latest-probe trace with operation, schema, HTTP status,
   duration, usage, and a bounded redacted response preview; saving the profile clears the old trace.
 
@@ -123,8 +145,9 @@ Milestone 10 adds gates for Investigator-only standalone chat, schema-valid
 multi-round read plans, a ten-round and 25-unit weighted investigation budget, duplicate
 suppression, discovery-followed-by-exact-container-log collection, ConfigMap and bounded-log evidence, Secret/subresource
 denial, recursive redaction, persisted provenance, and withholding of uncited
-cluster-specific answers. Audit both `cluster-reader` effective permissions and
-the application broker deny tests before release.
+cluster-specific answers. Current delegated-release RBAC gates must prove the runtime has
+`podpilot-role-reader`, has no `cluster-reader` binding, can GET OpenShift Groups, and cannot
+read ordinary workload objects through that identity. Retain the application broker deny tests.
 
 HTTP-probe gates must cover arbitrary destinations, HEAD/GET-only enforcement,
 SNI and Host preservation across connection overrides, TLS verification, no redirect
@@ -258,6 +281,10 @@ tests must enforce three collection issues, cluster ID/name-only attribution, an
 raw observations, findings, knowledge, relationship graph, capability ledger, catalog, and tool policy. Empty-content gates
 must prove one schema-only retry and a cited deterministic fallback after successful collection when
 that retry or a later final call still fails; no-evidence provider failures remain insufficient.
+Delegated-agent provider-failure gates must also prove that completed shell operations remain in the
+activity and evidence ledger, executed writes are identified as not rolled back, and the fallback never
+claims that no changes were attempted. Repeated identical shell calls must reach the runner independently
+without a model-authored retry-reason field while remaining subject to the action budget and deadlines.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace
@@ -329,10 +356,17 @@ but recommendation prose, graph hints, and gap text must never execute directly 
 grounding, deny policy, budget, discovery, verb, or RBAC checks.
 Candidate-first gates must prove that candidate rounds use the compact `ActionSelection` schema,
 candidate IDs compile only to exact server-held intents, unknown IDs execute nothing, and model-authored
-reads are limited to discovery, GET, LIST, and bounded field search. Tests must prove authored reads
+reads are limited to discovery, GET, and bounded field search. Tests must prove authored reads
 still pass sensitive-kind denial, live discovery, namespace/verb/RBAC preflight, duplicate suppression,
-and budgets. Query-relevant catalog matches must remain available beside relationship candidates, and
-bounded LIST/search results must become exact GET candidates on the next round. Actual provider payloads
+and budgets. When a corrected action selection contains only malformed object reads, PodPilot must
+discard them, execute nothing, and safely answer from evidence already collected instead of reporting
+a failed collection round. Query-relevant catalog matches must remain available beside relationship candidates, and
+bounded search results must become exact GET candidates on the next round. Provider payloads must
+label search and historical LIST evidence as inventory-only. A complete collection at or below the configured
+detail fan-out cap must compile to exact GETs for every non-sensitive object; incomplete or oversized
+collections must compile to no blanket GETs and must report the need to narrow scope. Tests must also
+prove that analysis coverage remains incomplete when any discovered object's GET detail is absent
+from the final model context, even if that GET executed successfully. Actual provider payloads
 must omit graph, ledger, tool policy, executable candidate intents, raw observation envelopes, and
 domain-specific teaching; only a bounded policy-filtered catalog projection may be included. Tests must
 assert planner caps of six fact cards/5 KB, twelve action ID/label pairs, and twelve catalog entries. The concise final-answer payload must assert
@@ -345,6 +379,15 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
+Typed planning and authored-read schemas must neither offer nor execute generic
+`list_resources` or `search_resources` calls, the runtime settings and manifests must contain no
+generic inventory-helper feature flag, and unified-agent tool schemas must omit both helpers.
+Final-answer prompts must request Markdown tables for comparable multi-item
+results; presentation tests must continue proving that answer-derived tables are bounded, sanitized,
+and not treated as evidence. Resource-presentation gates must merge repeated cited internal
+LIST/search observations by cluster and Kind,
+deduplicate resource identity by Kind/namespace/name, retain every contributing evidence ID, and mark
+the merged group incomplete if any contributing read was incomplete.
 They must also prove that exact operator URLs become grounded probe candidates only after Route
 evidence or a structured probe gap, and that normal-priority healthy Pod logs are offered for either
 a structured log gap or an explicit failure question. EndpointSlice/Endpoints target references must
@@ -391,13 +434,13 @@ Machine and workload tests must prove namespace propagation; Node and ClusterOpe
 reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
 summary must preserve the complete-coverage rule before confirming absence.
 
-## Unrestricted agent gates
+## Delegated agent gates
 
-- Guarded mode remains the default in the portable runtime ConfigMap and the standard remote overlay
-  does not contain the runner sidecar.
-- The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
+- The portable runtime has one delegated agent workflow; conversations select `read_only` or
+  role-authorized `action` execution.
+- The SNO milestone overlay renders an `oc-runner` container and
   `serviceAccountName: podpilot-investigator`.
-- The optional remote agentic overlay composes the guarded remote overlay plus the shared runner
+- The remote agentic overlay composes the remote overlay plus the shared runner
   component, renders both versioned ImageStreams, forces remote TLS verification off, and contains
   no cluster-admin binding.
 - No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
@@ -408,8 +451,24 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Provider tests must prove `openai/gpt-oss-120b` is sent through Chat Completions with
   `tool_choice=auto`, sequential tool calls, assistant tool-call preservation, and correlated
   `role=tool` results.
+- Provider-input tests must prove oversized shell results are compacted before reinjection, token
+  estimates are not raw UTF-8 byte counts, and the complete messages-plus-tools request stays below
+  `max_input_tokens`. Irreducible requests must fail locally without provider transmission, the
+  operator must see the configured input-token limit rather than an internal exception type even
+  when prior evidence exists, and bounded redacted 4xx/5xx error details must be retained.
+- Oversized-JSON tests must prove the provider receives no byte-truncated JSON or server-selected
+  domain fields. The refinement response must expose bounded structural metadata and direct the
+  agent to choose and run a narrower projection before answering the inventory.
 - End-to-end tests must prove an agent-selected command reaches the injected runner, its result is
   returned to the model, the final answer persists, and `agentic.command` audit metadata is written.
+  A raw tool result and its assistant call may be sent through one subsequent model request only;
+  later requests must replace the completed pair with the bounded rolling evidence ledger. Ledger
+  pressure must reduce successful read-only shell details before mutation, typed-observation, or
+  failure details. Manifest tests must keep the single app-wide action budget at 50 for delegated
+  agents and typed planning.
+  Successful mutations must be marked as writes. In Action mode, a final answer that describes
+  writes as blocked, claims the session is read-only, or asks for another approval without an actual
+  forbidden write result must be rejected and returned to the tool-capable loop before display.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
   token reaches the loopback runner, tokens never enter model messages or logs, the temporary
   kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
@@ -419,13 +478,43 @@ summary must preserve the complete-coverage rule before confirming absence.
   longer than the runner deadline. They must also prove stdout/stderr are continuously drained,
   retained within the configured byte ceiling, and visibly marked when truncated. Both containers
   retain working liveness/readiness probes.
-- Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
-  `top_log_volume_by_namespace` reader, supplies Loki evidence to the agent, preserves the
+- Delegated-mode parity tests must prove Investigator and Action conversations enter the same agent
+  loop with identical investigation tools, including HTTP probes, metrics, and audit events, while
+  omitting generic LIST and SEARCH helpers. Investigator commands must receive only the read-only
+  capability; the proxy must allow Kubernetes GET/HEAD/OPTIONS and SelfSubject reviews while
+  rejecting writes, exec/attach/proxy/port-forward variants, and Secret reads. Action commands must
+  receive the action capability without exposing the user's token to the model or runner.
+- Delegated typed-reader tests must prove lazy Kubernetes discovery runs outside the ASGI event loop,
+  so loopback broker requests and liveness/readiness probes remain serviceable during collector
+  initialization. They must also prove the metric and audit adapters use the selected cluster URL
+  and TLS policy, resolve only the current in-memory delegated token, and fail closed after session
+  revocation.
+- Agent-tool correction tests must prove cluster IDs are constrained to the selected set, one call
+  cannot concatenate multiple targets, generic object inventory/search is performed with bounded
+  `oc get`, and malformed attempts render as collapsed diagnostics rather than unresolved
+  limitations. Genuine runner and collector failures must remain prominent.
+- Agent-loop contract tests must prove finalization records `complete`, `blocked`, or
+  `budget_exhausted`; claimed completion with safe reads remaining returns to the tool loop; exact
+  same-cluster commands require an approved retry/comparison reason; and Loki TLS verification
+  failures retain the `tls_verification_failed` category. These gates must not impose a fixed
+  product-specific diagnostic sequence.
+- Safe-Markdown presentation tests must prove attribute-free HTML break tags render as line breaks
+  in extracted and fallback Markdown tables without enabling other raw HTML or interpreting tags
+  inside code spans and fences. They must also prove answer-table cleanup removes unmatched
+  serialization braces and redundant leading `unknown` placeholders while retaining balanced `{}`
+  and OpenShift Logging template expressions.
+- Delegated-session lifecycle tests must prove later logins append clusters to the current browser
+  session, individual removal revokes only the selected token, removed clusters disappear from new
+  conversation selectors, and existing conversations retain durable history while requiring
+  reconnection when one of their selected clusters is removed.
+- Known-read enrichment tests must prove delegated log-volume wording executes the registered
+  `top_log_volume_by_namespace` reader with cluster scope and namespace grouping, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.
-- Scoped log-volume tests must prove exact namespace, Pod, and Node totals; Pod rankings within a
+- Scoped log-volume tests must prove the dedicated cluster namespace ranking, exact cluster,
+  namespace, Pod, and Node totals; Pod rankings within a
   namespace; cluster-wide Pod and Node rankings; server-owned selectors/groupings; and that no
   matching log lines or model-authored LogQL cross the evidence boundary.
-- Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
+- Shared-enrichment tests must prove the delegated workflow can compile the typed metric, audit, and
   catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
   back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
 - Agent-first completion tests must prove causal Pod and resource questions continue from the
@@ -439,7 +528,7 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Failure-authority tests must prove an unavailable registered source plus failed shell verification
   cannot become an unsupported model claim about a missing metrics server or add-on.
 - Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,
-  suppresses a competing unrestricted shell call, preserves all-user wording, and enforces explicit
+  suppresses a competing delegated shell call, preserves all-user wording, and enforces explicit
   namespace, delete-operation, and Kubernetes resource filters in both Loki and local projection.
 - Audit-adherence tests must prove an explicit last/top count overrides the configured default and
   that delete/mutation plus successful/failed wording overrides broader classifier output before
@@ -450,7 +539,7 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Audit-failure authority tests must prove a timed-out or denied registered Loki audit read renders
   its real failure without calling the model shell loop, `oc-runner`, `events.audit.k8s.io`, or
   optional command-line JSON utilities.
-- Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
+- Metric-continuation tests must prove a delegated same-metric period follow-up reuses the prior
   registered ranking and original top-N while changing only the requested range. The log-volume
   fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day
   ceiling, and never attempt `pods/exec` or `logcli`.

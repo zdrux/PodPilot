@@ -9,7 +9,9 @@ metadata:
 data:
   environment: openshift-poc
   cluster_name: configure-cluster-name
+  chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"
+  adhoc_detail_fanout_max_objects: "10"
   adhoc_max_payload_bytes: "96000"
   adhoc_search_max_scan_objects: "2000"
   adhoc_metrics_max_range_seconds: "2592000"
@@ -25,20 +27,24 @@ data:
   loki_timeout_seconds: "90"
   loki_max_series: "50"
   adhoc_max_rounds: "10"
-  adhoc_max_reads_per_turn: "25"
+  adhoc_max_reads_per_turn: "50"
   adhoc_followup_reserve_units: "0"
   adhoc_worker_concurrency: "3"
   adhoc_max_concurrent_runs_per_user: "2"
   adhoc_http_probe_timeout_seconds: "8"
   adhoc_http_probe_max_bytes: "16384"
-  adhoc_run_timeout_seconds: "300"
-  agent_mode: "guarded"
+  adhoc_run_timeout_seconds: "900"
+  adhoc_finalization_reserve_seconds: "60"
+  delegated_access_enabled: "true"
+  delegated_session_lifetime_seconds: "86400"
+  delegated_login_attempts_per_minute: "5"
   agent_runner_url: "http://127.0.0.1:8090"
-  agent_command_timeout_seconds: "300"
+  agent_command_timeout_seconds: "240"
   agent_command_max_output_bytes: "262144"
   agent_heartbeat_seconds: "10"
-  remote_cluster_tls_verify: "true"
   model_timeout_max_seconds: "240"
   role_investigator_groups: '["podpilot-investigators"]'
+  role_read_write_groups: '["podpilot-read-write"]'
+  configuration_admin_groups: '["podpilot-configuration-admins"]'
   role_approver_groups: '["podpilot-approvers"]'
   role_breakglass_groups: '["podpilot-breakglass"]'

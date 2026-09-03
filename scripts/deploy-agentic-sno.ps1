@@ -17,19 +17,34 @@ if (-not $openRouterKey) {
 
 . "$PSScriptRoot\connect-sno.ps1" -BootstrapKubeconfig $BootstrapKubeconfig
 
+oc apply -k deploy/openshift/base
+if ($LASTEXITCODE -ne 0) {
+    throw 'Unable to apply the PodPilot base identity and role-reader RBAC.'
+}
+
 $runtimeIdentity = 'system:serviceaccount:ai-ops:podpilot-investigator'
-$canRead = oc auth can-i get pods --all-namespaces --as=$runtimeIdentity
-if ($LASTEXITCODE -ne 0 -or $canRead.Trim() -ne 'yes') {
-    throw 'The PodPilot runtime identity cannot perform its expected cluster read.'
+$canResolveRoles = oc auth can-i get groups.user.openshift.io --as=$runtimeIdentity
+if ($LASTEXITCODE -ne 0 -or $canResolveRoles.Trim() -ne 'yes') {
+    throw 'The PodPilot runtime identity cannot read OpenShift Groups for application-role resolution.'
+}
+$canReadPods = oc auth can-i get pods --all-namespaces --as=$runtimeIdentity
+$canReadPodsDecision = ($canReadPods.Trim() -split '\s+', 2)[0]
+if ($canReadPodsDecision -notin @('yes', 'no')) {
+    throw 'Unable to verify workload-read access for the PodPilot runtime identity.'
+}
+if ($canReadPodsDecision -eq 'yes') {
+    throw 'Refusing the delegated deployment because podpilot-investigator can read workload Pods.'
 }
 $canMutate = oc auth can-i patch deployments.apps --all-namespaces --as=$runtimeIdentity
 $canMutateResult = $canMutate.Trim()
 # `oc auth can-i` deliberately exits 1 when authorization is denied. Treat the
-# explicit `no` response as the successful least-privilege outcome.
-if ($canMutateResult -notin @('yes', 'no')) {
+# explicit `no` response as the successful least-privilege outcome. OpenShift
+# may append reconciliation diagnostics for referenced roles that are not installed.
+$canMutateDecision = ($canMutateResult -split '\s+', 2)[0]
+if ($canMutateDecision -notin @('yes', 'no')) {
     throw 'Unable to verify mutation access for the PodPilot runtime identity.'
 }
-if ($canMutateResult -eq 'yes') {
+if ($canMutateDecision -eq 'yes') {
     throw 'Refusing the agentic lab deployment because podpilot-investigator can patch Deployments.'
 }
 
@@ -80,5 +95,6 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Output (
     'Agentic SNO lab deployed with openai/gpt-oss-120b via OpenRouter Chat Completions. ' +
-    'The oc runner uses podpilot-investigator and has no Deployment patch permission.'
+    'The tokenless oc runner uses delegated-user proxy capabilities; podpilot-investigator ' +
+    'has application-role lookup but no Deployment patch permission.'
 )

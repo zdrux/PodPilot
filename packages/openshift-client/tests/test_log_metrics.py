@@ -53,6 +53,8 @@ def test_reader_uses_server_owned_logql_and_returns_only_aggregates() -> None:
         tool="query_metrics",
         metric="top_log_volume_by_namespace",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=3600,
         limit=10,
     ))
@@ -81,8 +83,10 @@ def test_reader_caps_requested_period() -> None:
 
     result = reader.execute(ReadIntent(
         tool="query_metrics",
-        metric="top_log_volume_by_namespace",
+        metric="application_log_volume",
         metric_scope="cluster",
+        metric_operation="rank",
+        metric_group_by=["namespace"],
         range_seconds=86_400,
     ))
 
@@ -94,13 +98,28 @@ def test_default_log_volume_policy_accepts_three_day_window() -> None:
     source = FakeLogSource()
 
     result = BoundedLogVolumeReader(source, clock=lambda: NOW).execute(ReadIntent(
-        tool="query_metrics", metric="top_log_volume_by_namespace",
-        metric_scope="cluster", range_seconds=259_200, limit=10,
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", metric_operation="rank",
+        metric_group_by=["namespace"], range_seconds=259_200, limit=10,
     ))
 
     assert "[259200s]" in source.queries[0]
     assert result.observations[0].data["rangeSeconds"] == 259_200
     assert not any("reduced" in item for item in result.limitations)
+
+
+def test_reader_returns_ungrouped_cluster_total() -> None:
+    source = ScopedLogSource(LogVolumeSample(bytes=12_345))
+
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).execute(ReadIntent(
+        tool="query_metrics", metric="application_log_volume",
+        metric_scope="cluster", range_seconds=3600,
+    ))
+
+    assert source.queries == [
+        'sum(bytes_over_time({log_type="application"}[3600s]))'
+    ]
+    assert result.observations[0].data["ranking"][0]["current"] == 12_345
 
 
 def test_reader_ranks_pods_within_one_namespace() -> None:
@@ -269,7 +288,32 @@ def test_remote_client_discovers_standard_lokistack_route() -> None:
         transport=httpx.MockTransport(handler),
     )
 
+    assert client._route_discovery_tls_verify is False
+    assert client._tls_verify is False
     assert client.query_namespace_volume("fixed").samples == ()
+
+
+def test_loki_client_resolves_a_fresh_bearer_token_for_each_request() -> None:
+    supplied = iter(("delegated-one", "delegated-two"))
+    observed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.headers["authorization"])
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"resultType": "vector", "result": []},
+        })
+
+    client = LokiQueryClient(
+        base_url="https://logs.example.test/api/logs/v1/application",
+        token_provider=lambda: next(supplied),
+        transport=httpx.MockTransport(handler),
+    )
+
+    client.query_log_volume("fixed")
+    client.query_log_volume("fixed")
+
+    assert observed == ["Bearer delegated-one", "Bearer delegated-two"]
 
 
 def test_loki_denial_has_actionable_role_guidance(tmp_path: Path) -> None:
@@ -301,3 +345,20 @@ def test_loki_timeout_reports_configured_deadline(tmp_path: Path) -> None:
 
     with pytest.raises(LogMetricsQueryError, match="configured 17-second timeout"):
         client.query_namespace_volume("fixed")
+
+
+def test_loki_tls_verification_failure_preserves_category(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] self-signed certificate in certificate chain",
+            request=request,
+        )
+
+    client = _client(tmp_path, handler)
+
+    with pytest.raises(
+        LogMetricsQueryError, match="TLS certificate verification failed",
+    ) as raised:
+        client.query_namespace_volume("fixed")
+
+    assert raised.value.failure_category == "tls_verification_failed"
