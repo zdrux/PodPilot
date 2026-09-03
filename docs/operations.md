@@ -1113,6 +1113,8 @@ This is evidence provenance, not model chain-of-thought.
 Evidence-backed and Not-confirmed states appear as short pills beside the reply
 time; hover or keyboard focus exposes their explanation. Ask UI timestamps use
 fixed `EST (-4)` presentation while database and API timestamps remain UTC.
+The sidebar Appearance selector applies the Classic, Dark, or Light semantic
+palette across every operator page and persists the choice in browser storage.
 When a model answer remains incomplete after its correction attempt, question-focused
 deterministic rendering may reuse exact-object evidence collected earlier in the same
 conversation. Kafka namespace follow-ups honor a cluster named in the question and list

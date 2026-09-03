@@ -13206,13 +13206,20 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '>View</button>' not in template
     assert "filtered-output-indicator" in template
     assert 'document.querySelectorAll("[data-operation-open]")' in script
-    assert "data-theme-select" in template
-    assert 'option value="classic"' in template
-    assert 'option value="dark"' in template
-    assert 'option value="light"' in template
+    assert "data-theme-select" in base_template
+    assert 'option value="classic"' in base_template
+    assert 'option value="dark"' in base_template
+    assert 'option value="light"' in base_template
+    assert 'class="sidebar-theme-control"' in base_template
     assert 'data-theme="classic"' in base_template
     assert "podpilot-color-theme" in script
     assert 'document.documentElement.dataset.theme = activeTheme' in script
+    assert 'document.querySelectorAll("[data-theme-select]")' in script
+    assert 'html[data-theme="classic"]' in styles
+    assert 'html[data-theme="dark"]' in styles
+    assert 'html[data-theme="light"]' in styles
+    assert "--theme-surface-inset" in styles
+    assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
     assert 'html[data-theme="dark"] .ask-page' in styles
     assert "data-scroll-latest" in template

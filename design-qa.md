@@ -39,10 +39,11 @@ No actionable P0, P1, or P2 issues remain.
 
 ## Deployed SNO validation
 
-- Build: `podpilot-75`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab.
+- Build: `podpilot-81`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab.
 - Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, activate an operation row, collapse and restore the evidence rail, and switch among all three themes.
 - Result: the live run retained 16 timed operations and 7 evidence sources. Timeline event rows, operation dialogs, the evidence toggle, and persisted theme selection worked without browser-console errors.
-- The 856-pixel in-app browser exposed clipped composer controls. The 960-pixel compact breakpoint now stacks the composer toolbar and lets long investigation titles wrap while preserving the desktop evidence rail above that breakpoint.
-- Accepted captures: `.audit/sno-evidence-ledger/01-cluster-signin.jpg` through `.audit/sno-evidence-ledger/07-final-compact-layout.jpg`; the final capture verifies the corrected stacked header and composer controls on build `podpilot-62`.
+- The open evidence rail originally allowed the conversation header to retain its collapsed width, placing its controls beneath the rail. The header now reserves the rail and action widths, keeps the title ellipsized, and leaves New conversation plus Hide evidence visible; the collapsed state restores the full transcript width.
+- Global theme coverage was visually checked on the conversation workspace, delegated cluster sign-in, shared cluster management, personal cluster form, model registry, cluster memory, a retained incident investigation, and the investigation-not-found error state. The `/` route redirects to the checked delegated sign-in page in the deployed ask-first mode. Classic, Dark, and Light all change the page canvas, navigation, panels, fields, menus, buttons, notices, code, evidence rail, and transient detail surfaces together.
+- The earlier accepted captures remain in `.audit/sno-evidence-ledger/`; the final live pass used the current in-app browser state against build `podpilot-81`.
 
 final result: passed

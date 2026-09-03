@@ -8,15 +8,16 @@
   } catch (_error) { /* Preference storage is optional. */ }
   document.documentElement.dataset.theme = activeTheme;
 
-  const themeSelect = document.querySelector("[data-theme-select]");
-  if (themeSelect) {
+  const themeSelects = Array.from(document.querySelectorAll("[data-theme-select]"));
+  themeSelects.forEach((themeSelect) => {
     themeSelect.value = activeTheme;
     themeSelect.addEventListener("change", () => {
       const nextTheme = supportedThemes.has(themeSelect.value) ? themeSelect.value : "classic";
       document.documentElement.dataset.theme = nextTheme;
+      themeSelects.forEach((select) => { select.value = nextTheme; });
       try { window.localStorage.setItem(themePreferenceKey, nextTheme); } catch (_error) { /* Preference storage is optional. */ }
     });
-  }
+  });
 
   const renderTime = document.querySelector("#render-time");
   if (renderTime) {

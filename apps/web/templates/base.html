@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=evidence-ledger-ui-21">
-  <script src="{{ url_for('static', path='/app.js') }}?v=evidence-ledger-ui-21" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=global-theme-system-6">
+  <script src="{{ url_for('static', path='/app.js') }}?v=global-theme-system-6" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
@@ -99,6 +99,16 @@
         </a>
         {% endif %}
       </nav>
+
+      <div class="sidebar-theme-control">
+        <label for="color-theme"><span>Appearance</span>
+          <select id="color-theme" data-theme-select aria-label="Color theme">
+            <option value="classic">Classic</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+      </div>
 
       {% if user is defined %}
       <div class="identity-card">
