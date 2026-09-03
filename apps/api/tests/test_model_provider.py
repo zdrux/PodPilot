@@ -354,7 +354,6 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
         "secret-token",
         {"observations": [{"id": "cluster-pod-1"}]},
     )
-
     assert isinstance(answer, AdHocAnswer)
     assert answer.cited_evidence_ids == ["cluster-pod-1"]
     assert answer.recommended_next_checks == []
@@ -370,7 +369,7 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["reasoning_effort"] == "high"
 
 
-def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> None:
+def test_chat_completions_delegated_agent_returns_structured_shell_call() -> None:
     completions = ToolCallingCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()
@@ -397,7 +396,6 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
             ),
         }, {"role": "user", "content": "Inspect the cluster."}],
     )
-
     assert step.content is None
     assert step.tool_calls[0].name == "execute_shell"
     assert json.loads(step.tool_calls[0].arguments)["command"] == "oc get pods -A"
@@ -471,7 +469,7 @@ def test_chat_completions_unrestricted_agent_returns_structured_shell_call() -> 
     ]
 
 
-def test_unrestricted_agent_timeout_records_effective_transport_budget(
+def test_delegated_agent_timeout_records_effective_transport_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class APITimeoutError(Exception):
@@ -510,7 +508,7 @@ def test_unrestricted_agent_timeout_records_effective_transport_budget(
     assert raised.value.failure_type == "timeout"
     summary = summarize_model_diagnostics(calls)
     assert summary["failures"] == [{
-        "operation": "workflow.unrestricted_agent",
+        "operation": "workflow.delegated_agent",
         "failure_type": "timeout",
         "schema": "AgentStep",
         "attempt": 1,
@@ -549,7 +547,7 @@ def test_inquiry_schema_advertises_only_focused_metric_semantics() -> None:
     ]
 
 
-def test_chat_completions_unrestricted_finalization_exposes_no_shell_tool() -> None:
+def test_chat_completions_delegated_finalization_exposes_no_shell_tool() -> None:
     completions = RecordingCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()

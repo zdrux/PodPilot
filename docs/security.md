@@ -102,14 +102,14 @@ account for an interactive Ask request.
 
 The following historical design is superseded and retained only as migration context.
 
-### Superseded delegated unrestricted sessions
+### Delegated sessions
 
 When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
 configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
 Operator application role. This is not inferred inside a conversation. The user must select only
 enabled entries from PodPilot's configured cluster registry, including the runtime system cluster,
 enter one username/password pair, and accept the
-unrestricted-agent warning. PodPilot performs the OpenShift challenging-client OAuth exchange,
+delegated-session warning. PodPilot performs the OpenShift challenging-client OAuth exchange,
 validates `/users/~`, and immediately discards the password.
 The API sends Basic credentials only after a Basic challenge from the exact HTTPS origin advertised
 by that cluster's verified OAuth discovery document and refuses later cross-origin redirects.
@@ -125,13 +125,12 @@ that capability and injects the bearer token on each Kubernetes request. The run
 no projected Pod service-account token. Kubernetes/OpenShift RBAC, admission, quotas, and policy
 therefore evaluate writes as the signed-in remote user.
 
-Delegated conversations persist `delegated_unrestricted` plus the originating session ID and an
+Delegated conversations persist `read_only` or `action` plus the originating session ID and an
 immutable cluster list. They cannot be continued after that exact in-memory session expires, is
 lost, or signs out; the user must reconnect and start a new conversation. Investigator, Approver,
-and Breakglass sessions remain `managed_guarded` even if their separate OpenShift account has
-cluster-admin rights. The API service account retains its read roles for guarded collection and
+and Breakglass sessions use the same role-authorized workflow. The API service account retains its read roles for typed collection and
 group resolution, but its projected credential is mounted only into the API and OAuth-proxy
-containers—not the unrestricted runner.
+containers—not the command runner.
 
 The OAuth proxy receives its OAuth client secret through a projected, expiring service-account
 token rather than a static token Secret. The pinned proxy does not reload that file itself, so its
@@ -160,9 +159,8 @@ the same memory-only broker and is evaluated by normal OpenShift RBAC.
 Delegated Investigator and Action conversations use the same Chat Completions agent loop and the
 same tokenless localhost `oc-runner` sidecar. Investigator commands receive only the random
 read-only proxy capability; Action commands receive the action capability. The runner and model
-never receive the user's token. This makes the behavioral distinction read versus read-write rather
-than guarded planner versus unrestricted agent. Legacy non-delegated deployments may still select
-the older guarded planner with `PODPILOT_AGENT_MODE`, but it is not the deployed delegated workflow.
+never receive the user's token. The behavioral distinction is read-only versus role-authorized
+Action; both use the same delegated agent workflow.
 The API assigns each shell execution a random runner request ID before dispatch. An owner-requested
 Ask cancellation may send only that identifier over Pod loopback to terminate the matching process
 group; it cannot target another command by cluster name or expose the delegated token. Cancellation
@@ -218,7 +216,7 @@ admission therefore remain the authoritative execution boundary. For a selected 
 cluster, the API reads only that cluster's token and brokers it over Pod loopback for one command.
 The runner writes a mode-0600 per-command kubeconfig under `/tmp` and deletes it after execution;
 the broker never places the token or kubeconfig in the model tool schema, command, result, or logs.
-This is not container-level credential isolation: the unrestricted sidecar shares the Pod service
+This is not container-level credential isolation: the command-runner sidecar shares the Pod service
 account, whose RBAC can read the two resourceName-restricted credential Secrets, and can inspect its
 projected token. Output redaction is defense in depth, not a guarantee against a model deliberately
 transforming secret bytes. Command text, target cluster, and exit status are
@@ -247,7 +245,7 @@ a production cluster or compose it with `poc-cluster-admin`.
 - The disposable SNO development lab deliberately adds `cluster-admin` through
   `deploy/openshift/overlays/poc-cluster-admin/` so implementation and remediation
   experiments are not blocked by evolving RBAC.
-- Outside the explicitly enabled unrestricted SNO fixture above, the PoC exception does not relax
+- Outside the explicitly enabled SNO fixture above, the PoC exception does not relax
   product-level approval requirements: every
   proposed mutation must show its target, patch or command, risks, and rollback,
   then require a fresh explicit approval.
@@ -299,7 +297,7 @@ registry metadata, revokes live delegated connections for that cluster, and reta
 conversation records. Shared entries remain disable-only. These operations require CSRF and
 content-free audit metadata and never return a bearer token.
 
-Remote Kubernetes API TLS verification defaults on in portable and guarded deployments. An Approver may explicitly disable
+Remote Kubernetes API TLS verification defaults on in portable deployments. An Approver may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
@@ -363,8 +361,8 @@ applies global, explicit-cluster, required-tag, and namespace filters before ran
 restricted entries require
 the Approver role. Search text is converted to a bounded quoted FTS expression,
 so operators and cluster-derived text cannot supply SQLite FTS instructions.
-Retrieved memory remains untrusted guidance rather than live evidence. Standalone Ask guarded
-answers and delegated-agent context receive eligible internal chunks annotated with their
+Retrieved memory remains untrusted guidance rather than live evidence. Delegated-agent context
+receives eligible internal chunks annotated with their
 applicable clusters; memory cannot define a tool, authorize a read, support a live-state citation,
 or enter investigation-chat/remediation workflows in this release.
 

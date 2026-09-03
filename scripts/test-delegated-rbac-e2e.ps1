@@ -87,7 +87,6 @@ function Invoke-PodPilotPost {
         throw
     }
 }
-
 function Wait-PodPilotRun {
     param(
         [string]$User,
@@ -165,7 +164,7 @@ try {
     oc adm policy add-cluster-role-to-group cluster-admin $investigatorGroup | Out-Null
     oc create namespace $testNamespace | Out-Null
     oc adm policy add-role-to-group edit $delegatedGroup -n $testNamespace | Out-Null
-    oc -n $testNamespace create configmap $investigatorCanary --from-literal=proof=guarded | Out-Null
+    oc -n $testNamespace create configmap $investigatorCanary --from-literal=proof=read-only | Out-Null
 
     $runtime = oc -n ai-ops get configmap podpilot-runtime -o json | ConvertFrom-Json
     $originalInvestigatorGroups = [string]$runtime.data.role_investigator_groups
@@ -227,7 +226,7 @@ try {
     $investigatorPage = Invoke-WebRequest -Uri "$apiBase/ask" `
         -Headers @{'X-Forwarded-User' = $investigatorUser} -WebSession $investigatorSession -UseBasicParsing
     if ($investigatorPage.Content -notmatch 'PodPilot remains read-only') {
-        throw 'The cluster-admin Investigator session was not rendered in guarded mode.'
+        throw 'The cluster-admin Investigator session was not rendered in read-only mode.'
     }
     $investigatorPath = Start-Conversation -User $investigatorUser -Session $investigatorSession `
         -Csrf $investigatorCsrf -ClusterId $systemClusterId `
@@ -235,12 +234,12 @@ try {
     $null = Wait-PodPilotRun -User $investigatorUser -Session $investigatorSession `
         -ConversationPath $investigatorPath
     oc -n $testNamespace get configmap $investigatorCanary -o name | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Guarded Investigator request deleted the canary.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Read-only Investigator request deleted the canary.' }
     $investigatorConversationId = $investigatorPath.TrimEnd('/').Split('/')[-1]
     $auditCode = "import json,sqlite3; c=sqlite3.connect('/var/lib/podpilot/podpilot.db'); print(sum(1 for (d,) in c.execute('select details_json from audit_events where action=?', ('agentic.command',)) if json.loads(d).get('conversation_id')=='$investigatorConversationId'))"
     $investigatorCommandCount = (oc -n ai-ops exec $pod -c api -- python -c $auditCode).Trim()
     if ([int]$investigatorCommandCount -ne 0) {
-        throw 'Guarded Investigator request reached the unrestricted runner.'
+        throw 'Read-only Investigator request reached the command runner.'
     }
 
     $delegatedSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
@@ -302,7 +301,7 @@ try {
         throw 'The delegated agent did not surface the out-of-namespace authorization denial.'
     }
 
-    Write-Output "E2E PASS investigator_user=$investigatorUser role=Investigator direct_cluster_role=cluster-admin guarded_delete_blocked=true runner_commands=0"
+    Write-Output "E2E PASS investigator_user=$investigatorUser role=Investigator direct_cluster_role=cluster-admin read_only_delete_blocked=true runner_commands=0"
     Write-Output "E2E PASS delegated_user=$delegatedUser role=DelegatedOperator namespace=$testNamespace login=true create=true delete=true outside_namespace_denied=true"
     Write-Output "E2E PASS system_cluster_id=$systemClusterId delegated_login=true"
     Write-Output "E2E PASS remote_cluster_id=$clusterId name='$clusterName' custom_ca=true"

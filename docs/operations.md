@@ -197,8 +197,8 @@ provider and credentials are healthy.
   stored credential and revokes live delegated connections before removing the registry entry;
   historical conversations remain available. Shared entries use **Disable** instead.
 
-- `PODPILOT_AGENT_MODE`; checked-in workload manifests set `unrestricted` and deploy the runner.
-  Conversation mode chooses the read-only collector or Action loop.
+- Conversation execution selects the delegated read-only or role-authorized Action loop; the
+  checked-in workload manifests deploy the runner.
 - `PODPILOT_AGENT_RUNNER_URL`, default `http://127.0.0.1:8090`; keep it on Pod loopback.
 - `PODPILOT_AGENT_COMMAND_TIMEOUT_SECONDS`, default `300`; the runner terminates the complete shell
   process group at this deadline and returns exit code `124`.
@@ -380,7 +380,7 @@ and hostname validation for the registered Kubernetes API and telemetry endpoint
 that API; it does not remove or alter bearer authentication.
 
 Kubernetes normally exposes API discovery to authenticated non-admin users through its default
-discovery roles, but clusters may customize that access. In unrestricted Ask, PodPilot exposes a
+discovery roles, but clusters may customize that access. In delegated Ask, PodPilot exposes a
 bounded `discover_resources` helper through the delegated read-only broker. It searches a
 five-minute, policy-filtered catalog using exact aliases, normalized compound names, and lexical
 overlap before the agent uses an unfamiliar operator or CRD name. A discovery match confirms only
@@ -388,7 +388,7 @@ that the API type is advertised; it does not prove the delegated identity may re
 Discovery denial or failure remains a non-blocking limitation, and the full catalog is never placed
 in the model prompt.
 
-Before an unrestricted Ask command containing an inline `jq` filter is allowed to read cluster
+Before a delegated Ask command containing an inline `jq` filter is allowed to read cluster
 input, PodPilot runs the filter with `jq -n` and no cluster input. A failed compile is returned as a
 `jq filter parse error`, and the original read is not run. Agent prompts require parentheses around
 fallback expressions used as object values, such as `{value: (.path // "unknown")}`.
@@ -506,7 +506,7 @@ example, `KafkaCluster` or “Kafka clusters” can resolve to the uniquely disc
 catalog miss triggers one fresh API-discovery pass. The generic `list_resources` agent helper is not
 registered or offered. Read-only planning can use exact GETs, bounded field searches, API discovery,
 and typed summaries; if none can establish the requested inventory, PodPilot reports insufficient
-evidence instead of inferring an empty result. Unrestricted delegated agents may issue a deliberately
+evidence instead of inferring an empty result. Delegated agents may issue a deliberately
 bounded read-only `oc get` command through the shell tool.
 This applies to health, diagnosis, comparison, explanation, configuration, topology, behavior,
 inventory, count, existence, and snapshot-replay questions. No collector result is
@@ -530,8 +530,8 @@ unmatched braces at cell-item boundaries and drops a leading quoted or code-form
 placeholder when substantive content follows. Balanced values such as `{}`, JSON snippets, and
 OpenShift Logging templates like `{kubernetes.namespace_name}` remain unchanged.
 The stored complete Markdown remains a fallback for clients that do not consume presentation metadata.
-The generic `list_resources` helper has been removed from guarded planning, authored object-read
-schemas, runtime configuration, and unrestricted tool schemas. Existing persisted LIST evidence and
+The generic `list_resources` helper has been removed from typed planning, authored object-read
+schemas, runtime configuration, and delegated tool schemas. Existing persisted LIST evidence and
 low-level Kubernetes LIST operations inside purpose-built typed collectors remain readable; they are
 implementation details, not an agent-selectable skill. A configuration comparison therefore requires
 matching exact-object GET evidence from every selected cluster, normally from operator-supplied
@@ -575,7 +575,7 @@ The `0011_cluster_memory` migration creates the relational metadata/chunk tables
 and the SQLite FTS5 virtual table. The application verifies that the FTS table is
 available at startup. `0012_multi_cluster_ask` adds the cluster registry, immutable
 conversation selections, and knowledge target fields. Eligible internal chunks are supplied
-to standalone Ask guarded answers and delegated-agent context as guidance; they are not live
+to delegated-agent context as guidance; they are not live
 evidence and do not enter investigation-chat or remediation prompts. Delegated-agent retrieval is
 bounded to four de-duplicated chunks of at most 1,200 characters each and labels their applicable
 clusters. `0013_raw_model_responses` adds the
@@ -670,7 +670,7 @@ the default 20-row display limit.
 If the Loki audit query times out, is denied, or only succeeds on some selected clusters, that exact
 registered result returns to the agent. The tool contract identifies Kubernetes Events and
 `events.audit.k8s.io` as different data sources, and the result remains an observation rather than a
-stop signal. The unrestricted tool boundary canonicalizes harmless natural-language variants such
+stop signal. The delegated tool boundary canonicalizes harmless natural-language variants such
 as `delete` to `deletes` and `any` to `all`; omitted operation and outcome filters default to the
 broad `all` semantics. Other invalid arguments return compact field-level guidance without echoed
 model input or Pydantic documentation URLs. The audit helper does not depend on `jq` being installed
@@ -689,7 +689,7 @@ into Loki Pods or require `pods/exec`. An explicitly different metric does not i
 query. The shipped `adhoc_logs_max_range_seconds` ceiling is seven days (`604800` seconds); longer
 requests are reduced to that bound and reported as limited.
 
-The unrestricted metric helper canonicalizes harmless metric and scope spelling variants before
+The delegated metric helper canonicalizes harmless metric and scope spelling variants before
 validating a typed request. A question that explicitly ranks namespaces by generated log volume is
 bound to the dedicated `top_log_volume_by_namespace` contract with cluster scope, rank operation,
 and namespace grouping. Exact namespace and Pod totals, plus Pod rankings within a namespace, use
@@ -720,7 +720,7 @@ Expected results are `podpilot-investigator`, `yes`, `no`, `no`, and a container
 
 ### Delegated Action mode
 
-The remote overlay includes the runner component and sets `agent_mode: unrestricted`.
+The remote agentic overlay includes the runner component.
 It creates no second Deployment: `oc-runner` is the third container in the existing
 PodPilot Pod. For multi-cluster conversations the model supplies one selected cluster
 ID per shell call. The API brokers only that cluster's in-memory delegated user token
@@ -1023,10 +1023,10 @@ must not duplicate tool activity. PodPilot does not actively probe the alert
 destination; `instance` is only an escaped exact-match label in the fixed Thanos
 queries.
 
-### Unrestricted-agent synthetic challenges
+### Delegated-agent synthetic challenges
 
 The disposable `podpilot-test` and `podpilot-test2` namespaces contain five
-independent challenges for the unrestricted-agent lab: an unmatched node selector, a missing PVC, an
+independent challenges for the delegated-agent lab: an unmatched node selector, a missing PVC, an
 oversized CPU request, a misspelled ConfigMap reference, and cross-namespace
 traffic denied by a NetworkPolicy. The last challenge runs `network-client` in
 `podpilot-test`; it exits whenever it cannot reach the `network-target` HTTP
@@ -1544,7 +1544,7 @@ volume is a Loki tenant query rather than a Thanos metric; its denial names
 LokiStack Route separately from query authorization, while transport and TLS failures remain
 reported as availability failures rather than being mislabeled as RBAC denials.
 
-In unrestricted agent mode, a recognized Kafka topic-disk-utilization request remains on this registered
+In the delegated agent workflow, a recognized Kafka topic-disk-utilization request remains on this registered
 metrics path even when Thanos or the required exporter is unavailable. PodPilot reports the
 authoritative collection failure and does not fall through to a broker Pod shell or recommend
 granting `pods/exec`. The result compares replicated topic log bytes with aggregate allocated Kafka

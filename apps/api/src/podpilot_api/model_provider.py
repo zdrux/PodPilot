@@ -2530,7 +2530,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         request_start = len(capture) if capture is not None else 0
         request_started = time.monotonic()
         try:
-            with _model_request_context("workflow.unrestricted_agent"):
+            with _model_request_context("workflow.delegated_agent"):
                 response = self._client(profile, api_key).chat.completions.create(
                     model=profile.chat_model,
                     messages=prepared_messages,
@@ -2555,7 +2555,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             }
             _record_model_failure(
                 failure,
-                operation="workflow.unrestricted_agent",
+                operation="workflow.delegated_agent",
                 schema="AgentStep",
                 since=request_start,
             )
@@ -2612,7 +2612,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         request_start = len(capture) if capture is not None else 0
         request_started = time.monotonic()
         try:
-            with _model_request_context("workflow.unrestricted_agent_finalization"):
+            with _model_request_context("workflow.delegated_agent_finalization"):
                 response = self._client(profile, api_key).chat.completions.create(
                     model=profile.chat_model,
                     messages=prepared_messages,
@@ -2634,7 +2634,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             }
             _record_model_failure(
                 failure,
-                operation="workflow.unrestricted_agent_finalization",
+                operation="workflow.delegated_agent_finalization",
                 schema="AgentStep",
                 since=request_start,
             )

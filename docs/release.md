@@ -378,7 +378,7 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
-Guarded planning and authored-read schemas must neither offer nor execute generic
+Typed planning and authored-read schemas must neither offer nor execute generic
 `list_resources` or `search_resources` calls, the runtime settings and manifests must contain no
 generic inventory-helper feature flag, and unified-agent tool schemas must omit both helpers.
 Final-answer prompts must request Markdown tables for comparable multi-item
@@ -433,13 +433,13 @@ Machine and workload tests must prove namespace propagation; Node and ClusterOpe
 reject namespaces. Combined workload evidence must expose per-kind scan counts, and every typed
 summary must preserve the complete-coverage rule before confirming absence.
 
-## Unrestricted agent gates
+## Delegated agent gates
 
-- Guarded mode remains the default in the portable runtime ConfigMap and the standard remote overlay
-  does not contain the runner sidecar.
-- The SNO milestone overlay renders `agent_mode: unrestricted`, an `oc-runner` container, and
+- The portable runtime has one delegated agent workflow; conversations select `read_only` or
+  role-authorized `action` execution.
+- The SNO milestone overlay renders an `oc-runner` container and
   `serviceAccountName: podpilot-investigator`.
-- The optional remote agentic overlay composes the guarded remote overlay plus the shared runner
+- The remote agentic overlay composes the remote overlay plus the shared runner
   component, renders both versioned ImageStreams, forces remote TLS verification off, and contains
   no cluster-admin binding.
 - No resource composed for that runtime binds `podpilot-investigator` to `cluster-admin`; live
@@ -502,14 +502,14 @@ summary must preserve the complete-coverage rule before confirming absence.
   session, individual removal revokes only the selected token, removed clusters disappear from new
   conversation selectors, and existing conversations retain durable history while requiring
   reconnection when one of their selected clusters is removed.
-- Known-read enrichment tests must prove unrestricted log-volume wording executes the registered
+- Known-read enrichment tests must prove delegated log-volume wording executes the registered
   `top_log_volume_by_namespace` reader with cluster scope and namespace grouping, supplies Loki evidence to the agent, preserves the
   native payload-volume metric card, and never substitutes Kubernetes Event counts.
 - Scoped log-volume tests must prove the dedicated cluster namespace ranking, exact cluster,
   namespace, Pod, and Node totals; Pod rankings within a
   namespace; cluster-wide Pod and Node rankings; server-owned selectors/groupings; and that no
   matching log lines or model-authored LogQL cross the evidence boundary.
-- Shared-enrichment tests must prove unrestricted mode can compile the guarded metric, audit, and
+- Shared-enrichment tests must prove the delegated workflow can compile the typed metric, audit, and
   catalog-grounded resource semantics. Metrics tests must prove a failed Thanos Node ranking falls
   back to a normalized current Kubernetes Metrics API snapshot and marks the loss of history.
 - Agent-first completion tests must prove causal Pod and resource questions continue from the
@@ -523,7 +523,7 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Failure-authority tests must prove an unavailable registered source plus failed shell verification
   cannot become an unsupported model claim about a missing metrics server or add-on.
 - Terminal-enrichment tests must prove a successful registered audit answer renders exactly once,
-  suppresses a competing unrestricted shell call, preserves all-user wording, and enforces explicit
+  suppresses a competing delegated shell call, preserves all-user wording, and enforces explicit
   namespace, delete-operation, and Kubernetes resource filters in both Loki and local projection.
 - Audit-adherence tests must prove an explicit last/top count overrides the configured default and
   that delete/mutation plus successful/failed wording overrides broader classifier output before
@@ -534,7 +534,7 @@ summary must preserve the complete-coverage rule before confirming absence.
 - Audit-failure authority tests must prove a timed-out or denied registered Loki audit read renders
   its real failure without calling the model shell loop, `oc-runner`, `events.audit.k8s.io`, or
   optional command-line JSON utilities.
-- Metric-continuation tests must prove an unrestricted same-metric period follow-up reuses the prior
+- Metric-continuation tests must prove a delegated same-metric period follow-up reuses the prior
   registered ranking and original top-N while changing only the requested range. The log-volume
   fixture must remain on the Loki adapter, accept the shipped three-day window within the seven-day
   ceiling, and never attempt `pods/exec` or `logcli`.

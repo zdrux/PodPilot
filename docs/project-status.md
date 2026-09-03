@@ -7,7 +7,7 @@ selected.
 
 ## Resume Here
 
-PodPilot 0.12.0 from feature branch `codex/delegated-unrestricted-sessions` is deployed on the
+PodPilot 0.12.0 from the delegated-sessions feature branch is deployed on the
 disposable SNO lab at schema head `0021_user_delegated_access`. The 2026-09-01 rollout uses
 application image digest `sha256:02b041afb5824019941cc1e62067dd90748063992f9514106d83c4464fced061`
 and runner digest `sha256:fc7c654ea5f3ea9c86b69e698f2640f038aab511d6de360edb4f1742ccaac05e`.
@@ -73,7 +73,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   only Approver and Breakglass sessions see the **Manage** navigation or may open and modify those
   sections. Investigator, Viewer, and Delegated Operator requests are rejected server-side.
 
-- Branch `codex/delegated-unrestricted-sessions` adds explicit Delegated Operator sessions for users
+- The delegated-sessions work adds explicit Delegated Operator sessions for users
   outside every configured PodPilot role group. The delegated picker uses the same enabled cluster
   registry as cluster management, including the runtime system cluster. Approvers register additional
   DEV cluster API origins and optional custom CA bundles; users multi-select clusters, complete one-time username/password
@@ -129,18 +129,17 @@ records remain, but execution now awaits a separate approval-gated action servic
   Flat standalone JSON summaries are transformed into native property/value tables without changing
   their values. Deterministic conclusions remain only as provider/contract-failure fallbacks.
 
-- A feature-branch unrestricted agent simulation now uses OpenRouter Chat Completions with
+- The delegated agent runtime uses OpenRouter Chat Completions with
   exact model `openai/gpt-oss-120b`. The model can repeatedly call an arbitrary `execute_shell`
   function backed by a localhost `oc-runner` sidecar until it returns a final answer. This bypasses
   typed read/remediation approval inside the explicit agentic mode while retaining the durable run deadline,
-  output redaction before provider reuse, progress, and command metadata audit. The base and
-  standard remote deployments remain guarded; unrestricted remote deployment is an explicit
-  additive overlay.
+  output redaction before provider reuse, progress, and command metadata audit. The SNO and remote
+  agentic deployments include the command runner.
 - The runner image copies a digest-pinned Linux `oc` binary into the pinned UBI Python runtime. The
   SNO overlay runs it non-root under the existing `podpilot-investigator` Pod service account. The
   deploy helper refuses to proceed if that identity can patch Deployments, builds both images,
   deploys the sidecar, and configures/probes the fixed OpenRouter profile from an environment key
-  passed over stdin. An additive `remote-poc-agentic` overlay now reuses the guarded remote PoC,
+  passed over stdin. The `remote-poc-agentic` overlay reuses the remote PoC,
   promotes a separate versioned runner image, and adds the same shared sidecar without adding RBAC.
   Each Action-mode shell call names one selected cluster. The API brokers only that cluster's
   in-memory delegated user token to the loopback runner, which uses and deletes a per-command
@@ -179,13 +178,13 @@ records remain, but execution now awaits a separate approval-gated action servic
   fails, normal code reports the exact failures and suppresses unsupported model explanations such
   as claiming a metrics add-on is absent.
 - Recognized Kafka topic-storage questions now fail closed on the registered Strimzi JMX/Thanos
-  path. If that authoritative read fails, unrestricted mode renders the collection limitation
+  path. If that authoritative read fails, the delegated workflow renders the collection limitation
   directly instead of attempting broker Pod exec or recommending broader `pods/exec` RBAC.
 - Namespace-scoped Kafka topic-storage wording now discovers exact Strimzi Kafka CRs in the named
   namespace and fans out one registered storage query per observed CR, grouped by topic. The path
   bypasses fragile metric classification, renders successful results directly, and preserves empty,
-  denied, or partially unavailable states without entering the unrestricted shell loop.
-- An empty unrestricted model turn now receives one tool-free finalization request. If that request
+  denied, or partially unavailable states without entering the delegated command loop.
+- An empty delegated model turn now receives one tool-free finalization request. If that request
   is also empty, PodPilot reports an invalid agent response rather than mislabeling it as provider
   unavailability.
 - Imperative Kafka deployment inventory wording now routes to the registered Strimzi Kafka reader.
@@ -195,7 +194,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Remote Thanos and LokiStack authorization failures now preserve the literal `HTTP 403` status in
   per-cluster Ask limitations and name the relevant read-only role. Log-volume queries correctly
   identify `cluster-logging-application-view`; Thanos metrics identify `cluster-monitoring-view`.
-- Successful terminal registered enrichments now render once and suppress a competing unrestricted
+- Successful terminal registered enrichments now render once and suppress a competing delegated
   shell call. Audit queries preserve explicit resource scope in addition to namespace, operation,
   outcome, username, and time range; an all-user Pod deletion query no longer shows an appended
   `events.audit.k8s.io` RBAC failure or the misleading phrase “the supplied user.”
@@ -205,7 +204,7 @@ records remain, but execution now awaits a separate approval-gated action servic
 - Unnumbered “recent” audit requests now query only the initial bounded window instead of repeatedly
   widening toward the audit ceiling to fill a model/default limit. Explicit “last N” requests retain
   bounded backward expansion until N matches are found.
-- Registered Loki audit reads now fail closed in unrestricted mode. A timeout, denial, or partial
+- Registered Loki audit reads now fail closed in the delegated workflow. A timeout, denial, or partial
   multi-cluster result is rendered directly instead of falling through to an invalid
   `events.audit.k8s.io`/`jq` shell attempt.
 - Elliptical metric-period follow-ups now reuse the latest registered top CPU, top memory, or
@@ -213,7 +212,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   replaced, so a three-day log-volume follow-up remains on the Loki adapter instead of attempting
   `pods/exec` or `logcli`. The shipped log-analytics range ceiling is now seven days, allowing the
   requested three-day window while retaining a bounded server-owned LogQL query.
-- Unrestricted Chat Completions finalization tolerates one empty assistant turn after tool use. The
+- Delegated Chat Completions finalization tolerates one empty assistant turn after tool use. The
   API logs the anomaly, sends one corrective request using the existing tool results, and then
   either persists the recovered answer or fails explicitly after a second empty turn. It does not
   automatically repeat completed shell commands.
@@ -247,7 +246,7 @@ records remain, but execution now awaits a separate approval-gated action servic
   text search composes with either filter. Generic new-chat links start with an empty selection and
   keep Submit disabled until the user chooses at least one cluster; a sidebar cluster-name link
   remains an explicit single-cluster preselection.
-- Unrestricted Ask now exposes the existing policy-filtered Kubernetes discovery catalog as a
+- Delegated Ask exposes the existing policy-filtered Kubernetes discovery catalog as a
   delegated typed tool. The agent is directed to search it before guessing unfamiliar CRD names or
   after a NoMatch error; deterministic matching recognizes compound fragments such as
   `logforwarder` while returning only exact, discovered API coordinates. Discovery remains
@@ -974,8 +973,8 @@ current repository and cluster state.
 - Investigation chat is limited to one investigation, a 20-message history, one
   non-executing safe-check intent, and non-streaming responses. Standalone Ask
   PodPilot conversations are unlimited and use rolling context, but responses
-  remain non-streaming. Curated memory is retrieved into standalone Ask guarded answers and
-  delegated-agent context as bounded untrusted guidance; it does not enter investigation-chat or
+  remain non-streaming. Curated memory is retrieved into delegated-agent context as bounded
+  untrusted guidance; it does not enter investigation-chat or
   remediation prompts.
 - The first executable plan is fixed to scoped `TargetDown` passive monitoring
   signals, Service topology, and Pod events. It does not inspect full rule

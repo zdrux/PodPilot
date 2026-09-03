@@ -23,7 +23,7 @@ Treat them as a snapshot and re-verify live state before relying on them.
   `deploy/openshift/base`; a fresh overlay deployment does not depend on pre-existing runtime RBAC.
 - Development/break-glass identity: `ai-ops/ai-observer`, with `cluster-admin`
   through the explicitly labeled `podpilot-poc-cluster-admin` binding.
-- The unrestricted-agent simulation uses a tokenless `oc-runner`; each cluster command receives a
+- The delegated-agent runtime uses a tokenless `oc-runner`; each cluster command receives a
   delegated-user broker capability. `scripts/deploy-agentic-sno.ps1` verifies application-role
   lookup and refuses to deploy if `podpilot-investigator` can patch Deployments.
 

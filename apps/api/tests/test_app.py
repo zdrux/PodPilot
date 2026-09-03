@@ -213,8 +213,6 @@ def test_collection_analysis_expands_only_small_complete_inventory() -> None:
             name="application",
         ),
     ]
-
-
 def test_explicit_comparison_overrides_plain_inventory_classification() -> None:
     inquiry = InquirySemantics(
         mode="inventory", operation="inventory", cardinality="collection",
@@ -1214,46 +1212,20 @@ def test_access_question_bypasses_generic_resource_planner() -> None:
     assert result.evidence[0]["id"] == "access-review-one"
 
 
-def test_reduced_model_is_usable_only_with_safe_core_capabilities() -> None:
+def test_reduced_model_is_usable_only_with_agent_tool_capabilities() -> None:
     profile = ModelProfile(
         provider_label="Internal", base_url="https://models.example.test/v1",
         chat_model="test-model", embedding_model=None, timeout_seconds=30,
         max_output_tokens=1200, status="reduced_capability", updated_by="ivy",
         capabilities_json=json.dumps({
             "reachable": True, "tls_valid": True, "authenticated": True,
-            "model_available": True, "structured_output": True, "ask_schemas": False,
+            "model_available": True, "tool_calls": True,
+            "structured_output": False, "ask_schemas": False,
         }),
     )
 
     assert _profile_is_usable(profile) is True
-    profile.capabilities_json = json.dumps({"reachable": True, "structured_output": False})
-    assert _profile_is_usable(profile) is False
-
-
-def test_unrestricted_mode_accepts_reduced_profile_with_tool_calling() -> None:
-    profile = ModelProfile(
-        provider_label="OpenRouter",
-        base_url="https://openrouter.ai/api/v1",
-        chat_model="openai/gpt-oss-120b",
-        api_type="chat-completions",
-        credential_key="openrouter_api_key",
-        timeout_seconds=240,
-        max_output_tokens=4096,
-        status="reduced_capability",
-        capabilities_json=json.dumps({
-            "reachable": True,
-            "authenticated": True,
-            "model_available": True,
-            "tls_valid": True,
-            "tool_calls": True,
-            "structured_output": False,
-        }),
-        updated_by="test",
-    )
-
-    assert _profile_is_usable(profile) is False
-    assert _profile_is_usable(profile, "unrestricted") is True
-    profile.status = "unavailable"
+    profile.capabilities_json = json.dumps({"reachable": True, "tool_calls": False})
     assert _profile_is_usable(profile) is False
 
 
@@ -9313,73 +9285,7 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert client.get("/health/ready").json() == {"status": "ready", "database": True}
 
 
-def test_ask_podpilot_runs_bounded_reads_and_persists_cited_answer(tmp_path: Path) -> None:
-    provider = FakeModelProvider()
-    explorer = FakeReadExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert page.status_code == 200
-        assert "The agent cannot change the cluster selection" in page.text
-        assert '<section class="notice"' not in page.text
-        assert "Read-only cluster assistant" not in page.text
-        assert 'class="panel-header ask-session-header"' in page.text
-        assert 'class="boundary-pill caution-summary"' in page.text
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Why is pod api-7d9 pending in payments?"},
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "selector does not match" in rendered.text
-        assert "Evidence used in this answer" in rendered.text
-        assert rendered.text.index('class="boundary-pill caution-summary"') < rendered.text.index(
-            "data-evidence-open"
-        )
-        assert "Inspected 1 cluster target" not in rendered.text
-        assert "cluster-pod-1" in rendered.text
-        assert '<details class="raw-model-response">' not in rendered.text
-
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].tool == "get_resource"
-    assert provider.adhoc_plan_calls[0]["tool_policy"]["logs_and_configmaps_allowed"] is True
-    assert provider.adhoc_answer_calls[0]["observations"][0]["id"] == "cluster-pod-1"
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert db_session.scalar(select(func.count()).select_from(AdHocConversation)) == 1
-        assert db_session.scalar(select(func.count()).select_from(AdHocMessage)) == 2
-        run = db_session.scalar(select(AdHocRun))
-        assistant = db_session.scalar(select(AdHocMessage).where(
-            AdHocMessage.role == "assistant"
-        ))
-        assert run is not None and run.include_raw_response is False
-        assert assistant is not None and json.loads(assistant.raw_responses_json) == []
-        actions = list(db_session.scalars(select(AuditEvent.action)))
-        assert "adhoc.message" in actions and "adhoc.answer" in actions
-    engine.dispose()
-
-
-def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
+def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -9457,7 +9363,6 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
         agent_runner=runner,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -9479,9 +9384,9 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert 'class="boundary-pill caution-summary agent-mode-pill"' in page.text
+        assert 'class="boundary-pill caution-summary"' in page.text
         assert "Session cautions" in page.text
-        assert "Unrestricted lab mode" in page.text
+        assert "Delegated read-only mode" in page.text
         assert "Delegated session ended" not in page.text
         assert 'data-starter-available="true"' in page.text
         composer = re.search(r'<textarea id="adhoc-message"[^>]*>', page.text)
@@ -9529,7 +9434,6 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
         assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
         assert assistant is not None
         activity = json.loads(assistant.tool_activity_json)
-        assert activity["agent_mode"] == "unrestricted"
         assert activity["reads"][0]["status"] == "failed"
         audits = list(db_session.scalars(select(AuditEvent.action)))
         assert "agentic.command" in audits
@@ -9537,7 +9441,7 @@ def test_unrestricted_agent_executes_chat_completion_tool_calls_through_runner(
 
 
 @pytest.mark.parametrize("second_finalization_is_valid", [True, False])
-def test_unrestricted_agent_rejects_tool_arguments_returned_as_final_content(
+def test_delegated_agent_rejects_tool_arguments_returned_as_final_content(
     tmp_path: Path, second_finalization_is_valid: bool,
 ) -> None:
     raw_arguments = json.dumps({
@@ -9598,7 +9502,6 @@ def test_unrestricted_agent_rejects_tool_arguments_returned_as_final_content(
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
         agent_runner=Runner(),
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -9729,7 +9632,6 @@ def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnos
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
         agent_runner=Runner(),
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -9784,7 +9686,7 @@ def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnos
     engine.dispose()
 
 
-def test_unrestricted_agent_is_not_forced_through_registered_log_volume_enrichment(
+def test_delegated_agent_is_not_forced_through_registered_log_volume_enrichment(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -9835,7 +9737,6 @@ def test_unrestricted_agent_is_not_forced_through_registered_log_volume_enrichme
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider,
         read_explorer=explorer,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -9908,7 +9809,7 @@ def test_unrestricted_agent_is_not_forced_through_registered_log_volume_enrichme
     engine.dispose()
 
 
-def test_unrestricted_pending_pod_question_is_driven_by_agent_without_collector_seed(
+def test_delegated_pending_pod_question_is_driven_by_agent_without_collector_seed(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10004,7 +9905,6 @@ def test_unrestricted_pending_pod_question_is_driven_by_agent_without_collector_
         model_provider=provider,
         read_explorer=explorer,
         agent_runner=runner,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -10043,7 +9943,7 @@ def test_unrestricted_pending_pod_question_is_driven_by_agent_without_collector_
     assert "Question-focused resource evidence" not in rendered.text
 
 
-def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
+def test_delegated_typed_collectors_return_to_agent_without_terminating(
     tmp_path: Path,
 ) -> None:
     calls = [
@@ -10184,7 +10084,6 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
         assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider, read_explorer=explorer,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -10251,7 +10150,7 @@ def test_unrestricted_typed_collectors_return_to_agent_without_terminating(
     engine.dispose()
 
 
-def test_unrestricted_broad_pod_health_preserves_agent_conclusion(
+def test_delegated_broad_pod_health_preserves_agent_conclusion(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10321,7 +10220,6 @@ def test_unrestricted_broad_pod_health_preserves_agent_conclusion(
         assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=provider, read_explorer=explorer,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -10366,7 +10264,7 @@ def test_unrestricted_broad_pod_health_preserves_agent_conclusion(
     engine.dispose()
 
 
-def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
+def test_delegated_input_limit_with_prior_evidence_is_reported_explicitly(
     tmp_path: Path, caplog,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10388,7 +10286,6 @@ def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
         assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=Provider(),
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     conversation_id = "30600000-0000-0000-0000-000000000001"
     now = datetime.now(timezone.utc)
@@ -10440,7 +10337,7 @@ def test_unrestricted_input_limit_with_prior_evidence_is_reported_explicitly(
     assert "podpilot.adhoc.provider_failed" in caplog.text
 
 
-def test_unrestricted_audit_argument_normalization_is_broad_and_error_safe() -> None:
+def test_delegated_audit_argument_normalization_is_broad_and_error_safe() -> None:
     aliases = _normalize_agent_collector_arguments("query_audit_events", {
         "audit_operation_scope": "delete",
         "audit_outcome": "any",
@@ -10475,7 +10372,7 @@ def test_unrestricted_audit_argument_normalization_is_broad_and_error_safe() -> 
     assert "input_value" not in detail
 
 
-def test_unrestricted_metric_argument_normalization_repairs_log_ranking() -> None:
+def test_delegated_metric_argument_normalization_repairs_log_ranking() -> None:
     normalized = _normalize_agent_collector_arguments(
         "query_metrics",
         {
@@ -10622,7 +10519,7 @@ def test_kafka_metric_validation_retry_explains_cluster_and_topic_coordinates() 
     assert "put the requested exact Kafka topic in topic" in guidance
 
 
-def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(
+def test_delegated_namespace_kafka_topic_storage_is_not_forced_by_heuristics(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10690,7 +10587,6 @@ def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(
         credential_store=MemoryCredentialStore("test-api-token"),
         model_provider=Provider(),
         read_explorer=explorer,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -10728,7 +10624,7 @@ def test_unrestricted_namespace_kafka_topic_storage_is_not_forced_by_heuristics(
     assert "execute_shell" not in rendered.text
 
 
-def test_unrestricted_kafka_inventory_does_not_run_without_agent_selected_reads(
+def test_delegated_kafka_inventory_does_not_run_without_agent_selected_reads(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -10788,7 +10684,6 @@ def test_unrestricted_kafka_inventory_does_not_run_without_agent_selected_reads(
         credential_store=MemoryCredentialStore("model-token"),
         cluster_credential_store=cluster_credentials, model_provider=Provider(),
         remote_read_explorer_factory=explorer_factory,
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     cluster_ids = [
         "40000000-0000-0000-0000-000000000001",
@@ -10842,7 +10737,7 @@ def test_unrestricted_kafka_inventory_does_not_run_without_agent_selected_reads(
     assert "agent compared Kafka evidence across the selected clusters" in rendered.text
 
 
-def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
+def test_delegated_agent_brokers_each_selected_remote_cluster_and_surfaces_failure(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level("INFO", logger="uvicorn.error")
@@ -10939,7 +10834,6 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
         model_provider=provider,
         agent_runner=runner,
         settings_overrides={
-            "agent_mode": "unrestricted",
             "agent_heartbeat_seconds": 2,
         },
     )
@@ -11050,7 +10944,7 @@ def test_unrestricted_agent_brokers_each_selected_remote_cluster_and_surfaces_fa
     assert re.search(r"diagnostic_ref=[0-9a-f]{12}", caplog.text)
 
 
-def test_unrestricted_agent_preserves_completed_changes_when_provider_times_out(
+def test_delegated_agent_preserves_completed_changes_when_provider_times_out(
     tmp_path: Path,
 ) -> None:
     class Provider(FakeModelProvider):
@@ -11106,7 +11000,6 @@ def test_unrestricted_agent_preserves_completed_changes_when_provider_times_out(
         credential_store=MemoryCredentialStore("model-token"),
         model_provider=Provider(),
         agent_runner=Runner(),
-        settings_overrides={"agent_mode": "unrestricted"},
     )
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -11249,170 +11142,6 @@ def test_agent_collector_failure_category_survives_wrapping() -> None:
             raise ReadOnlyExplorerError(str(exc)) from exc
     except ReadOnlyExplorerError as exc:
         assert _agent_collector_failure_category(exc) == "tls_verification_failed"
-
-
-def test_ask_raw_response_toggle_preserves_the_single_agent_answer_attempt(
-    tmp_path: Path,
-) -> None:
-    provider = HeadingOnlyThenCompleteProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert "Show raw model response" in page.text
-        assert "For this question only" not in page.text
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        assert csrf is not None
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": "Why is pod api-7d9 pending in payments?",
-                "include_raw_response": "on",
-            },
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "Raw model response" in rendered.text
-        assert "Untrusted provider output" in rendered.text
-        assert "1 attempt" in rendered.text
-        assert "initial answer" in rendered.text
-        assert "PodPilot correction" not in rendered.text
-        assert "Observed objects" in rendered.text
-        assert "Observed objects" in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        run = db_session.scalar(select(AdHocRun))
-        assistant = db_session.scalar(select(AdHocMessage).where(
-            AdHocMessage.role == "assistant"
-        ))
-        event = db_session.scalar(select(AuditEvent).where(
-            AuditEvent.action == "adhoc.message"
-        ))
-        assert run is not None and run.include_raw_response is True
-        assert assistant is not None
-        attempts = json.loads(assistant.raw_responses_json)
-        assert [item["stage"] for item in attempts] == ["initial answer"]
-        assert event is not None
-        assert json.loads(event.details_json)["raw_response_requested"] is True
-    engine.dispose()
-
-
-def test_ask_reasoning_choice_is_limited_by_model_and_persists_per_user(
-    tmp_path: Path,
-) -> None:
-    class ReasoningCaptureProvider(FakeModelProvider):
-        def __init__(self) -> None:
-            super().__init__()
-            self.reasoning_efforts: list[str | None] = []
-
-        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
-            self.reasoning_efforts.append(profile.reasoning_effort)
-            return super().plan_ad_hoc(profile, api_key, context)
-
-    provider = ReasoningCaptureProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="GPT OSS", base_url="https://models.example.test/v1",
-            chat_model="gpt-oss-120b", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}",
-            reasoning_efforts_json=json.dumps(["low", "medium", "high"]),
-            reasoning_effort=None, updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert '<option value="provider_default" selected>Provider default</option>' in page.text
-        assert '<option value="low"' in page.text
-        assert '<option value="medium"' in page.text
-        assert '<option value="high"' in page.text
-        assert '<option value="xhigh"' not in page.text
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        assert csrf is not None
-        headers = {"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)}
-
-        selected = client.post(
-            "/api/v1/adhoc-conversations",
-            headers=headers,
-            data={
-                "message": "Why is pod api-7d9 pending in payments?",
-                "reasoning_effort": "high",
-            },
-            follow_redirects=False,
-        )
-        assert selected.status_code == 303
-        persisted_page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert '<option value="high" selected>High</option>' in persisted_page.text
-
-        inherited = client.post(
-            "/api/v1/adhoc-conversations",
-            headers=headers,
-            data={"message": "Inspect pod api-7d9 again."},
-            follow_redirects=False,
-        )
-        assert inherited.status_code == 303
-
-        rejected = client.post(
-            "/api/v1/adhoc-conversations",
-            headers=headers,
-            data={"message": "Inspect it once more.", "reasoning_effort": "xhigh"},
-            follow_redirects=False,
-        )
-        assert rejected.status_code == 422
-
-        provider_default = client.post(
-            "/api/v1/adhoc-conversations",
-            headers=headers,
-            data={
-                "message": "Inspect pod api-7d9 with the provider default.",
-                "reasoning_effort": "provider_default",
-            },
-            follow_redirects=False,
-        )
-        assert provider_default.status_code == 303
-
-    assert provider.reasoning_efforts[0] == "high"
-    assert provider.reasoning_efforts[-1] is None
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        preference = db_session.scalar(select(UserModelPreference))
-        assert preference is not None
-        assert preference.username == "ivy"
-        assert preference.model_profile_id == 1
-        assert preference.reasoning_effort is None
-        assert [run.reasoning_effort for run in db_session.scalars(
-            select(AdHocRun).order_by(AdHocRun.created_at)
-        )] == ["high", "high", None]
-    engine.dispose()
 
 
 def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path: Path) -> None:
@@ -11788,727 +11517,6 @@ def test_cluster_test_does_not_return_raw_remote_client_exception(tmp_path: Path
     assert "failed before read-only discovery" in tested.json()["detail"]
     assert "Audit-Id" not in tested.text
     assert "Authorization" not in tested.text
-
-
-def test_ask_conversation_pins_and_reads_multiple_clusters(tmp_path: Path) -> None:
-    cluster_credentials = MemoryCredentialStore()
-    provider = FakeModelProvider()
-
-    class PerClusterExplorer(FakeReadExplorer):
-        def __init__(self, cluster_name: str):
-            super().__init__()
-            self.cluster_name = cluster_name
-
-        def execute(self, intent):
-            self.calls.append(intent)
-            return ReadResult((AdHocObservation(
-                id=f"cluster-{self.cluster_name}",
-                tool=intent.tool,
-                summary=f"Read Pod from {self.cluster_name}.",
-                source=f"kubernetes:{self.cluster_name}:v1:Pod:payments/api-7d9",
-                collected_at=datetime.now(timezone.utc),
-                data={"status": {"phase": "Running"}},
-            ),))
-
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("model-token"),
-        cluster_credential_store=cluster_credentials,
-        model_provider=provider,
-        remote_read_explorer_factory=lambda cluster, token: PerClusterExplorer(cluster.name),
-    )
-    first_id = "10000000-0000-0000-0000-000000000001"
-    second_id = "10000000-0000-0000-0000-000000000002"
-    engine = build_engine(settings)
-    with TestClient(app):
-        pass
-    with Session(engine) as db_session:
-        now = datetime.now(timezone.utc)
-        for cluster_id, name, platform in (
-            (first_id, "azure-one", "azure"),
-            (second_id, "metal-one", "baremetal"),
-        ):
-            key = f"cluster_{cluster_id.replace('-', '')}"
-            cluster_credentials.set(f"token-{name}", key)
-            db_session.add(Cluster(
-                id=cluster_id, name=name, api_url=f"https://api.{name}.example:6443",
-                credential_key=key, tags_json=json.dumps({"platform": platform}),
-                tls_verify=True, is_enabled=True, is_system=False, status="ready",
-                created_by="ada", updated_by="ada", created_at=now, updated_at=now,
-            ))
-        db_session.add(ModelProfile(
-            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": "Compare pod api-7d9 in namespace payments.",
-                "cluster_ids": json.dumps([first_id, second_id]),
-            },
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "azure-one" in rendered.text and "metal-one" in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        conversation = db_session.scalar(select(AdHocConversation))
-        assert json.loads(conversation.cluster_ids_json) == [first_id, second_id]
-        evidence = json.loads(conversation.evidence_json)
-        assert {item["cluster_name"] for item in evidence} == {"azure-one", "metal-one"}
-    engine.dispose()
-    assert {item["name"] for item in provider.adhoc_answer_calls[0]["clusters"]} == {
-        "azure-one", "metal-one"
-    }
-
-
-def test_ask_top_cpu_runs_one_cluster_metric_query_and_renders_table(
-    tmp_path: Path,
-) -> None:
-    cluster_credentials = MemoryCredentialStore()
-
-    class Provider(FakeModelProvider):
-        def classify_ad_hoc(self, _profile, _api_key, _context):
-            return InquirySemantics(
-                mode="metrics", resource_query="Pod", needs_object_details=True,
-                evidence_goal="Rank CPU-consuming pods on each selected cluster.",
-                metric_query="top_cpu_consumers", metric_scope="cluster", result_limit=5,
-            )
-
-    class Explorer:
-        def __init__(self, cluster_name: str):
-            self.cluster_name = cluster_name
-            self.calls = []
-
-        def execute(self, intent):
-            self.calls.append(intent)
-            slug = self.cluster_name.casefold().replace(" ", "-")
-            return ReadResult((AdHocObservation(
-                id=f"metric-{slug}", tool="query_metrics",
-                summary=f"Ranked CPU consumers in {self.cluster_name}.",
-                source="thanos:query_range/top_cpu_consumers",
-                collected_at=datetime.now(timezone.utc),
-                data={
-                    "metric": "top_cpu_consumers", "scope": "cluster",
-                    "unit": "cores", "limit": intent.limit, "complete": True,
-                    "ranking": [{
-                        "labels": {"namespace": "payments", "pod": f"api-{slug}"},
-                        "current": 0.75, "average": 0.5, "maximum": 0.9,
-                    }],
-                },
-            ),))
-
-    provider = Provider()
-    explorers: dict[str, Explorer] = {}
-
-    def explorer_factory(cluster, _token):
-        explorer = Explorer(cluster.name)
-        explorers[cluster.name] = explorer
-        return explorer
-
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("model-token"),
-        cluster_credential_store=cluster_credentials,
-        model_provider=provider,
-        remote_read_explorer_factory=explorer_factory,
-    )
-    cluster_ids = [
-        "20000000-0000-0000-0000-000000000001",
-        "20000000-0000-0000-0000-000000000002",
-    ]
-    engine = build_engine(settings)
-    with TestClient(app):
-        pass
-    with Session(engine) as db_session:
-        now = datetime.now(timezone.utc)
-        for cluster_id, name in zip(cluster_ids, ("Central DEV", "East DEV"), strict=True):
-            key = f"cluster_{cluster_id.replace('-', '')}"
-            cluster_credentials.set(f"token-{name}", key)
-            db_session.add(Cluster(
-                id=cluster_id, name=name, api_url=f"https://api.{name}.example:6443",
-                credential_key=key, tags_json="{}", tls_verify=True, is_enabled=True,
-                is_system=False, status="ready", created_by="ada", updated_by="ada",
-                created_at=now, updated_at=now,
-            ))
-        db_session.add(ModelProfile(
-            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": "Show me the top 5 CPU-consuming pods on each cluster.",
-                "cluster_ids": json.dumps(cluster_ids),
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "Top CPU Consumers" in rendered.text
-    assert "top 5 CPU-consuming pods by cluster" not in rendered.text
-    assert "api-central-dev" in rendered.text
-    assert "api-east-dev" in rendered.text
-    assert "Central DEV" in rendered.text and "East DEV" in rendered.text
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-    assert set(explorers) == {"Central DEV", "East DEV"}
-    for explorer in explorers.values():
-        assert len(explorer.calls) == 1
-        assert explorer.calls[0].tool == "query_metrics"
-        assert explorer.calls[0].metric_scope == "cluster"
-        assert explorer.calls[0].limit == 5
-
-
-def test_ask_multi_signal_pod_metrics_use_typed_plan_and_deterministic_table(
-    tmp_path: Path,
-) -> None:
-    class Provider(FakeModelProvider):
-        def classify_ad_hoc(self, _profile, _api_key, _context):
-            return InquirySemantics(
-                mode="metrics",
-                evidence_goal="Compare CPU and memory for the exact Pod.",
-                metric_request=MetricRequestSemantics(
-                    signals=["cpu_usage", "memory_working_set"],
-                    target=MetricTargetSemantics(
-                        scope="pod", kind="Pod",
-                        namespace="payments", name="api-7d9",
-                    ),
-                    operation="compare",
-                    statistic="current",
-                    range_seconds=900,
-                ),
-            )
-
-    class Explorer:
-        def __init__(self) -> None:
-            self.calls: list[ReadIntent] = []
-
-        def execute(self, intent: ReadIntent) -> ReadResult:
-            self.calls.append(intent)
-            value = 0.75 if intent.metric == "cpu_usage" else 536_870_912.0
-            unit = "cores" if intent.metric == "cpu_usage" else "bytes"
-            return ReadResult((AdHocObservation(
-                id=f"metric-{intent.metric}", tool="query_metrics",
-                summary=f"Read {intent.metric} for payments/api-7d9.",
-                source=f"thanos:query_range/{intent.metric}",
-                collected_at=datetime.now(timezone.utc),
-                data={
-                    "metric": intent.metric, "scope": "pod",
-                    "namespace": "payments", "name": "api-7d9",
-                    "unit": unit, "complete": True,
-                    "ranking": [{
-                        "labels": {}, "current": value,
-                        "average": value * 0.8, "maximum": value * 1.1,
-                    }],
-                },
-            ),))
-
-    provider = Provider()
-    explorer = Explorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Compare current CPU and memory for pod api-7d9 in payments."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert [intent.metric for intent in explorer.calls] == [
-        "cpu_usage", "memory_working_set",
-    ]
-    assert all(intent.metric_scope == "pod" for intent in explorer.calls)
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-    assert "Observed metric values" not in rendered.text
-    assert "The Pod selector does not match an available node" in rendered.text
-    assert "metric-cpu_usage" in rendered.text
-    assert "metric-memory_working_set" in rendered.text
-
-
-def test_ask_rbac_denial_reaches_terminal_answer_without_hanging(tmp_path: Path) -> None:
-    provider = RbacAwareAdHocProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=ForbiddenReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check pod api-7d9 in namespace payments."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "requested API server logs could not be collected" in rendered.text
-        assert "HTTP 403" in rendered.text
-        assert "Working on your question" not in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        run = db_session.scalar(select(AdHocRun))
-        assert run is not None and run.status == "succeeded"
-        assert run.completed_at is not None
-    engine.dispose()
-
-
-def test_ask_preserves_heading_only_final_answer_without_style_retry(
-    tmp_path: Path,
-) -> None:
-    provider = HeadingOnlyThenCompleteProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check pod api-7d9 in namespace payments."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "Observed objects" in rendered.text
-    assert "The exact Pod remains Pending" not in rendered.text
-    assert len(provider.adhoc_answer_calls) == 1
-    assert "answer_feedback" not in provider.adhoc_answer_calls[0]
-
-
-def test_ask_planner_failure_is_visible_and_does_not_block_answer(
-    tmp_path: Path, caplog
-) -> None:
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=FailingAdHocProvider(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    secret_question = "Why is customer-secret-phrase workload unhealthy?"
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": secret_question},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "does not match ReadPlan" in rendered.text
-        assert "scope_summary: string_too_short" in rendered.text
-
-    log_text = caplog.text
-    assert "podpilot.adhoc.provider_start" in log_text
-    assert "podpilot.adhoc.provider_complete" in log_text
-    assert "podpilot.adhoc.provider_failed" not in log_text
-    assert "scope_summary: string_too_short" in log_text
-    assert secret_question not in log_text
-
-
-def test_final_provider_failure_preserves_collected_evidence_and_compact_context(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = EmptyFinalAnswerProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check pod api-7d9 in namespace payments."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "Read Pod payments/api-7d9" in rendered.text
-    assert "PodPilot could not complete this investigation" not in rendered.text
-    assert "provider returned no structured response content" in rendered.text
-    assert "podpilot.adhoc.provider_fallback" in caplog.text
-    context = provider.adhoc_answer_calls[0]
-    assert len(context["conversation"]) <= 4
-    assert len(context["observations"]) <= 16
-    assert len(context["curated_knowledge"]) <= 6
-    assert "relationship_graph" not in context
-
-
-def test_ask_continues_to_answer_when_later_plan_is_invalid(tmp_path: Path) -> None:
-    provider = LateFailingPlanProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check pod api-7d9 in namespace payments."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert "selector does not match" in rendered.text
-    assert "continued to the answer phase" in rendered.text
-    assert len(provider.adhoc_answer_calls) == 1
-
-
-def test_ask_storageclass_inventory_does_not_use_removed_list_helper(
-    tmp_path: Path,
-) -> None:
-    provider = StorageClassProvider()
-    explorer = StorageClassExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "What StorageClasses are available on the cluster?"},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "No StorageClass inventory was collected" in rendered.text
-        assert "managed-premium" not in rendered.text
-        assert "cluster-sc-1" not in rendered.text
-        assert "Suggested next checks" not in rendered.text
-
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-    assert explorer.calls == []
-
-
-def test_ask_route_protocol_grounds_backend_service_and_preserves_route_answer(
-    tmp_path: Path,
-) -> None:
-    provider = RouteBackendProvider()
-    explorer = RouteBackendExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    question = (
-        "This Route reports an Internal Server Error over HTTPS, but is the backend HTTP? "
-        "https://maas.apps.example.test/v1/models"
-    )
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": question},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "model did not produce a usable evidence-backed interpretation" in rendered.text
-    assert "model planner did not select a safe evidence read" not in rendered.text
-    assert [call.tool for call in explorer.calls] == [
-        "search_resources", "get_resource",
-    ]
-    assert explorer.calls[1].name == "model-server"
-    assert "removed list_resources helper" in rendered.text
-
-
-def test_diagnostic_stop_is_respected_without_server_directed_reads(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = EarlyStoppingRouteProvider()
-    explorer = RouteBackendExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "This Route reports an Internal Server Error over HTTPS; validate the backend. "
-                    "https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    review_calls = [
-        context for context in provider.adhoc_plan_calls
-        if context.get("planner_feedback", {}).get("code") == "review_evidence_sufficiency"
-    ]
-    assert review_calls == []
-    assert "reason=evidence_sufficiency_review" not in caplog.text
-
-
-def test_structured_answer_gap_remains_agent_authored_without_server_replanning(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = StructuredGapRouteProvider()
-    explorer = RouteBackendExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "Validate this Route backend: https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "backend Service mapping is not collected yet" in rendered.text
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    assert len(provider.adhoc_answer_calls) == 1
-    assert "podpilot.adhoc.gap_followup_complete" not in caplog.text
-
-
-def test_embedded_answer_gap_is_not_used_to_direct_server_side_collection(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = EmbeddedGapRouteProvider()
-    explorer = RouteBackendExplorer(route_termination="passthrough")
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": (
-                "Validate this Route backend: https://maas.apps.example.test/v1/models"
-            )},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    assert "Route uses TLS passthrough" in rendered.text
-    assert "investigation_gaps" in rendered.text
-    assert "structured_fields_embedded_in_answer" not in caplog.text
-    assert "podpilot.adhoc.gap_followup_complete" not in caplog.text
-    assert len(provider.adhoc_answer_calls) == 1
 
 
 def test_candidate_first_planner_selects_route_then_service_with_compact_context() -> None:
@@ -12979,378 +11987,6 @@ def test_grounded_candidates_prioritize_workload_evidence_after_tls_response() -
     assert all(item.intent.tool != "list_resources" for item in candidates)
 
 
-def test_agent_stop_is_not_overridden_by_structured_gap_candidate(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = GapStoppingCandidateProvider()
-    explorer = RouteBackendExplorer(route_termination="passthrough")
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": (
-                "Validate this Route backend: https://maas.apps.example.test/v1/models"
-            )},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    assert "backend Service mapping is not collected yet" in rendered.text
-    assert "podpilot.adhoc.gap_candidate_recovery" not in caplog.text
-
-
-def test_empty_investigate_selection_does_not_invent_a_supplied_action(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = EmptyInvestigateRouteProvider()
-    explorer = RouteBackendExplorer(route_termination="passthrough")
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": (
-                "Validate this Route backend: https://maas.apps.example.test/v1/models"
-            )},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    assert "podpilot.adhoc.action_candidate_recovery" not in caplog.text
-
-
-def test_invalid_model_plan_does_not_trigger_a_preconceived_traffic_traversal(
-    tmp_path: Path,
-) -> None:
-    provider = FailingTrafficPlanProvider()
-    explorer = RouteBackendExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "This Route reports an Internal Server Error over HTTPS; inspect the backend. "
-                    "https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "planner could not produce a safe typed read plan" in rendered.text
-    assert "ReadPlan round 1 failed" in rendered.text
-    assert explorer.calls == []
-    assert provider.adhoc_answer_calls[0]["findings"] == []
-
-
-def test_heading_only_route_answer_is_not_replaced_by_deterministic_prose(
-    tmp_path: Path,
-) -> None:
-    provider = HeadingOnlyRouteProvider()
-    explorer = RouteBackendExplorer(log_tail=(
-        "ssl_context.load_cert_chain(\n"
-        "    certfile='/etc/certs/server.pem',\n"
-        "FileNotFoundError: [Errno 2] No such file or directory"
-    ))
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
-                    "https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert len(provider.adhoc_answer_calls) == 1
-    assert "Observed objects — what the cluster is actually doing" in rendered.text
-    assert "Configured termination" not in rendered.text
-    assert "Backend log findings" not in rendered.text
-
-
-def test_repeated_no_read_plan_uses_operator_grounded_anchor_then_returns_to_model(
-    tmp_path: Path, caplog,
-) -> None:
-    provider = NoReadThenHeadingOnlyRouteProvider()
-    explorer = RouteBackendExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-    caplog.set_level("INFO", logger="uvicorn.error")
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
-                    "https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "Observed objects — what the cluster is actually doing" in rendered.text
-    assert explorer.calls == []
-    assert len(provider.adhoc_plan_calls) == 1
-    assert provider.adhoc_plan_calls[0]["observations"] == []
-    assert "podpilot.adhoc.operator_anchor_recovery" not in caplog.text
-
-
-def test_natural_pod_log_request_discovers_exact_pod_then_analyzes_logs(
-    tmp_path: Path,
-) -> None:
-    question = (
-        "There is an authorino pod in kuadrant-system namespace, check its logs "
-        "for errors that could generate 401 error code for the user"
-    )
-
-    class Provider(FakeModelProvider):
-        def plan_ad_hoc(self, profile, api_key: str, context: dict[str, object]) -> ReadPlan:
-            self.adhoc_plan_calls.append(context)
-            log_ids = [
-                item["id"] for item in context["observations"]
-                if item.get("tool") == "pod_logs"
-            ]
-            supporting_ids = log_ids or [item["id"] for item in context["observations"]]
-            return ReadPlan(
-                goal_type="logs",
-                decision="answer_from_evidence",
-                scope_summary="Stop so server recovery can prove the requested log path.",
-                supporting_evidence_ids=supporting_ids,
-            )
-
-        def answer_ad_hoc(
-            self, profile, api_key: str, context: dict[str, object]
-        ) -> AdHocAnswer:
-            self.adhoc_answer_calls.append(context)
-            return AdHocAnswer(
-                answer_mode="insufficient_evidence",
-                conclusion_status="unresolved",
-                answer="No Authorino Pod logs were collected, so the 401 cause is unresolved.",
-                cited_evidence_ids=[],
-            )
-
-        def analyze_logs(
-            self, profile, api_key: str, context: dict[str, object]
-        ) -> AdHocLogAnalysis:
-            self.log_analysis_calls.append(context)
-            return AdHocLogAnalysis(
-                overview="The Authorino log contains a user-facing authentication failure.",
-                issues=[LogAnalysisIssue(
-                    evidence_ids=["cluster-authorino-log"],
-                    severity="error",
-                    category="authentication",
-                    summary="Authorino rejected a token because its audience was invalid.",
-                    potential_impact="Affected requests receive HTTP 401 Unauthorized.",
-                    supporting_excerpt="401 unauthorized: token audience invalid",
-                    confidence="high",
-                )],
-                limitations=["Only the bounded current log tail was analyzed."],
-            )
-
-    class Explorer:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def execute(self, intent):
-            self.calls.append(intent)
-            if intent.tool == "search_resources":
-                assert intent.kind == "Pod"
-                assert intent.namespace == "kuadrant-system"
-                assert intent.match_field == "metadata.name"
-                assert intent.match_value == "authorino"
-                assert intent.match_operator == "contains"
-                return ReadResult((AdHocObservation(
-                    id="cluster-authorino-pods",
-                    tool="search_resources",
-                    summary="Found one matching Authorino Pod.",
-                    source="kubernetes:v1:Pod:kuadrant-system/*",
-                    collected_at=datetime.now(timezone.utc),
-                    data={
-                        "kind": "Pod",
-                        "scope": "kuadrant-system",
-                        "logCandidates": [{
-                            "namespace": "kuadrant-system",
-                            "pod": "authorino-7fbbd96d8b-z2x9k",
-                            "containers": ["authorino"],
-                            "phase": "Running",
-                            "ready": True,
-                            "restartCount": 0,
-                        }],
-                    },
-                ),))
-            assert intent.tool == "pod_logs"
-            assert intent.namespace == "kuadrant-system"
-            assert intent.name == "authorino-7fbbd96d8b-z2x9k"
-            assert intent.container == "authorino"
-            return ReadResult((AdHocObservation(
-                id="cluster-authorino-log",
-                tool="pod_logs",
-                summary="Collected bounded current Authorino logs.",
-                source=(
-                    "kubernetes:v1:Pod/log:kuadrant-system/"
-                    "authorino-7fbbd96d8b-z2x9k?current"
-                ),
-                collected_at=datetime.now(timezone.utc),
-                data={
-                    "container": "authorino", "previous": False,
-                    "tail": "401 unauthorized: token audience invalid",
-                },
-            ),))
-
-    provider = Provider()
-    explorer = Explorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}",
-            updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        assert csrf is not None
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": question},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert explorer.calls == []
-    assert not provider.log_analysis_calls
-    assert "No Authorino Pod logs were collected" in rendered.text
-    assert "token audience invalid" not in rendered.text
-    assert "Model-assisted log analysis" not in rendered.text
-
-
 def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
     caplog,
 ) -> None:
@@ -13492,348 +12128,6 @@ def test_removed_list_plan_stops_before_later_candidate_recovery(caplog) -> None
     assert "failed schema validation" not in caplog.text
 
 
-def test_removed_list_helper_prevents_implicit_route_pod_log_expansion(
-    tmp_path: Path,
-) -> None:
-    provider = RouteOnlyAnswerProvider()
-    explorer = RouteBackendExplorer(
-        route_termination="passthrough",
-        log_tail=(
-            "ssl_context.load_cert_chain(\n"
-            "    certfile='/etc/certs/server.pem',\n"
-            "FileNotFoundError: [Errno 2] No such file or directory"
-        ),
-    )
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": (
-                    "This Route reports an Internal Server Error over HTTPS; is the backend HTTP? "
-                    "https://maas.apps.example.test/v1/models"
-                )
-            },
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    # The model-authored answer is retained without server-authored log prose.
-    assert len(provider.adhoc_answer_calls) == 1
-    assert provider.log_analysis_calls == []
-    assert not any(
-        item["tool"] == "pod_logs"
-        for item in provider.adhoc_answer_calls[0]["observations"]
-    )
-    assert "router forwards the client TLS stream" in rendered.text
-    assert "Model-assisted log analysis" not in rendered.text
-    assert "backend process could not load its configured PEM certificate" not in rendered.text
-    assert "passthrough" in rendered.text
-    assert "Backend log findings" not in rendered.text
-    assert "removed list_resources helper" in rendered.text
-
-
-def test_ask_namespace_top_cpu_uses_deterministic_metric_read_without_model_plan(
-    tmp_path: Path,
-) -> None:
-    provider = NamespaceMetricProvider()
-    explorer = NamespaceMetricExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "What workloads are using the most CPU in openshift-logging?"},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert "Top CPU Consumers" in rendered.text
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-    assert len(explorer.calls) == 1
-    assert explorer.calls[0].tool == "query_metrics"
-    assert explorer.calls[0].metric == "top_cpu_consumers"
-    assert explorer.calls[0].metric_scope == "namespace"
-    assert explorer.calls[0].namespace == "openshift-logging"
-    assert "Top CPU Consumers" in rendered.text
-    assert "collector-1" in rendered.text
-    assert "0.900 cores" in rendered.text
-    assert "Download CSV" in rendered.text
-    assert re.search(r'data-csv-table="metric-table-[^"]+-metric-cpu-1"', rendered.text)
-
-
-def test_ask_cluster_operator_status_uses_typed_health_summary(
-    tmp_path: Path,
-) -> None:
-    provider = ImpliedHealthProvider()
-    explorer = ClusterOperatorExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check the status of the cluster operators"},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert rendered.status_code == 200
-        assert "All observed ClusterOperators are Available" in rendered.text
-        assert "cluster-operators-1" not in rendered.text
-
-    assert explorer.calls == []
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-
-
-def test_ask_typed_cluster_operator_health_overrides_model_refusal(
-    tmp_path: Path,
-) -> None:
-    provider = RefusingCatalogProvider()
-    explorer = ClusterOperatorExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check the status of the cluster operators"},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "All observed ClusterOperators are Available" in rendered.text
-        assert "cluster-operators-1" not in rendered.text
-
-    assert provider.adhoc_plan_calls
-    assert len(provider.adhoc_answer_calls) == 1
-    assert explorer.calls == []
-
-
-def test_ask_uses_safely_reduced_active_profile_without_chat_warning(
-    tmp_path: Path,
-) -> None:
-    provider = FailingAdHocProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="reduced_capability",
-            capabilities_json=json.dumps({
-                "reachable": True, "tls_valid": True, "authenticated": True,
-                "model_available": True, "structured_output": True,
-                "ask_schemas": False,
-            }),
-            last_error="ReadPlan probe failed. Synthetic semantic mismatch.", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Show Pods in namespace ai-ops"},
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert rendered.status_code == 200
-        assert "Model running with reduced capability" not in rendered.text
-        assert "ReadPlan probe failed. Synthetic semantic mismatch." not in rendered.text
-        assert "Model profile not ready" not in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assistant = db_session.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
-        assert assistant is not None
-        assert assistant.provider_status == "reduced_capability"
-    engine.dispose()
-
-
-def test_ask_podpilot_discovers_pod_then_reads_exact_container_logs(tmp_path: Path) -> None:
-    provider = DiscoveryThenLogsProvider()
-    explorer = DiscoveryThenLogsExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Are there errors in the kube API server Pod logs?"},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert rendered.status_code == 200
-        assert "No error lines appeared" in rendered.text
-        assert "Evidence used in this answer" in rendered.text
-        assert "Inspected 2 cluster targets" not in rendered.text
-        assert "cluster-api-logs" in rendered.text
-        assert "exact Pod name is needed" not in rendered.text
-
-    assert [call.tool for call in explorer.calls] == ["search_resources", "pod_logs"]
-    assert provider.adhoc_plan_calls[1]["tool_policy"]["remaining_reads"] == (
-        settings.adhoc_max_reads_per_turn - 1
-    )
-    assert provider.adhoc_plan_calls[1]["completed_reads"][0]["round"] == 1
-    assert provider.adhoc_plan_calls[2]["observations"][-1]["tool"] == "pod_logs"
-
-
-def test_ask_rejects_synthesized_log_targets_and_falls_back_to_exact_candidates(
-    tmp_path: Path,
-) -> None:
-    provider = InvalidLogTargetsThenFallbackProvider()
-    explorer = ExactCandidateFallbackExplorer()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=explorer,
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Check the latest kube API server logs for errors."},
-            follow_redirects=False,
-        )
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-
-    assert rendered.status_code == 200
-    assert "used exact discovered Pod/container targets" not in rendered.text
-    assert [call.tool for call in explorer.calls] == ["search_resources"]
-    repaired_contexts = [
-        context for context in provider.adhoc_plan_calls
-            if context.get("planner_feedback", {}).get("code") == "model_target_not_grounded"
-    ]
-    assert len(repaired_contexts) == 1
-    fallback_candidates = repaired_contexts[0]["tool_policy"]["pod_log_candidates"]
-    assert len(fallback_candidates) == 4
-    assert [item["investigation_priority"] for item in fallback_candidates[:3]] == [
-        "normal", "elevated", "elevated",
-    ]
-    assert fallback_candidates[3]["investigation_priority"] == "normal"
-
-
 def test_ask_podpilot_is_investigator_gated(tmp_path: Path) -> None:
     app, _ = make_app(
         tmp_path, assignments={"vic": Role.VIEWER}, source=FakeAlertSource()
@@ -13868,7 +12162,7 @@ def test_new_ask_renders_real_read_only_starter_actions(tmp_path: Path) -> None:
     assert "List my projects" not in page.text
 
 
-def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
+def test_delegated_operator_connects_and_stamps_action_conversation(
     tmp_path: Path, monkeypatch,
 ) -> None:
     from podpilot_openshift.delegated import DelegatedIdentity
@@ -13993,7 +12287,7 @@ def test_delegated_operator_connects_and_stamps_unrestricted_conversation(
         assert "broker blocks Kubernetes mutations" in conversation_page.text
         assert "This conversation remains read-only" in conversation_page.text
         assert "Delegated Action mode" not in conversation_page.text
-        assert "agent-mode-pill" not in conversation_page.text
+        assert "action-caution-pill" not in conversation_page.text
         client.cookies.delete("podpilot_delegated_session")
         ended_page = client.get(
             f"/ask/{conversation_id}", headers={"x-forwarded-user": "dana"}
@@ -14476,7 +12770,7 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert "may create, patch, apply, or delete objects directly" in action_page.text
         assert "There is no PodPilot preview or approval step" in action_page.text
         assert "change selected clusters using your OpenShift identity" not in action_page.text
-        assert "agent-mode-pill" in action_page.text
+        assert "action-caution-pill" in action_page.text
     engine.dispose()
 
 
@@ -14626,58 +12920,6 @@ def test_owner_can_delete_queued_conversation_and_evidence_with_audit_record(
     engine.dispose()
 
 
-def test_unlimited_conversation_uses_rolling_context_summary(tmp_path: Path) -> None:
-    provider = FakeModelProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(), credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider, settings_overrides={"adhoc_context_messages": 10},
-    )
-    conversation_id = "00000000-0000-0000-0000-000000000091"
-    old = datetime.now(timezone.utc) - timedelta(minutes=10)
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="OpenAI", base_url="https://api.openai.com/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.add(AdHocConversation(
-            id=conversation_id, created_by="ivy", title="Long-running incident",
-            status="active", evidence_json="[]",
-        ))
-        for index in range(26):
-            db_session.add(AdHocMessage(
-                id=f"10000000-0000-0000-0000-{index:012d}", conversation_id=conversation_id,
-                created_at=old + timedelta(seconds=index),
-                role="user" if index % 2 == 0 else "assistant",
-                actor="ivy" if index % 2 == 0 else None,
-                content=f"historical message {index}",
-            ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        continued = client.post(
-            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Continue checking the same incident."},
-            follow_redirects=False,
-        )
-        assert continued.status_code == 303
-
-    assert len(provider.adhoc_plan_calls[0]["conversation"]) == 4
-    assert "historical message 0" in provider.adhoc_plan_calls[0]["earlier_context_summary"]
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        conversation = db_session.get(AdHocConversation, conversation_id)
-        assert conversation is not None and conversation.summarized_message_count == 17
-    engine.dispose()
-
-
 def test_adhoc_rate_limit_is_per_user_not_per_conversation(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource(),
@@ -14705,466 +12947,6 @@ def test_adhoc_rate_limit_is_per_user_not_per_conversation(tmp_path: Path) -> No
             data={"message": "Second"},
         )
         assert limited.status_code == 429
-
-
-def test_ask_job_returns_immediately_and_streams_private_progress(tmp_path: Path) -> None:
-    provider = BlockingAdHocProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-        settings_overrides={
-            "adhoc_job_worker_enabled": True,
-            "adhoc_worker_concurrency": 1,
-        },
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={
-                "message": "Why is pod api-7d9 pending in payments?",
-                "include_raw_response": "on",
-            },
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        assert provider.answer_started.wait(timeout=2)
-        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
-
-        pending_page = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "Live investigation" in pending_page.text
-        assert "thinking-spinner" in pending_page.text
-        assert re.search(
-            r'name="include_raw_response"\s+checked\s+disabled', pending_page.text
-        )
-        run_match = re.search(r'data-adhoc-run-id="([^"]+)"', pending_page.text)
-        assert run_match is not None
-        run_id = run_match.group(1)
-
-        status_response = client.get(
-            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-        )
-        assert status_response.status_code == 200
-        assert status_response.json()["status"] == "running"
-        assert any(
-            event["phase"] in {"planning", "collecting", "answering"}
-            for event in status_response.json()["events"]
-        )
-        hidden = client.get(
-            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ada"}
-        )
-        assert hidden.status_code == 404
-        hidden_events = client.get(
-            f"/api/v1/adhoc-runs/{run_id}/events", headers={"x-forwarded-user": "ada"}
-        )
-        assert hidden_events.status_code == 404
-        second = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Investigate a separate session while the worker is busy."},
-            follow_redirects=False,
-        )
-        assert second.status_code == 303
-        queued_page = client.get(second.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "Waiting to investigate" in queued_page.text
-        assert (
-            "Question queued. It will start automatically when the investigation worker is available."
-            in queued_page.text
-        )
-        overlapping = client.post(
-            f"/api/v1/adhoc-conversations/{conversation_id}/messages",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Run another check while this one is active."},
-        )
-        assert overlapping.status_code == 409
-        delete_active = client.post(
-            f"/api/v1/adhoc-conversations/{conversation_id}/delete",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        assert delete_active.status_code == 303
-        assert delete_active.headers["location"] == "/ask"
-
-        provider.release_answer.set()
-        assert client.get(
-            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-        ).status_code == 404
-        assert client.get(
-            created.headers["location"], headers={"x-forwarded-user": "ivy"}
-        ).status_code == 404
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert db_session.get(AdHocRun, run_id) is None
-        event = db_session.scalar(
-            select(AuditEvent).where(AuditEvent.action == "adhoc.delete")
-        )
-        assert event is not None
-        assert json.loads(event.details_json)["cancelled_run_count"] == 1
-    engine.dispose()
-
-
-def test_user_cancels_active_ask_run_and_correlated_runner_request(tmp_path: Path) -> None:
-    provider = BlockingAdHocProvider()
-
-    class Runner:
-        def __init__(self) -> None:
-            self.cancelled: list[str] = []
-
-        def execute(self, *_args, **_kwargs):
-            raise AssertionError("The synthetic provider should remain in its model call.")
-
-        def cancel(self, request_id: str) -> bool:
-            self.cancelled.append(request_id)
-            return True
-
-    runner = Runner()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-        agent_runner=runner,
-        settings_overrides={
-            "adhoc_job_worker_enabled": True,
-            "adhoc_worker_concurrency": 1,
-        },
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    runner_request_id = "00000000-0000-0000-0000-000000000104"
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        assert csrf is not None
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Inspect the selected cluster."},
-            follow_redirects=False,
-        )
-        assert created.status_code == 303
-        assert provider.answer_started.wait(timeout=2)
-        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            run_id = db_session.scalar(select(AdHocRun.id).where(
-                AdHocRun.conversation_id == conversation_id
-            ))
-        engine.dispose()
-        assert run_id is not None
-        app.state.adhoc_runner_requests[run_id] = {runner_request_id}
-
-        active = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert (
-            f'data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{run_id}/cancel"'
-            in active.text
-        )
-        assert "Cancel request</button>" not in active.text
-        textarea = re.search(r'<textarea id="adhoc-message"[^>]*>', active.text)
-        assert textarea is not None and "disabled" not in textarea.group(0)
-
-        cancelled = client.post(
-            f"/api/v1/adhoc-runs/{run_id}/cancel",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert cancelled.status_code == 200
-        assert cancelled.json()["status"] == "cancelled"
-        assert cancelled.json()["runner_cancellation_attempted"] is True
-        assert cancelled.json()["runner_terminations"] == 1
-        assert runner.cancelled == [runner_request_id]
-        provider.release_answer.set()
-
-        status = client.get(
-            f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-        )
-        assert status.status_code == 200
-        assert status.json()["status"] == "cancelled"
-        rendered = client.get(
-            created.headers["location"], headers={"x-forwarded-user": "ivy"}
-        )
-        assert "Investigation cancelled at your request" in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        event = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "adhoc.cancel"))
-        assert event is not None and event.outcome == "cancelled"
-    engine.dispose()
-
-
-def test_ask_worker_pool_runs_different_users_concurrently(tmp_path: Path) -> None:
-    provider = ConcurrentBlockingAdHocProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-        settings_overrides={
-            "adhoc_job_worker_enabled": True,
-            "adhoc_worker_concurrency": 3,
-            "adhoc_max_concurrent_runs_per_user": 1,
-        },
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        run_targets = []
-        csrf_tokens = {}
-        for username in ("ivy", "ada"):
-            page = client.get("/ask", headers={"x-forwarded-user": username})
-            csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-            assert csrf is not None
-            csrf_tokens[username] = csrf.group(1)
-            created = client.post(
-                "/api/v1/adhoc-conversations",
-                headers={
-                    "x-forwarded-user": username,
-                    "x-podpilot-csrf": csrf.group(1),
-                },
-                data={
-                    "message": (
-                        f"Investigate pod api-7d9 in namespace payments for {username}."
-                    )
-                },
-                follow_redirects=False,
-            )
-            assert created.status_code == 303
-            conversation_id = created.headers["location"].rsplit("/", 1)[-1]
-            run_targets.append((username, conversation_id))
-
-        assert provider.two_answers_started.wait(timeout=3)
-        assert provider.max_active_answers == 2
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            assert db_session.scalar(
-                select(func.count()).select_from(AdHocRun).where(AdHocRun.status == "running")
-            ) == 2
-        engine.dispose()
-
-        same_user = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={
-                "x-forwarded-user": "ivy",
-                "x-podpilot-csrf": csrf_tokens["ivy"],
-            },
-            data={"message": "Investigate pod api-7d9 in namespace payments again."},
-            follow_redirects=False,
-        )
-        assert same_user.status_code == 303
-        same_user_conversation_id = same_user.headers["location"].rsplit("/", 1)[-1]
-        queued_page = client.get(
-            same_user.headers["location"], headers={"x-forwarded-user": "ivy"}
-        )
-        assert "Waiting to investigate" in queued_page.text
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            assert db_session.scalar(
-                select(func.count()).select_from(AdHocRun).where(AdHocRun.status == "queued")
-            ) == 1
-        engine.dispose()
-
-        provider.release_answers.set()
-        run_targets.append(("ivy", same_user_conversation_id))
-        for username, conversation_id in run_targets:
-            completed = False
-            for _ in range(60):
-                page = client.get(
-                    f"/ask/{conversation_id}", headers={"x-forwarded-user": username}
-                )
-                if "selector does not match" in page.text:
-                    completed = True
-                    break
-                time.sleep(0.05)
-            assert completed
-
-
-def test_ask_job_deadline_persists_terminal_failure_and_stops_spinner(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    provider = BlockingAdHocProvider()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=provider,
-        read_explorer=FakeReadExplorer(),
-        settings_overrides={
-            "adhoc_job_worker_enabled": True,
-            "adhoc_run_timeout_seconds": 1,
-        },
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
-        created = client.post(
-            "/api/v1/adhoc-conversations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            data={"message": "Why is pod api-7d9 pending in payments?"},
-            follow_redirects=False,
-        )
-        assert provider.answer_started.wait(timeout=2)
-        conversation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            run_id = db_session.scalar(select(AdHocRun.id).where(
-                AdHocRun.conversation_id == conversation_id
-            ))
-        engine.dispose()
-        terminal = None
-        for _ in range(60):
-            terminal = client.get(
-                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-            ).json()
-            if terminal["status"] == "failed":
-                break
-            time.sleep(0.05)
-        provider.release_answer.set()
-        assert terminal is not None and terminal["status"] == "failed"
-        assert terminal["phase"] == "failed"
-        assert terminal["events"][-1]["phase"] == "failed"
-        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "exceeded the execution deadline" in rendered.text
-        assert "This conversation did not permit cluster writes" in rendered.text
-        assert "last recorded operation was:" in rendered.text
-        assert "Working on your question" not in rendered.text
-        assert "last_phase=" in caplog.text
-        assert "last_progress=" in caplog.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        run = db_session.get(AdHocRun, run_id)
-        assert run is not None and run.completed_at is not None
-        assert run.error_detail == "Investigation exceeded the 1-second execution deadline."
-        messages = list(db_session.scalars(select(AdHocMessage).where(
-            AdHocMessage.conversation_id == conversation_id,
-            AdHocMessage.role == "assistant",
-        )))
-        assert len(messages) == 1
-    engine.dispose()
-
-
-def test_ask_worker_requeues_interrupted_persisted_run_on_startup(tmp_path: Path) -> None:
-    run_id = "00000000-0000-0000-0000-000000000094"
-    conversation_id = "00000000-0000-0000-0000-000000000095"
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource(),
-        credential_store=MemoryCredentialStore("test-api-token"),
-        model_provider=FakeModelProvider(),
-        read_explorer=FakeReadExplorer(),
-        settings_overrides={"adhoc_job_worker_enabled": True},
-    )
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        db_session.add(ModelProfile(
-            id=1, provider_label="Internal", base_url="https://models.example.test/v1",
-            chat_model="test-model", embedding_model=None, timeout_seconds=30,
-            max_output_tokens=1200, status="ready", capabilities_json="{}", updated_by="ivy",
-        ))
-        db_session.add(AdHocConversation(
-            id=conversation_id,
-            created_by="ivy",
-            title="Interrupted question",
-            status="active",
-            evidence_json="[]",
-        ))
-        db_session.add(AdHocMessage(
-            id="00000000-0000-0000-0000-000000000096",
-            conversation_id=conversation_id,
-            role="user",
-            actor="ivy",
-            content="Why is pod api-7d9 pending in payments?",
-        ))
-        db_session.add(AdHocRun(
-            id=run_id,
-            conversation_id=conversation_id,
-            created_by="ivy",
-            message_text="Why is pod api-7d9 pending in payments?",
-            status="running",
-            phase="answering",
-            progress_json=json.dumps([{
-                "seq": 0,
-                "phase": "answering",
-                "message": "Preparing an answer before restart.",
-                "at": datetime.now(timezone.utc).isoformat(),
-            }]),
-            started_at=datetime.now(timezone.utc),
-        ))
-        db_session.commit()
-    engine.dispose()
-
-    with TestClient(app) as client:
-        terminal = None
-        for _ in range(40):
-            response = client.get(
-                f"/api/v1/adhoc-runs/{run_id}", headers={"x-forwarded-user": "ivy"}
-            )
-            terminal = response.json()
-            if terminal["status"] == "succeeded":
-                break
-            time.sleep(0.05)
-        assert terminal is not None and terminal["status"] == "succeeded"
-        rendered = client.get(
-            f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"}
-        )
-        assert "selector does not match" in rendered.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        run = db_session.get(AdHocRun, run_id)
-        assert run is not None
-        assert run.started_at is not None
-        assert run.completed_at is not None
-        assert run.assistant_message_id is not None
-    engine.dispose()
 
 
 def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
@@ -15195,7 +12977,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "ACTION MODE - Cluster WRITES Permitted" in template
     assert "data-action-tooltip" in template
     assert "data-read-only-tooltip" in template
-    assert ".agent-mode-pill" in styles
+    assert ".action-caution-pill" in styles
     assert ".action-mode-notice[hidden]" in styles
     assert ".boundary-pill.caution-summary::after" in styles
     assert "Session cautions:&#10;&#10;" in template
@@ -17274,7 +15056,7 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "total_tokens": 51200,
                 },
                 "calls": [{
-                    "operation": "workflow.unrestricted_agent",
+                    "operation": "workflow.delegated_agent",
                     "http_status": 400,
                     "request_id": "provider-request-400",
                     "error_preview": (

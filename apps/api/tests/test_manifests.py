@@ -261,7 +261,6 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     }
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
     assert runtime["data"]["adhoc_finalization_reserve_seconds"] == "60"
-    assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["delegated_access_enabled"] == "true"
     assert runtime["data"]["delegated_session_lifetime_seconds"] == "86400"
     assert runtime["data"]["agent_runner_url"] == "http://127.0.0.1:8090"
@@ -342,7 +341,6 @@ def test_sno_agentic_runner_uses_read_only_runtime_service_account() -> None:
     deployment = yaml.safe_load((root / "workload" / "deployment.yaml").read_text())
     rbac_documents = list(yaml.safe_load_all((root / "base" / "rbac.yaml").read_text()))
 
-    assert runtime["data"]["agent_mode"] == "unrestricted"
     assert runtime["data"]["adhoc_run_timeout_seconds"] == "900"
     assert "../../base" in kustomization["resources"]
     assert "../../../overlays/poc-cluster-admin" not in kustomization["resources"]
@@ -380,7 +378,6 @@ def test_remote_agentic_overlay_adds_versioned_runner_without_cluster_admin() ->
         "newTag": "0.12.0",
     }]
     assert runtime["data"] == {
-        "agent_mode": "unrestricted",
         "delegated_access_enabled": "true",
         "adhoc_run_timeout_seconds": "900",
     }

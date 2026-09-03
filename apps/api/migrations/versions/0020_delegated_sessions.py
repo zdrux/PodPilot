@@ -21,7 +21,7 @@ def upgrade() -> None:
     with op.batch_alter_table("adhoc_conversations") as batch:
         batch.add_column(sa.Column(
             "execution_mode", sa.String(length=32), nullable=False,
-            server_default="managed_guarded",
+            server_default="read_only",
         ))
         batch.add_column(sa.Column("delegated_session_id", sa.String(length=128), nullable=True))
 

@@ -251,7 +251,7 @@ including passthrough Route SNI behavior.
 
 Decision: Allow up to five rounds and twelve reads, derive the plan decision from
 typed content, and continue to the answer phase after any planner-contract failure.
-Add an unrestricted-destination `http_probe` intent to the same bounded broker. It
+Add an external-destination `http_probe` intent to the same bounded broker. It
 supports unauthenticated HEAD/GET, verified TLS, no redirects, bounded/redacted output,
 and a connection override that preserves the URL hostname as HTTP Host and TLS SNI.
 Arbitrary shell and model-authored headers, credentials, bodies, and mutations remain
@@ -268,7 +268,7 @@ policy. Probe failures remain evidence rather than generic provider failures.
 
 Context: Alert-specific packs cannot cover the long tail of ordinary cluster
 questions. Logs and ConfigMaps are necessary operational evidence, while the model
-must not receive Kubernetes credentials or an unrestricted client.
+must not receive Kubernetes credentials or a general-purpose client.
 
 Decision: Run the application as `ai-ops/podpilot-investigator`, bind it to the
 OpenShift `cluster-reader` ClusterRole, and retain `ai-observer` as the disposable
@@ -1060,22 +1060,22 @@ namespace filters. Combined workload scans apply the scan ceiling per controller
 `Ready=False`, a Machine provisioning condition, and a Pod container waiting reason remain distinct
 health semantics.
 
-## 2026-08-28 - Unrestricted agent simulation uses a read-only oc sidecar
+## 2026-08-28 - Delegated agent simulation uses a read-only oc sidecar
 
-Context: The guarded Ask loop cannot reproduce the behavior of a remote fully agentic deployment
+Context: The typed-planner Ask loop cannot reproduce the behavior of a remote fully agentic deployment
 because every cluster interaction compiles through typed reads and mutations require registered
 approval. The SNO lab needs to exercise native multi-step tool calling with the same OpenRouter
 model as the remote cluster without accidentally granting the lab agent cluster-admin.
 
-Decision: Add an explicit `unrestricted` agent mode enabled by the SNO milestone overlay and an
-optional additive `remote-poc-agentic` overlay. Use OpenRouter Chat Completions with exact model
+Decision: Add a delegated agent workflow enabled by the SNO milestone overlay and the
+`remote-poc-agentic` overlay. Use OpenRouter Chat Completions with exact model
 `openai/gpt-oss-120b` for the SNO simulation and one
 `execute_shell` function. Execute calls through a localhost-only sidecar built with a pinned Linux
 `oc` binary. Each call names one selected cluster. Runtime-cluster calls use the sidecar's projected
 `podpilot-investigator` identity; registered remote calls receive only that target's API origin and
 stored token from the API over Pod loopback and use a deleted-after-use kubeconfig. Do not compose the `ai-observer`
-cluster-admin overlay. Keep guarded mode as the base and standard remote default. The remote
-agentic overlay inherits remote configuration and RBAC, adds a separately promoted versioned runner
+cluster-admin overlay. The remote agentic overlay inherits remote configuration and RBAC, adds a
+separately promoted versioned runner
 image, grants no permissions itself, and explicitly forces remote-cluster TLS verification off for
 this environment. Retain an outer durable-run
 deadline, add a shorter per-command process-group timeout with silent polling and live UI
@@ -1088,14 +1088,14 @@ This accurately surfaces forbidden mutations in the agent loop. It is intentiona
 production, does not make model output trustworthy, and must never be combined with the lab
 cluster-admin overlay.
 
-## 2026-08-28 - Unrestricted mode retains additive deterministic enrichment
+## 2026-08-28 - Delegated workflow retains additive deterministic enrichment
 
 Context: A shell-only agent can miss product-specific capabilities that normal PodPilot code owns.
 For example, it may count Kubernetes Events as a proxy for log production even though PodPilot has
 an authenticated aggregate-only Loki application-log volume reader and a deterministic ranking
 presentation.
 
-Decision: Before each unrestricted shell loop, apply the existing high-confidence known-read
+Decision: Before each delegated command loop, apply the existing high-confidence known-read
 compiler to the current question. Execute a matching registered plan across the selected clusters,
 persist its normalized evidence, and include that evidence and its preferred presentation metadata
 in the agent context. For metric rankings, the native evidence card is the sole operator-visible
@@ -1103,7 +1103,7 @@ table; deterministic Markdown and model-authored copies are not rendered beside 
 model to report only material additions rather than reproducing enriched tables. Keep
 `execute_shell` available without approval or typed
 tool restrictions after enrichment. Do not invoke the model planner merely to find an enrichment;
-unrecognized questions proceed directly to the unrestricted loop.
+unrecognized questions proceed directly to the delegated loop.
 
 The native-card preference is evidence-shape based rather than a metric-name allowlist. Any
 normalized `query_metrics` observation with renderable rows uses the card, including CPU, memory,
@@ -1125,9 +1125,9 @@ caused causal follow-ups to stop at Pod spec fields instead of inspecting events
 controller state. Multi-cluster follow-ups could also repeat an exact coordinate on clusters that
 did not produce the selected result.
 
-Decision: Centralize unrestricted completion around question intent and registered-answer
+Decision: Centralize delegated completion around question intent and registered-answer
 completeness. Explicit retrieval requests may terminate on a complete registered result. Causal and
-investigative requests always continue into the unrestricted tool loop after enrichment, except
+investigative requests always continue into the delegated tool loop after enrichment, except
 for narrow fail-closed capabilities whose contracts prohibit generic shell fallback. Keep native
 cards and deterministic-primary views as presentation metadata only. Persist a uniquely
 attributable source cluster on opaque recent-object references and constrain the follow-up turn to
@@ -1141,14 +1141,14 @@ selected cluster.
 
 ## 2026-08-29 - Registered audit collection fails closed
 
-Context: When the authoritative Loki audit query timed out, unrestricted mode entered the generic
+Context: When the authoritative Loki audit query timed out, the delegated workflow entered the generic
 shell loop. The model attempted `events.audit.k8s.io`, which is not how OpenShift audit logs are
 exposed, and assumed an optional `jq` binary existed. These secondary failures obscured the real
 timeout without providing equivalent evidence.
 
 Decision: Treat a compiled `query_audit_events` plan as authoritative for the turn, including
 partial and failed multi-cluster results. Render the registered evidence or exact collection
-failure and do not enter the unrestricted shell loop. Continue to preserve explicit username,
+failure and do not enter the delegated command loop. Continue to preserve explicit username,
 namespace, resource, operation, outcome, time, and result-limit filters.
 Only an operator-specified result count enables backward audit-window expansion. For unnumbered
 `recent` requests, discard a classifier-invented convenience count, apply the configured display
@@ -1161,7 +1161,7 @@ restoring the registered audit source is the required recovery path.
 ## 2026-08-29 - Kafka deployment inventory is canonical and cluster-complete
 
 Context: Imperative wording such as “show all deployed Kafka clusters” missed the narrow Kafka
-existence recognizer. The unrestricted model then guessed several resource aliases on the first
+existence recognizer. The delegated model then guessed several resource aliases on the first
 selected cluster and generalized that result across the full multi-cluster selection.
 
 Decision: Recognize both imperative and interrogative Kafka deployment-inventory wording and
@@ -1197,7 +1197,7 @@ decision when they expect a read and must assert that server-side recovery does 
 agent stop. Historical decisions describing terminal registered enrichments or automatic
 continuations are superseded by this decision.
 
-## 2026-08-30 - Unmatched users use explicit delegated, unrestricted sessions
+## 2026-08-30 - Unmatched users use explicit delegated sessions
 
 Context: PodPilot role groups are an application policy boundary, not a faithful representation of
 each user's Kubernetes permissions. Some DEV operators need the agent to exercise exactly their own
@@ -1206,15 +1206,15 @@ remote RBAC, including writes, without changing the remote clusters or persistin
 Decision: When delegated access is enabled, users in no configured PodPilot role group become
 Delegated Operators. They explicitly select enabled clusters from the same PodPilot registry used
 by cluster management—including the runtime system cluster—accept an
-unrestricted warning, and complete an OpenShift challenging-client login with one credential pair.
+delegated-session warning, and complete an OpenShift challenging-client login with one credential pair.
 Passwords are discarded after exchange. Tokens stay in API memory for two hours and are injected by
 a capability-based loopback proxy; they are never given to the model or runner. The runner receives
 no Pod service-account token. Conversations lock their delegated session, execution mode, owner, and
 cluster set. Per-cluster custom CA bundles extend system trust without disabling TLS verification.
 
 Consequences: Remote RBAC and admission are the write boundary for delegated agents. Membership in
-Investigator, Approver, or Breakglass deliberately selects the managed guarded path even when that
-person is cluster-admin elsewhere. Normal expiry/logout attempts token revocation; process loss
+Investigator, Approver, or Breakglass uses the same delegated workflow with permissions determined
+by the application role. Normal expiry/logout attempts token revocation; process loss
 cannot revoke a memory-only token, so the cluster's standard OAuth TTL remains the residual bound.
 
 ## 2026-08-30 - All Ask access is user-delegated with conversation-scoped mode

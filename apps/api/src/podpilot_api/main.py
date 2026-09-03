@@ -671,9 +671,7 @@ def _active_profile(db_session: Session) -> ModelProfile | None:
     )
 
 
-def _profile_is_usable(
-    profile: ModelProfile | None, agent_mode: str = "guarded"
-) -> bool:
+def _profile_is_usable(profile: ModelProfile | None) -> bool:
     """Allow safely degraded text workflows without treating every probe warning as an outage."""
 
     if profile is None:
@@ -690,14 +688,9 @@ def _profile_is_usable(
         capabilities.get(key) is True
         for key in ("tls_valid", "tls_accepted", "plaintext_accepted")
     )
-    if agent_mode == "unrestricted":
-        return accepted_transport and all(
-            capabilities.get(key) is True
-            for key in ("reachable", "authenticated", "model_available", "tool_calls")
-        )
     return accepted_transport and all(
         capabilities.get(key) is True
-        for key in ("reachable", "authenticated", "model_available", "structured_output")
+        for key in ("reachable", "authenticated", "model_available", "tool_calls")
     )
 
 
@@ -10080,7 +10073,7 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
-    unrestricted_runner = agent_runner or OcAgentRunnerClient(
+    agent_runner_client = agent_runner or OcAgentRunnerClient(
         app_settings.agent_runner_url,
         timeout_seconds=app_settings.agent_command_timeout_seconds + 10,
     )
@@ -11023,7 +11016,6 @@ def create_app(
                             "investigation_gaps": [],
                             "conclusion_status": agent_conclusion_status,
                             "stop_reason": explicit_stop_reason or "complete",
-                            "agent_mode": "unrestricted",
                             "preferred_evidence_view": effective_preferred_evidence_view,
                             "presentation": resource_list_presentation,
                         }, sort_keys=True),
@@ -11038,7 +11030,6 @@ def create_app(
                         outcome="ready",
                         details_json=json.dumps({
                             "conversation_id": conversation_id,
-                            "agent_mode": "unrestricted",
                             "command_count": len(activity),
                         }, sort_keys=True),
                     ))
@@ -11346,7 +11337,7 @@ def create_app(
                                 command_hash, preflight_request_id,
                             )
                             preflight_result = await run_in_threadpool(
-                                unrestricted_runner.execute,
+                                agent_runner_client.execute,
                                 jq_preflight_command,
                                 connection,
                                 request_id=preflight_request_id,
@@ -11452,7 +11443,7 @@ def create_app(
                         command_started = asyncio.get_running_loop().time()
                         runner_task = asyncio.create_task(
                             run_in_threadpool(
-                                unrestricted_runner.execute,
+                                agent_runner_client.execute,
                                 command,
                                 connection,
                                 request_id=runner_request_id,
@@ -11648,19 +11639,6 @@ def create_app(
         with Session(engine, expire_on_commit=False) as db_session:
             conversation = db_session.get(AdHocConversation, conversation_id)
             assert conversation is not None
-            turn_agent_mode = (
-                "unrestricted"
-                if (
-                    app_settings.delegated_access_enabled
-                    or
-                    conversation.execution_mode in {"action", "delegated_unrestricted"}
-                    or (
-                        not app_settings.delegated_access_enabled
-                        and app_settings.agent_mode == "unrestricted"
-                    )
-                )
-                else "guarded"
-            )
             delegated_session_id = conversation.delegated_session_id
             evidence = list(json.loads(conversation.evidence_json))
             selected_cluster_ids = list(json.loads(conversation.cluster_ids_json or "[]"))
@@ -11719,7 +11697,7 @@ def create_app(
             profile_status = str(profile.status) if profile is not None else None
             profile_snapshot = (
                 _profile_config(profile)
-                if _profile_is_usable(profile, turn_agent_mode)
+                if _profile_is_usable(profile)
                 else None
             )
             if profile_snapshot is not None:
@@ -11763,7 +11741,7 @@ def create_app(
                 api_key = await run_in_threadpool(credentials.get, credential_key)
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
-                if turn_agent_mode == "unrestricted":
+                if profile_snapshot is not None:
                     read_only_agent = conversation.execution_mode == "read_only"
                     enrichment_evidence: list[dict[str, object]] = []
                     enrichment_activity: list[dict[str, object]] = []
@@ -11902,401 +11880,6 @@ def create_app(
                         retained_tool_ledger=agent_evidence_ledger,
                         run_deadline=run_deadline,
                     )
-                prior_audit_query = _latest_audit_query_semantics(evidence)
-                prior_metric_query = _latest_metric_query_semantics(evidence)
-                prior_resource_query = _latest_resource_query_semantics(evidence)
-                reuse_prior_resource_snapshot = bool(
-                    not followup_action
-                    and _resource_followup_reuses_snapshot(
-                        source_question, prior_resource_query,
-                    )
-                )
-                if not followup_action:
-                    if progress:
-                        await progress("planning", "Understanding the investigation request.")
-                    inquiry = (
-                        _resolve_resource_inquiry(
-                            question=source_question,
-                            inquiry=None,
-                            prior_resource_query=prior_resource_query,
-                        )
-                        if reuse_prior_resource_snapshot else
-                        await _classify_ad_hoc_inquiry(
-                            model_provider=provider,
-                            profile=profile_snapshot,
-                            api_key=api_key,
-                            question=source_question,
-                            conversation=history,
-                            cluster_names=[item.name for item in selected_clusters],
-                            prior_audit_query=prior_audit_query,
-                            prior_metric_query=prior_metric_query,
-                            prior_resource_query=prior_resource_query,
-                            evidence=evidence,
-                        )
-                    )
-                    inquiry = _resolve_audit_inquiry(
-                        question=source_question,
-                        inquiry=inquiry,
-                        prior_audit_query=prior_audit_query,
-                        max_range_seconds=app_settings.adhoc_audit_max_range_seconds,
-                    )
-                    inquiry = _resolve_metric_inquiry(
-                        question=source_question,
-                        inquiry=inquiry,
-                        prior_metric_query=prior_metric_query,
-                    )
-                    inquiry = _resolve_resource_inquiry(
-                        question=source_question,
-                        inquiry=inquiry,
-                        prior_resource_query=prior_resource_query,
-                    )
-                provider_phase = "bounded_read_collection"
-                if not selected_clusters:
-                    limitations.append("The conversation's selected clusters no longer exist.")
-                evidence_by_id = {
-                    str(item.get("id")): dict(item)
-                    for item in evidence if isinstance(item, dict) and item.get("id")
-                }
-                scope_summaries: list[str] = []
-                requested_cluster_id = str(followup_action.get("cluster_id") or "") if followup_action else ""
-                named_cluster_ids = _question_cluster_ids(
-                    source_question, selected_clusters,
-                )
-                if reuse_prior_resource_snapshot:
-                    reused_evidence, reused_activity = _reuse_prior_resource_evidence(
-                        evidence=evidence,
-                        prior_resource_query=prior_resource_query,
-                        cluster_ids=named_cluster_ids,
-                    )
-                    activity.extend(reused_activity)
-                    if reused_evidence:
-                        collected_times = sorted({
-                            str(item.get("collected_at"))
-                            for item in reused_evidence if item.get("collected_at")
-                        })
-                        snapshot_time = collected_times[-1] if collected_times else "an earlier turn"
-                        limitations.append(
-                            "Displayed the previously collected resource snapshot from "
-                            f"{snapshot_time}; no fresh cluster read was requested."
-                        )
-                        scope_summaries.append("Reused the explicitly referenced prior resource snapshot.")
-                clusters_to_collect = [] if reuse_prior_resource_snapshot else selected_clusters
-                for cluster_index, selected_cluster in enumerate(clusters_to_collect):
-                    if requested_cluster_id and selected_cluster.id != requested_cluster_id:
-                        continue
-                    if named_cluster_ids and selected_cluster.id not in named_cluster_ids:
-                        continue
-                    cluster_label = selected_cluster.name
-                    if not selected_cluster.is_enabled:
-                        limitations.append(
-                            f"Cluster {cluster_label} is disabled; PodPilot retained the session but did not connect."
-                        )
-                        continue
-                    clusters_remaining = len(clusters_to_collect) - cluster_index
-                    cluster_budget = max(1, remaining_budget // max(1, clusters_remaining))
-                    cluster_budget = min(cluster_budget, remaining_budget)
-                    if cluster_budget <= 0:
-                        limitations.append(
-                            f"Cluster {cluster_label} was not read because the shared {app_settings.adhoc_max_reads_per_turn}-read budget was exhausted."
-                        )
-                        continue
-                    reader: ReadOnlyExplorer = cluster_reader
-                    if app_settings.delegated_access_enabled:
-                        connection = (
-                            delegated_vault.get(
-                                session_id=delegated_session_id or "",
-                                owner=username,
-                                cluster_id=selected_cluster.id,
-                            )
-                            if delegated_vault is not None and delegated_session_id
-                            else None
-                        )
-                        if connection is None:
-                            limitations.append(
-                                f"Cluster {cluster_label} is no longer connected; reconnect it to continue."
-                            )
-                            continue
-                        proxy_url = (
-                            "http://127.0.0.1:8080/internal/delegated-proxy/"
-                            f"{connection.read_only_proxy_capability}"
-                        )
-                        def delegated_token_provider(
-                            capability: str = connection.read_only_proxy_capability,
-                            vault: DelegatedSessionVault = delegated_vault,
-                        ) -> str:
-                            grant = vault.grant_by_capability(capability)
-                            return grant[0].token if grant is not None else ""
-
-                        try:
-                            # DynamicClient performs synchronous API discovery while it is
-                            # constructed. The broker is served by this same ASGI process, so
-                            # construction on the event-loop thread deadlocks until the proxy
-                            # request times out. Keep discovery in the worker pool so the loop
-                            # remains available to service the loopback request.
-                            reader = await _build_delegated_read_only_explorer(
-                                proxy_url=proxy_url,
-                                telemetry_api_url=selected_cluster.api_url,
-                                token_provider=delegated_token_provider,
-                                telemetry_tls_verify=selected_cluster.tls_verify,
-                                settings=app_settings,
-                                telemetry_is_system=selected_cluster.is_system,
-                            )
-                        except Exception as exc:
-                            diagnostic_ref = uuid4().hex[:12]
-                            safe_detail = _agent_collector_error_detail(exc)
-                            limitations.append(
-                                f"Cluster {cluster_label}: the delegated read-only client could "
-                                f"not be initialized: {safe_detail} "
-                                f"(diagnostic ref {diagnostic_ref})."
-                            )
-                            LOGGER.warning(
-                                "podpilot.delegated.reader_initialization_failed actor=%s "
-                                "conversation_id=%s cluster_id=%s cluster=%r "
-                                "diagnostic_ref=%s exception_chain=%s",
-                                username,
-                                conversation_id,
-                                selected_cluster.id,
-                                cluster_label,
-                                diagnostic_ref,
-                                _safe_exception_diagnostics(exc),
-                            )
-                            continue
-                    elif not selected_cluster.is_system:
-                        try:
-                            cluster_token = await run_in_threadpool(
-                                cluster_credentials.get, selected_cluster.credential_key
-                            )
-                        except CredentialStoreError as exc:
-                            limitations.append(f"Cluster {cluster_label}: {exc}")
-                            continue
-                        if not cluster_token:
-                            limitations.append(
-                                f"Cluster {cluster_label} has no usable API token; an administrator must rotate it."
-                            )
-                            continue
-                        reader = remote_cluster_reader(selected_cluster, cluster_token)
-                    if progress:
-                        await progress("selecting_cluster", f"Investigating cluster {cluster_label}.")
-                    prior_cluster_evidence = [
-                        dict(item) for item in evidence_by_id.values()
-                        if str(item.get("cluster_id") or SYSTEM_CLUSTER_ID) == selected_cluster.id
-                    ]
-                    cluster_settings = app_settings.model_copy(update={
-                        "cluster_name": cluster_label,
-                        "adhoc_max_reads_per_turn": cluster_budget,
-                        "adhoc_followup_reserve_units": min(
-                            app_settings.adhoc_followup_reserve_units,
-                            max(0, cluster_budget // 5),
-                        ),
-                    })
-                    cluster_runtime: dict[str, object] = {
-                        "cluster": selected_cluster,
-                        "reader": reader,
-                        "read_signatures": [],
-                    }
-                    cluster_runtimes.append(cluster_runtime)
-                    collected = await _collect_bounded_cluster_reads(
-                        model_provider=provider,
-                        cluster_reader=reader,
-                        profile=profile_snapshot,
-                        api_key=api_key,
-                        settings=cluster_settings,
-                        actor=username,
-                        workflow_id=f"{conversation_id}:{selected_cluster.id}",
-                        question=source_question,
-                        conversation=history,
-                        earlier_context_summary=context_summary,
-                        existing_evidence=prior_cluster_evidence,
-                        investigation_gaps=([
-                            InvestigationGap(
-                                question=str(followup_action.get("label") or source_question)[:500],
-                                capability=str(followup_action.get("capability") or "resource_read"),
-                                priority="high",
-                                supporting_evidence_ids=[
-                                    str(item)[:128] for item in
-                                    followup_action.get("supporting_evidence_ids", [])
-                                ],
-                            )
-                        ] if followup_action else None),
-                        requested_candidate_id=(
-                            str(followup_action.get("id")) if followup_action else None
-                        ),
-                        progress=progress,
-                        inquiry=inquiry,
-                    )
-                    cluster_runtime["read_signatures"] = (
-                        collected.read_signatures or []
-                    )
-                    remaining_budget = max(0, remaining_budget - collected.units_used)
-                    for item in collected.evidence:
-                        attributed = dict(item)
-                        attributed["cluster_id"] = selected_cluster.id
-                        attributed["cluster_name"] = cluster_label
-                        evidence_by_id[str(attributed.get("id"))] = attributed
-                    for item in collected.activity:
-                        attributed_activity = dict(item)
-                        attributed_activity["cluster_id"] = selected_cluster.id
-                        attributed_activity["cluster_name"] = cluster_label
-                        activity.append(attributed_activity)
-                    limitations.extend(
-                        collected.limitations if len(selected_clusters) == 1 else
-                        [f"Cluster {cluster_label}: {item}" for item in collected.limitations]
-                    )
-                    scope_summaries.append(f"{cluster_label}: {collected.scope_summary}")
-                evidence = list(evidence_by_id.values())[-app_settings.adhoc_max_evidence :]
-                collected_scope_summary = "; ".join(scope_summaries) or "No selected cluster was readable."
-                provider_phase = "final_answer"
-                if progress:
-                    await progress(
-                        "answering",
-                        f"Preparing an evidence-backed answer from {len(evidence)} observation"
-                        f"{'s' if len(evidence) != 1 else ''}.",
-                    )
-                answer_evidence = evidence
-                if inquiry is not None and inquiry.mode == "audit":
-                    current_evidence_ids = {
-                        str(evidence_id)
-                        for entry in activity
-                        if entry.get("tool") == "query_audit_events"
-                        for evidence_id in (entry.get("evidence_ids") or [])
-                    }
-                    answer_evidence = [
-                        item for item in evidence
-                        if str(item.get("id") or "") in current_evidence_ids
-                    ]
-                elif inquiry is None and prior_audit_query is not None:
-                    current_evidence_ids = {
-                        str(evidence_id)
-                        for entry in activity
-                        for evidence_id in (entry.get("evidence_ids") or [])
-                    }
-                    answer_evidence = [
-                        item for item in evidence
-                        if str(item.get("id") or "") in current_evidence_ids
-                    ]
-                answer_observations, answer_context_metadata = _compact_answer_evidence(
-                    answer_evidence, activity=activity, question=message_text, total_byte_limit=48_000,
-                    per_observation_byte_limit=8_000, max_observations=16,
-                )
-                answer_findings = _compact_answer_findings(
-                    derive_adhoc_findings(answer_evidence), total_byte_limit=12_000
-                )[:8]
-                answer_facts = _model_fact_cards(
-                    answer_evidence,
-                    activity=activity,
-                    question=message_text,
-                    max_cards=8,
-                    total_byte_limit=8_000,
-                    prioritize_object_details=True,
-                )
-                configuration_comparison_required = (
-                    len(selected_clusters) > 1
-                    and _collection_object_analysis_requested(source_question, inquiry)
-                )
-                object_comparisons = (
-                    _resource_configuration_comparisons(
-                        evidence=answer_evidence,
-                        activity=activity,
-                    )
-                    if configuration_comparison_required
-                    else []
-                )
-                analysis_coverage = (
-                    _resource_analysis_coverage(
-                        evidence=answer_evidence, activity=activity,
-                        included_evidence_ids={
-                            str(item.get("id") or "") for item in answer_facts
-                        },
-                    )
-                    if _collection_object_analysis_requested(source_question, inquiry)
-                    else []
-                )
-                answer_context: dict[str, object] = {
-                    "clusters": [_cluster_summary(item) for item in selected_clusters],
-                    "question": provider_question,
-                    "conversation": [
-                        {
-                            "role": str(item.get("role") or "")[:16],
-                            "content": redact_text(str(item.get("content") or ""))[:1000],
-                        }
-                        for item in history[-4:]
-                    ],
-                    "earlier_context_summary": redact_text(context_summary)[-1500:],
-                    "scope_summary": collected_scope_summary,
-                    "observations": answer_observations,
-                    "facts": answer_facts,
-                    "curated_knowledge": knowledge_context[:6],
-                    "evidence_context": answer_context_metadata,
-                    "findings": answer_findings,
-                    "capability_ledger": _investigation_capability_ledger(
-                        evidence=answer_evidence,
-                        activity=activity,
-                        remaining_units=remaining_budget,
-                    ),
-                    "model_log_analysis": None,
-                    "collection_limitations": _dedupe_limitations(limitations, limit=10),
-                    "analysis_coverage": analysis_coverage,
-                    "object_comparisons": object_comparisons,
-                }
-                if inquiry is not None:
-                    answer_context["inquiry"] = inquiry.model_dump()
-                metric_ranking_candidate = _deterministic_metric_ranking_answer(
-                    evidence=evidence,
-                    activity=activity,
-                )
-                metric_summary_candidate = _deterministic_metric_summary_answer(
-                    evidence=evidence,
-                    activity=activity,
-                )
-                metric_candidate = metric_ranking_candidate or metric_summary_candidate
-                prefer_metric_card = bool(
-                    metric_candidate is not None
-                    and (
-                        (inquiry is not None and inquiry.mode == "metrics")
-                        or _current_reads_are_metric_rankings(activity)
-                    )
-                )
-                with capture_raw_model_responses(include_raw_response) as captured:
-                    try:
-                        answer = await run_in_threadpool(
-                            provider.answer_ad_hoc,
-                            profile_snapshot,
-                            api_key,
-                            answer_context,
-                        )
-                    finally:
-                        _bounded_raw_response_attempts(
-                            raw_responses, captured, stage="initial answer"
-                        )
-                if include_raw_response and not captured:
-                    _bounded_raw_response_attempts(
-                        raw_responses,
-                        [
-                            answer.model_dump_json()
-                            if hasattr(answer, "model_dump_json") else str(answer)
-                        ],
-                        stage="initial answer",
-                    )
-                validated = _validated_adhoc_answer(
-                    answer,
-                    known_evidence_ids={
-                        str(item.get("id")) for item in answer_evidence
-                    },
-                    collection_limitations=limitations,
-                    observations=answer_evidence,
-                )
-                validated["limitations"] = _dedupe_limitations(
-                    [*limitations, *list(validated["limitations"])]
-                )
-                LOGGER.info(
-                    "podpilot.adhoc.provider_complete actor=%s conversation_id=%s "
-                    "profile_id=%s reads=%s evidence=%s",
-                    username,
-                    conversation_id,
-                    profile_id,
-                    len(activity),
-                    len(evidence),
-                )
             except (CredentialStoreError, ModelProviderError) as exc:
                 LOGGER.warning(
                     "podpilot.adhoc.provider_failed actor=%s conversation_id=%s "
@@ -12550,13 +12133,7 @@ def create_app(
                 if run is not None else None
             )
             if conversation is not None:
-                writes_permitted = (
-                    conversation.execution_mode in {"action", "delegated_unrestricted"}
-                    or (
-                        not app_settings.delegated_access_enabled
-                        and app_settings.agent_mode == "unrestricted"
-                    )
-                )
+                writes_permitted = conversation.execution_mode == "action"
         answer = "PodPilot stopped this investigation because it exceeded the execution deadline. "
         answer += (
             "Cluster operations completed before the timeout are not rolled back; review the "
@@ -12776,7 +12353,7 @@ def create_app(
         request_ids = list(application.state.adhoc_runner_requests.get(run_id, set()))
         attempted = len(request_ids)
         terminated = 0
-        cancel_runner = getattr(unrestricted_runner, "cancel", None)
+        cancel_runner = getattr(agent_runner_client, "cancel", None)
         if callable(cancel_runner):
             for request_id in request_ids:
                 try:
@@ -13120,7 +12697,7 @@ def create_app(
             )
         form = await _urlencoded(request)
         if form.get("consent", "").casefold() not in {"on", "true", "yes", "1"}:
-            raise HTTPException(status_code=422, detail="Accept the unrestricted delegated-session warning.")
+            raise HTTPException(status_code=422, detail="Accept the delegated-session warning.")
         try:
             cluster_ids = list(dict.fromkeys(str(item) for item in json.loads(form.get("cluster_ids", "[]"))))
         except (TypeError, ValueError) as exc:
@@ -13384,10 +12961,6 @@ def create_app(
                 status_code=303,
             )
         delegated_cluster_ids = [item.cluster_id for item in delegated_connections]
-        turn_agent_mode = (
-            "unrestricted" if app_settings.delegated_access_enabled
-            else app_settings.agent_mode
-        )
         csrf_token, csrf_is_new = _csrf_token(request)
         with Session(request.app.state.engine) as db_session:
             recent = recent_conversations_for(db_session, user.username)
@@ -13432,12 +13005,9 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile, turn_agent_mode),
-                "read_only_model_ready": _profile_is_usable(
-                    profile,
-                    "unrestricted" if app_settings.delegated_access_enabled else "guarded",
-                ),
-                "action_model_ready": _profile_is_usable(profile, "unrestricted"),
+                "model_ready": _profile_is_usable(profile),
+                "read_only_model_ready": _profile_is_usable(profile),
+                "action_model_ready": _profile_is_usable(profile),
                 "reasoning_efforts": reasoning_efforts,
                 "selected_reasoning_effort": selected_reasoning_effort,
                 "active_run": None,
@@ -13448,7 +13018,6 @@ def create_app(
                     else list(available_cluster_ids)
                 ),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
-                "agent_mode": turn_agent_mode,
                 "delegated_session_active": bool(delegated_connections),
                 "missing_delegated_cluster_ids": [],
                 "is_delegated_mode": app_settings.delegated_access_enabled,
@@ -13500,19 +13069,6 @@ def create_app(
             conversation = db_session.get(AdHocConversation, conversation_id)
             if conversation is None or conversation.created_by != user.username:
                 raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
-            turn_agent_mode = (
-                "unrestricted"
-                if (
-                    app_settings.delegated_access_enabled
-                    or
-                    conversation.execution_mode in {"action", "delegated_unrestricted"}
-                    or (
-                        not app_settings.delegated_access_enabled
-                        and app_settings.agent_mode == "unrestricted"
-                    )
-                )
-                else "guarded"
-            )
             delegated_session_active = False
             connected_ids: set[str] = set()
             if conversation.delegated_session_id:
@@ -13618,12 +13174,9 @@ def create_app(
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile, turn_agent_mode),
-                "read_only_model_ready": _profile_is_usable(
-                    profile,
-                    "unrestricted" if app_settings.delegated_access_enabled else "guarded",
-                ),
-                "action_model_ready": _profile_is_usable(profile, "unrestricted"),
+                "model_ready": _profile_is_usable(profile),
+                "read_only_model_ready": _profile_is_usable(profile),
+                "action_model_ready": _profile_is_usable(profile),
                 "reasoning_efforts": reasoning_efforts,
                 "selected_reasoning_effort": selected_reasoning_effort,
                 "messages_truncated": conversation.summarized_message_count > 0,
@@ -13642,7 +13195,6 @@ def create_app(
                     else [item.id for item in available_clusters]
                 ),
                 "max_selected_clusters": app_settings.adhoc_max_clusters_per_conversation,
-                "agent_mode": turn_agent_mode,
                 "delegated_session_active": delegated_session_active,
                 "missing_delegated_cluster_ids": missing_delegated_cluster_ids,
                 "is_delegated_mode": bool(conversation.delegated_session_id),
@@ -13692,7 +13244,15 @@ def create_app(
             )
         conversation_id = str(uuid4())
         delegated_session_id: str | None = None
-        execution_mode = "managed_guarded"
+        requested_mode = form.get("execution_mode", "read_only").strip().casefold()
+        if requested_mode not in {"read_only", "action"}:
+            raise HTTPException(status_code=422, detail="Select a valid conversation mode.")
+        if requested_mode == "action" and not _can_use_action_mode(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Your PodPilot role is restricted to read-only investigations.",
+            )
+        execution_mode = requested_mode
         if app_settings.delegated_access_enabled:
             delegated_session_id = _delegated_session_id(request)
             connected_ids = {
@@ -13709,28 +13269,17 @@ def create_app(
                     "next": "/ask?new=1&cluster_ids=" + ",".join(requested_cluster_ids),
                 })
                 return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
-            requested_mode = form.get("execution_mode", "read_only").strip().casefold()
-            if requested_mode not in {"read_only", "action"}:
-                raise HTTPException(status_code=422, detail="Select a valid conversation mode.")
-            if requested_mode == "action" and not _can_use_action_mode(user):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Your PodPilot role is restricted to read-only investigations.",
-                )
-            execution_mode = requested_mode
         with Session(request.app.state.engine) as db_session:
             profile = _active_profile(db_session)
-            if app_settings.delegated_access_enabled:
-                required_agent_mode = "unrestricted"
-                if not _profile_is_usable(profile, required_agent_mode):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "The active model profile is not ready for Action mode."
-                            if execution_mode == "action"
-                            else "The active model profile is not ready for read-only Investigate mode."
-                        ),
-                    )
+            if app_settings.delegated_access_enabled and not _profile_is_usable(profile):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "The active model profile is not ready for Action mode."
+                        if execution_mode == "action"
+                        else "The active model profile is not ready for read-only Investigate mode."
+                    ),
+                )
             if "reasoning_effort" in form:
                 _save_reasoning_preference(
                     db_session,

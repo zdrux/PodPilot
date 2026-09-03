@@ -62,7 +62,7 @@ OpenShift template braces are preserved.
 Delegated and shared-credential Investigator and Action conversations share the same agent tool
 contract. The Chat Completions model can select typed `http_probe`, `query_audit_events`, and
 `query_metrics` helpers in the same iterative loop as its brokered
-shell escape hatch. The helpers reuse the guarded readers' fixed query construction, limits,
+shell escape hatch. The helpers reuse the typed readers' fixed query construction, limits,
 normalization, redaction, provenance, and cluster attribution. Every helper result is appended as a
 tool observation and control returns to the model; neither success nor a collector-level
 `complete` field ends the investigation. This preserves exact field filtering, Loki audit

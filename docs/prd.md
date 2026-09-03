@@ -522,7 +522,7 @@ executor service account performs approved changes and the application correlate
 them with the authenticated approver in its audit record.
 
 Keep collection and action tools as explicit internal functions with typed inputs.
-Do not expose a generic `oc`, shell, or unrestricted Kubernetes proxy tool to the model.
+Do not expose a generic `oc`, shell, or general-purpose Kubernetes proxy tool to the model.
 
 ### Model interaction boundary
 

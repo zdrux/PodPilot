@@ -99,8 +99,8 @@ podman push "${PUSH_IMAGE}"
 oc get imagestreamtag "podpilot:${PODPILOT_VERSION}" -n ai-ops
 ```
 
-For unrestricted mode, create the runner ImageStream and build and push the
-second image with the same immutable version:
+Create the runner ImageStream and build and push the second image with the same
+immutable version:
 
 ```bash
 oc apply -f deploy/openshift/overlays/remote-poc-agentic/image-stream.yaml
@@ -134,7 +134,7 @@ The push uses the external Route, while Pods use the stable internal Service
 hostname above. A Kubernetes Deployment still needs an OCI image pull spec;
 Kustomize renders that pull spec from the `ai-ops/podpilot:0.12.0` ImageStreamTag.
 Use a new versioned tag for each promotion instead of overwriting an existing tag.
-When using unrestricted mode, set the matching immutable runner `newTag` in
+Set the matching immutable runner `newTag` in
 `deploy/openshift/overlays/remote-poc-agentic/kustomization.yaml` as well.
 
 Edit `deploy/openshift/overlays/remote-poc/runtime-config-patch.yaml` and replace
@@ -278,8 +278,7 @@ oc delete clusterrolebinding podpilot-investigator --ignore-not-found
 
 Do not delete `podpilot-role-reader`; the API needs it to resolve application roles after OAuth.
 
-To install the optional unrestricted variant, substitute the additive overlay
-in all three commands:
+Install the delegated-agent overlay with the runner in all three commands:
 
 ```bash
 oc apply --dry-run=server -k deploy/openshift/overlays/remote-poc-agentic
@@ -288,8 +287,7 @@ oc apply -k deploy/openshift/overlays/remote-poc-agentic
 oc -n ai-ops rollout status deployment/podpilot --timeout=300s
 ```
 
-Do not set `agent_mode=unrestricted` on the guarded overlay by itself; without
-the sidecar, no runner listens on `127.0.0.1:8090`.
+The runner sidecar is required; without it, nothing listens on `127.0.0.1:8090`.
 
 For a later role-mapping ConfigMap change, explicitly restart after applying:
 
@@ -349,14 +347,12 @@ and that the runtime identity has not gained mutation access:
 oc -n ai-ops get deployment podpilot \
   -o jsonpath='{.spec.template.spec.containers[*].name}{"\n"}'
 oc -n ai-ops get configmap podpilot-runtime \
-  -o jsonpath='{.data.agent_mode}{"\n"}'
-oc -n ai-ops get configmap podpilot-runtime \
   -o jsonpath='{.data.agent_command_timeout_seconds}{" "}{.data.agent_command_max_output_bytes}{" "}{.data.agent_heartbeat_seconds}{"\n"}'
 oc -n ai-ops exec deployment/podpilot -c oc-runner -- oc version --client
 oc auth can-i patch deployments --all-namespaces --as="$SA"
 ```
 
-Expected results include `oc-runner api oauth-proxy`, `unrestricted`, `300 262144 10`, a Linux
+Expected results include `oc-runner api oauth-proxy`, `300 262144 10`, a Linux
 OpenShift CLI client version, and the RBAC result appropriate to the remote
 identity. Review any `yes` result before exposing agentic mode; the sidecar will
 be able to exercise every permission granted to that service account.
@@ -402,9 +398,9 @@ API type, model ID, token, TLS mode, and limits. Test the endpoint before
 activation. Prefer system trust or a custom CA. Insecure TLS disables certificate
 and hostname verification and is inappropriate for a real-workload cluster.
 
-Delegated Investigator and Action modes require a Chat Completions profile that passes the
-tool-call capability probe. Responses API profiles remain usable only for legacy non-delegated
-guarded mode and cannot drive the shared `execute_shell` investigation loop.
+Delegated read-only and Action sessions require a Chat Completions profile that passes the
+tool-call capability probe. Responses API profiles cannot drive the shared `execute_shell`
+investigation loop.
 
 Start with read-only questions against a designated test namespace. Confirm
 evidence scope, redaction, Pod-log access, Alertmanager freshness, and audit

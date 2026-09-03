@@ -584,7 +584,7 @@
     const updateModeAvailability = () => {
       const actionModeSelected = executionMode.value === "action";
       askLayout?.classList.toggle("action-session", actionModeSelected);
-      cautionSummary?.classList.toggle("agent-mode-pill", actionModeSelected);
+      cautionSummary?.classList.toggle("action-caution-pill", actionModeSelected);
       if (cautionSummary) {
         cautionSummary.dataset.tooltip = actionModeSelected
           ? cautionSummary.dataset.actionTooltip

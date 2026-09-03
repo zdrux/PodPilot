@@ -31,7 +31,7 @@ def upgrade() -> None:
     op.execute("""
         UPDATE adhoc_conversations
         SET execution_mode = CASE
-            WHEN execution_mode = 'delegated_unrestricted' THEN 'action'
+            WHEN execution_mode = 'action' THEN 'action'
             ELSE 'read_only'
         END
     """)
@@ -41,8 +41,8 @@ def downgrade() -> None:
     op.execute("""
         UPDATE adhoc_conversations
         SET execution_mode = CASE
-            WHEN execution_mode = 'action' THEN 'delegated_unrestricted'
-            ELSE 'managed_guarded'
+            WHEN execution_mode = 'action' THEN 'action'
+            ELSE 'read_only'
         END
     """)
     with op.batch_alter_table("clusters") as batch:

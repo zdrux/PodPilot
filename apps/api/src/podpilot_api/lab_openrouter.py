@@ -29,8 +29,8 @@ def main() -> int:
     parser.add_argument("--credential-stdin", action="store_true")
     args = parser.parse_args()
     settings = get_settings()
-    if settings.environment != "sno-lab" or settings.agent_mode != "unrestricted":
-        print("The OpenRouter bootstrap is restricted to the unrestricted sno-lab deployment.")
+    if settings.environment != "sno-lab":
+        print("The OpenRouter bootstrap is restricted to the SNO lab deployment.")
         return 2
 
     store = KubernetesSecretCredentialStore(

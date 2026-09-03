@@ -103,7 +103,6 @@ class Settings(BaseSettings):
     adhoc_max_concurrent_runs_per_user: int = Field(default=2, ge=1, le=8)
     adhoc_run_timeout_seconds: float = Field(default=900.0, ge=1.0, le=1800.0)
     adhoc_finalization_reserve_seconds: float = Field(default=60.0, ge=0.0, le=300.0)
-    agent_mode: Literal["guarded", "unrestricted"] = "guarded"
     agent_runner_url: str = "http://127.0.0.1:8090"
     agent_command_timeout_seconds: float = Field(default=240.0, ge=5.0, le=600.0)
     agent_heartbeat_seconds: float = Field(default=10.0, ge=2.0, le=60.0)
