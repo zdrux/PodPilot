@@ -8355,10 +8355,34 @@ def _agent_ledger_excerpt(value: object, limit: int) -> str:
     return f"{text[:limit - tail].rstrip()}\n...[compacted]...\n{text[-tail:].lstrip()}"
 
 
+def _ledger_value_was_redacted(value: object) -> bool:
+    """Report credential filtering without retaining the original sensitive value."""
+
+    if value in (None, ""):
+        return False
+    if isinstance(value, (dict, list, tuple)):
+        rendered = json.dumps(value, sort_keys=True, default=_json_default)
+    else:
+        rendered = str(value)
+    return redact_text(rendered) != rendered
+
+
+def _redact_ledger_value(value: object) -> object:
+    """Preserve structured operator detail while removing credential material."""
+
+    rendered = json.dumps(value, sort_keys=True, default=_json_default)
+    redacted = redact_text(rendered)
+    try:
+        return json.loads(redacted)
+    except json.JSONDecodeError:
+        return redact_text(str(value))
+
+
 def _agent_tool_ledger_entry(
     *, sequence: int, tool_name: str, tool_call_id: str,
     cluster_id: str, cluster_name: str, status: str,
     request: object, result: dict[str, object],
+    started_at: datetime | None = None, completed_at: datetime | None = None,
 ) -> dict[str, object]:
     """Create deterministic retained evidence after raw tool messages are consumed once."""
 
@@ -8370,6 +8394,16 @@ def _agent_tool_ledger_entry(
         "cluster_name": cluster_name[:200],
         "status": status[:80],
     }
+    if started_at is not None:
+        entry["started_at"] = started_at.isoformat()
+    if completed_at is not None:
+        entry["completed_at"] = completed_at.isoformat()
+    if started_at is not None and completed_at is not None:
+        entry["duration_ms"] = max(
+            0, round((completed_at - started_at).total_seconds() * 1_000)
+        )
+    filtered_fields: list[str] = []
+    filter_reasons: list[str] = []
     if tool_name == "execute_shell":
         retained_result = _prepare_agent_provider_payload(result)
         requires_refinement = bool(
@@ -8385,23 +8419,62 @@ def _agent_tool_ledger_entry(
             ),
             "stderr_excerpt": _agent_ledger_excerpt(retained_result.get("stderr"), 600),
         })
+        for field, value in (
+            ("command", request),
+            ("stdout", retained_result.get("stdout")),
+            ("stderr", retained_result.get("stderr")),
+            ("error", result.get("error")),
+        ):
+            if _ledger_value_was_redacted(value):
+                filtered_fields.append(field)
+        if filtered_fields:
+            filter_reasons.append("Credential-like values were redacted.")
+        if result.get("managed_fields_removed"):
+            filter_reasons.append("Kubernetes managedFields were omitted.")
+        if result.get("stdout_truncated") or result.get("stderr_truncated"):
+            filter_reasons.append("Runner output reached its retained byte limit.")
+        if requires_refinement:
+            filter_reasons.append("Oversized JSON was replaced with structural metadata.")
+        if (
+            len(str(retained_result.get("stdout") or "")) > 1_200
+            or len(str(retained_result.get("stderr") or "")) > 600
+        ):
+            filter_reasons.append("The timeline retains bounded output excerpts.")
         if requires_refinement:
             entry["provider_result_requires_refinement"] = True
             entry["provider_result_summary"] = retained_result.get("provider_result_summary")
             entry["retry_guidance"] = retained_result.get("retry_guidance")
     else:
         entry["request"] = _compact_provider_value(
-            request, string_limit=300, list_limit=12,
+            _redact_ledger_value(request), string_limit=300, list_limit=12,
         )
         entry["observations"] = _compact_provider_value(
-            result.get("observations") or [], string_limit=500, list_limit=8,
+            _redact_ledger_value(result.get("observations") or []),
+            string_limit=500, list_limit=8,
         )
         entry["limitations"] = _compact_provider_value(
-            result.get("limitations") or [], string_limit=300, list_limit=6,
+            _redact_ledger_value(result.get("limitations") or []),
+            string_limit=300, list_limit=6,
         )
+        if _ledger_value_was_redacted(request):
+            filtered_fields.append("request")
+        if _ledger_value_was_redacted(result.get("observations")):
+            filtered_fields.append("observations")
+        if _ledger_value_was_redacted(result.get("limitations")):
+            filtered_fields.append("limitations")
+        if filtered_fields:
+            filter_reasons.append("Credential-like values were redacted.")
     for key in ("failure_category", "diagnostic_ref", "error"):
         if result.get(key) not in (None, ""):
             entry[key] = _agent_ledger_excerpt(result[key], 400)
+    if _ledger_value_was_redacted(result.get("error")) and "error" not in filtered_fields:
+        filtered_fields.append("error")
+        if "Credential-like values were redacted." not in filter_reasons:
+            filter_reasons.append("Credential-like values were redacted.")
+    if filter_reasons:
+        entry["content_filtered"] = True
+        entry["filtered_fields"] = list(dict.fromkeys(filtered_fields))
+        entry["filter_reasons"] = list(dict.fromkeys(filter_reasons))
     return json.loads(json.dumps(entry, sort_keys=True, default=_json_default))
 
 
@@ -11234,6 +11307,7 @@ def create_app(
 
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
+                operation_started_at = datetime.now(timezone.utc)
                 if tool_call.name in {
                     "discover_resources", "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
@@ -11394,8 +11468,10 @@ def create_app(
                         cluster_id=collector_cluster_id,
                         cluster_name=collector_cluster_name,
                         status=collector_status,
-                        request=safe_collector_arguments,
+                        request=collector_arguments,
                         result=result_payload,
+                        started_at=operation_started_at,
+                        completed_at=datetime.now(timezone.utc),
                     ))
                     messages.append({
                         "role": "tool",
@@ -11600,6 +11676,7 @@ def create_app(
                     }
                 else:
                     agent_actions_used += 1
+                    managed_fields_removed = False
                     runner_request_id = str(uuid4())
                     runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
                     runner_requests.add(runner_request_id)
@@ -11644,6 +11721,7 @@ def create_app(
                                     command, result.stdout,
                                 )
                                 if compact_stdout != result.stdout:
+                                    managed_fields_removed = True
                                     result = replace(result, stdout=compact_stdout)
                                 break
                             elapsed_seconds = round(
@@ -11657,6 +11735,8 @@ def create_app(
                                     f"{app_settings.agent_command_timeout_seconds:g}s timeout).",
                                 )
                         result_payload = result.to_dict()
+                        if managed_fields_removed:
+                            result_payload["managed_fields_removed"] = True
                         log_method = LOGGER.info if result.exit_code == 0 else LOGGER.warning
                         stderr_tail = (
                             " ".join(redact_text(result.stderr).strip().split())[-2_000:]
@@ -11756,8 +11836,10 @@ def create_app(
                     cluster_id=cluster_id,
                     cluster_name=cluster_name,
                     status=ledger_status,
-                    request=redact_text(command),
+                    request=command,
                     result=result_payload,
+                    started_at=operation_started_at,
+                    completed_at=datetime.now(timezone.utc),
                 ))
                 safe_result = _bounded_agent_provider_result(result_payload)
                 messages.append({
