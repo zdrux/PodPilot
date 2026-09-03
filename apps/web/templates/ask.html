@@ -7,9 +7,9 @@
   <section class="panel ask-panel">
     <div class="panel-header ask-session-header">
       <div class="ask-session-title">
-        <p class="eyebrow">{% if conversation %}{{ conversation.title }}{% else %}New question{% endif %}</p>
+        <p class="eyebrow">Investigations <span aria-hidden="true">/</span> Cluster conversation</p>
         <div class="ask-session-heading-row">
-          <h2>Cluster conversation</h2>
+          <h2>{% if conversation %}{{ conversation.title }}{% else %}New investigation{% endif %}</h2>
           <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE - Cluster WRITES Permitted</span>
         </div>
       </div>
@@ -395,31 +395,7 @@
           <span class="thinking-spinner" aria-hidden="true"></span>
           <div><strong data-progress-title>{% if active_run.status == 'queued' %}Waiting to investigate{% else %}Live investigation{% endif %}</strong><p data-progress-current>{% if active_run.status == 'queued' %}Your request is waiting for an available worker.{% else %}PodPilot is choosing and running useful checks.{% endif %}</p></div>
         </div>
-        <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
-          {% set progress = namespace(phases=[], seen_messages=[]) %}
-          {% for event in active_run.events %}
-            {% if event.phase not in ['queued', 'starting'] and event.phase not in progress.phases %}{% set progress.phases = progress.phases + [event.phase] %}{% endif %}
-          {% endfor %}
-          {% for phase in progress.phases %}
-            {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
-            {% set unique_phase = namespace(events=[]) %}
-            {% for event in phase_events %}
-              {% if event.message not in progress.seen_messages %}
-                {% set progress.seen_messages = progress.seen_messages + [event.message] %}
-                {% set unique_phase.events = unique_phase.events + [event] %}
-              {% endif %}
-            {% endfor %}
-            {% if unique_phase.events %}
-            <li class="progress-phase" data-progress-phase="{{ phase }}">
-              <div class="progress-phase-heading"><span aria-hidden="true"></span><small>{{ phase | replace('_', ' ') }}</small></div>
-              <ul class="progress-phase-updates" data-progress-items>
-                {% set visible_phase_events = unique_phase.events[-5:] if phase == 'agent_command' else unique_phase.events[-3:] %}
-                {% for event in visible_phase_events %}<li data-seq="{{ event.seq }}">{{ event.message }}</li>{% endfor %}
-              </ul>
-            </li>
-            {% endif %}
-          {% endfor %}
-        </ol>
+        <ol class="progress-timeline" data-progress-log data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}"></ol>
       </article>
       {% endif %}
     </div>
@@ -549,6 +525,106 @@
     </div>
   </section>
 
+  <aside class="activity-sidebar" aria-label="Investigation activity">
+    {% set activity_summary = namespace(operation_count=0, diagnostic_count=0) %}
+    {% for message in messages %}
+      {% if message.activity and message.activity.evidence_ledger %}{% set activity_summary.operation_count = activity_summary.operation_count + (message.activity.evidence_ledger | length) %}{% endif %}
+      {% if message.activity and message.activity.diagnostics %}{% set activity_summary.diagnostic_count = activity_summary.diagnostic_count + (message.activity.diagnostics | length) %}{% endif %}
+    {% endfor %}
+    <div class="activity-sidebar-header">
+      <div><span class="activity-kicker">Evidence</span><h2>Investigation activity</h2></div>
+      <span class="activity-count">{{ activity_summary.operation_count }} operation{% if activity_summary.operation_count != 1 %}s{% endif %}</span>
+    </div>
+    <div class="activity-tabs" role="tablist" aria-label="Investigation activity views">
+      <button type="button" role="tab" aria-selected="true" aria-controls="activity-timeline-panel" id="activity-timeline-tab" data-activity-tab="timeline">Timeline</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="activity-details-panel" id="activity-details-tab" data-activity-tab="details">Details</button>
+    </div>
+
+    <section class="activity-tab-panel" id="activity-timeline-panel" role="tabpanel" aria-labelledby="activity-timeline-tab" data-activity-panel="timeline">
+      {% if active_run %}
+      <div class="activity-live" aria-live="polite">
+        <div class="activity-live-heading"><span class="thinking-spinner" aria-hidden="true"></span><strong>Live investigation</strong></div>
+        <ol data-activity-live data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
+          {% set live_progress = namespace(phases=[], seen_messages=[]) %}
+          {% for event in active_run.events %}
+            {% if event.phase not in ['queued', 'starting'] and event.phase not in live_progress.phases %}{% set live_progress.phases = live_progress.phases + [event.phase] %}{% endif %}
+          {% endfor %}
+          {% for phase in live_progress.phases %}
+            {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
+            {% set unique_live_phase = namespace(events=[]) %}
+            {% for event in phase_events %}
+              {% if event.message not in live_progress.seen_messages %}
+                {% set live_progress.seen_messages = live_progress.seen_messages + [event.message] %}
+                {% set unique_live_phase.events = unique_live_phase.events + [event] %}
+              {% endif %}
+            {% endfor %}
+            {% set visible_live_events = unique_live_phase.events[-5:] if phase == 'agent_command' else unique_live_phase.events[-3:] %}
+            {% for event in visible_live_events %}<li data-seq="{{ event.seq }}"><time>{% if event.at %}{{ event.at | est_time('%H:%M:%S') }}{% else %}now{% endif %}</time><span>{{ event.message }}</span></li>{% endfor %}
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
+      {% if activity_summary.diagnostic_count %}
+      <div class="activity-group activity-group-warning">
+        <div class="activity-group-heading"><span>Tool-call diagnostics</span><strong>{{ activity_summary.diagnostic_count }} rejected</strong></div>
+        {% for message in messages if message.activity and message.activity.diagnostics %}
+          {% for diagnostic in message.activity.diagnostics %}<p>{{ diagnostic }}</p>{% endfor %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if activity_summary.operation_count %}
+      <ol class="operation-timeline">
+        {% for message in messages if message.activity and message.activity.evidence_ledger %}
+          {% for item in message.activity.evidence_ledger %}
+          {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
+          <li class="operation-event operation-status-{{ item.status }}">
+            <span class="operation-marker" aria-hidden="true"></span>
+            <div class="operation-event-body">
+              <div class="operation-event-heading">
+                <strong>{{ item.tool | replace('_', ' ') }}</strong>
+                {% if item.content_filtered %}
+                <span class="filtered-output-indicator" tabindex="0" title="{{ item.filter_reasons | join(' ') }}" aria-label="Some retained content was filtered: {{ item.filter_reasons | join(' ') }}">
+                  <img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt="">
+                </span>
+                {% endif %}
+                <span class="operation-status">{{ item.status | replace('_', ' ') }}</span>
+              </div>
+              <div class="operation-event-meta">
+                {% if item.started_at %}<time>{{ item.started_at | est_time('%H:%M:%S') }}</time>{% endif %}
+                <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
+                {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
+              </div>
+              {% if item.command %}<code>{{ item.command }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
+              <button class="button secondary operation-view-button" type="button" data-operation-open="{{ operation_id }}">View</button>
+            </div>
+          </li>
+          {% endfor %}
+        {% endfor %}
+      </ol>
+      {% elif not active_run and not activity_summary.diagnostic_count %}
+      <div class="activity-empty"><strong>No operations yet</strong><p>Agent-selected checks will appear here after the first reply.</p></div>
+      {% endif %}
+    </section>
+
+    <section class="activity-tab-panel" id="activity-details-panel" role="tabpanel" aria-labelledby="activity-details-tab" data-activity-panel="details" hidden>
+      <div class="activity-detail-summary">
+        <span>Collected evidence</span><strong>{{ evidence_by_id | length }} source{% if evidence_by_id | length != 1 %}s{% endif %}</strong>
+        <p>Observed fields remain separate from model conclusions and retain their collection provenance.</p>
+      </div>
+      {% if evidence_by_id %}
+      <ul class="activity-evidence-list">
+        {% for id, item in evidence_by_id.items() %}
+        <li><div><strong>{{ item.tool | replace('_', ' ') }}</strong><span>{{ item.cluster_name or 'PodPilot runtime' }}</span><small>{{ item.collected_at | est_time('%Y-%m-%d %H:%M:%S') }}</small></div><button class="button secondary operation-view-button" type="button" data-evidence-ref="evidence-{{ id }}">View</button></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      <div class="activity-session-boundary">
+        <strong>{{ 'Action session' if delegated_action_session else 'Read-only session' }}</strong>
+        <p>{% if delegated_action_session %}Operations use your delegated OpenShift permissions and are retained for auditability.{% else %}Mutation, exec, attach, proxy, port-forward, and Secret reads are blocked by the broker.{% endif %}</p>
+      </div>
+    </section>
+  </aside>
+
 </div>
 
 {% if evidence_by_id %}
@@ -586,6 +662,41 @@
   </div>
 </dialog>
 {% endif %}
+
+{% for message in messages if message.activity and message.activity.evidence_ledger %}
+  {% for item in message.activity.evidence_ledger %}
+  {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
+  <dialog id="{{ operation_id }}" class="operation-dialog" data-operation-dialog aria-labelledby="{{ operation_id }}-title">
+    <div class="operation-dialog-header">
+      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item.tool | replace('_', ' ') }}</h2></div>
+      <button type="button" data-operation-close aria-label="Close operation details">×</button>
+    </div>
+    <div class="operation-dialog-content">
+      <dl class="operation-facts">
+        <div><dt>Cluster</dt><dd>{{ item.cluster_name or item.cluster_id or 'Unresolved' }}</dd></div>
+        <div><dt>Status</dt><dd>{{ item.status | replace('_', ' ') }}</dd></div>
+        {% if item.started_at %}<div><dt>Started</dt><dd>{{ item.started_at | est_time('%Y-%m-%d %H:%M:%S') }}</dd></div>{% endif %}
+        {% if item.completed_at %}<div><dt>Completed</dt><dd>{{ item.completed_at | est_time('%Y-%m-%d %H:%M:%S') }}</dd></div>{% endif %}
+        {% if item.duration_ms is defined %}<div><dt>Duration</dt><dd>{{ '%.2f' | format(item.duration_ms / 1000) }} seconds</dd></div>{% endif %}
+        {% if item.exit_code is defined and item.exit_code is not none %}<div><dt>Exit code</dt><dd>{{ item.exit_code }}</dd></div>{% endif %}
+      </dl>
+      {% if item.content_filtered %}
+      <div class="operation-filter-notice">
+        <img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt="">
+        <div><strong>Retained content was filtered</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div>
+      </div>
+      {% endif %}
+      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
+      {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt }}</code></pre></section>{% endif %}
+      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt }}</code></pre></section>{% endif %}
+      {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error }}</code></pre></section>{% endif %}
+    </div>
+  </dialog>
+  {% endfor %}
+{% endfor %}
 
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
 {% endblock %}
