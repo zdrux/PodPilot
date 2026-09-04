@@ -683,6 +683,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .resource-result-coverage.incomplete { border-color: rgba(255, 157, 102, .35); color: var(--orange); }
 .resource-result-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border-top: 1px solid var(--border); }
 .resource-result-toolbar small, .resource-result-note, .resource-result-empty { color: var(--muted); font-size: 10px; }
+.table-export-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .resource-table-wrap { overflow-x: auto; }
 .resource-result-table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 13px; line-height: 1.5; }
 .resource-result-table th, .resource-result-table td { padding: 8px 12px; border-top: 1px solid var(--border); text-align: left; vertical-align: top; }

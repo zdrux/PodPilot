@@ -161,9 +161,13 @@
             </summary>
             <div class="resource-result-toolbar">
               <small>Interpreted cells retain the answer’s evidence status; parsing does not promote them to observed cluster facts.</small>
-              <button class="button secondary compact-button" type="button"
-                data-csv-table="answer-table-data-{{ message.id }}-{{ answer_table_index }}"
-                data-csv-filename="podpilot-answer-table.csv">Download CSV</button>
+              <span class="table-export-actions">
+                <button class="button secondary compact-button" type="button"
+                  data-copy-table="answer-table-data-{{ message.id }}-{{ answer_table_index }}">Copy for email</button>
+                <button class="button secondary compact-button" type="button"
+                  data-csv-table="answer-table-data-{{ message.id }}-{{ answer_table_index }}"
+                  data-csv-filename="podpilot-answer-table.csv">Download CSV</button>
+              </span>
             </div>
             <div class="resource-table-wrap">
               <table id="answer-table-data-{{ message.id }}-{{ answer_table_index }}" class="resource-result-table answer-table-data">

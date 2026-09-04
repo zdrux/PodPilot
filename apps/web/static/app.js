@@ -1405,6 +1405,83 @@
   }
   document.querySelectorAll("[data-operation-open]").forEach(bindOperationDialog);
   document.querySelectorAll("[data-operation-dialog]").forEach(bindOperationDialogChrome);
+  const tablePlainText = (table) => Array.from(table.rows).map((row) =>
+    Array.from(row.cells).map((cell) => cell.textContent.trim()).join("\t")
+  ).join("\r\n");
+  const tableEmailHtml = (table) => {
+    const emailTable = table.cloneNode(true);
+    const columnCount = Math.max(...Array.from(emailTable.rows).map((row) => row.cells.length));
+    emailTable.removeAttribute("id");
+    emailTable.removeAttribute("class");
+    emailTable.setAttribute("border", "0");
+    emailTable.setAttribute("cellpadding", "0");
+    emailTable.setAttribute("cellspacing", "0");
+    emailTable.setAttribute("width", "100%");
+    emailTable.style.cssText = "width:100%;max-width:720px;border-collapse:collapse;table-layout:fixed;font-family:Arial,sans-serif;font-size:14px;line-height:1.45;color:#172b4d;";
+    Array.from(emailTable.rows).forEach((row) => {
+      Array.from(row.cells).forEach((cell) => {
+        cell.removeAttribute("class");
+        cell.setAttribute("width", `${Math.round(100 / columnCount)}%`);
+        cell.style.cssText = `width:${100 / columnCount}%;padding:8px 10px;border:1px solid #b8c2cc;text-align:left;vertical-align:top;overflow-wrap:anywhere;word-break:break-word;color:#172b4d;${cell.tagName === "TH" ? "background:#edf2f7;font-weight:700;" : "background:#ffffff;"}`;
+        cell.querySelectorAll("div,p,strong,em,code,a,span").forEach((element) => {
+          element.removeAttribute("class");
+          element.style.color = element.tagName === "A" ? "#005ea8" : "#172b4d";
+          if (element.tagName === "P" || element.tagName === "DIV") element.style.margin = "0";
+          if (element.tagName === "CODE") {
+            element.style.fontFamily = "Consolas, monospace";
+            element.style.fontSize = "0.92em";
+            element.style.background = "transparent";
+            element.style.border = "0";
+            element.style.padding = "0";
+          }
+        });
+      });
+    });
+    return emailTable.outerHTML;
+  };
+  const legacyCopyHtml = (html) => {
+    const staging = document.createElement("div");
+    staging.contentEditable = "true";
+    staging.style.cssText = "position:fixed;left:-10000px;top:0;";
+    staging.innerHTML = html;
+    document.body.append(staging);
+    const selection = window.getSelection();
+    const previousRanges = selection ? Array.from({length: selection.rangeCount}, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+    const range = document.createRange();
+    range.selectNodeContents(staging);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const copied = document.execCommand("copy");
+    staging.remove();
+    selection?.removeAllRanges();
+    previousRanges.forEach((previousRange) => selection?.addRange(previousRange));
+    return copied;
+  };
+  document.querySelectorAll("[data-copy-table]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const table = document.getElementById(button.dataset.copyTable);
+      if (!table) return;
+      const html = tableEmailHtml(table);
+      const plainText = tablePlainText(table);
+      try {
+        let copied = false;
+        if (navigator.clipboard?.write && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({
+              "text/html": new Blob([html], {type: "text/html"}),
+              "text/plain": new Blob([plainText], {type: "text/plain"}),
+            })]);
+            copied = true;
+          } catch (_clipboardError) { /* Try the selection-based fallback below. */ }
+        }
+        if (!copied) copied = legacyCopyHtml(html);
+        if (!copied) throw new Error("Clipboard access was unavailable.");
+        showToast("Table copied with email-friendly formatting.", "success", 5000);
+      } catch (_error) {
+        showToast("The table could not be copied. Check this site’s clipboard permission and try again.");
+      }
+    });
+  });
   document.querySelectorAll("[data-csv-table]").forEach((button) => {
     button.addEventListener("click", () => {
       const table = document.getElementById(button.dataset.csvTable);

@@ -5498,6 +5498,8 @@ def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
     assert 'class="answer-table-result"' in rendered.text
     assert "Dynamic columns parsed from PodPilot’s safe Markdown response" in rendered.text
     assert "Answer-derived" in rendered.text
+    assert "Copy for email" in rendered.text
+    assert 'data-copy-table="answer-table-data-' in rendered.text
     assert "Interpreted policies" in rendered.text
     assert "Blocks inbound traffic" in rendered.text
     assert "The policy effect remains visible." in rendered.text
