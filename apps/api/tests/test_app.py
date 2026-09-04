@@ -13297,6 +13297,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap))" in styles
     assert ".ask-composer .composer-input-wrap:focus-within" in styles
     assert "html[data-theme] .ask-composer .composer-input-wrap {\n  overflow: visible;" in styles
+    assert "html[data-theme] .operation-facts dd { color: var(--theme-text); }" in styles
+    assert "html[data-theme] .operation-dialog-content h3 { color: var(--theme-muted); }" in styles
     assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
     assert ".ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px" in styles
     assert ".ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 340px; }" in styles

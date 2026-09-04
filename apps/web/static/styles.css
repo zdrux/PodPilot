@@ -1623,6 +1623,11 @@ html[data-theme] .operation-dialog { border-color: var(--theme-border-strong); c
 html[data-theme] .operation-dialog-header,
 html[data-theme] .operation-facts,
 html[data-theme] .operation-dialog-content pre { border-color: var(--theme-border); }
+html[data-theme] .operation-dialog-header h2,
+html[data-theme] .operation-facts dd { color: var(--theme-text); }
+html[data-theme] .operation-dialog-header .eyebrow { color: var(--theme-accent-strong); }
+html[data-theme] .operation-facts dt,
+html[data-theme] .operation-dialog-content h3 { color: var(--theme-muted); }
 html[data-theme] .operation-facts { background: var(--theme-border); }
 html[data-theme] .operation-facts div,
 html[data-theme] .operation-dialog-content pre { color: var(--theme-text); background: var(--theme-surface-inset); }
