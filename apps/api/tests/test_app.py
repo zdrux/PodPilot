@@ -15253,7 +15253,7 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "cluster_name": "Runtime cluster",
                     "status": "completed",
                     "command": "oc get deployment web -o yaml --token=[REDACTED]",
-                    "stdout_excerpt": "kind: Deployment",
+                    "stdout_excerpt": "namespace\\tpod\\t1\\n",
                     "started_at": "2026-09-02T20:00:02+00:00",
                     "completed_at": "2026-09-02T20:00:04.250000+00:00",
                     "duration_ms": 2250,
@@ -15343,6 +15343,8 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "Sensitive values were redacted." in rendered.text
     assert "Credential-like values were redacted." not in rendered.text
     assert "This item contains redacted or shortened content" in rendered.text
+    assert "namespace\tpod\t1\n" in rendered.text
+    assert "namespace\\tpod\\t1\\n" not in rendered.text
     assert 'data-operation-open="operation-00000000-0000-0000-0000-000000000191-1"' in rendered.text
 
 

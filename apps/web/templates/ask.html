@@ -333,10 +333,10 @@
             <li>
               <strong>{{ item.cluster_name or item.cluster_id }} · {{ item.tool }} · {{ item.status }}</strong>
               {% if item.executed is defined %}<small>Runner executed: {{ 'yes' if item.executed else 'no' }}{% if item.failure_category %} · {{ item.failure_category | replace('_', ' ') }}{% endif %}{% if item.diagnostic_ref %} · diagnostic {{ item.diagnostic_ref }}{% endif %}</small>{% endif %}
-              {% if item.error %}<small class="ledger-stderr">{{ item.error }}</small>{% endif %}
-              {% if item.command %}<code>{{ item.command }}</code>{% endif %}
-              {% if item.stdout_excerpt %}<pre>{{ item.stdout_excerpt }}</pre>{% endif %}
-              {% if item.stderr_excerpt %}<pre class="ledger-stderr">{{ item.stderr_excerpt }}</pre>{% endif %}
+              {% if item.error %}<small class="ledger-stderr">{{ item.error | operation_display_text }}</small>{% endif %}
+              {% if item.command %}<code>{{ item.command | operation_display_text }}</code>{% endif %}
+              {% if item.stdout_excerpt %}<pre>{{ item.stdout_excerpt | operation_display_text }}</pre>{% endif %}
+              {% if item.stderr_excerpt %}<pre class="ledger-stderr">{{ item.stderr_excerpt | operation_display_text }}</pre>{% endif %}
               {% if item.observations %}<pre>{{ item.observations | tojson(indent=2) }}</pre>{% endif %}
               {% if item.limitations %}<pre class="ledger-stderr">{{ item.limitations | tojson(indent=2) }}</pre>{% endif %}
             </li>
@@ -557,7 +557,7 @@
                   <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
                   {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
                 </div>
-                {% if item.command %}<code>{{ item.command }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
+                {% if item.command %}<code>{{ item.command | operation_display_text }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
               </div>
             </button>
           </li>
@@ -586,7 +586,7 @@
                 <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
                 {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
               </div>
-              {% if item.command %}<code>{{ item.command }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
+              {% if item.command %}<code>{{ item.command | operation_display_text }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
               </div>
             </button>
           </li>
@@ -625,13 +625,13 @@
         {% if item.exit_code is defined and item.exit_code is not none %}<div><dt>Exit code</dt><dd>{{ item.exit_code }}</dd></div>{% endif %}
       </dl>
       {% if item.content_filtered %}<div class="operation-filter-notice"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""><div><strong>This item contains redacted or shortened content</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason | operator_filter_reason }}</li>{% endfor %}</ul></div></div>{% endif %}
-      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
+      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
-      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt }}</code></pre></section>{% endif %}
-      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt }}</code></pre></section>{% endif %}
+      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt | operation_display_text }}</code></pre></section>{% endif %}
+      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
-      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error }}</code></pre></section>{% endif %}
+      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error | operation_display_text }}</code></pre></section>{% endif %}
     </div>
   </dialog>
   {% endfor %}
@@ -660,13 +660,13 @@
         <div><strong>This item contains redacted or shortened content</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason | operator_filter_reason }}</li>{% endfor %}</ul></div>
       </div>
       {% endif %}
-      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
+      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
-      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt }}</code></pre></section>{% endif %}
-      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt }}</code></pre></section>{% endif %}
+      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt | operation_display_text }}</code></pre></section>{% endif %}
+      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
-      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error }}</code></pre></section>{% endif %}
+      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error | operation_display_text }}</code></pre></section>{% endif %}
     </div>
   </dialog>
   {% endfor %}

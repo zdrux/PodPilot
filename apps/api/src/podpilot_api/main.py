@@ -8500,6 +8500,17 @@ def _operator_filter_reasons(values: object) -> list[str]:
     return [_operator_filter_reason(value) for value in values]
 
 
+def _operation_display_text(value: object) -> str:
+    """Render common escaped shell separators without changing retained evidence."""
+
+    return (
+        str(value or "")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+    )
+
+
 def _agent_provider_failure_content(
     *, ledger: list[dict[str, object]], provider_error: str,
 ) -> str:
@@ -10425,6 +10436,7 @@ def create_app(
     templates.env.filters["safe_table_markdown"] = render_safe_table_markdown
     templates.env.filters["est_time"] = _format_est_time
     templates.env.filters["operator_filter_reason"] = _operator_filter_reason
+    templates.env.filters["operation_display_text"] = _operation_display_text
     templates.env.globals["operator_filter_reasons"] = _operator_filter_reasons
     templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
 

@@ -985,8 +985,12 @@
       if (event.target === dialog) dialog.close();
     });
   };
+  const operationDisplayText = (value) => String(value || "")
+    .replaceAll("\\r\\n", "\n")
+    .replaceAll("\\n", "\n")
+    .replaceAll("\\t", "\t");
   const operationText = (value) => typeof value === "string"
-    ? value
+    ? operationDisplayText(value)
     : JSON.stringify(value, null, 2);
   const operationFilterReason = (value) => ({
     "Credential-like values were redacted.": "Sensitive values were redacted.",
