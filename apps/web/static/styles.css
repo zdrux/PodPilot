@@ -1838,7 +1838,7 @@ html[data-theme] .ask-composer {
   letter-spacing: .075em;
 }
 html[data-theme] .ask-composer .composer-input-wrap {
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--theme-border-strong);
   border-radius: 12px;
   background: var(--theme-surface);
