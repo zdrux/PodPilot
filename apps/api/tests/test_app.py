@@ -13276,6 +13276,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "background: rgba(26, 126, 78, .3)" in styles
     assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .ask-thread .chat-meta .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
+    assert "--conversation-author-column: 190px" in styles
+    assert "--conversation-column-gap: clamp(28px, 4vw, 64px)" in styles
     assert ".ask-page .sidebar" not in styles
     assert ".ask-page .nav-label" not in styles
     assert ".ask-page .nav-link" not in styles
@@ -13287,6 +13289,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-composer .chat-budget p { color: var(--theme-muted); }" in styles
     assert "html[data-theme] .resource-result-table th" in styles
     assert "width: min(100%, var(--conversation-content-width))" in styles
+    assert "margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap))" in styles
     assert ".ask-composer .composer-input-wrap:focus-within" in styles
     assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
     assert ".ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px" in styles

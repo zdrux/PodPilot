@@ -1705,6 +1705,8 @@ html[data-theme="cibc-red"] .ask-page .operation-marker { border-color: #e5dadd;
 .ask-page {
   --conversation-content-width: 1120px;
   --conversation-gutter: clamp(22px, 2.4vw, 36px);
+  --conversation-author-column: 190px;
+  --conversation-column-gap: clamp(28px, 4vw, 64px);
 }
 
 /* Keep older Ask components on the same semantic palette as the active theme. */
@@ -1828,8 +1830,8 @@ html[data-theme] .ask-composer {
   background: var(--theme-canvas);
 }
 .ask-composer .chat-form {
-  width: min(100%, var(--conversation-content-width));
-  margin: 0 auto;
+  width: min(var(--conversation-content-width), calc(100% - var(--conversation-author-column) - var(--conversation-column-gap)));
+  margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap));
   padding: 0;
 }
 .ask-composer .composer-prompt-label {
@@ -1924,8 +1926,8 @@ html[data-theme] .ask-thread {
 html[data-theme] .ask-thread .chat-message {
   position: relative;
   width: 100%;
-  grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
-  column-gap: clamp(28px, 4vw, 64px);
+  grid-template-columns: minmax(148px, var(--conversation-author-column)) minmax(0, 1fr);
+  column-gap: var(--conversation-column-gap);
   margin: 0;
   padding: 24px var(--conversation-gutter) 25px;
   border: 0;
@@ -1978,11 +1980,13 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
 }
 
 @media (max-width: 1180px) {
-  .ask-thread .chat-message { grid-template-columns: minmax(112px, 148px) minmax(0, 1fr); }
+  .ask-page { --conversation-author-column: 148px; }
+  .ask-thread .chat-message { grid-template-columns: minmax(112px, var(--conversation-author-column)) minmax(0, 1fr); }
 }
 
 @media (max-width: 960px) {
   .ask-thread .chat-message { display: block; }
+  .ask-composer .chat-form { width: 100%; margin-left: 0; }
 }
 
 @media (max-width: 720px) {
