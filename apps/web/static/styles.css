@@ -1412,7 +1412,7 @@ html[data-theme="cibc-red"] {
   --theme-surface-raised: #e5dadd;
   --theme-surface-soft: #ddcdd2;
   --theme-surface-inset: #e1d5d9;
-  --theme-nav: #8b1d41;
+  --theme-nav: #783449;
   --theme-border: #c9b2ba;
   --theme-border-strong: #b894a0;
   --theme-text: #2c2024;
@@ -1666,7 +1666,7 @@ html[data-theme="light"] .operation-status-rejected .operation-status,
 html[data-theme="light"] .operation-status-denied_or_unavailable .operation-status { color: #995018; background: #fff5e8; }
 
 html[data-theme="medium-light"] .brand-mark { border-color: #087f8c; color: #ffffff; background: #087f8c; box-shadow: none; }
-html[data-theme="cibc-red"] .sidebar { color: #fdfdfd; background: #8b1d41; }
+html[data-theme="cibc-red"] .sidebar { color: #fdfdfd; background: #783449; }
 html[data-theme="cibc-red"] .brand strong,
 html[data-theme="cibc-red"] .nav-link,
 html[data-theme="cibc-red"] .nav-session-link strong,
