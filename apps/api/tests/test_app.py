@@ -3020,8 +3020,8 @@ def test_agent_ledger_records_timing_and_filtered_content_notice() -> None:
     assert entry["duration_ms"] == 2250
     assert entry["content_filtered"] is True
     assert set(entry["filtered_fields"]) == {"command", "stdout"}
-    assert "Credential-like values were redacted." in entry["filter_reasons"]
-    assert "Kubernetes managedFields were omitted." in entry["filter_reasons"]
+    assert "Sensitive values were redacted." in entry["filter_reasons"]
+    assert "Kubernetes-managed metadata was removed." in entry["filter_reasons"]
     assert "secret-value" not in json.dumps(entry)
     assert "[REDACTED]" in entry["command"]
 
@@ -15251,7 +15251,7 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "duration_ms": 2250,
                     "content_filtered": True,
                     "filtered_fields": ["command"],
-                    "filter_reasons": ["Credential-like values were redacted."],
+                    "filter_reasons": ["Sensitive values were redacted."],
                 }],
             }),
             model_diagnostics_json=json.dumps({
@@ -15332,7 +15332,8 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "16:00:02 EST (-4)" in rendered.text
     assert "2.2s" in rendered.text
     assert 'class="filtered-output-indicator"' in rendered.text
-    assert "Credential-like values were redacted." in rendered.text
+    assert "Sensitive values were redacted." in rendered.text
+    assert "This item contains redacted or shortened content" in rendered.text
     assert 'data-operation-open="operation-00000000-0000-0000-0000-000000000191-1"' in rendered.text
 
 

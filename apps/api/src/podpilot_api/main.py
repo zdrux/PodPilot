@@ -8428,18 +8428,18 @@ def _agent_tool_ledger_entry(
             if _ledger_value_was_redacted(value):
                 filtered_fields.append(field)
         if filtered_fields:
-            filter_reasons.append("Credential-like values were redacted.")
+            filter_reasons.append("Sensitive values were redacted.")
         if result.get("managed_fields_removed"):
-            filter_reasons.append("Kubernetes managedFields were omitted.")
+            filter_reasons.append("Kubernetes-managed metadata was removed.")
         if result.get("stdout_truncated") or result.get("stderr_truncated"):
-            filter_reasons.append("Runner output reached its retained byte limit.")
+            filter_reasons.append("Some command output was too long to display.")
         if requires_refinement:
-            filter_reasons.append("Oversized JSON was replaced with structural metadata.")
+            filter_reasons.append("A large response was summarized.")
         if (
             len(str(retained_result.get("stdout") or "")) > 1_200
             or len(str(retained_result.get("stderr") or "")) > 600
         ):
-            filter_reasons.append("The timeline retains bounded output excerpts.")
+            filter_reasons.append("Only part of the command output is shown.")
         if requires_refinement:
             entry["provider_result_requires_refinement"] = True
             entry["provider_result_summary"] = retained_result.get("provider_result_summary")
@@ -8463,14 +8463,14 @@ def _agent_tool_ledger_entry(
         if _ledger_value_was_redacted(result.get("limitations")):
             filtered_fields.append("limitations")
         if filtered_fields:
-            filter_reasons.append("Credential-like values were redacted.")
+            filter_reasons.append("Sensitive values were redacted.")
     for key in ("failure_category", "diagnostic_ref", "error"):
         if result.get(key) not in (None, ""):
             entry[key] = _agent_ledger_excerpt(result[key], 400)
     if _ledger_value_was_redacted(result.get("error")) and "error" not in filtered_fields:
         filtered_fields.append("error")
-        if "Credential-like values were redacted." not in filter_reasons:
-            filter_reasons.append("Credential-like values were redacted.")
+        if "Sensitive values were redacted." not in filter_reasons:
+            filter_reasons.append("Sensitive values were redacted.")
     if filter_reasons:
         entry["content_filtered"] = True
         entry["filtered_fields"] = list(dict.fromkeys(filtered_fields))

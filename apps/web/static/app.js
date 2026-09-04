@@ -1033,7 +1033,7 @@
       button.dataset.operationOpen = dialogId;
       button.setAttribute("aria-haspopup", "dialog");
       button.setAttribute("aria-controls", dialogId);
-      button.setAttribute("aria-label", `View ${String(operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". Some retained content was filtered" : ""}`);
+      button.setAttribute("aria-label", `View ${String(operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
       const marker = document.createElement("span");
       marker.className = "operation-marker";
       marker.setAttribute("aria-hidden", "true");
@@ -1047,7 +1047,7 @@
       if (operation.content_filtered) {
         const filtered = document.createElement("span");
         filtered.className = "filtered-output-indicator";
-        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.join(" ") : "Retained content was filtered.";
+        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.join(" ") : "This item contains redacted or shortened content.";
         const image = document.createElement("img");
         image.src = "/static/icons/shield-exclamation.svg";
         image.alt = "";
@@ -1137,7 +1137,7 @@
         image.alt = "";
         const noticeBody = document.createElement("div");
         const noticeTitle = document.createElement("strong");
-        noticeTitle.textContent = "Retained content was filtered";
+        noticeTitle.textContent = "This item contains redacted or shortened content";
         const reasons = document.createElement("ul");
         (operation.filter_reasons || []).forEach((reason) => {
           const item = document.createElement("li");

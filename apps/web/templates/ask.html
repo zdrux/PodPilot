@@ -326,8 +326,8 @@
         {% endif %}
         {% if message.activity and message.activity.evidence_ledger %}
         <details class="answer-diagnostics retained-agent-evidence">
-          <summary>Agent evidence ledger <small>{{ message.activity.evidence_ledger | length }} recorded operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
-          <p>This is the bounded operation trail the agent retained after each raw tool result was interpreted once.</p>
+          <summary>Investigation steps <small>{{ message.activity.evidence_ledger | length }} recorded operation{% if message.activity.evidence_ledger | length != 1 %}s{% endif %}</small></summary>
+          <p>These are the checks PodPilot ran and the results saved with this answer.</p>
           <ol>
           {% for item in message.activity.evidence_ledger %}
             <li>
@@ -567,7 +567,7 @@
           <li class="operation-event operation-status-{{ item.status }}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
             <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
               aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. Some retained content was filtered{% endif %}">
+              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
               <span class="operation-marker" aria-hidden="true"></span>
               <div class="operation-event-body">
                 <div class="operation-event-heading">
@@ -592,7 +592,7 @@
           <li class="operation-event operation-status-{{ item.status }}">
             <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
               aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. Some retained content was filtered{% endif %}">
+              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
               <span class="operation-marker" aria-hidden="true"></span>
               <div class="operation-event-body">
               <div class="operation-event-heading">
@@ -642,7 +642,7 @@
         {% if item.duration_ms is defined %}<div><dt>Duration</dt><dd>{{ '%.2f' | format(item.duration_ms / 1000) }} seconds</dd></div>{% endif %}
         {% if item.exit_code is defined and item.exit_code is not none %}<div><dt>Exit code</dt><dd>{{ item.exit_code }}</dd></div>{% endif %}
       </dl>
-      {% if item.content_filtered %}<div class="operation-filter-notice"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""><div><strong>Retained content was filtered</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div></div>{% endif %}
+      {% if item.content_filtered %}<div class="operation-filter-notice"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""><div><strong>This item contains redacted or shortened content</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div></div>{% endif %}
       {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
       {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt }}</code></pre></section>{% endif %}
@@ -675,7 +675,7 @@
       {% if item.content_filtered %}
       <div class="operation-filter-notice">
         <img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt="">
-        <div><strong>Retained content was filtered</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div>
+        <div><strong>This item contains redacted or shortened content</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div>
       </div>
       {% endif %}
       {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
