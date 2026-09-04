@@ -527,29 +527,6 @@
       <span class="activity-count" data-activity-count>{{ total_operation_count }} operation{% if total_operation_count != 1 %}s{% endif %}</span>
     </div>
     <section class="activity-tab-panel activity-timeline-panel" id="activity-timeline-panel" aria-label="Investigation timeline">
-      {% if active_run %}
-      <div class="activity-live" aria-live="polite">
-        <div class="activity-live-heading"><span class="thinking-spinner" aria-hidden="true"></span><strong>Live investigation</strong></div>
-        <ol data-activity-live data-last-seq="{{ active_run.events[-1].seq if active_run.events else -1 }}">
-          {% set live_progress = namespace(phases=[], seen_messages=[]) %}
-          {% for event in active_run.events %}
-            {% if event.phase not in ['queued', 'starting'] and event.phase not in live_progress.phases %}{% set live_progress.phases = live_progress.phases + [event.phase] %}{% endif %}
-          {% endfor %}
-          {% for phase in live_progress.phases %}
-            {% set phase_events = active_run.events | selectattr('phase', 'equalto', phase) | list %}
-            {% set unique_live_phase = namespace(events=[]) %}
-            {% for event in phase_events %}
-              {% if event.message not in live_progress.seen_messages %}
-                {% set live_progress.seen_messages = live_progress.seen_messages + [event.message] %}
-                {% set unique_live_phase.events = unique_live_phase.events + [event] %}
-              {% endif %}
-            {% endfor %}
-            {% set visible_live_events = unique_live_phase.events[-5:] if phase == 'agent_command' else unique_live_phase.events[-3:] %}
-            {% for event in visible_live_events %}<li data-seq="{{ event.seq }}"><time>{% if event.at %}{{ event.at | est_time('%H:%M:%S') }}{% else %}now{% endif %}</time><span>{{ event.message }}</span></li>{% endfor %}
-          {% endfor %}
-        </ol>
-      </div>
-      {% endif %}
       {% if activity_summary.diagnostic_count %}
       <div class="activity-group activity-group-warning">
         <div class="activity-group-heading"><span>Tool-call diagnostics</span><strong>{{ activity_summary.diagnostic_count }} rejected</strong></div>
@@ -615,8 +592,13 @@
           </li>
           {% endfor %}
         {% endfor %}
+        {% if active_run %}
+        <li class="operation-live-tail" data-operation-live-tail role="status" aria-live="polite">
+          <span class="thinking-spinner" aria-hidden="true"></span><strong>Investigating…</strong>
+        </li>
+        {% endif %}
       </ol>
-      {% if total_operation_count == 0 and not activity_summary.diagnostic_count %}
+      {% if total_operation_count == 0 and not activity_summary.diagnostic_count and not active_run %}
       <div class="activity-empty" data-activity-empty><strong>No operations yet</strong><p>Agent-selected checks will appear here as they start.</p></div>
       {% endif %}
     </section>

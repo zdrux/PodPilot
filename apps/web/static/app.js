@@ -1028,8 +1028,8 @@
         row = document.createElement("li");
         row.dataset.liveOperation = "";
         row.dataset.operationKey = key;
-        const firstRetainedOperation = timeline.querySelector(".operation-event:not([data-live-operation])");
-        timeline.insertBefore(row, firstRetainedOperation);
+        const insertionPoint = timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]");
+        timeline.insertBefore(row, insertionPoint);
       }
       row.className = `operation-event operation-status-${operation.status || "running"}`;
       const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -1188,9 +1188,7 @@
     const progressTitle = pendingRun.querySelector("[data-progress-title]");
     const current = pendingRun.querySelector("[data-progress-current]");
     const log = pendingRun.querySelector("[data-progress-log]");
-    const activityLive = document.querySelector("[data-activity-live]");
     let lastSeq = Number.parseInt(log?.dataset.lastSeq || "-1", 10);
-    let activityLastSeq = Number.parseInt(activityLive?.dataset.lastSeq || "-1", 10);
     const hiddenProgressPhases = new Set(["queued", "starting"]);
     const displayedProgressMessages = new Set(
       Array.from(log?.querySelectorAll("[data-progress-items] li") || [], (item) => item.textContent)
@@ -1243,27 +1241,6 @@
           : "PodPilot is choosing and running useful checks.";
       }
       appendPhaseUpdate(event, seq);
-      if (
-        activityLive && event.message && !hiddenProgressPhases.has(event.phase)
-        && (!Number.isFinite(seq) || seq > activityLastSeq)
-      ) {
-        if (Number.isFinite(seq)) activityLastSeq = seq;
-        const item = document.createElement("li");
-        if (Number.isFinite(seq)) item.dataset.seq = String(seq);
-        const time = document.createElement("time");
-        const parsedAt = event.at ? new Date(event.at) : null;
-        time.textContent = parsedAt && !Number.isNaN(parsedAt.valueOf())
-          ? parsedAt.toLocaleTimeString("en-US", {
-            hour: "2-digit", minute: "2-digit", second: "2-digit",
-            hour12: false, timeZone: "America/Toronto",
-          })
-          : "now";
-        const message = document.createElement("span");
-        message.textContent = event.message;
-        item.append(time, message);
-        activityLive.append(item);
-        while (activityLive.children.length > 12) activityLive.firstElementChild?.remove();
-      }
       const thread = pendingRun.closest(".ask-thread");
       thread?.scrollTo({top: thread.scrollHeight});
     };

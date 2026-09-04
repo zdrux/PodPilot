@@ -12998,15 +12998,14 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
         )
 
     assert page.status_code == 200
-    assert page.text.count(repeated) == 1
+    assert repeated not in page.text
     assert 'data-progress-phase="replanning"' not in page.text
     assert 'data-progress-phase="queued"' not in page.text
     assert 'data-progress-phase="starting"' not in page.text
     assert "Question queued." not in page.text
     assert "Starting investigation." not in page.text
-    assert "Command update 1." not in page.text
-    for index in range(2, 7):
-        assert f"Command update {index}." in page.text
+    for index in range(1, 7):
+        assert f"Command update {index}." not in page.text
     assert 'data-operation-key="call-live-1"' in page.text
     assert "1 operation" in page.text
     assert "oc get pods -A" in page.text
@@ -13203,10 +13202,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "PodPilot is choosing and running useful checks." in script
     assert "active_run.events[-1].message if active_run.events" not in template
     assert 'current.textContent = event.message || "Investigation in progress."' not in script
-    assert "data-activity-live" in template
-    assert "event.message not in live_progress.seen_messages" in template
-    assert "unique_live_phase.events[-5:] if phase == 'agent_command'" in template
-    assert "event.phase not in ['queued', 'starting']" in template
+    assert "data-activity-live" not in template
+    assert "data-operation-live-tail" in template
+    assert "<strong>Investigating" in template
+    assert 'timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]")' in script
     assert "active_run.events[-6:]" not in template
     assert 'hiddenProgressPhases = new Set(["queued", "starting"])' in script
     assert 'phaseName === "agent_command" ? 5 : 3' in script
