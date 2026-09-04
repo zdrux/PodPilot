@@ -1448,6 +1448,8 @@ html[data-theme] .button:hover:not(:disabled) { border-color: var(--theme-accent
 html[data-theme] .button.primary { border-color: var(--theme-accent); color: var(--theme-canvas); background: var(--theme-accent); }
 html[data-theme="light"] .button.primary { color: #ffffff; }
 html[data-theme] .button.danger { border-color: color-mix(in srgb, var(--theme-danger) 50%, var(--theme-border)); color: var(--theme-danger); background: color-mix(in srgb, var(--theme-danger) 8%, var(--theme-surface)); }
+html[data-theme] .execution-mode-badge.execution-mode-read-only { border-color: color-mix(in srgb, var(--theme-success) 50%, var(--theme-border)); color: var(--theme-success); background: color-mix(in srgb, var(--theme-success) 10%, var(--theme-surface)); }
+html[data-theme] .execution-mode-badge.execution-mode-read-write { border-color: color-mix(in srgb, var(--theme-danger) 50%, var(--theme-border)); color: var(--theme-danger); background: color-mix(in srgb, var(--theme-danger) 9%, var(--theme-surface)); }
 html[data-theme] input:not([type="checkbox"]):not([type="radio"]),
 html[data-theme] select,
 html[data-theme] textarea { border-color: var(--theme-border-strong); color: var(--theme-text); background: var(--theme-surface-inset); caret-color: var(--theme-accent); }

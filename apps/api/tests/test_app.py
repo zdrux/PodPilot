@@ -13132,6 +13132,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert ".execution-mode-badge { min-height: 34px; padding: 0 11px; border-radius: 7px;" in styles
     assert ".execution-mode-badge.execution-mode-read-only" in styles
     assert ".execution-mode-badge.execution-mode-read-write" in styles
+    assert "html[data-theme] .execution-mode-badge.execution-mode-read-only" in styles
+    assert "color: var(--theme-success)" in styles
+    assert "html[data-theme] .execution-mode-badge.execution-mode-read-write" in styles
+    assert "color: var(--theme-danger)" in styles
     assert ".ask-page .ask-session-header" in styles
     assert "padding-inline: 20px" in styles
     assert ".answer-table-result { margin: 10px 0 14px; }" in styles
