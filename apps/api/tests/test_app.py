@@ -13254,6 +13254,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-thread .chat-markdown strong," in styles
     assert "html[data-theme] .ask-thread .chat-markdown pre code { color: var(--theme-text);" in styles
     assert "html[data-theme] .suggested-followup-actions strong," in styles
+    assert "html[data-theme] .ask-thread { padding: 0; }" in styles
+    assert "padding: 24px var(--conversation-gutter) 25px" in styles
+    assert "border-bottom: 1px solid color-mix(in srgb, var(--theme-border-strong) 72%, transparent)" in styles
+    assert "html[data-theme] .answer-status-grounded" in styles
+    assert 'html[data-theme="light"] .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
     assert ".ask-page .sidebar" not in styles
     assert ".ask-page .nav-label" not in styles

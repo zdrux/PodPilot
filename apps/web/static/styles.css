@@ -1782,20 +1782,21 @@ html[data-theme] .ask-composer .composer-toolbar {
   .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { max-width: none; }
 }
 
-/* Keep dense investigation output full-width; retain the narrower composer. */
-html[data-theme] .ask-thread { padding: 0 var(--conversation-gutter); }
+/* Keep dense investigation output edge-to-edge; retain the narrower composer. */
+html[data-theme] .ask-thread { padding: 0; }
 .ask-thread .chat-message {
   width: 100%;
   grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
   column-gap: clamp(28px, 4vw, 64px);
   margin: 0;
-  padding: 24px 14px 25px;
+  padding: 24px var(--conversation-gutter) 25px;
   border: 0;
-  border-bottom: 1px solid var(--theme-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-border-strong) 72%, transparent);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
+.ask-thread .chat-message:last-child { border-bottom: 0; }
 .ask-thread .chat-user { background: transparent; }
 .ask-thread .context-divider {
   width: 100%;
@@ -1814,6 +1815,17 @@ html[data-theme] .ask-thread { padding: 0 var(--conversation-gutter); }
   color: var(--theme-accent-strong);
   background: var(--theme-accent-soft);
 }
+html[data-theme] .answer-status-grounded {
+  border-color: color-mix(in srgb, var(--theme-success) 72%, var(--theme-border));
+  color: var(--theme-success);
+  background: color-mix(in srgb, var(--theme-success) 22%, var(--theme-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-success) 12%, transparent);
+}
+html[data-theme="light"] .answer-status-grounded {
+  border-color: #70bd8d;
+  color: #0f6f3d;
+  background: #dff4e7;
+}
 @keyframes operation-pulse {
   50% { box-shadow: 0 0 0 1px var(--theme-accent), 0 0 0 7px transparent; }
 }
@@ -1829,4 +1841,5 @@ html[data-theme] .ask-thread { padding: 0 var(--conversation-gutter); }
 @media (max-width: 720px) {
   html[data-theme] .ask-thread { padding: 16px 12px 24px; }
   .ask-thread .chat-message { margin-bottom: 10px; padding: 17px 16px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-surface); }
+  .ask-thread .chat-message:last-child { border-bottom: 1px solid var(--theme-border); }
 }
