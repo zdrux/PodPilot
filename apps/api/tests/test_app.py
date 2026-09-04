@@ -13293,6 +13293,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-composer .chat-budget p { color: var(--theme-muted); }" in styles
     assert "html[data-theme] .resource-result-table th" in styles
     assert "width: min(100%, var(--conversation-content-width))" in styles
+    assert "width: calc(100% - var(--conversation-author-column) - var(--conversation-column-gap))" in styles
     assert "margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap))" in styles
     assert ".ask-composer .composer-input-wrap:focus-within" in styles
     assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
