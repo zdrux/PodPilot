@@ -1801,3 +1801,21 @@ html[data-theme] .ask-composer .composer-toolbar {
   .ask-thread .chat-message { margin-bottom: 10px; padding: 17px 16px; border-radius: 10px; }
   html[data-theme] .ask-composer { padding: 0 12px 12px; }
 }
+
+/* Keep conversation actions anchored to the conversation/evidence boundary. */
+.ask-page .ask-session-header { position: static; width: auto; }
+.ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { max-width: calc(100vw - 878px); }
+.ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px; z-index: 5; }
+.ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 340px; }
+
+@media (max-width: 1180px) {
+  .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { max-width: calc(100vw - 838px); }
+  .ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 300px; }
+}
+
+@media (max-width: 960px) {
+  .ask-page .ask-session-header { position: relative; }
+  .ask-layout .panel-header-actions,
+  .ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { position: static; }
+  .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { max-width: none; }
+}

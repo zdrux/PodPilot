@@ -13229,6 +13229,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .resource-result-table th" in styles
     assert "width: min(100%, var(--conversation-content-width))" in styles
     assert ".ask-composer .composer-input-wrap:focus-within" in styles
+    assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
+    assert ".ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px" in styles
+    assert ".ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 340px; }" in styles
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template
