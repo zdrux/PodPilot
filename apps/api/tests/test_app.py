@@ -13263,6 +13263,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-thread .chat-user," in styles
     assert "html[data-theme] .ask-thread .chat-assistant { background: transparent; }" in styles
     assert "html[data-theme] .answer-status-grounded" in styles
+    assert "color: #4ade9a" in styles
+    assert "background: rgba(74, 222, 154, .08)" in styles
     assert 'html[data-theme="light"] .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
     assert ".ask-page .sidebar" not in styles
