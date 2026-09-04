@@ -1512,6 +1512,8 @@ html[data-theme] .ask-session-header { grid-template-columns: minmax(0, 1fr) max
 html[data-theme] .prompt-starters button,
 html[data-theme] .workload-starter-form,
 html[data-theme] .chat-pending { border-color: var(--theme-border); color: var(--theme-text); background: var(--theme-surface-raised); }
+html[data-theme] .prompt-starters strong { color: var(--theme-text); }
+html[data-theme] .prompt-starters small { color: var(--theme-muted); }
 html[data-theme] .prompt-starters button:hover:not(:disabled) { border-color: var(--theme-accent); background: var(--theme-accent-soft); }
 html[data-theme] .raw-response-switch > span[aria-hidden] { border-color: var(--theme-border-strong); background: var(--theme-surface-inset); }
 html[data-theme] .composer-input-wrap,

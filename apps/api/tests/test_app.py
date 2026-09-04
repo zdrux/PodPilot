@@ -13246,6 +13246,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
     assert 'html[data-theme="dark"] .ask-page' in styles
+    assert "html[data-theme] .prompt-starters strong { color: var(--theme-text); }" in styles
+    assert "html[data-theme] .prompt-starters small { color: var(--theme-muted); }" in styles
     assert "--conversation-content-width: 1120px" in styles
     assert ".ask-page .sidebar" not in styles
     assert ".ask-page .nav-label" not in styles
