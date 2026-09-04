@@ -39,7 +39,7 @@ No actionable P0, P1, or P2 issues remain.
 
 ## Deployed SNO validation
 
-- Build: `podpilot-85`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab at image digest `sha256:e50502f8436d8680709d5dc122aeb1cece0609dcc03945eaa155fb5d434e27c4`.
+- Build: `podpilot-86`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab at image digest `sha256:7a1e2796fa0fa8dd83bc58e0fc0f940de194b4caecb54bc957f98bc0a9a18080`.
 - Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, activate an operation row, collapse and restore the evidence rail, and switch among all three themes.
 - Result: the live run retained 16 timed operations and 7 evidence sources. Timeline event rows, operation dialogs, the evidence toggle, and persisted theme selection worked without browser-console errors.
 - The open evidence rail originally allowed the conversation header to retain its collapsed width, placing its controls beneath the rail. The header now reserves the rail and action widths, keeps the title ellipsized, and leaves New conversation plus Hide evidence visible; the collapsed state restores the full transcript width.
@@ -48,5 +48,6 @@ No actionable P0, P1, or P2 issues remain.
 - A follow-up side-by-side review against the Light cluster sign-in page found that Ask still used a narrower navigation rail, compressed title bar, divider-only transcript, and older hard-coded result-table fills. Build `podpilot-83` aligns Ask with the shared 248px operator navigation, larger page-title typography, generous page rhythm, elevated message surfaces, and card-style composer. Resource and answer-table surfaces now resolve through theme tokens as well.
 - Browser validation on build `podpilot-83` covered the Light conversation with the evidence rail open, the Dark conversation with the rail collapsed, and computed Classic surfaces. The evidence toggle restored correctly; all three themes used the intended canvas/card/result hierarchy; there was no horizontal page overflow and no browser-console output.
 - Follow-up spacing validation on build `podpilot-85` measured the header actions 22px from the evidence divider when the rail was open and 14px from the workspace edge when closed. Both states retained the intended title truncation, produced no horizontal overflow, and restored the evidence rail without console output.
+- Cross-route navigation validation on build `podpilot-86` compared computed sidebar, brand, `WORKSPACE` label, navigation link, session row, subtree, and identity styles between Ask and cluster sign-in. Their dimensions, typography, spacing, colors, borders, and radii now match exactly; the active Ask and active Clusters links also produce identical computed styling. No Ask-scoped sidebar selectors remain and the browser console stayed clear.
 
 final result: passed

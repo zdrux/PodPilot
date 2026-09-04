@@ -13223,7 +13223,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'html[data-theme="light"] .ask-page' in styles
     assert 'html[data-theme="dark"] .ask-page' in styles
     assert "--conversation-content-width: 1120px" in styles
-    assert ".ask-page .shell { grid-template-columns: 248px" in styles
+    assert ".ask-page .sidebar" not in styles
+    assert ".ask-page .nav-label" not in styles
+    assert ".ask-page .nav-link" not in styles
+    assert ".ask-page .brand-mark" not in styles
     assert "html[data-theme] .ask-panel { background: var(--theme-canvas); }" in styles
     assert "html[data-theme] .resource-result-group" in styles
     assert "html[data-theme] .resource-result-table th" in styles

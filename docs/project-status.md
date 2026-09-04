@@ -637,7 +637,9 @@ records remain, but execution now awaits a separate approval-gated action servic
   conversation surfaces instead of the previous full-width flat transcript, while the activity sidebar
   remains available for operators to hide or restore from the
   conversation header. The header actions stay anchored to the evidence divider when the rail is open and
-  to the page edge when it is closed; that browser preference persists across conversations and reloads. The original
+  to the page edge when it is closed. The shared navigation has no Ask-route typography, spacing, brand,
+  active-state, subtree, or identity overrides, so it remains visually identical while moving among chats,
+  cluster sign-in, and management pages; that browser preference persists across conversations and reloads. The original
   blue-black PodPilot palette is the default, with persistent Dark and Light alternatives available
   from the shared sidebar on every page. Shared canvas, panel, navigation, input, menu, button, notice,
   code, dialog, evidence, resource-result, and answer-table colors resolve through the same semantic theme tokens.

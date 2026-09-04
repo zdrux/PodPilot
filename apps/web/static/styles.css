@@ -414,7 +414,6 @@ h3 { margin-bottom: 8px; font-size: 16px; }
   background: #172538;
 }
 .ask-page .shell { height: 100dvh; min-height: 0; }
-.ask-page .sidebar { border-color: #2b3b50; background: #111d2c; backdrop-filter: none; }
 .ask-page .main { height: 100dvh; min-height: 0; padding: 0; overflow: hidden; }
 .ask-layout { position: relative; height: 100%; margin-top: 0; }
 .ask-layout.action-session::after {
@@ -1037,21 +1036,6 @@ html[data-theme="light"] .ask-page {
   --radius: 8px;
 }
 
-.ask-page .shell { grid-template-columns: 232px minmax(0, 1fr); background: var(--bg); }
-.ask-page .sidebar { padding: 18px 14px; border-color: #202b37; background: #0b1118; }
-.ask-page .brand { padding: 0 6px 22px; }
-.ask-page .brand-mark { width: 34px; height: 34px; border: 0; border-radius: 7px; background: var(--cyan); font-size: 16px; }
-.ask-page .brand strong { font-size: 14px; }
-.ask-page .brand small { color: #8290a0; font-size: 10px; }
-.ask-page .nav-label { margin-top: 4px; color: #788697; font-size: 9px; letter-spacing: .1em; }
-.ask-page .nav-link { min-height: 40px; border-radius: 7px; color: #b3bdc8; font-size: 12px; }
-.ask-page .nav-link.active { border-color: #315063; color: #f3f7f8; background: #122431; box-shadow: inset 2px 0 var(--cyan); }
-.ask-page .nav-subtree { margin-left: 18px; border-color: #23303e; }
-.ask-page .nav-session-list li { border-radius: 6px; }
-.ask-page .nav-session-list li.active { background: #111f2a; box-shadow: inset 2px 0 var(--cyan); }
-.ask-page .nav-session-link strong { color: #d4dce4; }
-.ask-page .identity-card { padding-inline: 6px; border-color: #202b37; }
-
 .ask-layout { display: grid; grid-template-columns: minmax(0, 1fr) 326px; background: var(--surface); }
 .ask-page .ask-panel { width: auto; min-width: 0; border-right: 1px solid var(--border); background: var(--surface); }
 .ask-page .ask-session-header { width: 100%; min-width: 0; max-width: 100%; min-height: 92px; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: 16px; overflow: hidden; padding: 18px 22px; border-color: var(--border); background: #0d141d; }
@@ -1153,10 +1137,6 @@ html[data-theme="light"] .ask-page {
 .operation-filter-notice ul { margin: 5px 0 0; padding-left: 17px; color: #bda78f; font-size: 10px; line-height: 1.5; }
 
 /* Classic preserves the original PodPilot blue-black palette while using the new layout. */
-html[data-theme="classic"] .ask-page .shell { background: #101a2a; }
-html[data-theme="classic"] .ask-page .sidebar { border-color: #2a3a52; background: #0d1725; }
-html[data-theme="classic"] .ask-page .nav-link.active { border-color: #315b70; background: #173042; }
-html[data-theme="classic"] .ask-page .nav-session-list li.active { background: #14283a; }
 html[data-theme="classic"] .ask-page .ask-panel,
 html[data-theme="classic"] .ask-page .ask-session-header { background: #172538; }
 html[data-theme="classic"] .ask-page .ask-session-header { border-color: #34465d; }
@@ -1175,21 +1155,9 @@ html[data-theme="classic"] .ask-page .operation-dialog-content pre { border-colo
 
 /* Light is a high-contrast daytime alternative for the investigation workspace. */
 html[data-theme="light"] .ask-page { color: var(--text); background: #eef2f6; background-image: none; }
-html[data-theme="light"] .ask-page .shell { background: #f3f6f9; }
-html[data-theme="light"] .ask-page .sidebar { border-color: #d8e0e8; background: #f8fafc; }
-html[data-theme="light"] .ask-page .brand-mark { color: #ffffff; background: #087f8c; }
-html[data-theme="light"] .ask-page .brand strong,
 html[data-theme="light"] .ask-page .ask-session-heading-row h2,
 html[data-theme="light"] .ask-page .activity-sidebar-header h2 { color: #172033; }
-html[data-theme="light"] .ask-page .brand small,
-html[data-theme="light"] .ask-page .nav-label,
 html[data-theme="light"] .ask-page .activity-kicker { color: #6d7b8b; }
-html[data-theme="light"] .ask-page .nav-link { color: #48576a; }
-html[data-theme="light"] .ask-page .nav-link.active { border-color: #a8d5da; color: #0d5260; background: #e3f3f5; }
-html[data-theme="light"] .ask-page .nav-subtree,
-html[data-theme="light"] .ask-page .identity-card { border-color: #d8e0e8; }
-html[data-theme="light"] .ask-page .nav-session-list li.active { background: #e8f2f4; }
-html[data-theme="light"] .ask-page .nav-session-link strong { color: #344255; }
 html[data-theme="light"] .ask-page .ask-panel,
 html[data-theme="light"] .ask-page .ask-session-header,
 html[data-theme="light"] .ask-page .ask-composer { border-color: #d4dde6; background: #ffffff; }
@@ -1279,7 +1247,6 @@ html[data-theme="light"] .operation-filter-notice ul { color: #765d48; }
 
 @media (max-width: 720px) {
   .ask-page .shell { display: block; height: auto; }
-  .ask-page .sidebar { position: static; width: 100%; height: auto; }
   .ask-page .main { height: auto; overflow: visible; }
   .ask-page .ask-panel { height: 100dvh; }
   .activity-sidebar { min-height: 560px; }
@@ -1620,14 +1587,6 @@ html[data-theme="light"] .operation-status-denied_or_unavailable .operation-stat
   --conversation-content-width: 1120px;
   --conversation-gutter: clamp(22px, 2.4vw, 36px);
 }
-.ask-page .shell { grid-template-columns: 248px minmax(0, 1fr); }
-.ask-page .sidebar { padding: 24px 18px 18px; }
-.ask-page .brand { padding: 0 8px 26px; }
-.ask-page .brand-mark { width: 38px; height: 38px; border-radius: 9px; }
-.ask-page .nav-link { min-height: 42px; padding: 0 12px; font-size: 13px; }
-.ask-page .nav-subtree { margin: 0 0 18px 18px; padding: 0 0 0 14px; }
-.ask-page .nav-subtree .nav-link { min-height: 36px; font-size: 12px; }
-.ask-page .identity { padding: 16px 10px 0; }
 
 .ask-page .ask-session-header {
   min-height: 116px;
@@ -1778,9 +1737,6 @@ html[data-theme] .ask-composer .composer-toolbar {
 }
 
 @media (max-width: 960px) {
-  .ask-page .shell { grid-template-columns: 210px minmax(0, 1fr); }
-  .ask-page .sidebar { padding: 18px 14px; }
-  .ask-page .brand { padding-bottom: 20px; }
   .ask-page .ask-session-header { min-height: auto; padding: 20px var(--conversation-gutter); }
   .ask-layout:not(.activity-sidebar-collapsed) .ask-session-title { max-width: none; }
   .ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { position: static; }
@@ -1792,9 +1748,6 @@ html[data-theme] .ask-composer .composer-toolbar {
 
 @media (max-width: 720px) {
   .ask-page .shell { grid-template-columns: 1fr; }
-  .ask-page .sidebar { padding: 12px; }
-  .ask-page .brand { padding-bottom: 12px; }
-  .ask-page .brand-mark { width: 34px; height: 34px; }
   .ask-page .ask-session-header { padding: 16px; }
   .ask-session-heading-row h2 { font-size: 22px; }
   html[data-theme] .ask-thread { padding: 16px 12px 24px; }
