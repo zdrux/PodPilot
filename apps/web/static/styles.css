@@ -1616,6 +1616,9 @@ html[data-theme] .activity-kicker,
 html[data-theme] .activity-group p,
 html[data-theme] .operation-event-meta,
 html[data-theme] .operation-event-body > code { color: var(--theme-subtle); }
+html[data-theme] .activity-empty,
+html[data-theme] .activity-empty p { color: var(--theme-muted); }
+html[data-theme] .activity-empty strong { color: var(--theme-text); }
 html[data-theme] .operation-event:not(:last-child)::before { background: var(--theme-border-strong); }
 html[data-theme] .operation-event-button:hover { border-color: color-mix(in srgb, var(--theme-accent) 24%, transparent); background: var(--theme-accent-soft); box-shadow: 0 10px 22px -16px var(--theme-accent), inset 0 -1px color-mix(in srgb, var(--theme-accent) 25%, transparent); }
 html[data-theme] .operation-marker { border-color: var(--theme-nav); }
