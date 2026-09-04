@@ -1786,21 +1786,31 @@ html[data-theme] .ask-composer .composer-toolbar {
 html[data-theme] .ask-thread {
   padding: 0;
   scrollbar-gutter: auto;
+  background: var(--theme-surface);
 }
-.ask-thread .chat-message {
+html[data-theme] .ask-thread .chat-message {
+  position: relative;
   width: 100%;
   grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
   column-gap: clamp(28px, 4vw, 64px);
   margin: 0;
   padding: 24px var(--conversation-gutter) 25px;
   border: 0;
-  border-bottom: 1px solid var(--theme-border-strong);
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
-.ask-thread .chat-message:last-child { border-bottom: 0; }
-.ask-thread .chat-user { background: transparent; }
+html[data-theme] .ask-thread .chat-message:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: var(--conversation-gutter);
+  bottom: 0;
+  left: var(--conversation-gutter);
+  height: 1px;
+  background: var(--theme-border);
+}
+html[data-theme] .ask-thread .chat-user,
+html[data-theme] .ask-thread .chat-assistant { background: transparent; }
 .ask-thread .context-divider {
   width: 100%;
   margin: 0;
@@ -1843,6 +1853,7 @@ html[data-theme="light"] .answer-status-grounded {
 
 @media (max-width: 720px) {
   html[data-theme] .ask-thread { padding: 16px 12px 24px; }
-  .ask-thread .chat-message { margin-bottom: 10px; padding: 17px 16px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-surface); }
-  .ask-thread .chat-message:last-child { border-bottom: 1px solid var(--theme-border); }
+  html[data-theme] .ask-thread .chat-message { margin-bottom: 10px; padding: 17px 16px; border: 1px solid var(--theme-border); border-radius: 10px; background: var(--theme-surface); }
+  html[data-theme] .ask-thread .chat-message:last-child { border-bottom: 1px solid var(--theme-border); }
+  html[data-theme] .ask-thread .chat-message::after { display: none; }
 }

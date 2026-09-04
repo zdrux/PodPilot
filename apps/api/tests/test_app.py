@@ -13257,7 +13257,11 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-thread {" in styles
     assert "scrollbar-gutter: auto" in styles
     assert "padding: 24px var(--conversation-gutter) 25px" in styles
-    assert "border-bottom: 1px solid var(--theme-border-strong)" in styles
+    assert ".ask-thread .chat-message:not(:last-child)::after" in styles
+    assert "right: var(--conversation-gutter)" in styles
+    assert "left: var(--conversation-gutter)" in styles
+    assert "html[data-theme] .ask-thread .chat-user," in styles
+    assert "html[data-theme] .ask-thread .chat-assistant { background: transparent; }" in styles
     assert "html[data-theme] .answer-status-grounded" in styles
     assert 'html[data-theme="light"] .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
