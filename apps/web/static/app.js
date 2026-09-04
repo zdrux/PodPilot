@@ -1,6 +1,6 @@
 (() => {
   const themePreferenceKey = "podpilot-color-theme";
-  const supportedThemes = new Set(["classic", "dark", "light"]);
+  const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red"]);
   let activeTheme = "classic";
   try {
     const savedTheme = window.localStorage.getItem(themePreferenceKey);

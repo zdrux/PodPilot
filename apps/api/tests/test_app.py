@@ -13236,6 +13236,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'data-theme-option="classic"' in base_template
     assert 'data-theme-option="dark"' in base_template
     assert 'data-theme-option="light"' in base_template
+    assert 'data-theme-option="medium-light"' in base_template
+    assert 'data-theme-option="cibc-red"' in base_template
     assert 'role="group" aria-label="Color theme"' in base_template
     assert 'class="sidebar-theme-control"' in base_template
     assert 'data-theme="classic"' in base_template
@@ -13246,6 +13248,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'html[data-theme="classic"]' in styles
     assert 'html[data-theme="dark"]' in styles
     assert 'html[data-theme="light"]' in styles
+    assert 'html[data-theme="medium-light"]' in styles
+    assert 'html[data-theme="cibc-red"]' in styles
+    assert "#c41f3e" in styles.lower()
+    assert "#8b1d41" in styles.lower()
     assert "--theme-surface-inset" in styles
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
@@ -13266,7 +13272,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .answer-status-grounded" in styles
     assert "color: #4ade9a" in styles
     assert "background: rgba(74, 222, 154, .08)" in styles
-    assert 'html[data-theme="light"] .answer-status-grounded' in styles
+    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
     assert ".ask-page .sidebar" not in styles
     assert ".ask-page .nav-label" not in styles

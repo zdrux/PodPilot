@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=conversation-layout-unification-7">
-  <script src="{{ url_for('static', path='/app.js') }}?v=conversation-layout-unification-7" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=conversation-layout-unification-8">
+  <script src="{{ url_for('static', path='/app.js') }}?v=conversation-layout-unification-8" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <div class="shell">
@@ -111,6 +111,12 @@
           </button>
           <button type="button" data-theme-option="light" aria-label="Use Light theme" aria-pressed="false" title="Light">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>
+          </button>
+          <button type="button" data-theme-option="medium-light" aria-label="Use Medium Light theme" aria-pressed="false" title="Medium Light">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 3v1M12 20v1M5.64 5.64l.7.7M17.66 17.66l.7.7M3 12h1M20 12h1M5.64 18.36l.7-.7M17.66 6.34l.7-.7"></path></svg>
+          </button>
+          <button type="button" data-theme-option="cibc-red" aria-label="Use CIBC Red theme" aria-pressed="false" title="CIBC Red">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a7 7 0 0 0 7-7c0-4-7-13-7-13S5 11 5 15a7 7 0 0 0 7 7Z"></path></svg>
           </button>
         </div>
       </div>
