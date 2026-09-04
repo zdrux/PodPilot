@@ -1497,6 +1497,14 @@ html[data-theme] .ask-session-header,
 html[data-theme] .ask-composer { border-color: var(--theme-border); background: var(--theme-surface); }
 html[data-theme] .ask-thread .chat-message { border-color: var(--theme-border); }
 html[data-theme] .ask-thread .chat-markdown { color: var(--theme-text); }
+html[data-theme] .ask-thread .chat-markdown strong,
+html[data-theme] .ask-thread .chat-markdown h1,
+html[data-theme] .ask-thread .chat-markdown h2,
+html[data-theme] .ask-thread .chat-markdown h3,
+html[data-theme] .ask-thread .chat-markdown h4 { color: var(--theme-text); }
+html[data-theme] .ask-thread .chat-markdown pre code { color: var(--theme-text); background: transparent; }
+html[data-theme] .ask-thread .chat-markdown pre code.language-json { color: var(--theme-accent-strong); }
+html[data-theme] .ask-thread .chat-markdown thead th { color: var(--theme-text); background: var(--theme-surface-soft); }
 html[data-theme] .ask-thread .chat-meta strong { color: var(--theme-text); }
 html[data-theme] .ask-thread .chat-meta span,
 html[data-theme] .ask-session-title .eyebrow,
@@ -1507,6 +1515,10 @@ html[data-theme] .workload-starter-form,
 html[data-theme] .chat-pending { border-color: var(--theme-border); color: var(--theme-text); background: var(--theme-surface-raised); }
 html[data-theme] .prompt-starters strong { color: var(--theme-text); }
 html[data-theme] .prompt-starters small { color: var(--theme-muted); }
+html[data-theme] .suggested-followup-actions strong,
+html[data-theme] .metric-trend figcaption strong,
+html[data-theme] .metric-current strong { color: var(--theme-text); }
+html[data-theme] .suggested-followup-actions small { color: var(--theme-muted); }
 html[data-theme] .prompt-starters button:hover:not(:disabled) { border-color: var(--theme-accent); background: var(--theme-accent-soft); }
 html[data-theme] .raw-response-switch > span[aria-hidden] { border-color: var(--theme-border-strong); background: var(--theme-surface-inset); }
 html[data-theme] .composer-input-wrap,
