@@ -1827,7 +1827,7 @@ html[data-theme] .ask-composer {
   background: var(--theme-canvas);
 }
 .ask-composer .chat-form {
-  width: calc(100% - var(--conversation-author-column) - var(--conversation-column-gap));
+  width: calc(100% - var(--conversation-author-column) - var(--conversation-column-gap) - var(--conversation-author-column) - var(--conversation-column-gap));
   margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap));
   padding: 0;
 }
