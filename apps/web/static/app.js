@@ -8,15 +8,18 @@
   } catch (_error) { /* Preference storage is optional. */ }
   document.documentElement.dataset.theme = activeTheme;
 
-  const themeSelects = Array.from(document.querySelectorAll("[data-theme-select]"));
-  themeSelects.forEach((themeSelect) => {
-    themeSelect.value = activeTheme;
-    themeSelect.addEventListener("change", () => {
-      const nextTheme = supportedThemes.has(themeSelect.value) ? themeSelect.value : "classic";
-      document.documentElement.dataset.theme = nextTheme;
-      themeSelects.forEach((select) => { select.value = nextTheme; });
-      try { window.localStorage.setItem(themePreferenceKey, nextTheme); } catch (_error) { /* Preference storage is optional. */ }
+  const themeOptions = Array.from(document.querySelectorAll("[data-theme-option]"));
+  const applyTheme = (nextTheme) => {
+    const resolvedTheme = supportedThemes.has(nextTheme) ? nextTheme : "classic";
+    document.documentElement.dataset.theme = resolvedTheme;
+    themeOptions.forEach((option) => {
+      option.setAttribute("aria-pressed", String(option.dataset.themeOption === resolvedTheme));
     });
+    try { window.localStorage.setItem(themePreferenceKey, resolvedTheme); } catch (_error) { /* Preference storage is optional. */ }
+  };
+  themeOptions.forEach((themeOption) => {
+    themeOption.setAttribute("aria-pressed", String(themeOption.dataset.themeOption === activeTheme));
+    themeOption.addEventListener("click", () => applyTheme(themeOption.dataset.themeOption));
   });
 
   const renderTime = document.querySelector("#render-time");

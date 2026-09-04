@@ -9516,7 +9516,7 @@ def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert 'data-theme-select' in page.text
+        assert 'data-theme-option="classic"' in page.text
         assert "Session cautions" not in page.text
         assert "Delegated session ended" not in page.text
         assert 'data-starter-available="true"' in page.text
@@ -13233,15 +13233,16 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '>View</button>' not in template
     assert "filtered-output-indicator" in template
     assert 'document.querySelectorAll("[data-operation-open]")' in script
-    assert "data-theme-select" in base_template
-    assert 'option value="classic"' in base_template
-    assert 'option value="dark"' in base_template
-    assert 'option value="light"' in base_template
+    assert 'data-theme-option="classic"' in base_template
+    assert 'data-theme-option="dark"' in base_template
+    assert 'data-theme-option="light"' in base_template
+    assert 'role="group" aria-label="Color theme"' in base_template
     assert 'class="sidebar-theme-control"' in base_template
     assert 'data-theme="classic"' in base_template
     assert "podpilot-color-theme" in script
     assert 'document.documentElement.dataset.theme = activeTheme' in script
-    assert 'document.querySelectorAll("[data-theme-select]")' in script
+    assert 'document.querySelectorAll("[data-theme-option]")' in script
+    assert 'option.setAttribute("aria-pressed"' in script
     assert 'html[data-theme="classic"]' in styles
     assert 'html[data-theme="dark"]' in styles
     assert 'html[data-theme="light"]' in styles
