@@ -13301,6 +13301,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .operation-dialog-content h3 { color: var(--theme-muted); }" in styles
     assert "html[data-theme] .activity-empty strong { color: var(--theme-text); }" in styles
     assert "html[data-theme] .activity-empty p { color: var(--theme-muted); }" in styles
+    assert "html[data-theme] .button.primary:hover:not(:disabled) { border-color: var(--theme-accent); background: var(--theme-accent); }" in styles
     assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
     assert ".ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px" in styles
     assert ".ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 340px; }" in styles
