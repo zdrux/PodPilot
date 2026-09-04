@@ -13238,6 +13238,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'data-theme-option="light"' in base_template
     assert 'data-theme-option="medium-light"' in base_template
     assert 'data-theme-option="cibc-red"' in base_template
+    assert base_template.index('data-theme-option="dark"') < base_template.index('data-theme-option="classic"')
+    assert base_template.index('data-theme-option="classic"') < base_template.index('data-theme-option="medium-light"')
+    assert base_template.index('data-theme-option="medium-light"') < base_template.index('data-theme-option="light"')
+    assert base_template.index('data-theme-option="light"') < base_template.index('data-theme-option="cibc-red"')
     assert 'role="group" aria-label="Color theme"' in base_template
     assert 'class="sidebar-theme-control"' in base_template
     assert 'data-theme="classic"' in base_template
@@ -13253,7 +13257,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "#c41f3e" in styles.lower()
     assert "#8b1d41" in styles.lower()
     assert "cibc-diamond.svg" in base_template
-    assert 'class="brand-mark-cibc"' in base_template
+    assert 'class="brand-mark" aria-hidden="true">P</span>' in base_template
     assert "--theme-surface-inset" in styles
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
