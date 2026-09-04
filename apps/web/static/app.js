@@ -988,6 +988,13 @@
   const operationText = (value) => typeof value === "string"
     ? value
     : JSON.stringify(value, null, 2);
+  const operationFilterReason = (value) => ({
+    "Credential-like values were redacted.": "Sensitive values were redacted.",
+    "Kubernetes managedFields were omitted.": "Kubernetes-managed metadata was removed.",
+    "Runner output reached its retained byte limit.": "Some command output was too long to display.",
+    "Oversized JSON was replaced with structural metadata.": "A large response was summarized.",
+    "The timeline retains bounded output excerpts.": "Only part of the command output is shown.",
+  })[String(value || "")] || String(value || "");
   const operationTime = (value, includeDate = false) => {
     const parsed = value ? new Date(value) : null;
     if (!parsed || Number.isNaN(parsed.valueOf())) return "";
@@ -1047,7 +1054,7 @@
       if (operation.content_filtered) {
         const filtered = document.createElement("span");
         filtered.className = "filtered-output-indicator";
-        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.join(" ") : "This item contains redacted or shortened content.";
+        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.map(operationFilterReason).join(" ") : "This item contains redacted or shortened content.";
         const image = document.createElement("img");
         image.src = "/static/icons/shield-exclamation.svg";
         image.alt = "";
@@ -1141,7 +1148,7 @@
         const reasons = document.createElement("ul");
         (operation.filter_reasons || []).forEach((reason) => {
           const item = document.createElement("li");
-          item.textContent = String(reason);
+          item.textContent = operationFilterReason(reason);
           reasons.append(item);
         });
         noticeBody.append(noticeTitle, reasons);

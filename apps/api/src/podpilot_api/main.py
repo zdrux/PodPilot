@@ -8478,6 +8478,28 @@ def _agent_tool_ledger_entry(
     return json.loads(json.dumps(entry, sort_keys=True, default=_json_default))
 
 
+_OPERATOR_FILTER_REASON_COPY = {
+    "Credential-like values were redacted.": "Sensitive values were redacted.",
+    "Kubernetes managedFields were omitted.": "Kubernetes-managed metadata was removed.",
+    "Runner output reached its retained byte limit.": "Some command output was too long to display.",
+    "Oversized JSON was replaced with structural metadata.": "A large response was summarized.",
+    "The timeline retains bounded output excerpts.": "Only part of the command output is shown.",
+}
+
+
+def _operator_filter_reason(value: object) -> str:
+    """Translate stored implementation language into operator-facing copy."""
+
+    text = str(value or "").strip()
+    return _OPERATOR_FILTER_REASON_COPY.get(text, text)
+
+
+def _operator_filter_reasons(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [_operator_filter_reason(value) for value in values]
+
+
 def _agent_provider_failure_content(
     *, ledger: list[dict[str, object]], provider_error: str,
 ) -> str:
@@ -10402,6 +10424,8 @@ def create_app(
     templates.env.filters["safe_markdown"] = render_safe_markdown
     templates.env.filters["safe_table_markdown"] = render_safe_table_markdown
     templates.env.filters["est_time"] = _format_est_time
+    templates.env.filters["operator_filter_reason"] = _operator_filter_reason
+    templates.env.globals["operator_filter_reasons"] = _operator_filter_reasons
     templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
 
     def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:

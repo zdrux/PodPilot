@@ -15251,7 +15251,7 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
                     "duration_ms": 2250,
                     "content_filtered": True,
                     "filtered_fields": ["command"],
-                    "filter_reasons": ["Sensitive values were redacted."],
+                    "filter_reasons": ["Credential-like values were redacted."],
                 }],
             }),
             model_diagnostics_json=json.dumps({
@@ -15333,6 +15333,7 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "2.2s" in rendered.text
     assert 'class="filtered-output-indicator"' in rendered.text
     assert "Sensitive values were redacted." in rendered.text
+    assert "Credential-like values were redacted." not in rendered.text
     assert "This item contains redacted or shortened content" in rendered.text
     assert 'data-operation-open="operation-00000000-0000-0000-0000-000000000191-1"' in rendered.text
 
