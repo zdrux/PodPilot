@@ -522,7 +522,9 @@
     {% endfor %}
     <div class="activity-sidebar-header">
       <div><span class="activity-kicker">Evidence</span><h2>Investigation activity</h2></div>
-      <span class="activity-count">{{ activity_summary.operation_count }} operation{% if activity_summary.operation_count != 1 %}s{% endif %}</span>
+      {% set live_operation_count = active_run.operations | length if active_run and active_run.operations else 0 %}
+      {% set total_operation_count = activity_summary.operation_count + live_operation_count %}
+      <span class="activity-count" data-activity-count>{{ total_operation_count }} operation{% if total_operation_count != 1 %}s{% endif %}</span>
     </div>
     <section class="activity-tab-panel activity-timeline-panel" id="activity-timeline-panel" aria-label="Investigation timeline">
       {% if active_run %}
@@ -556,8 +558,34 @@
         {% endfor %}
       </div>
       {% endif %}
-      {% if activity_summary.operation_count %}
-      <ol class="operation-timeline">
+      <ol class="operation-timeline" data-operation-timeline
+        data-run-id="{{ active_run.id if active_run else '' }}"
+        data-completed-operation-count="{{ activity_summary.operation_count }}">
+        {% if active_run and active_run.operations %}
+          {% for item in active_run.operations %}
+          {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
+          <li class="operation-event operation-status-{{ item.status }}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
+            <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
+              aria-haspopup="dialog" aria-controls="{{ operation_id }}"
+              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. Some retained content was filtered{% endif %}">
+              <span class="operation-marker" aria-hidden="true"></span>
+              <div class="operation-event-body">
+                <div class="operation-event-heading">
+                  <strong>{{ item.tool | replace('_', ' ') }}</strong>
+                  {% if item.content_filtered %}<span class="filtered-output-indicator" title="{{ item.filter_reasons | join(' ') }}"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""></span>{% endif %}
+                  <span class="operation-status">{{ item.status | replace('_', ' ') }}</span>
+                </div>
+                <div class="operation-event-meta">
+                  {% if item.started_at %}<time>{{ item.started_at | est_time('%H:%M:%S') }}</time>{% endif %}
+                  <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
+                  {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
+                </div>
+                {% if item.command %}<code>{{ item.command }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
+              </div>
+            </button>
+          </li>
+          {% endfor %}
+        {% endif %}
         {% for message in messages if message.activity and message.activity.evidence_ledger %}
           {% for item in message.activity.evidence_ledger %}
           {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
@@ -588,14 +616,44 @@
           {% endfor %}
         {% endfor %}
       </ol>
-      {% elif not active_run and not activity_summary.diagnostic_count %}
-      <div class="activity-empty"><strong>No operations yet</strong><p>Agent-selected checks will appear here after the first reply.</p></div>
+      {% if total_operation_count == 0 and not activity_summary.diagnostic_count %}
+      <div class="activity-empty" data-activity-empty><strong>No operations yet</strong><p>Agent-selected checks will appear here as they start.</p></div>
       {% endif %}
     </section>
 
   </aside>
 
 </div>
+
+{% if active_run and active_run.operations %}
+  {% for item in active_run.operations %}
+  {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
+  <dialog id="{{ operation_id }}" class="operation-dialog" data-operation-dialog data-live-operation-dialog data-operation-key="{{ item.tool_call_id }}" aria-labelledby="{{ operation_id }}-title">
+    <div class="operation-dialog-header">
+      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item.tool | replace('_', ' ') }}</h2></div>
+      <button type="button" data-operation-close aria-label="Close operation details">×</button>
+    </div>
+    <div class="operation-dialog-content">
+      <dl class="operation-facts">
+        <div><dt>Cluster</dt><dd>{{ item.cluster_name or item.cluster_id or 'Unresolved' }}</dd></div>
+        <div><dt>Status</dt><dd>{{ item.status | replace('_', ' ') }}</dd></div>
+        {% if item.started_at %}<div><dt>Started</dt><dd>{{ item.started_at | est_time('%Y-%m-%d %H:%M:%S') }}</dd></div>{% endif %}
+        {% if item.completed_at %}<div><dt>Completed</dt><dd>{{ item.completed_at | est_time('%Y-%m-%d %H:%M:%S') }}</dd></div>{% endif %}
+        {% if item.duration_ms is defined %}<div><dt>Duration</dt><dd>{{ '%.2f' | format(item.duration_ms / 1000) }} seconds</dd></div>{% endif %}
+        {% if item.exit_code is defined and item.exit_code is not none %}<div><dt>Exit code</dt><dd>{{ item.exit_code }}</dd></div>{% endif %}
+      </dl>
+      {% if item.content_filtered %}<div class="operation-filter-notice"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""><div><strong>Retained content was filtered</strong><ul>{% for reason in item.filter_reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div></div>{% endif %}
+      {% if item.command %}<section><h3>Command</h3><pre><code>{{ item.command }}</code></pre></section>{% endif %}
+      {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt }}</code></pre></section>{% endif %}
+      {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt }}</code></pre></section>{% endif %}
+      {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
+      {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error }}</code></pre></section>{% endif %}
+    </div>
+  </dialog>
+  {% endfor %}
+{% endif %}
 
 {% for message in messages if message.activity and message.activity.evidence_ledger %}
   {% for item in message.activity.evidence_ledger %}

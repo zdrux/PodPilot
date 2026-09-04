@@ -11179,6 +11179,10 @@ def test_delegated_agent_preserves_completed_changes_when_provider_times_out(
         assert [item["status"] for item in activity["reads"]] == ["completed"]
         assert activity["evidence_ledger"][0]["operation_kind"] == "write"
         assert activity["evidence_ledger"][0]["executed"] is True
+        run = db_session.scalar(select(AdHocRun))
+        assert run is not None
+        live_operations = json.loads(run.operation_json)
+        assert live_operations == activity["evidence_ledger"]
     engine.dispose()
 
 
@@ -12950,6 +12954,16 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             for index in range(1, 7)
         ],
     ]
+    operations = [{
+        "sequence": 1,
+        "tool": "execute_shell",
+        "tool_call_id": "call-live-1",
+        "cluster_id": "cluster-live",
+        "cluster_name": "Live cluster",
+        "status": "running",
+        "command": "oc get pods -A",
+        "started_at": "2026-09-03T20:26:42+00:00",
+    }]
     engine = build_engine(settings)
     with Session(engine) as db_session:
         db_session.add(AdHocConversation(
@@ -12971,12 +12985,17 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             status="running",
             phase="next_check",
             progress_json=json.dumps(events),
+            operation_json=json.dumps(operations),
         ))
         db_session.commit()
     engine.dispose()
 
     with TestClient(app) as client:
         page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        status = client.get(
+            "/api/v1/adhoc-runs/00000000-0000-0000-0000-000000000189",
+            headers={"x-forwarded-user": "ivy"},
+        )
 
     assert page.status_code == 200
     assert page.text.count(repeated) == 1
@@ -12988,6 +13007,11 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
     assert "Command update 1." not in page.text
     for index in range(2, 7):
         assert f"Command update {index}." in page.text
+    assert 'data-operation-key="call-live-1"' in page.text
+    assert "1 operation" in page.text
+    assert "oc get pods -A" in page.text
+    assert status.status_code == 200
+    assert status.json()["operations"] == operations
 
 
 def test_owner_can_delete_queued_conversation_and_evidence_with_audit_record(

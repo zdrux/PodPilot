@@ -969,6 +969,213 @@
     });
   });
 
+  const bindOperationDialog = (button) => {
+    if (button.dataset.operationBound === "true") return;
+    button.dataset.operationBound = "true";
+    button.addEventListener("click", () => {
+      const dialog = document.getElementById(button.dataset.operationOpen);
+      if (dialog instanceof HTMLDialogElement && !dialog.open) dialog.showModal();
+    });
+  };
+  const bindOperationDialogChrome = (dialog) => {
+    dialog.querySelector("[data-operation-close]")?.addEventListener("click", () => dialog.close());
+    if (dialog.dataset.operationBound === "true") return;
+    dialog.dataset.operationBound = "true";
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+  };
+  const operationText = (value) => typeof value === "string"
+    ? value
+    : JSON.stringify(value, null, 2);
+  const operationTime = (value, includeDate = false) => {
+    const parsed = value ? new Date(value) : null;
+    if (!parsed || Number.isNaN(parsed.valueOf())) return "";
+    return `${parsed.toLocaleString("en-CA", {
+      ...(includeDate ? {year: "numeric", month: "2-digit", day: "2-digit"} : {}),
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      timeZone: "America/Toronto",
+    })} EST (-4)`;
+  };
+  let lastLiveOperationsSnapshot = null;
+  const updateLiveOperations = (operations) => {
+    const timeline = document.querySelector("[data-operation-timeline]");
+    const count = document.querySelector("[data-activity-count]");
+    if (!timeline || !Array.isArray(operations)) return;
+    const operationsSnapshot = JSON.stringify(operations);
+    if (operationsSnapshot === lastLiveOperationsSnapshot) return;
+    lastLiveOperationsSnapshot = operationsSnapshot;
+    const operationKeys = new Set(operations.map((item) => String(item.tool_call_id || "")));
+    timeline.querySelectorAll("[data-live-operation]").forEach((row) => {
+      if (!operationKeys.has(row.dataset.operationKey || "")) row.remove();
+    });
+    document.querySelectorAll("[data-live-operation-dialog]").forEach((dialog) => {
+      if (!operationKeys.has(dialog.dataset.operationKey || "")) dialog.remove();
+    });
+
+    operations.forEach((operation, index) => {
+      const key = String(operation.tool_call_id || `operation-${index + 1}`);
+      let row = Array.from(timeline.querySelectorAll("[data-live-operation]"))
+        .find((item) => item.dataset.operationKey === key);
+      if (!row) {
+        row = document.createElement("li");
+        row.dataset.liveOperation = "";
+        row.dataset.operationKey = key;
+        const firstRetainedOperation = timeline.querySelector(".operation-event:not([data-live-operation])");
+        timeline.insertBefore(row, firstRetainedOperation);
+      }
+      row.className = `operation-event operation-status-${operation.status || "running"}`;
+      const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "-");
+      const dialogId = `operation-live-${timeline.dataset.runId || "run"}-${safeKey}`;
+      const button = document.createElement("button");
+      button.className = "operation-event-button";
+      button.type = "button";
+      button.dataset.operationOpen = dialogId;
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-controls", dialogId);
+      button.setAttribute("aria-label", `View ${String(operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". Some retained content was filtered" : ""}`);
+      const marker = document.createElement("span");
+      marker.className = "operation-marker";
+      marker.setAttribute("aria-hidden", "true");
+      const body = document.createElement("div");
+      body.className = "operation-event-body";
+      const heading = document.createElement("div");
+      heading.className = "operation-event-heading";
+      const title = document.createElement("strong");
+      title.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      heading.append(title);
+      if (operation.content_filtered) {
+        const filtered = document.createElement("span");
+        filtered.className = "filtered-output-indicator";
+        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.join(" ") : "Retained content was filtered.";
+        const image = document.createElement("img");
+        image.src = "/static/icons/shield-exclamation.svg";
+        image.alt = "";
+        filtered.append(image);
+        heading.append(filtered);
+      }
+      const status = document.createElement("span");
+      status.className = "operation-status";
+      status.textContent = String(operation.status || "running").replaceAll("_", " ");
+      heading.append(status);
+      const meta = document.createElement("div");
+      meta.className = "operation-event-meta";
+      const started = operationTime(operation.started_at);
+      [started, operation.cluster_name || operation.cluster_id || "Unresolved cluster",
+        Number.isFinite(operation.duration_ms) ? `${(operation.duration_ms / 1000).toFixed(1)}s` : ""]
+        .filter(Boolean).forEach((value) => {
+          const node = document.createElement(value === started ? "time" : "span");
+          node.textContent = value;
+          meta.append(node);
+        });
+      body.append(heading, meta);
+      const preview = operation.command || operation.request;
+      if (preview) {
+        const code = document.createElement("code");
+        code.textContent = operationText(preview);
+        body.append(code);
+      }
+      button.append(marker, body);
+      row.replaceChildren(button);
+      bindOperationDialog(button);
+
+      let dialog = Array.from(document.querySelectorAll("[data-live-operation-dialog]"))
+        .find((item) => item.dataset.operationKey === key);
+      if (!dialog) {
+        dialog = document.createElement("dialog");
+        dialog.className = "operation-dialog";
+        dialog.dataset.operationDialog = "";
+        dialog.dataset.liveOperationDialog = "";
+        dialog.dataset.operationKey = key;
+        document.body.append(dialog);
+      }
+      dialog.id = dialogId;
+      dialog.setAttribute("aria-labelledby", `${dialogId}-title`);
+      const dialogHeader = document.createElement("div");
+      dialogHeader.className = "operation-dialog-header";
+      const dialogHeading = document.createElement("div");
+      const eyebrow = document.createElement("p");
+      eyebrow.className = "eyebrow";
+      eyebrow.textContent = `Operation ${operation.sequence || index + 1}`;
+      const dialogTitle = document.createElement("h2");
+      dialogTitle.id = `${dialogId}-title`;
+      dialogTitle.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      dialogHeading.append(eyebrow, dialogTitle);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.dataset.operationClose = "";
+      close.setAttribute("aria-label", "Close operation details");
+      close.textContent = "×";
+      dialogHeader.append(dialogHeading, close);
+      const content = document.createElement("div");
+      content.className = "operation-dialog-content";
+      const facts = document.createElement("dl");
+      facts.className = "operation-facts";
+      const factValues = [
+        ["Cluster", operation.cluster_name || operation.cluster_id || "Unresolved"],
+        ["Status", String(operation.status || "running").replaceAll("_", " ")],
+        ["Started", operationTime(operation.started_at, true)],
+        ["Completed", operationTime(operation.completed_at, true)],
+        ["Duration", Number.isFinite(operation.duration_ms) ? `${(operation.duration_ms / 1000).toFixed(2)} seconds` : ""],
+        ["Exit code", operation.exit_code ?? ""],
+      ];
+      factValues.filter(([, value]) => value !== "").forEach(([label, value]) => {
+        const fact = document.createElement("div");
+        const term = document.createElement("dt");
+        const description = document.createElement("dd");
+        term.textContent = label;
+        description.textContent = String(value);
+        fact.append(term, description);
+        facts.append(fact);
+      });
+      content.append(facts);
+      if (operation.content_filtered) {
+        const notice = document.createElement("div");
+        notice.className = "operation-filter-notice";
+        const image = document.createElement("img");
+        image.src = "/static/icons/shield-exclamation.svg";
+        image.alt = "";
+        const noticeBody = document.createElement("div");
+        const noticeTitle = document.createElement("strong");
+        noticeTitle.textContent = "Retained content was filtered";
+        const reasons = document.createElement("ul");
+        (operation.filter_reasons || []).forEach((reason) => {
+          const item = document.createElement("li");
+          item.textContent = String(reason);
+          reasons.append(item);
+        });
+        noticeBody.append(noticeTitle, reasons);
+        notice.append(image, noticeBody);
+        content.append(notice);
+      }
+      const sections = [
+        ["Command", operation.command], ["Request", operation.request],
+        ["Standard output", operation.stdout_excerpt], ["Standard error", operation.stderr_excerpt],
+        ["Observations", operation.observations], ["Limitations", operation.limitations],
+        ["Error", operation.error],
+      ];
+      sections.filter(([, value]) => value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length))
+        .forEach(([label, value]) => {
+          const section = document.createElement("section");
+          const sectionTitle = document.createElement("h3");
+          sectionTitle.textContent = label;
+          const pre = document.createElement("pre");
+          if (["Standard error", "Limitations", "Error"].includes(label)) pre.className = "operation-error";
+          const code = document.createElement("code");
+          code.textContent = operationText(value);
+          pre.append(code);
+          section.append(sectionTitle, pre);
+          content.append(section);
+        });
+      dialog.replaceChildren(dialogHeader, content);
+      bindOperationDialogChrome(dialog);
+    });
+    const completedCount = Number.parseInt(timeline.dataset.completedOperationCount || "0", 10) || 0;
+    const total = completedCount + operations.length;
+    if (count) count.textContent = `${total} operation${total === 1 ? "" : "s"}`;
+    document.querySelector("[data-activity-empty]")?.toggleAttribute("hidden", total > 0);
+  };
+
   const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
   if (pendingRun) {
     const progressTitle = pendingRun.querySelector("[data-progress-title]");
@@ -1095,6 +1302,7 @@
         if (!response.ok) return false;
         const payload = await response.json();
         payload.events?.forEach(addProgress);
+        updateLiveOperations(payload.operations || []);
         if (!["succeeded", "failed", "cancelled"].includes(payload.status)) return false;
         progressStopped = true;
         source?.close();
@@ -1118,6 +1326,9 @@
       source = new EventSource(pendingRun.dataset.eventsUrl);
       source.addEventListener("progress", (event) => {
         try { addProgress(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
+      });
+      source.addEventListener("operations", (event) => {
+        try { updateLiveOperations(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
       });
       source.addEventListener("complete", (event) => {
         progressStopped = true;
@@ -1201,18 +1412,8 @@
       }
     });
   }
-  document.querySelectorAll("[data-operation-open]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const dialog = document.getElementById(button.dataset.operationOpen);
-      if (dialog instanceof HTMLDialogElement && !dialog.open) dialog.showModal();
-    });
-  });
-  document.querySelectorAll("[data-operation-dialog]").forEach((dialog) => {
-    dialog.querySelector("[data-operation-close]")?.addEventListener("click", () => dialog.close());
-    dialog.addEventListener("click", (event) => {
-      if (event.target === dialog) dialog.close();
-    });
-  });
+  document.querySelectorAll("[data-operation-open]").forEach(bindOperationDialog);
+  document.querySelectorAll("[data-operation-dialog]").forEach(bindOperationDialogChrome);
   document.querySelectorAll("[data-csv-table]").forEach((button) => {
     button.addEventListener("click", () => {
       const table = document.getElementById(button.dataset.csvTable);

@@ -775,6 +775,11 @@ short operator-visible hypotheses and server-observed workflow actions; PodPilot
 expose hidden model chain-of-thought. Queued state remains visible in the live header, while
 one-time queued and starting events are omitted from the phase journal. Agent command retains five
 recent updates and other visible phases retain three. The rolling journal exists only while a run is active.
+Each run also persists a separate bounded, redacted operation ledger. An operation is upserted when
+its tool call starts and again when that call completes or fails; SSE publishes ledger snapshots
+independently of the final response so the activity sidebar can expose completed call details while
+the agent is still choosing later actions. The final assistant message retains the same completed
+ledger as the durable conversation-history representation.
 The final schema-validated answer remains a complete response rather than token
 streaming.
 For an individual Ask question, the operator may opt in to retaining the raw final-answer
@@ -803,8 +808,8 @@ provider-facing marker from displayed prose. Ask PodPilot initializes its bounde
 newest message after navigation while retaining normal manual scrolling afterward.
 Private Ask sessions are rendered as a nested list beneath the primary Ask
 PodPilot navigation item and expose owner-authorized deletion controls. Collected evidence and
-agent activity occupy a persistent investigation sidebar with separate timeline and evidence-detail
-views. Each completed operation can open a focused detail sheet; credential filtering and other
+agent activity occupy a collapsible persistent investigation sidebar. Each running or completed
+operation can open a focused detail sheet; credential filtering and other
 retained-output reductions are disclosed on the affected timeline row. The header count and answer
 citations continue to open the modal provenance drawer focused on the matching evidence card. Reply
 citations are collapsed by default beneath a

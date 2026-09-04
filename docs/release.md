@@ -285,6 +285,9 @@ Delegated-agent provider-failure gates must also prove that completed shell oper
 activity and evidence ledger, executed writes are identified as not rolled back, and the fallback never
 claims that no changes were attempted. Repeated identical shell calls must reach the runner independently
 without a model-authored retry-reason field while remaining subject to the action budget and deadlines.
+Active-run presentation gates must prove that the owner-authorized status response exposes the
+bounded redacted run operation ledger, running operations render before the final assistant message,
+and the terminal message ledger matches the run ledger after completion.
 Chat presentation gates verify that completed Ask conversations open at the newest
 message, CommonMark tables and prose render structurally, raw HTML is escaped,
 unsafe link schemes do not become anchors, and code uses a distinct monospace

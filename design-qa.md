@@ -1,53 +1,49 @@
-# Evidence Ledger Mission Control QA
+# Design QA
 
 ## Comparison target
 
-- Selected Product Design visual: `C:\Users\zdrux\.codex\generated_images\01a067d6-e944-7332-b4cc-2b3ba426254b\exec-f3d7bc0e-344f-4614-bcc3-38462803cac2.png`.
-- Browser-rendered implementation: local authenticated Ask fixture at `/ask/00000000-0000-0000-0000-000000009001` in the Codex in-app browser.
-- Target state: completed two-cluster investigation with retained operations, collected evidence, and one filtered operation.
+- Source visual truth: `C:\Users\zdrux\AppData\Local\Temp\codex-clipboard-3938f814-3710-42cc-b34e-41361aa45482.png`
+- Written source override: restore the transcript to the full-width classic layout while retaining the narrower composer.
+- Browser-rendered implementation: `C:\Users\zdrux\AppData\Local\Temp\podpilot-live-ledger-qa-20260903\implementation-wide-chat.jpg`
+- Combined comparison: `C:\Users\zdrux\AppData\Local\Temp\podpilot-live-ledger-qa-20260903\design-qa-comparison.jpg`
+- Viewport: 1574 × 841 CSS pixels, device scale factor 1.
+- Source pixels: 2556 × 1275. The source was center-fit to 1574 × 841 for the combined comparison; the original remained unchanged.
+- Implementation pixels: 1574 × 841.
+- State: Classic theme, evidence sidebar open, same completed unhealthy-workloads conversation, transcript at its latest content.
 
 ## Findings
 
-No actionable P0, P1, or P2 issues remain.
+- No actionable P0, P1, or P2 differences remain.
+- The transcript no longer uses the source screenshot's centered 1120 px cards. This is the requested change: message rows and their tables now consume the available conversation pane, with the classic divider treatment and no card radius or elevation.
+- The composer intentionally retains its narrower centered width and existing control layout.
+- The evidence rail retains the selected design's compact hierarchy, status colors, timeline markers, clickable rows, and filtering indicator.
 
-- Visual hierarchy: the existing PodPilot shell now uses compact surfaces, restrained cyan accents, thin ShadCN-style borders, compact controls, and a dedicated evidence rail. The original navy palette is the default, with persistent dark and light alternatives.
-- Timeline: completed operations are ordered chronologically and show tool name, status, start time, cluster, duration, and a bounded request or command preview. The complete event row opens its retained details.
-- Start/stop data: retained operation dialogs expose both start and completion timestamps plus elapsed duration.
-- Filter disclosure: operations whose retained payload was credential-scrubbed, truncated, excerpted, structurally summarized, or had Kubernetes `managedFields` removed show a shield indicator at the event heading and an explanation in the detail dialog.
-- Evidence provenance: answer citations remain inline with their facts, source, collection time, and evidence identifier; the redundant collected-evidence modal and rail Details tab are removed.
-- Operation inspection: activating an event row opens a native dialog containing retained request/command, stdout, stderr, observations, limitations, error, status, cluster, and timing fields as available.
-- Live behavior: existing coarse SSE progress is mirrored into the activity rail; no full tool-result streaming was introduced.
-- Responsive behavior: the evidence rail becomes a full-width section below the conversation at the existing compact breakpoint, preserving all content without horizontal page overflow.
-- Accessibility: operation rows are full-width buttons with descriptive labels; dialogs have labelled headings and close controls; the filter icon has an accessible explanation.
-- Browser console errors: none.
+## Required fidelity surfaces
 
-## Comparison notes
+- Fonts and typography: existing PodPilot family, weights, heading scale, metadata size, and table hierarchy are preserved. Wider rows reduce unintended wrapping in table cells.
+- Spacing and layout rhythm: transcript gutters and classic row dividers are restored; the composer remains visually focused and narrower. Header and evidence rail alignment remain unchanged.
+- Colors and tokens: Classic theme tokens remain the default and are consistently applied to the transcript, tables, composer, and evidence rail.
+- Image quality and asset fidelity: no new raster assets were required. The existing shield indicator remains a real packaged icon.
+- Copy and content: application text is unchanged except the empty timeline guidance now accurately says operations appear as they start.
 
-- The implementation intentionally preserves PodPilot's transcript-first investigation workflow instead of reproducing the concept's static comparison table.
-- The selected visual's persistent evidence rail, compact density, divider-led surfaces, cyan accent, status chips, and detailed operation inspection are carried into the existing application.
-- At the in-app browser's narrow QA width, the responsive layout stacks the evidence rail after the composer. Desktop CSS retains the selected fixed right-rail layout above 960 pixels.
+## Interaction and runtime verification
 
-## Verification checklist
+- Opened the deployed SNO build in the Codex in-app browser.
+- Verified the evidence sidebar open state and existing full-width answer tables.
+- Seeded a bounded validation run, observed a RUNNING operation row, updated it to COMPLETED, and confirmed status, duration, retained output, and operation count updated before a final reply existed.
+- Waited through multiple 1.5-second reconciliation cycles and verified unchanged snapshots no longer rebuild the row.
+- Verified the row remains a whole-row dialog trigger and the retained composer width is unchanged.
+- Checked the rendered page structure after removing the validation fixture and restored the affected conversation evidence/history.
+- Browser console errors: none attributable to the application. The temporary local visual proxy could not stream SSE, so the production SSE payload was verified by code/tests and the browser exercised the built-in status reconciliation fallback.
 
-- [x] Selected mock and rendered implementation reviewed together for hierarchy, density, color, spacing, borders, and interaction coverage.
-- [x] Timeline event rows and evidence rail collapse/restore behavior exercised in the browser.
-- [x] Filtered event indicator and explanation verified.
-- [x] Operation detail dialog opened and closed.
-- [x] Browser console checked.
-- [x] Targeted API and UI tests passed.
-- [x] JavaScript syntax and Python compilation checks passed.
+## Comparison history
 
-## Deployed SNO validation
+1. Initial SNO pass found a P2 interaction issue: unchanged status polling rebuilt the live row and could detach it during a click.
+2. Added operation-snapshot change detection so DOM and dialog nodes remain stable between identical updates.
+3. Rebuilt and redeployed, then verified the completed row remained stable across multiple polling intervals.
 
-- Build: `podpilot-86`, deployed from the `codex/evidence-ledger-ui-redesign` feature branch to the disposable SNO lab at image digest `sha256:7a1e2796fa0fa8dd83bc58e0fc0f940de194b4caecb54bc957f98bc0a9a18080`.
-- Flow: connect a delegated `podpilot-breakglass` identity, select the SNO cluster, submit a read-only ClusterLogForwarder investigation, observe live activity, inspect the completed ledger, activate an operation row, collapse and restore the evidence rail, and switch among all three themes.
-- Result: the live run retained 16 timed operations and 7 evidence sources. Timeline event rows, operation dialogs, the evidence toggle, and persisted theme selection worked without browser-console errors.
-- The open evidence rail originally allowed the conversation header to retain its collapsed width, placing its controls beneath the rail. The header now reserves the rail and action widths, keeps the title ellipsized, and leaves New conversation plus Hide evidence visible; the collapsed state restores the full transcript width.
-- Global theme coverage was visually checked on the conversation workspace, delegated cluster sign-in, shared cluster management, personal cluster form, model registry, cluster memory, a retained incident investigation, and the investigation-not-found error state. The `/` route redirects to the checked delegated sign-in page in the deployed ask-first mode. Classic, Dark, and Light all change the page canvas, navigation, panels, fields, menus, buttons, notices, code, evidence rail, and transient detail surfaces together.
-- The earlier accepted captures remain in `.audit/sno-evidence-ledger/`; the final live pass used the current in-app browser state against build `podpilot-81`.
-- A follow-up side-by-side review against the Light cluster sign-in page found that Ask still used a narrower navigation rail, compressed title bar, divider-only transcript, and older hard-coded result-table fills. Build `podpilot-83` aligns Ask with the shared 248px operator navigation, larger page-title typography, generous page rhythm, elevated message surfaces, and card-style composer. Resource and answer-table surfaces now resolve through theme tokens as well.
-- Browser validation on build `podpilot-83` covered the Light conversation with the evidence rail open, the Dark conversation with the rail collapsed, and computed Classic surfaces. The evidence toggle restored correctly; all three themes used the intended canvas/card/result hierarchy; there was no horizontal page overflow and no browser-console output.
-- Follow-up spacing validation on build `podpilot-85` measured the header actions 22px from the evidence divider when the rail was open and 14px from the workspace edge when closed. Both states retained the intended title truncation, produced no horizontal overflow, and restored the evidence rail without console output.
-- Cross-route navigation validation on build `podpilot-86` compared computed sidebar, brand, `WORKSPACE` label, navigation link, session row, subtree, and identity styles between Ask and cluster sign-in. Their dimensions, typography, spacing, colors, borders, and radii now match exactly; the active Ask and active Clusters links also produce identical computed styling. No Ask-scoped sidebar selectors remain and the browser console stayed clear.
+## Follow-up polish
+
+- None required for this scope.
 
 final result: passed
