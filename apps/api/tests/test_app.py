@@ -13281,7 +13281,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert ".ask-page .nav-link" not in styles
     assert ".ask-page .brand-mark" not in styles
     assert "html[data-theme] .ask-panel { background: var(--theme-canvas); }" in styles
+    assert "--muted: var(--theme-muted)" in styles
     assert "html[data-theme] .resource-result-group" in styles
+    assert "html[data-theme] .resource-result-group > summary small," in styles
+    assert "html[data-theme] .ask-composer .chat-budget p { color: var(--theme-muted); }" in styles
     assert "html[data-theme] .resource-result-table th" in styles
     assert "width: min(100%, var(--conversation-content-width))" in styles
     assert ".ask-composer .composer-input-wrap:focus-within" in styles

@@ -1707,6 +1707,23 @@ html[data-theme="cibc-red"] .ask-page .operation-marker { border-color: #e5dadd;
   --conversation-gutter: clamp(22px, 2.4vw, 36px);
 }
 
+/* Keep older Ask components on the same semantic palette as the active theme. */
+html[data-theme] .ask-page {
+  --bg: var(--theme-canvas);
+  --surface: var(--theme-surface);
+  --surface-raised: var(--theme-surface-raised);
+  --surface-soft: var(--theme-surface-soft);
+  --border: var(--theme-border);
+  --border-bright: var(--theme-border-strong);
+  --text: var(--theme-text);
+  --muted: var(--theme-muted);
+  --subtle: var(--theme-subtle);
+  --cyan: var(--theme-accent);
+  --cyan-soft: var(--theme-accent-soft);
+  --green: var(--theme-success);
+  --orange: var(--theme-warning);
+}
+
 .ask-page .ask-session-header {
   min-height: 116px;
   padding: 24px var(--conversation-gutter);
@@ -1764,6 +1781,10 @@ html[data-theme] .resource-result-table td,
 html[data-theme] .metric-ranking-table th,
 html[data-theme] .metric-ranking-table td { border-color: var(--theme-border); }
 html[data-theme] .resource-result-table th { color: var(--theme-subtle); background: var(--theme-surface-soft); }
+html[data-theme] .resource-result-group > summary small,
+html[data-theme] .resource-result-toolbar small,
+html[data-theme] .resource-result-note,
+html[data-theme] .resource-result-empty { color: var(--theme-muted); }
 html[data-theme] .answer-table-markdown code,
 html[data-theme] .kafka-topic-storage-identity code { color: var(--theme-accent-strong); background: var(--theme-accent-soft); }
 .ask-thread .chat-message {
@@ -1846,6 +1867,8 @@ html[data-theme] .ask-composer .composer-toolbar {
   border-color: var(--theme-border);
   background: var(--theme-surface-raised);
 }
+html[data-theme] .ask-composer .chat-budget p { color: var(--theme-muted); }
+html[data-theme] .ask-composer .chat-budget a { color: var(--theme-accent-strong); text-decoration-color: color-mix(in srgb, var(--theme-accent) 50%, transparent); }
 .activity-sidebar-header { min-height: 116px; padding: 24px 18px; }
 .activity-sidebar-header h2 { font-size: 17px; letter-spacing: -.02em; }
 
