@@ -13252,6 +13252,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'html[data-theme="cibc-red"]' in styles
     assert "#c41f3e" in styles.lower()
     assert "#8b1d41" in styles.lower()
+    assert "cibc-diamond.svg" in base_template
+    assert 'class="brand-mark-cibc"' in base_template
     assert "--theme-surface-inset" in styles
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
     assert 'html[data-theme="light"] .ask-page' in styles
@@ -13269,10 +13271,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "left: var(--conversation-gutter)" in styles
     assert "html[data-theme] .ask-thread .chat-user," in styles
     assert "html[data-theme] .ask-thread .chat-assistant { background: transparent; }" in styles
-    assert "html[data-theme] .answer-status-grounded" in styles
-    assert "color: #4ade9a" in styles
-    assert "background: rgba(74, 222, 154, .08)" in styles
-    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .answer-status-grounded' in styles
+    assert "html[data-theme] .ask-thread .chat-meta .answer-status-grounded" in styles
+    assert "color: #55f0a5" in styles
+    assert "background: rgba(26, 126, 78, .3)" in styles
+    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .ask-thread .chat-meta .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
     assert ".ask-page .sidebar" not in styles
     assert ".ask-page .nav-label" not in styles
