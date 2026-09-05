@@ -3,8 +3,8 @@
 {% macro state_mark(state) -%}<span class="incident-activity-mark incident-activity-mark-{{ state }}" aria-label="{{ state | replace('_', ' ') }}"></span>{%- endmacro %}
 {% macro incident_table(items, active=false) %}
 <div class="incident-board-table-wrap">
-  <table class="incident-board-table">
-    <thead><tr><th aria-hidden="true"></th><th>Investigation</th><th>Cluster</th><th>State</th><th>Specialists</th><th>Last activity</th></tr></thead>
+  <div class="incident-board-table-header" role="row"><span aria-hidden="true"></span><span role="columnheader">Investigation</span><span role="columnheader">Cluster</span><span role="columnheader">State</span><span role="columnheader">Specialists</span><span role="columnheader">Last activity</span></div>
+  <table class="incident-board-table" aria-label="Incident investigations">
     {% for item in items %}
     <tbody class="incident-board-item{% if active %} incident-board-item-active{% endif %}">
       <tr><td colspan="5">
