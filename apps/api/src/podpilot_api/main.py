@@ -8355,10 +8355,34 @@ def _agent_ledger_excerpt(value: object, limit: int) -> str:
     return f"{text[:limit - tail].rstrip()}\n...[compacted]...\n{text[-tail:].lstrip()}"
 
 
+def _ledger_value_was_redacted(value: object) -> bool:
+    """Report credential filtering without retaining the original sensitive value."""
+
+    if value in (None, ""):
+        return False
+    if isinstance(value, (dict, list, tuple)):
+        rendered = json.dumps(value, sort_keys=True, default=_json_default)
+    else:
+        rendered = str(value)
+    return redact_text(rendered) != rendered
+
+
+def _redact_ledger_value(value: object) -> object:
+    """Preserve structured operator detail while removing credential material."""
+
+    rendered = json.dumps(value, sort_keys=True, default=_json_default)
+    redacted = redact_text(rendered)
+    try:
+        return json.loads(redacted)
+    except json.JSONDecodeError:
+        return redact_text(str(value))
+
+
 def _agent_tool_ledger_entry(
     *, sequence: int, tool_name: str, tool_call_id: str,
     cluster_id: str, cluster_name: str, status: str,
     request: object, result: dict[str, object],
+    started_at: datetime | None = None, completed_at: datetime | None = None,
 ) -> dict[str, object]:
     """Create deterministic retained evidence after raw tool messages are consumed once."""
 
@@ -8370,6 +8394,16 @@ def _agent_tool_ledger_entry(
         "cluster_name": cluster_name[:200],
         "status": status[:80],
     }
+    if started_at is not None:
+        entry["started_at"] = started_at.isoformat()
+    if completed_at is not None:
+        entry["completed_at"] = completed_at.isoformat()
+    if started_at is not None and completed_at is not None:
+        entry["duration_ms"] = max(
+            0, round((completed_at - started_at).total_seconds() * 1_000)
+        )
+    filtered_fields: list[str] = []
+    filter_reasons: list[str] = []
     if tool_name == "execute_shell":
         retained_result = _prepare_agent_provider_payload(result)
         requires_refinement = bool(
@@ -8385,24 +8419,96 @@ def _agent_tool_ledger_entry(
             ),
             "stderr_excerpt": _agent_ledger_excerpt(retained_result.get("stderr"), 600),
         })
+        for field, value in (
+            ("command", request),
+            ("stdout", retained_result.get("stdout")),
+            ("stderr", retained_result.get("stderr")),
+            ("error", result.get("error")),
+        ):
+            if _ledger_value_was_redacted(value):
+                filtered_fields.append(field)
+        if filtered_fields:
+            filter_reasons.append("Sensitive values were redacted.")
+        if result.get("managed_fields_removed"):
+            filter_reasons.append("Kubernetes-managed metadata was removed.")
+        if result.get("stdout_truncated") or result.get("stderr_truncated"):
+            filter_reasons.append("Some command output was too long to display.")
+        if requires_refinement:
+            filter_reasons.append("A large response was summarized.")
+        if (
+            len(str(retained_result.get("stdout") or "")) > 1_200
+            or len(str(retained_result.get("stderr") or "")) > 600
+        ):
+            filter_reasons.append("Only part of the command output is shown.")
         if requires_refinement:
             entry["provider_result_requires_refinement"] = True
             entry["provider_result_summary"] = retained_result.get("provider_result_summary")
             entry["retry_guidance"] = retained_result.get("retry_guidance")
     else:
         entry["request"] = _compact_provider_value(
-            request, string_limit=300, list_limit=12,
+            _redact_ledger_value(request), string_limit=300, list_limit=12,
         )
         entry["observations"] = _compact_provider_value(
-            result.get("observations") or [], string_limit=500, list_limit=8,
+            _redact_ledger_value(result.get("observations") or []),
+            string_limit=500, list_limit=8,
         )
         entry["limitations"] = _compact_provider_value(
-            result.get("limitations") or [], string_limit=300, list_limit=6,
+            _redact_ledger_value(result.get("limitations") or []),
+            string_limit=300, list_limit=6,
         )
+        if _ledger_value_was_redacted(request):
+            filtered_fields.append("request")
+        if _ledger_value_was_redacted(result.get("observations")):
+            filtered_fields.append("observations")
+        if _ledger_value_was_redacted(result.get("limitations")):
+            filtered_fields.append("limitations")
+        if filtered_fields:
+            filter_reasons.append("Sensitive values were redacted.")
     for key in ("failure_category", "diagnostic_ref", "error"):
         if result.get(key) not in (None, ""):
             entry[key] = _agent_ledger_excerpt(result[key], 400)
+    if _ledger_value_was_redacted(result.get("error")) and "error" not in filtered_fields:
+        filtered_fields.append("error")
+        if "Sensitive values were redacted." not in filter_reasons:
+            filter_reasons.append("Sensitive values were redacted.")
+    if filter_reasons:
+        entry["content_filtered"] = True
+        entry["filtered_fields"] = list(dict.fromkeys(filtered_fields))
+        entry["filter_reasons"] = list(dict.fromkeys(filter_reasons))
     return json.loads(json.dumps(entry, sort_keys=True, default=_json_default))
+
+
+_OPERATOR_FILTER_REASON_COPY = {
+    "Credential-like values were redacted.": "Sensitive values were redacted.",
+    "Kubernetes managedFields were omitted.": "Kubernetes-managed metadata was removed.",
+    "Runner output reached its retained byte limit.": "Some command output was too long to display.",
+    "Oversized JSON was replaced with structural metadata.": "A large response was summarized.",
+    "The timeline retains bounded output excerpts.": "Only part of the command output is shown.",
+}
+
+
+def _operator_filter_reason(value: object) -> str:
+    """Translate stored implementation language into operator-facing copy."""
+
+    text = str(value or "").strip()
+    return _OPERATOR_FILTER_REASON_COPY.get(text, text)
+
+
+def _operator_filter_reasons(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [_operator_filter_reason(value) for value in values]
+
+
+def _operation_display_text(value: object) -> str:
+    """Render common escaped shell separators without changing retained evidence."""
+
+    return (
+        str(value or "")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+    )
 
 
 def _agent_provider_failure_content(
@@ -10329,6 +10435,9 @@ def create_app(
     templates.env.filters["safe_markdown"] = render_safe_markdown
     templates.env.filters["safe_table_markdown"] = render_safe_table_markdown
     templates.env.filters["est_time"] = _format_est_time
+    templates.env.filters["operator_filter_reason"] = _operator_filter_reason
+    templates.env.filters["operation_display_text"] = _operation_display_text
+    templates.env.globals["operator_filter_reasons"] = _operator_filter_reasons
     templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
 
     def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:
@@ -11227,6 +11336,9 @@ def create_app(
                     run.status = "succeeded"
                     run.phase = "complete"
                     run.progress_json = json.dumps(events[-40:], sort_keys=True)
+                    run.operation_json = json.dumps(
+                        agent_tool_ledger, sort_keys=True, default=_json_default,
+                    )
                     run.assistant_message_id = assistant_message_id
                     run.completed_at = now
                     db_session.commit()
@@ -11234,6 +11346,35 @@ def create_app(
 
             messages.append(step.assistant_message)
             for tool_call in step.tool_calls:
+                operation_started_at = datetime.now(timezone.utc)
+                try:
+                    live_arguments: object = json.loads(tool_call.arguments)
+                except (TypeError, json.JSONDecodeError):
+                    live_arguments = tool_call.arguments
+                live_cluster_id = ""
+                if isinstance(live_arguments, dict):
+                    live_cluster_id = str(live_arguments.get("cluster_id") or "").strip()
+                if not live_cluster_id and len(agent_targets) == 1:
+                    live_cluster_id = next(iter(agent_targets))
+                live_cluster_name = agent_targets.get(live_cluster_id, ("", None))[0]
+                live_request: object = live_arguments
+                if tool_call.name == "execute_shell" and isinstance(live_arguments, dict):
+                    live_request = live_arguments.get("command") or ""
+                await _record_run_operation(
+                    engine,
+                    run_id,
+                    _agent_tool_ledger_entry(
+                        sequence=len(agent_tool_ledger) + 1,
+                        tool_name=tool_call.name,
+                        tool_call_id=tool_call.id,
+                        cluster_id=live_cluster_id,
+                        cluster_name=live_cluster_name,
+                        status="running",
+                        request=live_request,
+                        result={},
+                        started_at=operation_started_at,
+                    ),
+                )
                 if tool_call.name in {
                     "discover_resources", "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics",
@@ -11387,16 +11528,20 @@ def create_app(
                         result_payload["diagnostic_ref"] = collector_diagnostic_ref
                     if collector_retry_guidance:
                         result_payload["retry_guidance"] = collector_retry_guidance
-                    agent_tool_ledger.append(_agent_tool_ledger_entry(
+                    ledger_entry = _agent_tool_ledger_entry(
                         sequence=len(agent_tool_ledger) + 1,
                         tool_name=tool_call.name,
                         tool_call_id=tool_call.id,
                         cluster_id=collector_cluster_id,
                         cluster_name=collector_cluster_name,
                         status=collector_status,
-                        request=safe_collector_arguments,
+                        request=collector_arguments,
                         result=result_payload,
-                    ))
+                        started_at=operation_started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                    agent_tool_ledger.append(ledger_entry)
+                    await _record_run_operation(engine, run_id, ledger_entry)
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
@@ -11600,6 +11745,7 @@ def create_app(
                     }
                 else:
                     agent_actions_used += 1
+                    managed_fields_removed = False
                     runner_request_id = str(uuid4())
                     runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
                     runner_requests.add(runner_request_id)
@@ -11644,6 +11790,7 @@ def create_app(
                                     command, result.stdout,
                                 )
                                 if compact_stdout != result.stdout:
+                                    managed_fields_removed = True
                                     result = replace(result, stdout=compact_stdout)
                                 break
                             elapsed_seconds = round(
@@ -11657,6 +11804,8 @@ def create_app(
                                     f"{app_settings.agent_command_timeout_seconds:g}s timeout).",
                                 )
                         result_payload = result.to_dict()
+                        if managed_fields_removed:
+                            result_payload["managed_fields_removed"] = True
                         log_method = LOGGER.info if result.exit_code == 0 else LOGGER.warning
                         stderr_tail = (
                             " ".join(redact_text(result.stderr).strip().split())[-2_000:]
@@ -11749,16 +11898,20 @@ def create_app(
                     "failed" if result_payload.get("exit_code") is not None else
                     "rejected" if command_failure_category == "budget_exhausted" else "invalid"
                 )
-                agent_tool_ledger.append(_agent_tool_ledger_entry(
+                ledger_entry = _agent_tool_ledger_entry(
                     sequence=len(agent_tool_ledger) + 1,
                     tool_name="execute_shell",
                     tool_call_id=tool_call.id,
                     cluster_id=cluster_id,
                     cluster_name=cluster_name,
                     status=ledger_status,
-                    request=redact_text(command),
+                    request=command,
                     result=result_payload,
-                ))
+                    started_at=operation_started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+                agent_tool_ledger.append(ledger_entry)
+                await _record_run_operation(engine, run_id, ledger_entry)
                 safe_result = _bounded_agent_provider_result(result_payload)
                 messages.append({
                     "role": "tool",
@@ -12262,10 +12415,37 @@ def create_app(
             run.status = "succeeded"
             run.phase = "complete"
             run.progress_json = json.dumps(progress_events[-40:], sort_keys=True)
+            run.operation_json = json.dumps(
+                agent_evidence_ledger, sort_keys=True, default=_json_default,
+            )
             run.assistant_message_id = assistant_message_id
             run.completed_at = datetime.now(timezone.utc)
             db_session.commit()
         return assistant_message_id
+
+    async def _record_run_operation(
+        engine, run_id: str, operation: dict[str, object]
+    ) -> None:
+        """Upsert one bounded, redacted operation while an Ask run is active."""
+
+        with Session(engine) as db_session:
+            run = db_session.get(AdHocRun, run_id)
+            if run is None or run.status not in {"queued", "running"}:
+                return
+            operations = list(json.loads(run.operation_json or "[]"))
+            operation_key = str(operation.get("tool_call_id") or "")
+            replaced = False
+            for index, item in enumerate(operations):
+                if str(item.get("tool_call_id") or "") == operation_key:
+                    operations[index] = operation
+                    replaced = True
+                    break
+            if not replaced:
+                operations.append(operation)
+            run.operation_json = json.dumps(
+                operations[-40:], sort_keys=True, default=_json_default,
+            )
+            db_session.commit()
 
     async def _record_run_progress(
         engine, run_id: str, phase: str, message: str
@@ -13395,6 +13575,7 @@ def create_app(
                     "phase": active_run_row.phase,
                     "include_raw_response": active_run_row.include_raw_response,
                     "events": json.loads(active_run_row.progress_json),
+                    "operations": json.loads(active_run_row.operation_json or "[]"),
                 } if active_run_row else None),
                 "clusters": [_cluster_summary(item) for item in available_clusters],
                 "selected_cluster_ids": conversation_cluster_ids,
@@ -13708,6 +13889,7 @@ def create_app(
                 "status": run.status,
                 "phase": run.phase,
                 "events": json.loads(run.progress_json),
+                "operations": json.loads(run.operation_json or "[]"),
                 "location": f"/ask/{run.conversation_id}",
             })
 
@@ -13727,6 +13909,7 @@ def create_app(
 
         async def stream() -> AsyncIterator[str]:
             last_seen = last_event_id
+            last_operations_json: str | None = None
             heartbeat_at = datetime.now(timezone.utc)
             while True:
                 if await request.is_disconnected():
@@ -13737,8 +13920,15 @@ def create_app(
                     if current is None or current.created_by != user.username:
                         return
                     events = list(json.loads(current.progress_json))
+                    operations_json = current.operation_json or "[]"
                     status_value = current.status
                     location = f"/ask/{current.conversation_id}"
+                if operations_json != last_operations_json:
+                    last_operations_json = operations_json
+                    yield (
+                        "event: operations\n"
+                        f"data: {operations_json}\n\n"
+                    )
                 for event in events:
                     seq = int(event.get("seq", -1))
                     if seq <= last_seen:

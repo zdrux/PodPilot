@@ -2992,6 +2992,40 @@ def test_consumed_agent_tool_output_is_replaced_by_bounded_evidence_ledger() -> 
     assert len(str(_agent_evidence_ledger_message(ledger)["content"]).encode()) <= 80 * 1024
 
 
+def test_agent_ledger_records_timing_and_filtered_content_notice() -> None:
+    started_at = datetime(2026, 9, 3, 15, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 9, 3, 15, 0, 2, 250000, tzinfo=timezone.utc)
+
+    entry = _agent_tool_ledger_entry(
+        sequence=1,
+        tool_name="execute_shell",
+        tool_call_id="call-filtered",
+        cluster_id="cluster-1",
+        cluster_name="EC2",
+        status="completed",
+        request="oc get deployment web -o yaml --token=secret-value",
+        result={
+            "exit_code": 0,
+            "stdout": "authorization: Bearer secret-value\nkind: Deployment",
+            "stderr": "",
+            "operation_kind": "read",
+            "managed_fields_removed": True,
+        },
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+    assert entry["started_at"] == "2026-09-03T15:00:00+00:00"
+    assert entry["completed_at"] == "2026-09-03T15:00:02.250000+00:00"
+    assert entry["duration_ms"] == 2250
+    assert entry["content_filtered"] is True
+    assert set(entry["filtered_fields"]) == {"command", "stdout"}
+    assert "Sensitive values were redacted." in entry["filter_reasons"]
+    assert "Kubernetes-managed metadata was removed." in entry["filter_reasons"]
+    assert "secret-value" not in json.dumps(entry)
+    assert "[REDACTED]" in entry["command"]
+
+
 def test_agent_ledger_preserves_writes_and_failures_before_successful_read_detail() -> None:
     entries = [
         _agent_tool_ledger_entry(
@@ -5464,6 +5498,8 @@ def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
     assert 'class="answer-table-result"' in rendered.text
     assert "Dynamic columns parsed from PodPilot’s safe Markdown response" in rendered.text
     assert "Answer-derived" in rendered.text
+    assert "Copy for email" in rendered.text
+    assert 'data-copy-table="answer-table-data-' in rendered.text
     assert "Interpreted policies" in rendered.text
     assert "Blocks inbound traffic" in rendered.text
     assert "The policy effect remains visible." in rendered.text
@@ -9482,9 +9518,8 @@ def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
 
     with TestClient(app) as client:
         page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
-        assert 'class="boundary-pill caution-summary"' in page.text
-        assert "Session cautions" in page.text
-        assert "Delegated read-only mode" in page.text
+        assert 'data-theme-option="classic"' in page.text
+        assert "Session cautions" not in page.text
         assert "Delegated session ended" not in page.text
         assert 'data-starter-available="true"' in page.text
         composer = re.search(r'<textarea id="adhoc-message"[^>]*>', page.text)
@@ -11146,6 +11181,10 @@ def test_delegated_agent_preserves_completed_changes_when_provider_times_out(
         assert [item["status"] for item in activity["reads"]] == ["completed"]
         assert activity["evidence_ledger"][0]["operation_kind"] == "write"
         assert activity["evidence_ledger"][0]["executed"] is True
+        run = db_session.scalar(select(AdHocRun))
+        assert run is not None
+        live_operations = json.loads(run.operation_json)
+        assert live_operations == activity["evidence_ledger"]
     engine.dispose()
 
 
@@ -12381,9 +12420,8 @@ def test_delegated_operator_connects_and_stamps_action_conversation(
         )
         assert "execution-mode-read-only" in conversation_page.text
         assert "execution-mode-read-write" not in conversation_page.text
-        assert "Delegated read-only mode" in conversation_page.text
-        assert "broker blocks Kubernetes mutations" in conversation_page.text
-        assert "This conversation remains read-only" in conversation_page.text
+        assert "Investigate · read-only" in conversation_page.text
+        assert "Session cautions" not in conversation_page.text
         assert "Delegated Action mode" not in conversation_page.text
         assert "action-caution-pill" not in conversation_page.text
         client.cookies.delete("podpilot_delegated_session")
@@ -12864,11 +12902,10 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert 'class="ask-layout action-session"' in action_page.text
         assert "execution-mode-read-write" in action_page.text
         assert "execution-mode-read-only" not in action_page.text
-        assert "Delegated Action mode" in action_page.text
-        assert "may create, patch, apply, or delete objects directly" in action_page.text
-        assert "There is no PodPilot preview or approval step" in action_page.text
+        assert "ACTION MODE - Cluster WRITES Permitted" in action_page.text
+        assert "Session cautions" not in action_page.text
         assert "change selected clusters using your OpenShift identity" not in action_page.text
-        assert "action-caution-pill" in action_page.text
+        assert "action-caution-pill" not in action_page.text
     engine.dispose()
 
 
@@ -12919,6 +12956,16 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             for index in range(1, 7)
         ],
     ]
+    operations = [{
+        "sequence": 1,
+        "tool": "execute_shell",
+        "tool_call_id": "call-live-1",
+        "cluster_id": "cluster-live",
+        "cluster_name": "Live cluster",
+        "status": "running",
+        "command": "oc get pods -A",
+        "started_at": "2026-09-03T20:26:42+00:00",
+    }]
     engine = build_engine(settings)
     with Session(engine) as db_session:
         db_session.add(AdHocConversation(
@@ -12940,23 +12987,32 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             status="running",
             phase="next_check",
             progress_json=json.dumps(events),
+            operation_json=json.dumps(operations),
         ))
         db_session.commit()
     engine.dispose()
 
     with TestClient(app) as client:
         page = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        status = client.get(
+            "/api/v1/adhoc-runs/00000000-0000-0000-0000-000000000189",
+            headers={"x-forwarded-user": "ivy"},
+        )
 
     assert page.status_code == 200
-    assert page.text.count(repeated) == 1
+    assert repeated not in page.text
     assert 'data-progress-phase="replanning"' not in page.text
     assert 'data-progress-phase="queued"' not in page.text
     assert 'data-progress-phase="starting"' not in page.text
     assert "Question queued." not in page.text
     assert "Starting investigation." not in page.text
-    assert "Command update 1." not in page.text
-    for index in range(2, 7):
-        assert f"Command update {index}." in page.text
+    for index in range(1, 7):
+        assert f"Command update {index}." not in page.text
+    assert 'data-operation-key="call-live-1"' in page.text
+    assert "1 operation" in page.text
+    assert "oc get pods -A" in page.text
+    assert status.status_code == 200
+    assert status.json()["operations"] == operations
 
 
 def test_owner_can_delete_queued_conversation_and_evidence_with_audit_record(
@@ -13066,24 +13122,22 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert '>Cancel</button>' in template
     assert 'pendingRun.querySelector("[data-run-cancel]")' not in script
     assert "appendOptimisticTurn" in script
-    assert 'class="boundary-pill caution-summary' in template
-    assert template.count('class="boundary-pill caution-summary') == 1
+    assert 'class="boundary-pill caution-summary' not in template
     assert template.count('class="boundary-pill execution-mode-badge ') == 1
-    assert "Session cautions" in template
+    assert "Session cautions" not in template
     assert "data-action-mode-notice" in template
     assert 'class="ask-session-heading-row"' in template
     assert "ACTION MODE - Cluster WRITES Permitted" in template
-    assert "data-action-tooltip" in template
-    assert "data-read-only-tooltip" in template
-    assert ".action-caution-pill" in styles
     assert ".action-mode-notice[hidden]" in styles
-    assert ".boundary-pill.caution-summary::after" in styles
-    assert "Session cautions:&#10;&#10;" in template
     assert "execution-mode-read-write" in template
     assert "execution-mode-read-only" in template
     assert ".execution-mode-badge { min-height: 34px; padding: 0 11px; border-radius: 7px;" in styles
     assert ".execution-mode-badge.execution-mode-read-only" in styles
     assert ".execution-mode-badge.execution-mode-read-write" in styles
+    assert "html[data-theme] .execution-mode-badge.execution-mode-read-only" in styles
+    assert "color: var(--theme-success)" in styles
+    assert "html[data-theme] .execution-mode-badge.execution-mode-read-write" in styles
+    assert "color: var(--theme-danger)" in styles
     assert ".ask-page .ask-session-header" in styles
     assert "padding-inline: 20px" in styles
     assert ".answer-table-result { margin: 10px 0 14px; }" in styles
@@ -13134,7 +13188,6 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "resizeComposerTextarea" in script
     assert 'composerTextarea.style.overflowY = contentHeight > maxHeight ? "auto" : "hidden"' in script
     assert ".ask-layout.action-session .composer-controls > [data-ask-submit]" in styles
-    assert 'cautionSummary.dataset.tooltip = actionModeSelected' in script
     assert "actionModeNotice.hidden = !actionModeSelected" in script
     assert ".composer-input-wrap > [data-run-cancel]" not in styles
     assert "Each question: up to" not in template
@@ -13155,10 +13208,10 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "PodPilot is choosing and running useful checks." in script
     assert "active_run.events[-1].message if active_run.events" not in template
     assert 'current.textContent = event.message || "Investigation in progress."' not in script
-    assert "data-progress-phase" in template
-    assert "event.message not in progress.seen_messages" in template
-    assert "unique_phase.events[-5:] if phase == 'agent_command'" in template
-    assert "event.phase not in ['queued', 'starting']" in template
+    assert "data-activity-live" not in template
+    assert "data-operation-live-tail" in template
+    assert "<strong>Investigating" in template
+    assert 'timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]")' in script
     assert "active_run.events[-6:]" not in template
     assert 'hiddenProgressPhases = new Set(["queued", "starting"])' in script
     assert 'phaseName === "agent_command" ? 5 : 3' in script
@@ -13166,12 +13219,94 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "displayedProgressMessages.has(event.message)" in script
     assert '.progress-phase-updates li::before' not in styles
     assert 'phaseGroups.find((item) => item.dataset.progressPhase === phaseName)' in script
-    assert 'document.querySelectorAll(\'.chat-citations a[href^="#evidence-"]\')' in script
-    assert 'document.querySelectorAll(\'.answer-evidence a[href^="#evidence-"]\')' in script
-    assert "target.scrollIntoView" in script
-    assert "technicalDetails.open = true" in script
-    assert 'aria-expanded", "true"' in script
-    assert 'tabindex="-1"' in template
+    assert 'aria-label="Investigation timeline"' in template
+    assert 'data-activity-tab="details"' not in template
+    assert 'id="activity-details-panel"' not in template
+    assert "data-activity-sidebar-toggle" in template
+    assert 'aria-controls="investigation-activity-sidebar"' in template
+    assert 'id="investigation-activity-sidebar"' in template
+    assert "podpilot-evidence-panel-open" in script
+    assert 'activitySidebar.hidden = !open' in script
+    assert '.activity-sidebar[hidden] { display: none; }' in styles
+    assert ".ask-layout.activity-sidebar-collapsed" in styles
+    assert "data-operation-open" in template
+    assert 'class="operation-event-button"' in template
+    assert ".operation-event-button:hover" in styles
+    assert '>View</button>' not in template
+    assert "filtered-output-indicator" in template
+    assert 'document.querySelectorAll("[data-operation-open]")' in script
+    assert 'data-theme-option="classic"' in base_template
+    assert 'data-theme-option="dark"' in base_template
+    assert 'data-theme-option="light"' in base_template
+    assert 'data-theme-option="medium-light"' in base_template
+    assert 'data-theme-option="cibc-red"' in base_template
+    assert base_template.index('data-theme-option="dark"') < base_template.index('data-theme-option="classic"')
+    assert base_template.index('data-theme-option="classic"') < base_template.index('data-theme-option="medium-light"')
+    assert base_template.index('data-theme-option="medium-light"') < base_template.index('data-theme-option="light"')
+    assert base_template.index('data-theme-option="light"') < base_template.index('data-theme-option="cibc-red"')
+    assert 'role="group" aria-label="Color theme"' in base_template
+    assert 'class="sidebar-theme-control"' in base_template
+    assert 'data-theme="classic"' in base_template
+    assert "podpilot-color-theme" in script
+    assert 'document.documentElement.dataset.theme = activeTheme' in script
+    assert 'document.querySelectorAll("[data-theme-option]")' in script
+    assert 'option.setAttribute("aria-pressed"' in script
+    assert 'html[data-theme="classic"]' in styles
+    assert 'html[data-theme="dark"]' in styles
+    assert 'html[data-theme="light"]' in styles
+    assert 'html[data-theme="medium-light"]' in styles
+    assert 'html[data-theme="cibc-red"]' in styles
+    assert "#c41f3e" in styles.lower()
+    assert "#8b1d41" in styles.lower()
+    assert "cibc-diamond.svg" in base_template
+    assert 'class="brand-mark" aria-hidden="true">P</span>' in base_template
+    assert "--theme-surface-inset" in styles
+    assert 'html[data-theme] input:not([type="checkbox"])' in styles
+    assert 'html[data-theme="light"] .ask-page' in styles
+    assert 'html[data-theme="dark"] .ask-page' in styles
+    assert "html[data-theme] .prompt-starters strong { color: var(--theme-text); }" in styles
+    assert "html[data-theme] .prompt-starters small { color: var(--theme-muted); }" in styles
+    assert "html[data-theme] .ask-thread .chat-markdown strong," in styles
+    assert "html[data-theme] .ask-thread .chat-markdown pre code { color: var(--theme-text);" in styles
+    assert "html[data-theme] .suggested-followup-actions strong," in styles
+    assert "html[data-theme] .ask-thread {" in styles
+    assert "scrollbar-gutter: auto" in styles
+    assert "padding: 24px var(--conversation-gutter) 25px" in styles
+    assert ".ask-thread .chat-message:not(:last-child)::after" in styles
+    assert "right: var(--conversation-gutter)" in styles
+    assert "left: var(--conversation-gutter)" in styles
+    assert "html[data-theme] .ask-thread .chat-user," in styles
+    assert "html[data-theme] .ask-thread .chat-assistant { background: transparent; }" in styles
+    assert "html[data-theme] .ask-thread .chat-meta .answer-status-grounded" in styles
+    assert "color: #55f0a5" in styles
+    assert "background: rgba(26, 126, 78, .3)" in styles
+    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .ask-thread .chat-meta .answer-status-grounded' in styles
+    assert "--conversation-content-width: 1120px" in styles
+    assert "--conversation-author-column: 190px" in styles
+    assert "--conversation-column-gap: clamp(28px, 4vw, 64px)" in styles
+    assert ".ask-page .sidebar" not in styles
+    assert ".ask-page .nav-label" not in styles
+    assert ".ask-page .nav-link" not in styles
+    assert ".ask-page .brand-mark" not in styles
+    assert "html[data-theme] .ask-panel { background: var(--theme-canvas); }" in styles
+    assert "--muted: var(--theme-muted)" in styles
+    assert "html[data-theme] .resource-result-group" in styles
+    assert "html[data-theme] .resource-result-group > summary small," in styles
+    assert "html[data-theme] .ask-composer .chat-budget p { color: var(--theme-muted); }" in styles
+    assert "html[data-theme] .resource-result-table th" in styles
+    assert "width: min(100%, var(--conversation-content-width))" in styles
+    assert "width: calc(100% - var(--conversation-author-column) - var(--conversation-column-gap) - var(--conversation-author-column) - var(--conversation-column-gap))" in styles
+    assert "margin: 0 0 0 calc(var(--conversation-author-column) + var(--conversation-column-gap))" in styles
+    assert ".ask-composer .composer-input-wrap:focus-within" in styles
+    assert "html[data-theme] .ask-composer .composer-input-wrap {\n  overflow: visible;" in styles
+    assert "html[data-theme] .operation-facts dd { color: var(--theme-text); }" in styles
+    assert "html[data-theme] .operation-dialog-content h3 { color: var(--theme-muted); }" in styles
+    assert "html[data-theme] .activity-empty strong { color: var(--theme-text); }" in styles
+    assert "html[data-theme] .activity-empty p { color: var(--theme-muted); }" in styles
+    assert "html[data-theme] .button.primary:hover:not(:disabled) { border-color: var(--theme-accent); background: var(--theme-accent); }" in styles
+    assert "Keep conversation actions anchored to the conversation/evidence boundary" in styles
+    assert ".ask-layout .panel-header-actions { position: absolute; top: 39px; right: 14px" in styles
+    assert ".ask-layout:not(.activity-sidebar-collapsed) .panel-header-actions { right: 340px; }" in styles
     assert "data-scroll-latest" in template
     assert "latestThread.scrollTop = latestThread.scrollHeight" in script
     assert "message.content | safe_markdown" in template
@@ -13182,7 +13317,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
         'class="chat-thread ask-thread"'
     )
     assert "ask-sidebar" not in template
-    assert "data-evidence-dialog" in template and "data-evidence-open" in template
+    assert "data-evidence-dialog" not in template and "data-evidence-open" not in template
     assert "tool-activity" not in template
     assert "Inspected {{ message.activity.reads" not in template
     assert 'class="answer-status answer-status-limited"' in template
@@ -13194,7 +13329,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "recent_conversations" in base_template
     assert "nav-session-list" in base_template
     assert "nav-session-delete" in base_template
-    assert "evidenceDialog.showModal()" in script
+    assert "evidenceDialog.showModal()" not in script
     assert 'name="include_raw_response"' in template
     assert "Show raw model response" in template
     assert 'class="raw-model-response"' in template
@@ -13230,7 +13365,7 @@ def test_recent_ask_sessions_remain_visible_outside_ask_routes(tmp_path: Path) -
     assert 'href="/memory"' not in dashboard.text
 
 
-def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
+def test_ask_evidence_ui_exposes_inline_citations_without_redundant_drawer(
     tmp_path: Path,
 ) -> None:
     app, settings = make_app(
@@ -13302,15 +13437,14 @@ def test_ask_evidence_ui_exposes_clickable_citations_and_technical_payload(
     assert "Evidence-backed" in rendered.text
     assert "Cluster-specific claims are backed by the cited observations" in rendered.text
     assert "20:51:27 EST (-4)" in rendered.text
-    assert f'href="#evidence-{evidence_id}"' in rendered.text
+    assert f'href="#evidence-{evidence_id}"' not in rendered.text
     assert f">{evidence_id}</code>" in rendered.text
     assert "TLS termination" in rendered.text
     assert "passthrough" in rendered.text
-    assert "Route target port" in rendered.text
-    assert "View technical details" in rendered.text
-    assert "Redacted collected payload" in rendered.text
-    assert "Evidence links beneath replies open and focus the cited card" in rendered.text
-    assert 'aria-controls="evidence-dialog"' in rendered.text
+    assert "kubernetes:route.openshift.io/v1:Route:openshift-ingress/*" in rendered.text
+    assert "View technical details" not in rendered.text
+    assert "Redacted collected payload" not in rendered.text
+    assert 'aria-controls="evidence-dialog"' not in rendered.text
 
 
 def test_analysis_creates_one_durable_investigation_and_audit_event(tmp_path: Path) -> None:
@@ -15145,11 +15279,29 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
             id="00000000-0000-0000-0000-000000000191",
             conversation_id=conversation_id, role="assistant", actor=None,
             content="A bounded answer.", answer_mode="general_guidance",
-            tool_activity_json=json.dumps({"reads": [
-                {"tool": "execute_shell", "status": "completed"},
-                {"tool": "execute_shell", "status": "failed"},
-                {"tool": "query_metrics", "status": "denied_or_unavailable"},
-            ]}),
+            tool_activity_json=json.dumps({
+                "reads": [
+                    {"tool": "execute_shell", "status": "completed"},
+                    {"tool": "execute_shell", "status": "failed"},
+                    {"tool": "query_metrics", "status": "denied_or_unavailable"},
+                ],
+                "evidence_ledger": [{
+                    "sequence": 1,
+                    "tool": "execute_shell",
+                    "tool_call_id": "call-1",
+                    "cluster_id": SYSTEM_CLUSTER_ID,
+                    "cluster_name": "Runtime cluster",
+                    "status": "completed",
+                    "command": "oc get deployment web -o yaml --token=[REDACTED]",
+                    "stdout_excerpt": "namespace\\tpod\\t1\\n",
+                    "started_at": "2026-09-02T20:00:02+00:00",
+                    "completed_at": "2026-09-02T20:00:04.250000+00:00",
+                    "duration_ms": 2250,
+                    "content_filtered": True,
+                    "filtered_fields": ["command"],
+                    "filter_reasons": ["Credential-like values were redacted."],
+                }],
+            }),
             model_diagnostics_json=json.dumps({
                 "call_count": 3,
                 "usage_reported_calls": 2,
@@ -15222,6 +15374,18 @@ def test_ask_message_hides_model_usage_under_author_column(tmp_path: Path) -> No
     assert "Provider HTTP error · 400" in rendered.text
     assert "provider-request-400" in rendered.text
     assert "context_length_exceeded" in rendered.text
+    assert "Investigation activity" in rendered.text
+    assert "1 operation" in rendered.text
+    assert "20:00:02 EST (-4)" not in rendered.text
+    assert "16:00:02 EST (-4)" in rendered.text
+    assert "2.2s" in rendered.text
+    assert 'class="filtered-output-indicator"' in rendered.text
+    assert "Sensitive values were redacted." in rendered.text
+    assert "Credential-like values were redacted." not in rendered.text
+    assert "This item contains redacted or shortened content" in rendered.text
+    assert "namespace\tpod\t1\n" in rendered.text
+    assert "namespace\\tpod\\t1\\n" not in rendered.text
+    assert 'data-operation-open="operation-00000000-0000-0000-0000-000000000191-1"' in rendered.text
 
 
 def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:

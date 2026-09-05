@@ -283,6 +283,7 @@ class AdHocRun(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     phase: Mapped[str] = mapped_column(String(64), nullable=False, default="queued")
     progress_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    operation_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     assistant_message_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 

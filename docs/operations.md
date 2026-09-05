@@ -756,9 +756,13 @@ write results, or failures, preserving the findings most likely to matter later 
 One app-wide 50-unit default action budget is configured with
 `PODPILOT_ADHOC_MAX_READS_PER_TURN`; it applies to typed planning and delegated-agent Investigation
 and Action conversations and may be set from 1 to 100.
-The retained excerpts and operation metadata are operator-inspectable beneath the answer in the
-expandable **Agent evidence ledger** section. Each shell row states whether the runner executed it
-and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
+The retained excerpts and operation metadata are operator-inspectable in the Ask activity sidebar.
+Each operation row shows start and completion timing, duration, cluster, and status; the full row opens
+the retained detail sheet and uses a subtle hover treatment to disclose that interaction.
+Rows whose retained request or response was credential-redacted, truncated, excerpted, stripped of
+Kubernetes `managedFields`, or replaced with oversized-JSON structural metadata carry a visible shield
+indicator and describe the applied filtering in the detail sheet. Each shell detail states whether the
+runner executed it and displays any safe failure category, diagnostic reference, and validation error. Repeated commands
 are recorded and executed like any other agent-selected operation; there is no separate duplicate-command
 or retry-reason contract.
 The agent has only a lightweight presentation preference: lists of comparable items should use a
@@ -1093,12 +1097,10 @@ leaving deterministic evidence and checks usable.
 
 For evidence-based Ask replies, the collapsed **Evidence used in this answer**
 rounded control replaces the separate inspected-target activity disclosure and expands into a
-compact vertical timeline of supporting observations.
-Selecting one opens and focuses its
-card in **Collected evidence**. The drawer shows normalized OpenShift coordinates
-and material fields, probe connection/SNI/TLS diagnostics, metric query bounds, or
-the exact Pod/container and bounded log excerpt as applicable. **View technical
-details** displays the complete persisted redacted payload used by the answer.
+compact vertical timeline of supporting observations. Each observation keeps its summary, material
+facts, collection time, source, and evidence identifier inline. The former separate collected-evidence
+drawer is intentionally omitted; retained agent request and response details are available from their
+corresponding activity-sidebar operation rows.
 Replies that cite a top-consumer metric render its persisted ranking directly as
 an operator-visible horizontal bar table with average, current, and peak values.
 The table can be downloaded as CSV; neither the visualization nor the export depends
@@ -1111,6 +1113,8 @@ This is evidence provenance, not model chain-of-thought.
 Evidence-backed and Not-confirmed states appear as short pills beside the reply
 time; hover or keyboard focus exposes their explanation. Ask UI timestamps use
 fixed `EST (-4)` presentation while database and API timestamps remain UTC.
+The sidebar Appearance selector applies the Classic, Dark, or Light semantic
+palette across every operator page and persists the choice in browser storage.
 When a model answer remains incomplete after its correction attempt, question-focused
 deterministic rendering may reuse exact-object evidence collected earlier in the same
 conversation. Kafka namespace follow-ups honor a cluster named in the question and list

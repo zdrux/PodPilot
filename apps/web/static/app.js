@@ -1,4 +1,27 @@
 (() => {
+  const themePreferenceKey = "podpilot-color-theme";
+  const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red"]);
+  let activeTheme = "classic";
+  try {
+    const savedTheme = window.localStorage.getItem(themePreferenceKey);
+    if (supportedThemes.has(savedTheme)) activeTheme = savedTheme;
+  } catch (_error) { /* Preference storage is optional. */ }
+  document.documentElement.dataset.theme = activeTheme;
+
+  const themeOptions = Array.from(document.querySelectorAll("[data-theme-option]"));
+  const applyTheme = (nextTheme) => {
+    const resolvedTheme = supportedThemes.has(nextTheme) ? nextTheme : "classic";
+    document.documentElement.dataset.theme = resolvedTheme;
+    themeOptions.forEach((option) => {
+      option.setAttribute("aria-pressed", String(option.dataset.themeOption === resolvedTheme));
+    });
+    try { window.localStorage.setItem(themePreferenceKey, resolvedTheme); } catch (_error) { /* Preference storage is optional. */ }
+  };
+  themeOptions.forEach((themeOption) => {
+    themeOption.setAttribute("aria-pressed", String(themeOption.dataset.themeOption === activeTheme));
+    themeOption.addEventListener("click", () => applyTheme(themeOption.dataset.themeOption));
+  });
+
   const renderTime = document.querySelector("#render-time");
   if (renderTime) {
     const parsed = new Date(renderTime.dateTime);
@@ -537,7 +560,29 @@
   const executionMode = adhocForm?.querySelector('[name="execution_mode"]');
   const askSubmit = adhocForm?.querySelector("[data-ask-submit]");
   const askLayout = document.querySelector("[data-ask-layout]");
-  const cautionSummary = document.querySelector(".caution-summary");
+  const activitySidebar = document.getElementById("investigation-activity-sidebar");
+  const activitySidebarToggle = document.querySelector("[data-activity-sidebar-toggle]");
+  const activitySidebarToggleLabel = activitySidebarToggle?.querySelector("[data-activity-sidebar-toggle-label]");
+  const activitySidebarPreferenceKey = "podpilot-evidence-panel-open";
+  const setActivitySidebarVisibility = (open, {persist = false} = {}) => {
+    if (!askLayout || !activitySidebar || !activitySidebarToggle) return;
+    activitySidebar.hidden = !open;
+    askLayout.classList.toggle("activity-sidebar-collapsed", !open);
+    activitySidebarToggle.setAttribute("aria-expanded", String(open));
+    activitySidebarToggle.title = open ? "Hide evidence panel" : "Show evidence panel";
+    if (activitySidebarToggleLabel) activitySidebarToggleLabel.textContent = open ? "Hide evidence" : "Show evidence";
+    if (persist) {
+      try { window.localStorage.setItem(activitySidebarPreferenceKey, String(open)); } catch (_error) { /* Preference storage is optional. */ }
+    }
+  };
+  if (activitySidebar && activitySidebarToggle) {
+    let activitySidebarOpen = true;
+    try { activitySidebarOpen = window.localStorage.getItem(activitySidebarPreferenceKey) !== "false"; } catch (_error) { /* Use the default. */ }
+    setActivitySidebarVisibility(activitySidebarOpen);
+    activitySidebarToggle.addEventListener("click", () => {
+      setActivitySidebarVisibility(activitySidebar.hidden, {persist: true});
+    });
+  }
   const actionModeNotice = document.querySelector("[data-action-mode-notice]");
   const composerTextarea = adhocForm?.querySelector("textarea[name='message']");
   const resizeComposerTextarea = () => {
@@ -591,18 +636,6 @@
     const updateModeAvailability = () => {
       const actionModeSelected = executionMode.value === "action";
       askLayout?.classList.toggle("action-session", actionModeSelected);
-      cautionSummary?.classList.toggle("action-caution-pill", actionModeSelected);
-      if (cautionSummary) {
-        cautionSummary.dataset.tooltip = actionModeSelected
-          ? cautionSummary.dataset.actionTooltip
-          : cautionSummary.dataset.readOnlyTooltip;
-        cautionSummary.setAttribute(
-          "aria-label",
-          actionModeSelected
-            ? cautionSummary.dataset.actionAriaLabel
-            : cautionSummary.dataset.readOnlyAriaLabel
-        );
-      }
       if (actionModeNotice) actionModeNotice.hidden = !actionModeSelected;
       updateAskSubmitAvailability();
     };
@@ -939,6 +972,224 @@
     });
   });
 
+  const bindOperationDialog = (button) => {
+    if (button.dataset.operationBound === "true") return;
+    button.dataset.operationBound = "true";
+    button.addEventListener("click", () => {
+      const dialog = document.getElementById(button.dataset.operationOpen);
+      if (dialog instanceof HTMLDialogElement && !dialog.open) dialog.showModal();
+    });
+  };
+  const bindOperationDialogChrome = (dialog) => {
+    dialog.querySelector("[data-operation-close]")?.addEventListener("click", () => dialog.close());
+    if (dialog.dataset.operationBound === "true") return;
+    dialog.dataset.operationBound = "true";
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+  };
+  const operationDisplayText = (value) => String(value || "")
+    .replaceAll("\\r\\n", "\n")
+    .replaceAll("\\n", "\n")
+    .replaceAll("\\t", "\t");
+  const operationText = (value) => typeof value === "string"
+    ? operationDisplayText(value)
+    : JSON.stringify(value, null, 2);
+  const operationFilterReason = (value) => ({
+    "Credential-like values were redacted.": "Sensitive values were redacted.",
+    "Kubernetes managedFields were omitted.": "Kubernetes-managed metadata was removed.",
+    "Runner output reached its retained byte limit.": "Some command output was too long to display.",
+    "Oversized JSON was replaced with structural metadata.": "A large response was summarized.",
+    "The timeline retains bounded output excerpts.": "Only part of the command output is shown.",
+  })[String(value || "")] || String(value || "");
+  const operationTime = (value, includeDate = false) => {
+    const parsed = value ? new Date(value) : null;
+    if (!parsed || Number.isNaN(parsed.valueOf())) return "";
+    return `${parsed.toLocaleString("en-CA", {
+      ...(includeDate ? {year: "numeric", month: "2-digit", day: "2-digit"} : {}),
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      timeZone: "America/Toronto",
+    })} EST (-4)`;
+  };
+  let lastLiveOperationsSnapshot = null;
+  const updateLiveOperations = (operations) => {
+    const timeline = document.querySelector("[data-operation-timeline]");
+    const count = document.querySelector("[data-activity-count]");
+    if (!timeline || !Array.isArray(operations)) return;
+    const operationsSnapshot = JSON.stringify(operations);
+    if (operationsSnapshot === lastLiveOperationsSnapshot) return;
+    lastLiveOperationsSnapshot = operationsSnapshot;
+    const operationKeys = new Set(operations.map((item) => String(item.tool_call_id || "")));
+    timeline.querySelectorAll("[data-live-operation]").forEach((row) => {
+      if (!operationKeys.has(row.dataset.operationKey || "")) row.remove();
+    });
+    document.querySelectorAll("[data-live-operation-dialog]").forEach((dialog) => {
+      if (!operationKeys.has(dialog.dataset.operationKey || "")) dialog.remove();
+    });
+
+    operations.forEach((operation, index) => {
+      const key = String(operation.tool_call_id || `operation-${index + 1}`);
+      let row = Array.from(timeline.querySelectorAll("[data-live-operation]"))
+        .find((item) => item.dataset.operationKey === key);
+      if (!row) {
+        row = document.createElement("li");
+        row.dataset.liveOperation = "";
+        row.dataset.operationKey = key;
+        const insertionPoint = timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]");
+        timeline.insertBefore(row, insertionPoint);
+      }
+      row.className = `operation-event operation-status-${operation.status || "running"}`;
+      const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "-");
+      const dialogId = `operation-live-${timeline.dataset.runId || "run"}-${safeKey}`;
+      const button = document.createElement("button");
+      button.className = "operation-event-button";
+      button.type = "button";
+      button.dataset.operationOpen = dialogId;
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-controls", dialogId);
+      button.setAttribute("aria-label", `View ${String(operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
+      const marker = document.createElement("span");
+      marker.className = "operation-marker";
+      marker.setAttribute("aria-hidden", "true");
+      const body = document.createElement("div");
+      body.className = "operation-event-body";
+      const heading = document.createElement("div");
+      heading.className = "operation-event-heading";
+      const title = document.createElement("strong");
+      title.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      heading.append(title);
+      if (operation.content_filtered) {
+        const filtered = document.createElement("span");
+        filtered.className = "filtered-output-indicator";
+        filtered.title = Array.isArray(operation.filter_reasons) ? operation.filter_reasons.map(operationFilterReason).join(" ") : "This item contains redacted or shortened content.";
+        const image = document.createElement("img");
+        image.src = "/static/icons/shield-exclamation.svg";
+        image.alt = "";
+        filtered.append(image);
+        heading.append(filtered);
+      }
+      const status = document.createElement("span");
+      status.className = "operation-status";
+      status.textContent = String(operation.status || "running").replaceAll("_", " ");
+      heading.append(status);
+      const meta = document.createElement("div");
+      meta.className = "operation-event-meta";
+      const started = operationTime(operation.started_at);
+      [started, operation.cluster_name || operation.cluster_id || "Unresolved cluster",
+        Number.isFinite(operation.duration_ms) ? `${(operation.duration_ms / 1000).toFixed(1)}s` : ""]
+        .filter(Boolean).forEach((value) => {
+          const node = document.createElement(value === started ? "time" : "span");
+          node.textContent = value;
+          meta.append(node);
+        });
+      body.append(heading, meta);
+      const preview = operation.command || operation.request;
+      if (preview) {
+        const code = document.createElement("code");
+        code.textContent = operationText(preview);
+        body.append(code);
+      }
+      button.append(marker, body);
+      row.replaceChildren(button);
+      bindOperationDialog(button);
+
+      let dialog = Array.from(document.querySelectorAll("[data-live-operation-dialog]"))
+        .find((item) => item.dataset.operationKey === key);
+      if (!dialog) {
+        dialog = document.createElement("dialog");
+        dialog.className = "operation-dialog";
+        dialog.dataset.operationDialog = "";
+        dialog.dataset.liveOperationDialog = "";
+        dialog.dataset.operationKey = key;
+        document.body.append(dialog);
+      }
+      dialog.id = dialogId;
+      dialog.setAttribute("aria-labelledby", `${dialogId}-title`);
+      const dialogHeader = document.createElement("div");
+      dialogHeader.className = "operation-dialog-header";
+      const dialogHeading = document.createElement("div");
+      const eyebrow = document.createElement("p");
+      eyebrow.className = "eyebrow";
+      eyebrow.textContent = `Operation ${operation.sequence || index + 1}`;
+      const dialogTitle = document.createElement("h2");
+      dialogTitle.id = `${dialogId}-title`;
+      dialogTitle.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      dialogHeading.append(eyebrow, dialogTitle);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.dataset.operationClose = "";
+      close.setAttribute("aria-label", "Close operation details");
+      close.textContent = "×";
+      dialogHeader.append(dialogHeading, close);
+      const content = document.createElement("div");
+      content.className = "operation-dialog-content";
+      const facts = document.createElement("dl");
+      facts.className = "operation-facts";
+      const factValues = [
+        ["Cluster", operation.cluster_name || operation.cluster_id || "Unresolved"],
+        ["Status", String(operation.status || "running").replaceAll("_", " ")],
+        ["Started", operationTime(operation.started_at, true)],
+        ["Completed", operationTime(operation.completed_at, true)],
+        ["Duration", Number.isFinite(operation.duration_ms) ? `${(operation.duration_ms / 1000).toFixed(2)} seconds` : ""],
+        ["Exit code", operation.exit_code ?? ""],
+      ];
+      factValues.filter(([, value]) => value !== "").forEach(([label, value]) => {
+        const fact = document.createElement("div");
+        const term = document.createElement("dt");
+        const description = document.createElement("dd");
+        term.textContent = label;
+        description.textContent = String(value);
+        fact.append(term, description);
+        facts.append(fact);
+      });
+      content.append(facts);
+      if (operation.content_filtered) {
+        const notice = document.createElement("div");
+        notice.className = "operation-filter-notice";
+        const image = document.createElement("img");
+        image.src = "/static/icons/shield-exclamation.svg";
+        image.alt = "";
+        const noticeBody = document.createElement("div");
+        const noticeTitle = document.createElement("strong");
+        noticeTitle.textContent = "This item contains redacted or shortened content";
+        const reasons = document.createElement("ul");
+        (operation.filter_reasons || []).forEach((reason) => {
+          const item = document.createElement("li");
+          item.textContent = operationFilterReason(reason);
+          reasons.append(item);
+        });
+        noticeBody.append(noticeTitle, reasons);
+        notice.append(image, noticeBody);
+        content.append(notice);
+      }
+      const sections = [
+        ["Command", operation.command], ["Request", operation.request],
+        ["Standard output", operation.stdout_excerpt], ["Standard error", operation.stderr_excerpt],
+        ["Observations", operation.observations], ["Limitations", operation.limitations],
+        ["Error", operation.error],
+      ];
+      sections.filter(([, value]) => value !== undefined && value !== null && value !== "" && (!Array.isArray(value) || value.length))
+        .forEach(([label, value]) => {
+          const section = document.createElement("section");
+          const sectionTitle = document.createElement("h3");
+          sectionTitle.textContent = label;
+          const pre = document.createElement("pre");
+          if (["Standard error", "Limitations", "Error"].includes(label)) pre.className = "operation-error";
+          const code = document.createElement("code");
+          code.textContent = operationText(value);
+          pre.append(code);
+          section.append(sectionTitle, pre);
+          content.append(section);
+        });
+      dialog.replaceChildren(dialogHeader, content);
+      bindOperationDialogChrome(dialog);
+    });
+    const completedCount = Number.parseInt(timeline.dataset.completedOperationCount || "0", 10) || 0;
+    const total = completedCount + operations.length;
+    if (count) count.textContent = `${total} operation${total === 1 ? "" : "s"}`;
+    document.querySelector("[data-activity-empty]")?.toggleAttribute("hidden", total > 0);
+  };
+
   const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
   if (pendingRun) {
     const progressTitle = pendingRun.querySelector("[data-progress-title]");
@@ -1042,6 +1293,7 @@
         if (!response.ok) return false;
         const payload = await response.json();
         payload.events?.forEach(addProgress);
+        updateLiveOperations(payload.operations || []);
         if (!["succeeded", "failed", "cancelled"].includes(payload.status)) return false;
         progressStopped = true;
         source?.close();
@@ -1065,6 +1317,9 @@
       source = new EventSource(pendingRun.dataset.eventsUrl);
       source.addEventListener("progress", (event) => {
         try { addProgress(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
+      });
+      source.addEventListener("operations", (event) => {
+        try { updateLiveOperations(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
       });
       source.addEventListener("complete", (event) => {
         progressStopped = true;
@@ -1148,59 +1403,85 @@
       }
     });
   }
-  const evidenceDialog = document.querySelector("[data-evidence-dialog]");
-  const evidenceToggle = document.querySelector("[data-evidence-open]");
-  const openEvidence = () => {
-    if (!evidenceDialog) return false;
-    if (!evidenceDialog.open) evidenceDialog.showModal();
-    evidenceToggle?.setAttribute("aria-expanded", "true");
-    return true;
+  document.querySelectorAll("[data-operation-open]").forEach(bindOperationDialog);
+  document.querySelectorAll("[data-operation-dialog]").forEach(bindOperationDialogChrome);
+  const tablePlainText = (table) => Array.from(table.rows).map((row) =>
+    Array.from(row.cells).map((cell) => cell.textContent.trim()).join("\t")
+  ).join("\r\n");
+  const tableEmailHtml = (table) => {
+    const emailTable = table.cloneNode(true);
+    const columnCount = Math.max(...Array.from(emailTable.rows).map((row) => row.cells.length));
+    emailTable.removeAttribute("id");
+    emailTable.removeAttribute("class");
+    emailTable.setAttribute("border", "0");
+    emailTable.setAttribute("cellpadding", "0");
+    emailTable.setAttribute("cellspacing", "0");
+    emailTable.setAttribute("width", "100%");
+    emailTable.style.cssText = "width:100%;max-width:720px;border-collapse:collapse;table-layout:fixed;font-family:Arial,sans-serif;font-size:14px;line-height:1.45;color:#172b4d;";
+    Array.from(emailTable.rows).forEach((row) => {
+      Array.from(row.cells).forEach((cell) => {
+        cell.removeAttribute("class");
+        cell.setAttribute("width", `${Math.round(100 / columnCount)}%`);
+        cell.style.cssText = `width:${100 / columnCount}%;padding:8px 10px;border:1px solid #b8c2cc;text-align:left;vertical-align:top;overflow-wrap:anywhere;word-break:break-word;color:#172b4d;${cell.tagName === "TH" ? "background:#edf2f7;font-weight:700;" : "background:#ffffff;"}`;
+        cell.querySelectorAll("div,p,strong,em,code,a,span").forEach((element) => {
+          element.removeAttribute("class");
+          element.style.color = element.tagName === "A" ? "#005ea8" : "#172b4d";
+          if (element.tagName === "P" || element.tagName === "DIV") element.style.margin = "0";
+          if (element.tagName === "CODE") {
+            element.style.fontFamily = "Consolas, monospace";
+            element.style.fontSize = "0.92em";
+            element.style.background = "transparent";
+            element.style.border = "0";
+            element.style.padding = "0";
+          }
+        });
+      });
+    });
+    return emailTable.outerHTML;
   };
-  const focusEvidence = (target, {smooth = true} = {}) => {
-    if (!target || !openEvidence()) return;
-    document.querySelectorAll(".evidence-focus").forEach((item) => item.classList.remove("evidence-focus"));
-    target.classList.add("evidence-focus");
-    const technicalDetails = target.querySelector(".evidence-technical");
-    document.querySelectorAll(".evidence-technical[open]").forEach((item) => {
-      if (item !== technicalDetails) item.open = false;
-    });
-    if (technicalDetails) technicalDetails.open = true;
-    requestAnimationFrame(() => {
-      target.scrollIntoView({behavior: smooth ? "smooth" : "auto", block: "start"});
-      target.focus({preventScroll: true});
-    });
+  const legacyCopyHtml = (html) => {
+    const staging = document.createElement("div");
+    staging.contentEditable = "true";
+    staging.style.cssText = "position:fixed;left:-10000px;top:0;";
+    staging.innerHTML = html;
+    document.body.append(staging);
+    const selection = window.getSelection();
+    const previousRanges = selection ? Array.from({length: selection.rangeCount}, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
+    const range = document.createRange();
+    range.selectNodeContents(staging);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const copied = document.execCommand("copy");
+    staging.remove();
+    selection?.removeAllRanges();
+    previousRanges.forEach((previousRange) => selection?.addRange(previousRange));
+    return copied;
   };
-  evidenceToggle?.addEventListener("click", openEvidence);
-  document.querySelector("[data-evidence-close]")?.addEventListener("click", () => evidenceDialog?.close());
-  evidenceDialog?.addEventListener("close", () => {
-    evidenceToggle?.setAttribute("aria-expanded", "false");
-    evidenceToggle?.focus();
-  });
-  evidenceDialog?.addEventListener("click", (event) => {
-    if (event.target === evidenceDialog) evidenceDialog.close();
-  });
-  document.querySelectorAll('.chat-citations a[href^="#evidence-"]').forEach((link) => {
-    link.addEventListener("click", (event) => {
-      const target = document.getElementById(link.hash.slice(1));
-      if (!target) return;
-      event.preventDefault();
-      focusEvidence(target);
-      window.history.replaceState(null, "", link.hash);
+  document.querySelectorAll("[data-copy-table]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const table = document.getElementById(button.dataset.copyTable);
+      if (!table) return;
+      const html = tableEmailHtml(table);
+      const plainText = tablePlainText(table);
+      try {
+        let copied = false;
+        if (navigator.clipboard?.write && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({
+              "text/html": new Blob([html], {type: "text/html"}),
+              "text/plain": new Blob([plainText], {type: "text/plain"}),
+            })]);
+            copied = true;
+          } catch (_clipboardError) { /* Try the selection-based fallback below. */ }
+        }
+        if (!copied) copied = legacyCopyHtml(html);
+        if (!copied) throw new Error("Clipboard access was unavailable.");
+        showToast("Table copied with email-friendly formatting.", "success", 5000);
+      } catch (_error) {
+        showToast("The table could not be copied. Check this site’s clipboard permission and try again.");
+      }
     });
   });
-  document.querySelectorAll('.answer-evidence a[href^="#evidence-"]').forEach((link) => {
-    link.addEventListener("click", (event) => {
-      const target = document.getElementById(link.hash.slice(1));
-      if (!target) return;
-      event.preventDefault();
-      focusEvidence(target);
-      window.history.replaceState(null, "", link.hash);
-    });
-  });
-  if (window.location.hash.startsWith("#evidence-")) {
-    const target = document.getElementById(window.location.hash.slice(1));
-    if (target) focusEvidence(target, {smooth: false});
-  }
   document.querySelectorAll("[data-csv-table]").forEach((button) => {
     button.addEventListener("click", () => {
       const table = document.getElementById(button.dataset.csvTable);
