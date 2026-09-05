@@ -37,6 +37,7 @@ from podpilot_api.knowledge import (
 )
 from podpilot_api.markdown import (
     render_safe_markdown,
+    render_safe_prose_markdown,
     render_safe_table_markdown,
     split_markdown_tables,
 )
@@ -10459,6 +10460,7 @@ def create_app(
         context_processors=[workspace_navigation_context],
     )
     templates.env.filters["safe_markdown"] = render_safe_markdown
+    templates.env.filters["safe_prose_markdown"] = render_safe_prose_markdown
     templates.env.filters["safe_table_markdown"] = render_safe_table_markdown
     templates.env.filters["est_time"] = _format_est_time
     templates.env.filters["operator_filter_reason"] = _operator_filter_reason

@@ -106,7 +106,11 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
         run.status = 'completed'
         run.briefing_json = json.dumps({
             'summary': 'The **API server is healthy** based on Evidence E1.',
-            'hypotheses': ['1. **Synthetic signal** - verify the simulation label.'],
+            'hypotheses': [
+                '1. **Synthetic signal** - verify the simulation label.\n\n'
+                '| Evidence | Observation |\n|---|---|\n'
+                '| E1 | `restartCount=9` |',
+            ],
             'evidence_ids': ['E1'],
             'next_steps': ['- Confirm the alert rule source.'],
             'limitations': ['Only a bounded snapshot was collected.'],
@@ -135,6 +139,11 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert f'id="evidence-{run_id}-E1"' in page.text
     assert 'class="panel incident-panel"' not in page.text
     assert '>- Confirm' not in page.text
+    ranked_hypotheses = re.search(
+        r'<ol class="incident-ranked-list">(.*?)</ol>', page.text, re.DOTALL,
+    ).group(1)
+    assert '<table>' not in ranked_hypotheses
+    assert '<code>restartCount=9</code>' in ranked_hypotheses
 
     script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
     assert "target.open = true" in script

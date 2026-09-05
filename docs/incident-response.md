@@ -22,8 +22,9 @@ The shared sidebar lists the five most recently updated incidents below the clus
 tree, with links to each case and an indication when more are available on the full
 **Incidents** dashboard. The incident detail page uses a flat tabbed report: Overview
 groups identical source alerts into table rows with occurrence counts, and every
-immutable run has its own Investigation tab. Briefings render as sanitized Markdown,
-while hypotheses, next steps and limitations use compact reading lists. Supporting
+immutable run has its own Investigation tab. Briefings, hypotheses and next steps
+render as sanitized narrative Markdown without table parsing, so pipe-delimited model
+output cannot distort the report layout. Limitations use a compact reading list. Supporting
 evidence links activate the owning run, expand the exact run-scoped evidence row and
 scroll it into view; retained payloads remain collapsed until requested. Refresh
 retrieves worker progress. Continue in Ask

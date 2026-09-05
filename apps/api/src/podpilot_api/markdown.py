@@ -13,6 +13,11 @@ _renderer = MarkdownIt(
     {"breaks": True, "html": False, "linkify": False, "typographer": False},
 ).enable("table")
 
+_prose_renderer = MarkdownIt(
+    "commonmark",
+    {"breaks": True, "html": False, "linkify": False, "typographer": False},
+)
+
 _HTML_BREAK = re.compile(r"<br[ \t]*/?>", re.IGNORECASE)
 _ESCAPED_HTML_BREAK = re.compile(r"&lt;br[ \t]*/?&gt;", re.IGNORECASE)
 _CODE_ONLY_ESCAPED_HTML_BREAK = re.compile(
@@ -41,6 +46,7 @@ def _render_text_with_safe_breaks(_renderer, tokens, index, _options, _env) -> s
 
 
 _renderer.add_render_rule("text", _render_text_with_safe_breaks)
+_prose_renderer.add_render_rule("text", _render_text_with_safe_breaks)
 
 _FENCED_CODE = re.compile(
     r"(?ms)^```(?P<language>json)?[ \t]*\n(?P<body>.*?)\n```[ \t]*$"
@@ -85,6 +91,12 @@ def render_safe_markdown(value: object) -> Markup:
     """Render CommonMark while keeping raw HTML escaped."""
 
     return Markup(_renderer.render(_pretty_json_markdown(str(value or ""))))
+
+
+def render_safe_prose_markdown(value: object) -> Markup:
+    """Render narrative CommonMark without interpreting pipe-delimited text as tables."""
+
+    return Markup(_prose_renderer.render(_pretty_json_markdown(str(value or ""))))
 
 
 def _normalize_table_cell(value: str) -> str:

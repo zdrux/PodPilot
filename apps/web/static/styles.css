@@ -2055,7 +2055,7 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
 .incident-row-label h2, .incident-row-label h3 { margin: 4px 0 7px; color: var(--theme-text); font-size: 15px; line-height: 1.25; }
 .incident-row-label > p:last-child:not(.eyebrow) { margin: 0; color: var(--theme-subtle); font-size: 10px; line-height: 1.5; }
 .incident-row-content { min-width: 0; }
-.incident-markdown { color: var(--theme-muted); font-size: 14px; line-height: 1.72; }
+.incident-markdown { min-width: 0; color: var(--theme-muted); font-size: 14px; line-height: 1.72; overflow-wrap: anywhere; }
 .incident-markdown > :first-child { margin-top: 0; }
 .incident-markdown > :last-child { margin-bottom: 0; }
 .incident-markdown strong { color: var(--theme-text); }

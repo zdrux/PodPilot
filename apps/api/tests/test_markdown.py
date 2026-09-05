@@ -1,8 +1,22 @@
 from podpilot_api.markdown import (
     render_safe_markdown,
+    render_safe_prose_markdown,
     render_safe_table_markdown,
     split_markdown_tables,
 )
+
+
+def test_prose_markdown_does_not_turn_pipe_delimited_evidence_into_a_table() -> None:
+    rendered = str(render_safe_prose_markdown(
+        "**Likely cause**\n\n"
+        "| Evidence | Observation |\n|---|---|\n"
+        "| E1 | `restartCount=9` |"
+    ))
+
+    assert "<table>" not in rendered
+    assert "<strong>Likely cause</strong>" in rendered
+    assert "<code>restartCount=9</code>" in rendered
+    assert "| Evidence | Observation |" in rendered
 
 
 def test_chat_markdown_renders_tables_and_common_prose() -> None:
