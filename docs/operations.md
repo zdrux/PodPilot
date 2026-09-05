@@ -2,7 +2,7 @@
 
 The opt-in incident-response feature, connector credentials, Alertmanager setup,
 single-process worker limits and SNO component packaging are documented in
-[Incident response](incident-response.md). It requires migration `0023_fleet_incidents`
+[Incident response](incident-response.md). It requires migrations through `0024_incident_activity`
 and remains disabled in existing deployment compositions.
 
 Last reviewed: 2026-08-24

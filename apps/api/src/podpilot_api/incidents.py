@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone, timedelta
+from threading import Lock
 from uuid import uuid4
 from urllib.parse import urlsplit
 
@@ -27,6 +28,147 @@ from podpilot_openshift.credentials import KubernetesSecretCredentialStore
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+
+def _json_object(value):
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _activity_result(source, data):
+    """Return a short operator-safe description of retained evidence."""
+
+    if not isinstance(data, dict):
+        return "Evidence retained for review."
+    summary = data.get("summary") or data.get("overview")
+    if isinstance(summary, str) and summary.strip():
+        return re.sub(r"\s+", " ", summary).strip()[:240]
+    alerts = data.get("alerts")
+    if isinstance(alerts, list):
+        return f"Received {len(alerts)} alert signal{'s' if len(alerts) != 1 else ''}."
+    rows = data.get("rows")
+    if isinstance(rows, list):
+        return f"Collected {len(rows)} platform record{'s' if len(rows) != 1 else ''}."
+    changes = data.get("changes")
+    if isinstance(changes, list):
+        return f"Collected {len(changes)} recent deployment change{'s' if len(changes) != 1 else ''}."
+    if "logs" in data:
+        return "Collected a bounded platform log excerpt."
+    if data.get("limitation"):
+        return str(data["limitation"])[:240]
+    return "Evidence retained for review."
+
+
+def _queued_activity():
+    now = utcnow().isoformat()
+    return json.dumps({
+        "version": 1,
+        "phase": "Queued",
+        "current_work": "Waiting for an incident worker",
+        "updated_at": now,
+        "tasks": [{
+            "id": "coordinator",
+            "role": "coordinator",
+            "label": "Incident coordinator",
+            "state": "queued",
+            "work": "Waiting for an incident worker",
+            "queued_at": now,
+            "started_at": None,
+            "ended_at": None,
+            "result": "",
+        }],
+        "events": [],
+    })
+
+
+def _incident_activity_view(incident, run):
+    alerts = list(_json_object(incident.alerts_json).values())
+    alert_names = list(dict.fromkeys(
+        str((alert.get("labels") or {}).get("alertname") or "Unknown alert")
+        for alert in alerts if isinstance(alert, dict)
+    ))[:6]
+    activity = _json_object(run.activity_json) if run else {}
+    tasks = [task for task in activity.get("tasks", []) if isinstance(task, dict)][:24]
+    evidence = []
+    if run:
+        try:
+            parsed_evidence = json.loads(run.evidence_json or "[]")
+            evidence = parsed_evidence if isinstance(parsed_evidence, list) else []
+        except (TypeError, ValueError):
+            evidence = []
+    known_sources = {str(task.get("source", "")) for task in tasks}
+    for item in evidence:
+        source = str(item.get("source") or "")
+        if not source.endswith(" specialist") or source in known_sources:
+            continue
+        tasks.append({
+            "id": f"legacy-{item.get('id', len(tasks) + 1)}",
+            "role": "specialist",
+            "label": source,
+            "source": source,
+            "state": "completed",
+            "work": "Review retained specialist evidence",
+            "started_at": item.get("observed_at"),
+            "ended_at": item.get("observed_at"),
+            "result": _activity_result(source, item.get("data")),
+        })
+    status = run.status if run else "not_started"
+    if not any(task.get("role") == "coordinator" for task in tasks) and run:
+        coordinator_state = {
+            "queued": "queued", "running": "running", "completed": "completed",
+            "partial": "completed", "budget_exhausted": "stopped",
+            "interrupted": "stopped", "failed": "error",
+        }.get(status, "stopped")
+        tasks.insert(0, {
+            "id": "coordinator", "role": "coordinator", "label": "Incident coordinator",
+            "state": coordinator_state,
+            "work": activity.get("current_work") or (
+                "Waiting for an incident worker" if status == "queued" else
+                "Investigation finished" if status in {"completed", "partial"} else
+                "Investigation is not active"
+            ),
+            "started_at": run.created_at.isoformat() if status != "queued" else None,
+            "ended_at": run.completed_at.isoformat() if run.completed_at else None,
+        })
+    specialists = [task for task in tasks if task.get("role") == "specialist"]
+    counts = {
+        "queued": sum(task.get("state") == "queued" for task in specialists),
+        "running": sum(task.get("state") == "running" for task in specialists),
+        "completed": sum(task.get("state") == "completed" for task in specialists),
+        "error": sum(task.get("state") in {"error", "stopped"} for task in specialists),
+    }
+    results = []
+    for item in evidence[-6:]:
+        results.append({
+            "id": str(item.get("id") or ""),
+            "source": str(item.get("source") or "Evidence")[:160],
+            "observed_at": item.get("observed_at"),
+            "summary": _activity_result(item.get("source"), item.get("data")),
+        })
+    return {
+        "incident": incident,
+        "run": run,
+        "status": status,
+        "active": status in {"queued", "running"},
+        "alert_names": alert_names,
+        "main_alert": alert_names[0] if alert_names else incident.title,
+        "phase": str(activity.get("phase") or status.replace("_", " ")).capitalize(),
+        "current_work": str(activity.get("current_work") or (
+            "Waiting for an incident worker" if status == "queued" else
+            "Investigation finished; open the case for the full assessment."
+        ))[:300],
+        "updated_at": activity.get("updated_at") or (
+            run.completed_at.isoformat() if run and run.completed_at else incident.updated_at.isoformat()
+        ),
+        "tasks": tasks,
+        "specialists": specialists,
+        "counts": counts,
+        "results": results,
+        "evidence_count": len(evidence),
+    }
 
 
 class ConnectionInput(BaseModel):
@@ -156,7 +298,8 @@ class IncidentService:
             incident.updated_at = utcnow()
             if create:
                 db.add(IncidentRun(id=str(uuid4()), incident_id=incident.id, actor=f"webhook:{source.id}",
-                    alert_snapshot_json=incident.alerts_json, status="queued"))
+                    alert_snapshot_json=incident.alerts_json, status="queued",
+                    activity_json=_queued_activity()))
             self.audit(db, f"webhook:{source.id}", "received", incident_id=incident.id, created=create,
                        alert_count=len(alerts), truncated=webhook.truncatedAlerts)
             db.commit()
@@ -279,9 +422,100 @@ class IncidentService:
         secrets = []
         reader = None
         specialist_reports = 0
+        activity_guard = Lock()
+        activity = {
+            "version": 1,
+            "phase": "Starting",
+            "current_work": "Preparing the investigation",
+            "updated_at": utcnow().isoformat(),
+            "tasks": [{
+                "id": "coordinator", "role": "coordinator",
+                "label": "Incident coordinator", "state": "running",
+                "work": "Preparing the investigation", "queued_at": None,
+                "started_at": utcnow().isoformat(), "ended_at": None, "result": "",
+            }],
+            "events": [],
+        }
         briefing = {"summary": "Investigation could not establish a cause.", "hypotheses": [],
                     "next_steps": ["Review available evidence and restore missing investigation access."], "evidence_ids": []}
         status = "completed"
+
+        def write_activity_locked():
+            activity["updated_at"] = utcnow().isoformat()
+            activity["tasks"] = activity.get("tasks", [])[:24]
+            activity["events"] = activity.get("events", [])[-12:]
+            with Session(engine) as activity_db:
+                activity_db.execute(update(IncidentRun).where(IncidentRun.id == run_id).values(
+                    activity_json=json.dumps(activity)))
+                activity_db.commit()
+
+        def coordinator_activity(work, *, phase=None, state=None, result=None):
+            with activity_guard:
+                coordinator = activity["tasks"][0]
+                changed = coordinator.get("work") != work
+                coordinator["work"] = str(work)[:300]
+                activity["current_work"] = str(work)[:300]
+                if phase:
+                    activity["phase"] = str(phase)[:80]
+                if state:
+                    coordinator["state"] = state
+                    if state in {"completed", "error", "stopped"}:
+                        coordinator["ended_at"] = utcnow().isoformat()
+                if result is not None:
+                    coordinator["result"] = str(result)[:240]
+                if changed:
+                    activity["events"].append({
+                        "at": utcnow().isoformat(), "label": "Coordinator",
+                        "state": state or "running", "summary": str(work)[:240],
+                    })
+                write_activity_locked()
+
+        def queue_specialist(label, work, source_item):
+            with activity_guard:
+                task_id = f"specialist-{len([t for t in activity['tasks'] if t.get('role') == 'specialist']) + 1}"
+                activity["tasks"].append({
+                    "id": task_id, "role": "specialist", "label": f"{label} specialist",
+                    "source": f"{label} specialist", "state": "queued",
+                    "work": str(work)[:300], "source_evidence_id": source_item.get("id"),
+                    "queued_at": utcnow().isoformat(), "started_at": None,
+                    "ended_at": None, "result": "",
+                })
+                activity["events"].append({
+                    "at": utcnow().isoformat(), "label": f"{label} specialist",
+                    "state": "queued", "summary": str(work)[:240],
+                })
+                write_activity_locked()
+                return task_id
+
+        def update_specialist(task_id, state, *, work=None, result=None):
+            with activity_guard:
+                task = next((item for item in activity["tasks"] if item.get("id") == task_id), None)
+                if not task:
+                    return
+                task["state"] = state
+                if work:
+                    task["work"] = str(work)[:300]
+                if state == "running" and not task.get("started_at"):
+                    task["started_at"] = utcnow().isoformat()
+                if state in {"completed", "error", "stopped"}:
+                    task["ended_at"] = utcnow().isoformat()
+                if result is not None:
+                    task["result"] = str(result)[:240]
+                activity["events"].append({
+                    "at": utcnow().isoformat(), "label": task.get("label", "Specialist"),
+                    "state": state, "summary": str(result or task.get("work") or "")[:240],
+                })
+                write_activity_locked()
+
+        def evidence_activity(item):
+            with activity_guard:
+                activity["events"].append({
+                    "at": item["observed_at"], "label": item["source"],
+                    "state": "completed", "summary": _activity_result(item["source"], item.get("data")),
+                    "evidence_id": item["id"],
+                })
+                write_activity_locked()
+
         def record(source, data, *, coordinate=True):
             item = clean_evidence({"id": f"E{len(evidence)+1}", "source": source,
                 "observed_at": utcnow().isoformat(), "cluster_id": cluster.id, "data": data}, secrets)
@@ -300,6 +534,7 @@ class IncidentService:
             with Session(engine) as progress_db:
                 progress_db.execute(update(IncidentRun).where(IncidentRun.id == run_id).values(evidence_json=json.dumps(evidence)))
                 progress_db.commit()
+            evidence_activity(item)
             return item
 
         def summarize_specialist(label, source_item, objective):
@@ -308,6 +543,8 @@ class IncidentService:
                 return None
             if time.monotonic()-started > run_timeout:
                 return None
+            task_id = queue_specialist(label, objective, source_item)
+            update_specialist(task_id, "running")
             try:
                 decision = self.provider.incident_step(deadline_profile(), api_key, {
                     "objective": objective,
@@ -316,6 +553,7 @@ class IncidentService:
                     "specialist": label})
                 if decision.collect:
                     limitations.append(f"{label} specialist requested unsupported additional collection.")
+                    update_specialist(task_id, "error", result="Requested unsupported additional collection.")
                     return None
                 report = decision.model_dump(exclude={"collect"})
                 valid = {source_item["id"]}
@@ -323,14 +561,19 @@ class IncidentService:
                 if not report["evidence_ids"]:
                     limitations.append(f"{label} specialist returned no valid source citation.")
                 specialist_reports += 1
+                update_specialist(task_id, "completed", result=_activity_result(label, report))
                 return record(f"{label} specialist", report)
             except Exception:
                 limitations.append(f"{label} specialist analysis unavailable; bounded source evidence is retained.")
+                update_specialist(task_id, "error", result="Analysis unavailable; source evidence was retained.")
                 return None
 
-        def analyze_log(source_item):
+        def analyze_log(work):
+            source_item, task_id = work
+            update_specialist(task_id, "running")
             analyzer = getattr(self.provider, "analyze_logs", None)
             if not callable(analyzer):
+                update_specialist(task_id, "error", result=f"Analyzer unavailable for {source_item['id']}.")
                 return None, f"Pod log specialist is unavailable for {source_item['id']}."
             data = source_item["data"]
             try:
@@ -341,8 +584,10 @@ class IncidentService:
                         "pod": data.get("pod"), "container": data.get("container"),
                         "excerpt": data.get("logs", "")}],
                 })
+                update_specialist(task_id, "completed", result=_activity_result("Pod log specialist", analysis.model_dump()))
                 return ({**analysis.model_dump(), "source_evidence_ids": [source_item["id"]]}, None)
             except Exception:
+                update_specialist(task_id, "error", result=f"Analysis failed for {source_item['id']}; logs retained.")
                 return None, f"Pod log specialist could not analyze {source_item['id']}; raw bounded logs are retained."
         try:
             with Session(engine) as db:
@@ -358,6 +603,7 @@ class IncidentService:
                 run_timeout = 240 if synthetic else self.settings.incident_run_timeout_seconds
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
+            coordinator_activity("Validating cluster access and investigation policy", phase="Starting")
             token = self.credentials().get(source.credential_key)
             secrets.append(token)
             profile, api_key = self.model_context(engine)
@@ -382,6 +628,7 @@ class IncidentService:
                 limitations.append("Monitoring endpoint is not configured; platform metric trends are unavailable.")
             if not cluster.tls_verify and not cluster.is_system:
                 limitations.append("Kubernetes TLS certificate and hostname verification is disabled for this cluster.")
+            coordinator_activity("Reading the alert and current ClusterOperator health", phase="Initial assessment")
             record("Alertmanager notification", {"alerts": [{
                 "status": a["status"], "starts_at": a["startsAt"],
                 "labels": {k:v[:500] for k,v in a["labels"].items() if k in {
@@ -396,6 +643,8 @@ class IncidentService:
             # Preserve recent changes before model-guided investigation; no arbitrary repository traversal.
             changes = []
             onset = min(datetime.fromisoformat(a["startsAt"]) for a in alert_snapshot.values())
+            if connectors:
+                coordinator_activity("Correlating recent platform deployments and repository metadata", phase="Change correlation")
             for connector in connectors:
                 if time.monotonic()-started > self.settings.incident_connector_timeout_seconds:
                     limitations.append("Connector collection time budget reached.")
@@ -461,6 +710,7 @@ class IncidentService:
                     if other:
                         other.close()
             if not profile or not api_key:
+                coordinator_activity("Collecting deterministic platform snapshots", phase="Evidence collection")
                 limitations.append("No usable model profile; deterministic platform snapshots only.")
                 for key in ("version", "nodes", "machine-pools"):
                     try:
@@ -478,6 +728,10 @@ class IncidentService:
                         limitations.append("Investigation time budget reached.")
                         status = "budget_exhausted"
                         break
+                    coordinator_activity(
+                        f"Planning investigation round {step + 1} of {max_rounds}",
+                        phase="Investigation planning",
+                    )
                     decision = self.provider.incident_step(deadline_profile(), api_key, {
                         "objective": (
                             "This signal is labelled as a synthetic webhook test. Verify basic platform access from the operator snapshot and at most version/node snapshots, then finish with a concise test result. The test signal is not evidence of an etcd outage. Report any independently observed health issues separately; do not pursue an RCA for the synthetic signal."
@@ -491,6 +745,7 @@ class IncidentService:
                         "remaining_rounds": max_rounds-1-step,
                         "specialist_reports": specialist_reports})
                     if not decision.collect:
+                        coordinator_activity("Validating citations and preparing the operator briefing", phase="Final assessment")
                         briefing = clean_evidence(decision.model_dump(exclude={"collect"}), secrets)
                         valid_ids = {e["id"] for e in evidence}
                         if not decision.evidence_ids or set(decision.evidence_ids)-valid_ids:
@@ -510,9 +765,10 @@ class IncidentService:
                         if key not in available:
                             limitations.append("Model requested an unavailable collector; request rejected.")
                             continue
-                        available.pop(key)
+                        collector_label = available.pop(key)
                         consumed.add(key)
                         try:
+                            coordinator_activity(f"Collecting {collector_label}", phase="Evidence collection")
                             source_item = record(key, reader.collect(key), coordinate=not key.startswith("logs:"))
                             if key.startswith("logs:"):
                                 log_items.append(source_item)
@@ -522,9 +778,19 @@ class IncidentService:
                     slots = max(0, self.settings.incident_max_specialist_reports-specialist_reports)
                     selected_logs = log_items[:slots]
                     if selected_logs:
+                        specialist_work = []
+                        for source_item in selected_logs:
+                            data = source_item.get("data") or {}
+                            target = "/".join(filter(None, [data.get("namespace"), data.get("pod"), data.get("container")]))
+                            work = f"Analyze bounded platform logs{f' for {target}' if target else ''}"
+                            specialist_work.append((source_item, queue_specialist("Pod log", work, source_item)))
+                        coordinator_activity(
+                            f"Waiting for {len(selected_logs)} Pod log specialist{'s' if len(selected_logs) != 1 else ''}",
+                            phase="Specialist analysis",
+                        )
                         with ThreadPoolExecutor(max_workers=min(3, len(selected_logs)),
                                 thread_name_prefix="incident-log-specialist") as pool:
-                            analyses = list(pool.map(analyze_log, selected_logs))
+                            analyses = list(pool.map(analyze_log, specialist_work))
                         for source_item, (analysis, error) in zip(selected_logs, analyses):
                             if analysis:
                                 specialist_reports += 1
@@ -543,9 +809,16 @@ class IncidentService:
                 reader.close()
         briefing["limitations"] = list(dict.fromkeys(briefing.get("limitations", []) + limitations))
         briefing = clean_evidence(briefing, secrets)
+        coordinator_state = "completed" if status in {"completed", "partial"} else "error" if status == "failed" else "stopped"
+        coordinator_activity(
+            "Investigation finished; open the case for the full assessment.",
+            phase=status.replace("_", " ").capitalize(), state=coordinator_state,
+            result=f"Retained {len(evidence)} evidence item{'s' if len(evidence) != 1 else ''}; status {status.replace('_', ' ')}.",
+        )
         with Session(engine) as db:
             db.execute(update(IncidentRun).where(IncidentRun.id == run_id).values(status=status,
-                evidence_json=json.dumps(evidence), briefing_json=json.dumps(briefing), completed_at=utcnow()))
+                evidence_json=json.dumps(evidence), briefing_json=json.dumps(briefing),
+                activity_json=json.dumps(activity), completed_at=utcnow()))
             self.audit(db, "system:incident-worker", "run_finished", status, run_id=run_id, evidence_count=len(evidence))
             db.commit()
 
@@ -553,8 +826,20 @@ class IncidentService:
         engine = app.state.engine
         # A interrupted run retains evidence and is explicitly partial; never silently re-run it.
         with Session(engine) as db:
-            db.execute(update(IncidentRun).where(IncidentRun.status == "running").values(status="interrupted",
-                briefing_json=json.dumps({"summary": "Worker restarted during investigation. Retained evidence is available; an operator can rerun."})))
+            interrupted_at = utcnow().isoformat()
+            for run in db.scalars(select(IncidentRun).where(IncidentRun.status == "running")):
+                activity = _json_object(run.activity_json)
+                activity["phase"] = "Interrupted"
+                activity["current_work"] = "Worker restarted; retained evidence is available"
+                activity["updated_at"] = interrupted_at
+                for task in activity.get("tasks", []):
+                    if task.get("state") in {"queued", "running"}:
+                        task["state"] = "stopped"
+                        task["ended_at"] = interrupted_at
+                        task["result"] = "Stopped when the incident worker restarted."
+                run.status = "interrupted"
+                run.activity_json = json.dumps(activity)
+                run.briefing_json = json.dumps({"summary": "Worker restarted during investigation. Retained evidence is available; an operator can rerun."})
             db.commit()
         claim_lock = asyncio.Lock()
         async def slot():
@@ -616,7 +901,19 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             rows = list(db.scalars(query.limit(100)))
             clusters = {c.id: c.name for c in db.scalars(select(Cluster).where(Cluster.visibility == "shared"))}
             runs = {r.id: db.scalar(select(IncidentRun).where(IncidentRun.incident_id == r.id).order_by(IncidentRun.created_at.desc()).limit(1)) for r in rows}
-        return page(request, user, "incidents.html", {"incidents": rows, "clusters": clusters, "runs": runs})
+        views = [_incident_activity_view(row, runs[row.id]) for row in rows]
+        active = [item for item in views if item["active"]]
+        history = [item for item in views if not item["active"]]
+        return page(request, user, "incidents.html", {
+            "incidents": rows, "clusters": clusters, "runs": runs,
+            "active_incidents": active, "historical_incidents": history,
+            "dashboard_stats": {
+                "active": len(active),
+                "total": len(views),
+                "firing": sum(row.alert_state == "firing" for row in rows),
+                "specialists": sum(item["counts"]["running"] for item in active),
+            },
+        })
 
     @app.get("/incidents/{incident_id}")
     async def detail(incident_id: str, request: Request, user=Depends(current_user)):
@@ -686,7 +983,8 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 if db.scalar(select(func.count()).select_from(IncidentRun).where(IncidentRun.status.in_(["queued", "running"]))) >= 100:
                     raise HTTPException(503, "Incident queue is full.")
                 db.add(IncidentRun(id=str(uuid4()), incident_id=incident.id, actor=user.username,
-                    alert_snapshot_json=incident.alerts_json, status="queued"))
+                    alert_snapshot_json=incident.alerts_json, status="queued",
+                    activity_json=_queued_activity()))
                 service.audit(db, user.username, "rerun", incident_id=incident.id)
                 db.commit()
         return {"ok": True}

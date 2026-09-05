@@ -45,5 +45,6 @@ class IncidentRun(Base):
     alert_snapshot_json: Mapped[str] = mapped_column(Text)
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     briefing_json: Mapped[str] = mapped_column(Text, default="{}")
+    activity_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

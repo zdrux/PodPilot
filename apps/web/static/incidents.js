@@ -64,6 +64,50 @@
     else if (initialTarget?.matches('details')) revealEvidence(initialTarget, false);
   }
 
+  let incidentBoard = document.querySelector('[data-incident-dashboard]');
+  if (incidentBoard) {
+    let timer;
+    function openIds(root, attribute) {
+      return new Set(Array.from(root.querySelectorAll(`details[${attribute}][open]`))
+        .map(item => item.getAttribute(attribute)));
+    }
+    function restoreOpen(root, attribute, values) {
+      root.querySelectorAll(`details[${attribute}]`).forEach(item => {
+        item.open = values.has(item.getAttribute(attribute));
+      });
+    }
+    async function refreshActivity() {
+      if (incidentBoard.dataset.activeIncidents === '0') return;
+      if (document.hidden) {
+        timer = window.setTimeout(refreshActivity, 4000);
+        return;
+      }
+      const expandedIncidents = openIds(incidentBoard, 'data-incident-activity-id');
+      const expandedSpecialists = openIds(incidentBoard, 'data-specialist-activity-id');
+      try {
+        const response = await fetch(window.location.href, {
+          headers: {'X-PodPilot-Activity-Refresh': '1'}, cache: 'no-store'
+        });
+        if (!response.ok) throw new Error('Incident activity refresh failed.');
+        const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
+        const replacement = documentCopy.querySelector('[data-incident-dashboard]');
+        if (replacement) {
+          incidentBoard.replaceWith(replacement);
+          incidentBoard = replacement;
+          restoreOpen(incidentBoard, 'data-incident-activity-id', expandedIncidents);
+          restoreOpen(incidentBoard, 'data-specialist-activity-id', expandedSpecialists);
+        }
+      } catch (_error) {
+        // The visible data remains usable; the next bounded poll retries automatically.
+      }
+      if (incidentBoard.dataset.activeIncidents !== '0') {
+        timer = window.setTimeout(refreshActivity, 4000);
+      }
+    }
+    timer = window.setTimeout(refreshActivity, 4000);
+    window.addEventListener('pagehide', () => window.clearTimeout(timer), {once: true});
+  }
+
   const form = document.getElementById('incident-connection-form');
   if (!form) return;
   function visibility() {

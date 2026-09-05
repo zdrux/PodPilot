@@ -8,6 +8,14 @@ collectors, Argo CD/GitHub metadata connectors and a model-selected read loop. A
 remains delegated. See [incident response](incident-response.md) for the contract,
 single-process constraints, evidence boundary and configuration.
 
+Each incident run persists a separate bounded operator-facing activity journal. The
+worker updates coordinator phase, collector completion, and specialist queue/start/end
+transitions independently of the final briefing. The fleet dashboard derives live and
+historical tables from run state and refreshes only its incident-board fragment while
+work remains active. This telemetry contains concise server-authored workflow metadata
+and redacted result summaries; it does not expose chain-of-thought or duplicate raw
+evidence payloads.
+
 Incident orchestration separates the durable evidence ledger from the coordinator's
 model context. Bounded connector results and Pod logs remain in the ledger, while
 isolated Argo CD, GitHub and Pod-log specialist calls return compact cited reports to

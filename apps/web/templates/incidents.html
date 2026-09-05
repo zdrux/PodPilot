@@ -1,12 +1,84 @@
 {% extends "base.html" %}
 {% block title %}Incidents · PodPilot{% endblock %}
+{% macro state_mark(state) -%}<span class="incident-activity-mark incident-activity-mark-{{ state }}" aria-label="{{ state | replace('_', ' ') }}"></span>{%- endmacro %}
+{% macro incident_table(items, active=false) %}
+<div class="incident-board-table-wrap">
+  <table class="incident-board-table">
+    <thead><tr><th>Investigation</th><th>Cluster</th><th>State</th><th>Specialists</th><th>Last activity</th></tr></thead>
+    {% for item in items %}
+    <tbody class="incident-board-item{% if active %} incident-board-item-active{% endif %}">
+      <tr><td colspan="5">
+        <details class="incident-activity-row" data-incident-activity-id="{{ item.incident.id }}">
+          <summary>
+            <span class="incident-row-disclosure" aria-hidden="true">⌄</span>
+            <span class="incident-row-primary"><strong>{{ item.incident.title }}</strong><small>Critical · {{ item.incident.created_at | est_time }} · {{ item.alert_names | length }} signal{% if item.alert_names | length != 1 %}s{% endif %}</small></span>
+            <span class="incident-row-cluster">{{ clusters.get(item.incident.cluster_id, item.incident.cluster_id) }}</span>
+            <span class="incident-row-state">{{ state_mark(item.status) }}<span><strong>{{ item.status | replace('_', ' ') | capitalize }}</strong><small>Alert {{ item.incident.alert_state }}</small></span></span>
+            <span class="incident-row-specialists"><strong>{{ item.counts.running }} active</strong><small>{{ item.counts.queued }} queued · {{ item.counts.completed }} done{% if item.counts.error %} · {{ item.counts.error }} error{% endif %}</small></span>
+            <time>{{ item.updated_at | est_time }}</time>
+          </summary>
+          <div class="incident-activity-drawer">
+            <div class="incident-activity-lead">
+              <div><p class="eyebrow">{{ item.phase }}</p><h3>{{ item.current_work }}</h3><div class="incident-signal-list">{% for alert in item.alert_names %}<span>{{ alert }}</span>{% endfor %}</div></div>
+              <dl class="incident-activity-totals">
+                <div><dt>Evidence</dt><dd>{{ item.evidence_count }}</dd></div>
+                <div><dt>Working</dt><dd>{{ item.counts.running }}</dd></div>
+                <div><dt>Pending</dt><dd>{{ item.counts.queued }}</dd></div>
+                <div><dt>Finished</dt><dd>{{ item.counts.completed }}</dd></div>
+              </dl>
+            </div>
+            <div class="incident-activity-columns">
+              <section class="incident-activity-section">
+                <div class="incident-activity-section-heading"><div><p class="eyebrow">Workstream</p><h4>Coordinator and specialists</h4></div><span>{{ item.tasks | length }} task{% if item.tasks | length != 1 %}s{% endif %}</span></div>
+                <div class="incident-task-list">
+                  {% for task in item.tasks %}
+                  <details class="incident-specialist incident-specialist-{{ task.state }}" data-specialist-activity-id="{{ item.incident.id }}-{{ task.id }}">
+                    <summary>{{ state_mark(task.state) }}<span class="incident-specialist-copy"><strong>{{ task.label }}</strong><small>{{ task.work }}</small></span><span class="incident-specialist-state">{{ task.state | replace('_', ' ') }}</span><span class="incident-specialist-arrow" aria-hidden="true">⌄</span></summary>
+                    <div class="incident-specialist-detail">
+                      <dl><div><dt>Started</dt><dd>{{ task.started_at | est_time if task.started_at else 'Not started' }}</dd></div><div><dt>Finished</dt><dd>{{ task.ended_at | est_time if task.ended_at else 'In progress' if task.state == 'running' else '—' }}</dd></div><div><dt>Activity</dt><dd>{{ task.work }}</dd></div></dl>
+                      {% if task.result %}<p><strong>Result</strong>{{ task.result }}</p>{% endif %}
+                    </div>
+                  </details>
+                  {% else %}<p class="incident-activity-empty">No specialist work has been scheduled.</p>{% endfor %}
+                </div>
+              </section>
+              <section class="incident-activity-section">
+                <div class="incident-activity-section-heading"><div><p class="eyebrow">Latest evidence</p><h4>Results collected</h4></div><span>{{ item.evidence_count }} total</span></div>
+                <ol class="incident-result-list">
+                  {% for result in item.results | reverse %}<li><span class="incident-result-id">{{ result.id }}</span><div><strong>{{ result.source }}</strong><p>{{ result.summary }}</p></div><time>{{ result.observed_at | est_time }}</time></li>
+                  {% else %}<li class="incident-activity-empty">No evidence has been retained yet.</li>{% endfor %}
+                </ol>
+              </section>
+            </div>
+            <a class="incident-open-case" href="/incidents/{{ item.incident.id }}">Open full investigation <span aria-hidden="true">→</span></a>
+          </div>
+        </details>
+      </td></tr>
+    </tbody>
+    {% endfor %}
+  </table>
+</div>
+{% endmacro %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Fleet operations · PoC</p><h1>Incidents</h1><p class="subtitle">Critical OpenShift platform alerts and their investigations.</p></div><a class="button" href="/incidents">Refresh</a></header>
-<section class="panel incident-panel">
-<form method="get" class="settings-form"><label>Cluster<select name="cluster"><option value="">All clusters</option>{% for id, name in clusters.items() %}<option value="{{ id }}" {% if request.query_params.get('cluster') == id %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label><button class="button" type="submit">Filter</button></form>
-<div class="incident-table-wrap"><table><thead><tr><th>Incident</th><th>Cluster</th><th>Alerts</th><th>Investigation</th><th>Last notification</th></tr></thead><tbody>
-{% for incident in incidents %}<tr><td><a href="/incidents/{{ incident.id }}"><strong>{{ incident.title }}</strong></a><small class="incident-muted">Critical · {{ incident.created_at | est_time }}</small></td><td>{{ clusters.get(incident.cluster_id, incident.cluster_id) }}</td><td><span class="tag">{{ incident.alert_state }}</span></td><td>{{ runs[incident.id].status if runs[incident.id] else 'Not started' }}</td><td>{{ incident.updated_at | est_time }}</td></tr>
-{% else %}<tr><td colspan="5"><h2>No incidents yet</h2><p>Admitted critical platform alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</td></tr>{% endfor %}
-</tbody></table></div><p class="incident-muted">Showing up to 100 most recently updated incidents. Alert resolution does not confirm a root cause.</p>
+<header class="topbar incident-dashboard-header"><div><p class="eyebrow">Fleet operations · PoC</p><h1>Incidents</h1><p class="subtitle">Critical OpenShift platform alerts and live investigation activity.</p></div><a class="button" href="/incidents">Refresh</a></header>
+<section class="incident-dashboard-content" data-incident-dashboard data-active-incidents="{{ active_incidents | length }}">
+  <div class="incident-dashboard-overview">
+    <dl class="incident-dashboard-stats"><div><dt>Active</dt><dd>{{ dashboard_stats.active }}</dd><small>queued or running</small></div><div><dt>Specialists</dt><dd>{{ dashboard_stats.specialists }}</dd><small>working now</small></div><div><dt>Firing alerts</dt><dd>{{ dashboard_stats.firing }}</dd><small>awaiting resolution</small></div><div><dt>Fleet cases</dt><dd>{{ dashboard_stats.total }}</dd><small>in current view</small></div></dl>
+    <form method="get" class="incident-dashboard-filter"><label>Cluster<select name="cluster"><option value="">All clusters</option>{% for id, name in clusters.items() %}<option value="{{ id }}" {% if request.query_params.get('cluster') == id %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label><button class="button" type="submit">Apply</button></form>
+  </div>
+  {% if active_incidents %}
+  <section class="incident-board incident-board-live">
+    <header class="incident-board-heading"><div><p class="eyebrow"><span class="incident-live-pulse"></span> Live response</p><h2>Active investigations</h2><p>Coordinator and specialist activity refreshes automatically.</p></div><span class="incident-live-label">Live · 4 sec</span></header>
+    {{ incident_table(active_incidents, true) }}
+  </section>
+  {% endif %}
+  <section class="incident-board incident-board-history">
+    <header class="incident-board-heading"><div><p class="eyebrow">Fleet history</p><h2>{% if active_incidents %}All other investigations{% else %}Investigations{% endif %}</h2><p>Expand a case for its latest evidence and completed specialist work.</p></div><span>{{ historical_incidents | length }} case{% if historical_incidents | length != 1 %}s{% endif %}</span></header>
+    {% if historical_incidents %}{{ incident_table(historical_incidents) }}
+    {% elif not active_incidents %}<div class="incident-dashboard-empty"><h3>No incidents yet</h3><p>Admitted critical platform alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</div>
+    {% else %}<p class="incident-dashboard-empty">Completed, partial, and stopped investigations will move here automatically.</p>{% endif %}
+  </section>
+  <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>
 </section>
+<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-board-3" defer></script>
 {% endblock %}

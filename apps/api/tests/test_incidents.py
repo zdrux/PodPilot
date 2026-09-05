@@ -150,6 +150,65 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert "target.scrollIntoView" in script
 
 
+def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
+    sid = source(client)
+    active_id = send(client, sid, notification()).json()['incident_id']
+    historical_payload = notification(starts='2026-09-05T13:00:00Z')
+    historical_payload['groupKey'] = 'cluster/historical'
+    historical_payload['alerts'][0]['fingerprint'] = 'historical'
+    historical_id = send(client, sid, historical_payload).json()['incident_id']
+    with Session(client.app.state.engine) as db:
+        active_run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == active_id))
+        active_run.status = 'running'
+        active_run.evidence_json = json.dumps([{
+            'id': 'E1', 'source': 'operators', 'observed_at': '2026-09-05T12:01:00Z',
+            'data': {'rows': [{'name': 'kube-apiserver'}]},
+        }])
+        active_run.activity_json = json.dumps({
+            'phase': 'Specialist analysis', 'current_work': 'Waiting for platform log specialists',
+            'updated_at': '2026-09-05T12:02:00Z', 'tasks': [
+                {'id': 'coordinator', 'role': 'coordinator', 'label': 'Incident coordinator',
+                 'state': 'running', 'work': 'Correlating current evidence',
+                 'started_at': '2026-09-05T12:00:01Z', 'ended_at': None, 'result': ''},
+                {'id': 's1', 'role': 'specialist', 'label': 'Pod log specialist',
+                 'state': 'running', 'work': 'Analyzing kube-apiserver logs',
+                 'started_at': '2026-09-05T12:01:00Z', 'ended_at': None, 'result': ''},
+                {'id': 's2', 'role': 'specialist', 'label': 'Argo CD specialist',
+                 'state': 'queued', 'work': 'Reviewing platform deployment history',
+                 'started_at': None, 'ended_at': None, 'result': ''},
+                {'id': 's3', 'role': 'specialist', 'label': 'GitHub specialist',
+                 'state': 'completed', 'work': 'Reviewing revision metadata',
+                 'started_at': '2026-09-05T12:00:10Z', 'ended_at': '2026-09-05T12:00:20Z',
+                 'result': 'No related platform PR was found.'},
+                {'id': 's4', 'role': 'specialist', 'label': 'Route specialist',
+                 'state': 'error', 'work': 'Checking route state',
+                 'started_at': '2026-09-05T12:00:10Z', 'ended_at': '2026-09-05T12:00:15Z',
+                 'result': '<script>unsafe</script>'},
+            ],
+        })
+        historical_run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == historical_id))
+        historical_run.status = 'completed'
+        historical_run.completed_at = datetime(2026, 9, 5, 13, 3, tzinfo=timezone.utc)
+        db.commit()
+
+    page = client.get('/incidents', headers={'x-forwarded-user': 'sre'})
+
+    assert page.status_code == 200
+    assert 'data-active-incidents="1"' in page.text
+    assert page.text.index('Active investigations') < page.text.index('All other investigations')
+    dashboard = page.text[page.text.index('data-incident-dashboard'):]
+    assert dashboard.index(active_id) < dashboard.index(historical_id)
+    assert 'Waiting for platform log specialists' in page.text
+    assert '1 active' in page.text and '1 queued · 1 done · 1 error' in page.text
+    for state in ('running', 'queued', 'completed', 'error'):
+        assert f'incident-activity-mark-{state}' in page.text
+    assert 'Analyzing kube-apiserver logs' in page.text
+    assert 'No related platform PR was found.' in page.text
+    assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
+    assert '<script>unsafe</script>' not in page.text
+    assert 'incident-live-board-3' in page.text
+
+
 def test_connections_secret_isolation_and_access(client):
     sid = source(client)
     with Session(client.app.state.engine) as db:
@@ -242,6 +301,12 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
         retained=json.loads(run.evidence_json)
         assert any(e['source']=='logs:exact' for e in retained)
         assert run.status=='completed'
+        activity=json.loads(run.activity_json)
+        specialist=next(item for item in activity['tasks'] if item.get('role')=='specialist')
+        assert specialist['state']=='completed'
+        assert specialist['started_at'] and specialist['ended_at']
+        assert 'Analyze bounded platform logs' in specialist['work']
+        assert specialist['result']=='No meaningful anomaly identified.'
 
 
 def test_connector_specialist_isolated_from_coordinator_context(client):

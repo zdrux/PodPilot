@@ -20,7 +20,12 @@ occurrence do not reopen it. Manual reruns preserve previous run snapshots.
 
 The shared sidebar lists the five most recently updated incidents below the cluster
 tree, with links to each case and an indication when more are available on the full
-**Incidents** dashboard. The incident detail page uses a flat tabbed report: Overview
+**Incidents** dashboard. The dashboard pins queued and running investigations in a
+separate live table above fleet history. Rows expand in place to show the current
+coordinator phase, retained evidence results, specialist counts, and specialist
+start/end times, work descriptions, results and queued/running/completed/error state.
+While work is active, the board refreshes its content every four seconds and preserves
+expanded rows. The incident detail page uses a flat tabbed report: Overview
 groups identical source alerts into table rows with occurrence counts, and every
 immutable run has its own Investigation tab. Briefings, hypotheses and next steps
 render as sanitized narrative Markdown without table parsing, so pipe-delimited model
@@ -33,8 +38,8 @@ requires the operator's own delegated sign-in before additional reads.
 
 ## Configuration
 
-Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migration
-`0023_fleet_incidents`. The default is false. Connectors configuration requires
+Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
+`0024_incident_activity`. The default is false. Connectors configuration requires
 configuration-administrator access as well as an SRE role.
 
 Under Connectors, add a **Cluster investigation + Alertmanager** connection for
@@ -180,6 +185,12 @@ observation time. Connector save/test, webhook acceptance, rerun, handoff and ru
 completion write metadata-only audit events. Connector HTTP requests use HTTPS,
 bounded GETs and no redirects. Existing explicitly accepted per-cluster TLS bypass
 is honored and displayed; GitHub/model TLS is not bypassed by this feature.
+
+Each run also retains a bounded activity journal with at most 24 coordinator/specialist
+tasks and 12 recent transitions. Entries contain server-authored task labels, state,
+timestamps, bounded work descriptions, evidence IDs and short redacted results. Raw
+logs, connector payloads, prompts, credentials and model reasoning remain in their
+existing evidence or provider boundaries and are not copied into activity telemetry.
 
 ## Packaging, operations and limits
 
