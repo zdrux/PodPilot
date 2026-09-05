@@ -32,14 +32,15 @@ finished in about 11 minutes with three completed investigations and one correct
 partial result due to invalid final citations. SNO has no Argo CD Application CRD or
 corporate GitHub connector, so those specialists remain model-free tested. The shared
 sidebar now retains active Ask sessions on the incident configuration pages, lists the
-ten most recently updated incidents with a link to the full fleet view, and nests the
+five most recently updated incidents below Clusters with a link to the full fleet view, and nests the
 connector and webhook pages under **Connections & webhooks**. Cluster Management remains
-its own administration entry rather than a duplicate configuration tab.
+its own administration entry rather than a duplicate configuration tab. The divided
+Manage section and all connector/webhook navigation remain configuration-admin-only.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:40c4f78ed1a1435f213b3f0b3a21aad1e64ad6228fc79f76e6d86fd223fd75be`
+`sha256:a6128c4bb3d926d7be8b0a31cfa44aabf4d659cf6fc56becff40236d7a0205da`
 with schema head `0023_fleet_incidents`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
