@@ -13,7 +13,7 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 792 model-free tests pass, migration upgrade/
+Validation: 795 model-free tests pass (77% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -21,11 +21,16 @@ authenticated, TLS-verified webhooks. A live synthetic Prometheus rule produced
 repeated deliveries, one completed model investigation with operator evidence,
 and a resolved incident. Connections and webhook status have dedicated settings
 pages. Corporate connectors still require end-to-end environment validation.
+Incident mode now isolates Argo CD, GitHub and selected Pod-log analysis in specialist
+contexts, returns their compact cited reports to a bounded coordinator context, and
+retains the bounded source evidence for operators. Normal runs have a configurable
+15-minute deadline, ten coordinator rounds and up to twelve specialist reports; the
+single PoC worker executes specialists serially.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:fd271b4f0ada724bdbd3e164b7ea02e1961bf84f510d5fefcb3edff581d0b091`
+`sha256:28ccf0731c50413ee1fa8c7b2ca1876c72f9b2c38c718c5b3ea6d8400fa6ff53`
 with schema head `0023_fleet_incidents`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the

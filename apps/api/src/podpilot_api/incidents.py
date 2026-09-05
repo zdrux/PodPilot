@@ -272,25 +272,79 @@ class IncidentService:
 
     def investigate(self, engine, run_id):
         started = time.monotonic()
-        evidence, limitations = [], []
+        evidence, coordination_evidence, limitations = [], [], []
         secrets = []
         reader = None
+        specialist_reports = 0
         briefing = {"summary": "Investigation could not establish a cause.", "hypotheses": [],
                     "next_steps": ["Review available evidence and restore missing investigation access."], "evidence_ids": []}
         status = "completed"
-        def record(source, data):
+        def record(source, data, *, coordinate=True):
             item = clean_evidence({"id": f"E{len(evidence)+1}", "source": source,
                 "observed_at": utcnow().isoformat(), "cluster_id": cluster.id, "data": data}, secrets)
-            if len(json.dumps(item)) > 24000:
+            if len(json.dumps(item)) > 32768:
                 item["data"] = {"limitation": "Evidence exceeded the per-collector projection limit."}
                 limitations.append(f"{source}: evidence projection exceeded the limit.")
-            if len(json.dumps(evidence)) + len(json.dumps(item)) > 96000:
+            if len(json.dumps(evidence)) + len(json.dumps(item)) > self.settings.incident_max_evidence_bytes:
                 limitations.append("Total evidence budget reached; remaining collection is incomplete.")
                 raise ValueError("Evidence budget reached")
             evidence.append(item)
+            if coordinate:
+                if len(json.dumps(coordination_evidence)) + len(json.dumps(item)) <= self.settings.incident_max_coordinator_bytes:
+                    coordination_evidence.append(item)
+                else:
+                    limitations.append(f"{source}: retained for operators but omitted from coordinator context.")
             with Session(engine) as progress_db:
                 progress_db.execute(update(IncidentRun).where(IncidentRun.id == run_id).values(evidence_json=json.dumps(evidence)))
                 progress_db.commit()
+            return item
+
+        def summarize_specialist(label, source_item, objective):
+            nonlocal specialist_reports
+            if not profile or not api_key or specialist_reports >= self.settings.incident_max_specialist_reports:
+                return None
+            if time.monotonic()-started > run_timeout:
+                return None
+            try:
+                decision = self.provider.incident_step(profile, api_key, {
+                    "objective": objective,
+                    "evidence": [source_item], "limitations": [],
+                    "available_collectors": {}, "remaining_rounds": 0,
+                    "specialist": label})
+                if decision.collect:
+                    limitations.append(f"{label} specialist requested unsupported additional collection.")
+                    return None
+                report = decision.model_dump(exclude={"collect"})
+                valid = {source_item["id"]}
+                report["evidence_ids"] = [item for item in decision.evidence_ids if item in valid]
+                if not report["evidence_ids"]:
+                    limitations.append(f"{label} specialist returned no valid source citation.")
+                specialist_reports += 1
+                return record(f"{label} specialist", report)
+            except Exception:
+                limitations.append(f"{label} specialist analysis unavailable; bounded source evidence is retained.")
+                return None
+
+        def analyze_log(source_item):
+            nonlocal specialist_reports
+            analyzer = getattr(self.provider, "analyze_logs", None)
+            if not callable(analyzer) or specialist_reports >= self.settings.incident_max_specialist_reports:
+                return None
+            data = source_item["data"]
+            try:
+                analysis = analyzer(profile, api_key, {
+                    "operator_request": "Identify incident-relevant anomalies in this platform container log.",
+                    "investigation_context": [item for item in coordination_evidence if item["source"] == "Alertmanager notification"],
+                    "logs": [{"evidence_id": source_item["id"], "namespace": data.get("namespace"),
+                        "pod": data.get("pod"), "container": data.get("container"),
+                        "excerpt": data.get("logs", "")}],
+                })
+                specialist_reports += 1
+                return record("Pod log specialist", {**analysis.model_dump(),
+                    "source_evidence_ids": [source_item["id"]]})
+            except Exception:
+                limitations.append(f"Pod log specialist could not analyze {source_item['id']}; raw bounded logs are retained.")
+                return None
         try:
             with Session(engine) as db:
                 run = db.get(IncidentRun, run_id)
@@ -301,10 +355,15 @@ class IncidentService:
                     raise ValueError("Incident connection is disabled.")
                 alert_snapshot = json.loads(run.alert_snapshot_json)
                 synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
+                run_timeout = 240 if synthetic else self.settings.incident_run_timeout_seconds
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
             token = self.credentials().get(source.credential_key)
             secrets.append(token)
+            profile, api_key = self.model_context(engine)
+            secrets.append(api_key)
+            if profile and api_key:
+                profile = replace(profile, timeout_seconds=self.settings.incident_model_timeout_seconds, max_retries=0)
             reader = self.cluster_reader(cluster, token)
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):
@@ -329,7 +388,7 @@ class IncidentService:
             changes = []
             onset = min(datetime.fromisoformat(a["startsAt"]) for a in alert_snapshot.values())
             for connector in connectors:
-                if time.monotonic()-started > 180:
+                if time.monotonic()-started > self.settings.incident_connector_timeout_seconds:
                     limitations.append("Connector collection time budget reached.")
                     break
                 cfg = json.loads(connector.config_json)
@@ -349,7 +408,9 @@ class IncidentService:
                         servers.add("https://kubernetes.default.svc")
                     names = [cfg["destination_names"][cluster.id]] if cluster.id in cfg["destination_names"] else []
                     result = other.argocd(cfg["namespace"], cfg["projects"], servers, names, onset - timedelta(hours=2))
-                    record(f"Argo CD: {connector.name} (host {host.id})", result)
+                    source_item = record(f"Argo CD: {connector.name} (host {host.id})", result, coordinate=False)
+                    summarize_specialist("Argo CD", source_item,
+                        "Correlate only this Argo CD deployment evidence with the incident onset. Return a compact cited report of relevant platform deployment changes, contradictions, and gaps. Do not request more collection.")
                     changes.extend(result["changes"])
                     if not host.tls_verify and not host.is_system:
                         limitations.append(f"Argo CD hosting cluster {host.name}: TLS verification disabled.")
@@ -359,7 +420,7 @@ class IncidentService:
                     if other:
                         other.close()
             for connector in connectors:
-                if connector.kind != "github" or time.monotonic()-started > 180:
+                if connector.kind != "github" or time.monotonic()-started > self.settings.incident_connector_timeout_seconds:
                     continue
                 cfg = json.loads(connector.config_json)
                 other = None
@@ -378,17 +439,18 @@ class IncidentService:
                         identity = (repo, change.get("revision"))
                         if parsed.hostname != urlsplit(cfg["url"]).hostname or repo not in cfg["repositories"] or identity in seen:
                             continue
-                        if time.monotonic()-started > 180:
+                        if time.monotonic()-started > self.settings.incident_connector_timeout_seconds:
                             break
                         seen.add(identity)
-                        record(f"GitHub: {connector.name}", other.github(repo, change["revision"], cfg["api_prefix"]))
+                        source_item = record(f"GitHub: {connector.name}",
+                            other.github(repo, change["revision"], cfg["api_prefix"]), coordinate=False)
+                        summarize_specialist("GitHub", source_item,
+                            "Assess only this revision and pull-request metadata for incident relevance. Return a compact cited report of timing, likely relationship, contradictions, and gaps. Do not infer diff contents or request more collection.")
                 except Exception:
                     limitations.append(f"GitHub connector {connector.name}: revision/PR metadata unavailable.")
                 finally:
                     if other:
                         other.close()
-            profile, api_key = self.model_context(engine)
-            secrets.append(api_key)
             if not profile or not api_key:
                 limitations.append("No usable model profile; deterministic platform snapshots only.")
                 for key in ("version", "nodes", "machine-pools"):
@@ -398,12 +460,12 @@ class IncidentService:
                         limitations.append(f"{key}: evidence unavailable.")
                 status = "partial"
             else:
-                profile = replace(profile, timeout_seconds=30, max_retries=0)
                 available = reader.catalog()
                 available.pop("operators", None)
                 consumed = {"operators"}
-                for step in range(6):
-                    if time.monotonic()-started > 240:
+                max_rounds = 6 if synthetic else self.settings.incident_max_rounds
+                for step in range(max_rounds):
+                    if time.monotonic()-started > run_timeout:
                         limitations.append("Investigation time budget reached.")
                         status = "budget_exhausted"
                         break
@@ -413,9 +475,10 @@ class IncidentService:
                             if synthetic else
                             "Investigate this critical OpenShift platform incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
                         ),
-                        "evidence": evidence, "limitations": limitations,
-                        "available_collectors": available if step < 5 else {},
-                        "remaining_rounds": 5-step})
+                        "evidence": coordination_evidence, "limitations": limitations,
+                        "available_collectors": available if step < max_rounds-1 else {},
+                        "remaining_rounds": max_rounds-1-step,
+                        "specialist_reports": specialist_reports})
                     if not decision.collect:
                         briefing = clean_evidence(decision.model_dump(exclude={"collect"}), secrets)
                         valid_ids = {e["id"] for e in evidence}
@@ -424,12 +487,12 @@ class IncidentService:
                             status = "partial"
                         briefing["evidence_ids"] = [e for e in decision.evidence_ids if e in valid_ids]
                         break
-                    if step == 5:
+                    if step == max_rounds-1:
                         status = "budget_exhausted"
-                        limitations.append("Model did not finalize within the six-round limit.")
+                        limitations.append(f"Model did not finalize within the {max_rounds}-round limit.")
                         break
                     for key in decision.collect:
-                        if time.monotonic()-started > 240:
+                        if time.monotonic()-started > run_timeout:
                             limitations.append("Read time budget reached.")
                             break
                         if key not in available:
@@ -438,7 +501,11 @@ class IncidentService:
                         available.pop(key)
                         consumed.add(key)
                         try:
-                            record(key, reader.collect(key))
+                            source_item = record(key, reader.collect(key), coordinate=not key.startswith("logs:"))
+                            if key.startswith("logs:"):
+                                report = analyze_log(source_item)
+                                if report is None and len(json.dumps(coordination_evidence)) + len(json.dumps(source_item)) <= self.settings.incident_max_coordinator_bytes:
+                                    coordination_evidence.append(source_item)
                             available = {k:v for k,v in reader.catalog().items() if k not in consumed}
                         except Exception:
                             limitations.append(f"{key}: read unavailable or response too large.")

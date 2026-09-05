@@ -8,6 +8,14 @@ collectors, Argo CD/GitHub metadata connectors and a model-selected read loop. A
 remains delegated. See [incident response](incident-response.md) for the contract,
 single-process constraints, evidence boundary and configuration.
 
+Incident orchestration separates the durable evidence ledger from the coordinator's
+model context. Bounded connector results and Pod logs remain in the ledger, while
+isolated Argo CD, GitHub and Pod-log specialist calls return compact cited reports to
+the coordinator. This prevents one high-volume evidence domain from consuming the
+entire cross-domain reasoning context. The PoC runs these handoffs serially; the same
+boundary can later be backed by parallel durable workers without changing collector
+trust or evidence ownership.
+
 Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 

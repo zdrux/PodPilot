@@ -124,14 +124,32 @@ Optional metric collection uses one fixed platform availability query over 30
 minutes at 60-second resolution, capped at 12 series.
 
 An initial operator snapshot and configured change enrichment seed a model-guided
-loop. The model chooses only available collector IDs, or finalizes with cited
-evidence, hypotheses and next steps. Six model rounds, up to three reads per round,
-bounded HTTP payloads, a 96,000-character aggregate evidence budget, and elapsed-time
-checks constrain execution. Missing or
+coordinator. The model chooses only available collector IDs, or finalizes with cited
+evidence, hypotheses and next steps. A normal incident has a 15-minute outer deadline,
+ten coordinator rounds and up to three reads per round. Retained evidence is capped at
+384 KiB while the coordinator context has a separate 128 KiB ceiling. These defaults
+are configurable with the `PODPILOT_INCIDENT_*` settings defined in `settings.py`;
+schema bounds prevent unbounded autonomy. Synthetic smoke tests retain their shorter
+four-minute/six-round path. Missing or
 invalid citations label the briefing unverified. Model failures preserve collected
 evidence. Without a configured usable model, fixed platform snapshots are retained
 with partial status and an explicit limitation. Every run uses the currently active
 model profile behind the existing API provider boundary.
+
+Large or separate evidence domains use isolated specialist calls. Argo CD and GitHub
+specialists each receive only one connector result and return a compact cited report.
+The coordinator receives that report; the bounded source result remains in the
+operator evidence timeline. When the coordinator discovers and selects an exact
+platform-container log capability, the existing structured Pod-log analyzer receives
+only that one redacted excerpt. Its compact issue report enters coordinator context,
+while the raw bounded log remains available in retained evidence. At most 12 specialist
+reports are admitted per run. A failed or uncited specialist is recorded as a
+limitation and cannot silently establish a conclusion.
+
+The PoC executes specialist calls serially inside its single worker. Their isolated
+contexts establish the handoff boundary needed for later parallel fan-out, but a
+durable multi-worker queue, per-specialist lifecycle records, cancellation and join
+policy remain production work.
 
 Credentials are kept out of model context; projected observations, webhook data,
 Git metadata and model output are redacted before durable evidence/display.
@@ -217,3 +235,8 @@ Its resolved notification updated incident
 `69fcfb0c-1386-40a7-bc40-2e8d022ecd0a` without removing the investigation history.
 An earlier smoke run reached its evidence/time budget; bounded operator and Pod
 projections were corrected before the successful rerun.
+
+The specialist-orchestration deployment was revalidated with synthetic incident
+`7822cbdd-2885-48ad-9a18-7d4944293c35`: one run completed with four cited platform
+observations, repeat deliveries did not create another run, and the resolved
+notification preserved its investigation history.

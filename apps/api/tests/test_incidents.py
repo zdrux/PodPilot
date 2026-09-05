@@ -13,6 +13,7 @@ from podpilot_api.database import build_engine
 from podpilot_api.main import create_app, SYSTEM_CLUSTER_ID
 from podpilot_api.models import Base
 from podpilot_api.incident_models import IncidentConnection, FleetIncident, IncidentRun
+from podpilot_api.model_provider import AdHocLogAnalysis, ModelProfileConfig
 from podpilot_api.settings import Settings
 from podpilot_diagnostics.incidents import IncidentDecision
 from podpilot_openshift.incidents import IncidentReader, clean_evidence
@@ -141,6 +142,84 @@ def test_worker_model_selection_rejects_out_of_scope_reads(client):
         assert run.status=='completed'
         assert 'request rejected' in run.briefing_json
         assert 'model-secret' not in run.briefing_json
+
+
+def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(client):
+    sid=source(client); iid=send(client,sid,notification()).json()['incident_id']
+    service=client.app.state.incident_service
+    contexts=[]
+    class Reader:
+        exposed=False
+        def collect(self,key):
+            if key=='pods:openshift-etcd': self.exposed=True; return {'rows':[{'name':'etcd-0'}]}
+            if key=='logs:exact': return {'namespace':'openshift-etcd','pod':'etcd-0',
+                'container':'etcd','logs':'sensitive bounded log excerpt'}
+            return {'rows':[]}
+        def catalog(self):
+            result={'operators':'Operators','pods:openshift-etcd':'Etcd Pods'}
+            if self.exposed: result['logs:exact']='Observed etcd container logs'
+            return result
+        def close(self): pass
+    class Provider:
+        def incident_step(self,_profile,_key,context):
+            contexts.append(context)
+            coordinator_calls=[item for item in contexts if 'specialist' not in item]
+            if len(coordinator_calls)==1: return IncidentDecision(collect=['pods:openshift-etcd'])
+            if len(coordinator_calls)==2: return IncidentDecision(collect=['logs:exact'])
+            return IncidentDecision(summary='Log specialist found no incident anomaly.',evidence_ids=['E5'])
+        def analyze_logs(self,_profile,_key,context):
+            assert context['logs'][0]['evidence_id']=='E4'
+            return AdHocLogAnalysis(overview='No meaningful anomaly identified.',issues=[],limitations=[])
+    service.cluster_reader=lambda *args:Reader()
+    service.model_context=lambda engine:(ModelProfileConfig(provider_label='test',base_url='https://model.invalid',
+        chat_model='test',embedding_model=None,timeout_seconds=30,max_output_tokens=2000),'model-secret')
+    service.provider=Provider()
+    with Session(client.app.state.engine) as db: rid=db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id==iid))
+    service.investigate(client.app.state.engine,rid)
+    coordinator=[item for item in contexts if 'specialist' not in item]
+    assert all('sensitive bounded log excerpt' not in json.dumps(item) for item in coordinator)
+    assert any(e['source']=='Pod log specialist' for e in coordinator[-1]['evidence'])
+    with Session(client.app.state.engine) as db:
+        run=db.get(IncidentRun,rid)
+        retained=json.loads(run.evidence_json)
+        assert any(e['source']=='logs:exact' for e in retained)
+        assert run.status=='completed'
+
+
+def test_connector_specialist_isolated_from_coordinator_context(client):
+    sid=source(client)
+    response=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'argocd','name':'Platform GitOps','enabled':True,'cluster_id':SYSTEM_CLUSTER_ID,
+        'projects':['platform'],'target_cluster_ids':[SYSTEM_CLUSTER_ID]})
+    assert response.status_code==200
+    iid=send(client,sid,notification()).json()['incident_id']
+    service=client.app.state.incident_service
+    contexts=[]
+    class Reader:
+        monitor=None
+        def collect(self,key): return {'rows':[]}
+        def catalog(self): return {'operators':'Operators'}
+        def argocd(self,*args): return {'changes':[], 'partial':False}
+        def close(self): pass
+    class Provider:
+        def incident_step(self,_profile,_key,context):
+            contexts.append(context)
+            if context.get('specialist')=='Argo CD':
+                return IncidentDecision(summary='No nearby platform deployment.',
+                    evidence_ids=[context['evidence'][0]['id']])
+            return IncidentDecision(summary='No deployment correlation.',evidence_ids=['E4'])
+    service.cluster_reader=lambda *args:Reader()
+    service.model_context=lambda engine:(ModelProfileConfig(provider_label='test',base_url='https://model.invalid',
+        chat_model='test',embedding_model=None,timeout_seconds=30,max_output_tokens=2000),'model-secret')
+    service.provider=Provider()
+    with Session(client.app.state.engine) as db: rid=db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id==iid))
+    service.investigate(client.app.state.engine,rid)
+    coordinator=next(item for item in contexts if not item.get('specialist'))
+    assert not any(e['source'].startswith('Argo CD:') for e in coordinator['evidence'])
+    assert any(e['source']=='Argo CD specialist' for e in coordinator['evidence'])
+    with Session(client.app.state.engine) as db:
+        retained=json.loads(db.get(IncidentRun,rid).evidence_json)
+        assert any(e['source'].startswith('Argo CD:') for e in retained)
 
 
 def test_reader_denies_arbitrary_paths_and_projects():
