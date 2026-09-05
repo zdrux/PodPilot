@@ -54,7 +54,7 @@ The lab investigation reader token lasts 24 hours; rerun the documented configur
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:ecacc32e3e263037e2b6a5a02879334b5d9380d44b9b9155721d9b563306d8c9`
+`sha256:61aa98d88b4575fb7124a8dd813aad8170585ad4b0fd22d6b100591ae2c8b38a`
 with schema head `0024_incident_activity`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
