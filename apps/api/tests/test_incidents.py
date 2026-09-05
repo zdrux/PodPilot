@@ -129,6 +129,7 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert '<td>3</td>' in page.text
     alert_table = re.search(r'<table class="incident-detail-table">(.*?)</table>', page.text, re.DOTALL).group(1)
     assert alert_table.count('<strong>etcdNoLeader</strong>') == 1
+    assert '<details class="incident-alert-annotation"><summary>View alert annotation</summary>' in alert_table
     assert 'data-evidence-link' in page.text
     assert f'href="#evidence-{run_id}-E1"' in page.text
     assert f'id="evidence-{run_id}-E1"' in page.text

@@ -2076,9 +2076,11 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
 .incident-detail-table th { padding: 0 15px 11px 0; color: var(--theme-subtle); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .incident-detail-table td { padding: 15px 15px 15px 0; color: var(--theme-muted); font-size: 12px; vertical-align: top; }
 .incident-detail-table tbody tr + tr td { border-top: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent); }
-.incident-detail-table td strong, .incident-detail-table td small { display: block; }
+.incident-detail-table td strong { display: block; }
 .incident-detail-table td strong { color: var(--theme-text); font-size: 13px; }
-.incident-detail-table td small { max-width: 620px; margin-top: 5px; color: var(--theme-subtle); line-height: 1.45; }
+.incident-alert-annotation { max-width: 620px; margin-top: 7px; }
+.incident-alert-annotation summary { width: fit-content; color: var(--theme-accent-strong); font-size: 9px; font-weight: 750; cursor: pointer; }
+.incident-alert-annotation p { margin: 9px 0 0; color: var(--theme-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .incident-evidence-list details { scroll-margin-top: 30px; transition: background-color .25s ease, box-shadow .25s ease; }
 .incident-evidence-list details + details { border-top: 1px solid color-mix(in srgb, var(--theme-border) 72%, transparent); }
 .incident-evidence-list summary { display: grid; grid-template-columns: 48px minmax(180px, 1fr) auto 18px; gap: 12px; align-items: center; padding: 14px 5px; color: var(--theme-muted); cursor: pointer; list-style: none; }
