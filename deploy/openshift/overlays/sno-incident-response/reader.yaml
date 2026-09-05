@@ -1,0 +1,32 @@
+# Disposable SNO investigation identity. Credentials are minted at setup time, never committed.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: podpilot-incident-reader
+  namespace: ai-ops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-incident-reader
+subjects:
+  - kind: ServiceAccount
+    name: podpilot-incident-reader
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podpilot-incident-reader-monitoring
+subjects:
+  - kind: ServiceAccount
+    name: podpilot-incident-reader
+    namespace: ai-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view

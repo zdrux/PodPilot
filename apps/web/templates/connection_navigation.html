@@ -1,0 +1,5 @@
+<nav class="topbar-actions incident-panel" aria-label="Connection configuration">
+  <a class="button {% if request.url.path == '/settings/clusters' %}primary{% endif %}" href="/settings/clusters">Cluster registry</a>
+  <a class="button {% if request.url.path == '/settings/connectors' %}primary{% endif %}" href="/settings/connectors">Investigation access &amp; connectors</a>
+  <a class="button {% if request.url.path == '/settings/webhooks' %}primary{% endif %}" href="/settings/webhooks">Webhook receivers</a>
+</nav>

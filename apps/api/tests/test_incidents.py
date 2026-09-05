@@ -309,3 +309,40 @@ def test_webhook_rejects_naive_dates_and_oversized_payload(client):
     assert send(client,sid,body).status_code==422
     body=notification(); body['alerts'][0]['annotations']['summary']='x'*131072
     assert send(client,sid,body).status_code==413
+
+
+def test_webhook_settings_shows_receiver_and_delivery_without_secrets(client):
+    sid=source(client)
+    page=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'})
+    assert page.status_code==200
+    assert f'/api/v1/incident-webhooks/{sid}' in page.text
+    assert 'None yet' in page.text
+    assert 'private-cluster-token' not in page.text and 'w'*40 not in page.text
+    send(client,sid,notification())
+    page=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'})
+    assert '1 incidents recorded' in page.text
+    assert 'None yet' not in page.text
+    assert client.get('/settings/webhooks',headers={'x-forwarded-user':'sre'}).status_code==403
+
+
+def test_synthetic_incidents_are_clearly_labelled(client):
+    sid=source(client)
+    payload=notification(); payload['alerts'][0]['labels']['podpilot_test']='true'
+    response=send(client,sid,payload)
+    with Session(client.app.state.engine) as db:
+        row=db.get(FleetIncident,response.json()['incident_id'])
+        assert row.title=='[TEST] etcdNoLeader'
+
+
+def test_platform_projection_preserves_failures_without_large_status_bodies():
+    payload={'items':[{'metadata':{'name':'etcd'},'status':{'conditions':[
+        {'type':'Available','status':'True','message':'healthy '*1000},
+        {'type':'Degraded','status':'True','reason':'MemberFailure','message':'failure '*1000}]}}]}
+    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(lambda r:httpx.Response(200,json=payload)))
+    result=reader.collect('operators')
+    conditions=result['rows'][0]['conditions']
+    assert conditions[0]=={'type':'Available','status':'True'}
+    assert conditions[1]['reason']=='MemberFailure'
+    assert len(conditions[1]['message'])==200
+    assert len(json.dumps(result))<1000
+    reader.close()

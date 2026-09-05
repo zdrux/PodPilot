@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Cluster management · PodPilot{% endblock %}
 {% block content %}
+{% if incidents_enabled %}{% include "connection_navigation.html" %}{% endif %}
 <header class="topbar"><div><p class="eyebrow">Administration</p><h1>Cluster Management</h1><p class="subtitle">Configure the shared cluster registry and manage availability for PodPilot users.</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/settings/clusters?new=1">Add cluster</a></div>{% endif %}</header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>TLS verification exceptions carry credentials</strong><p>Disabling verification sends the cluster bearer token and receives evidence without authenticating the Kubernetes API or discovered telemetry endpoints. Use only for explicitly accepted internal environments.</p></div></section>
 <div class="settings-grid cluster-settings-grid">

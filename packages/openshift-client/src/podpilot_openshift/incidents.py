@@ -123,9 +123,25 @@ class IncidentReader:
                            last_seen=stamp, involved_object=item.get("involvedObject"))
             else:
                 # Never send arbitrary annotations, environment values, or full specs.
-                row["conditions"] = status.get("conditions", [])
+                conditions=[]
+                for condition in status.get('conditions', [])[:8]:
+                    healthy = (condition.get('type'),condition.get('status')) in {
+                        ('Available','True'),('Ready','True'),('Upgradeable','True'),
+                        ('Degraded','False'),('Progressing','False'),('Disabled','False')}
+                    fields = ('type','status') if healthy else ('type','status','reason','message','lastTransitionTime')
+                    conditions.append({k:(str(v)[:200] if k in ('message','reason') else v)
+                        for k,v in condition.items() if k in fields})
+                row['conditions']=conditions
                 if kind == "pods":
-                    row.update(phase=status.get("phase"), containers=status.get("containerStatuses", []),
+                    containers=[]
+                    for container in status.get('containerStatuses', [])[:8]:
+                        state={}
+                        for state_name, details in container.get('state', {}).items():
+                            state[state_name]={k:(str(v)[:200] if k=='message' else v) for k,v in details.items()
+                                if k in ('reason','message','exitCode','startedAt','finishedAt')}
+                        containers.append({'name':container.get('name'),'ready':container.get('ready'),
+                            'restartCount':container.get('restartCount'),'state':state})
+                    row.update(phase=status.get("phase"), containers=containers,
                         images=[c.get("image") for c in spec.get("containers", [])])
                     # Only exact names read from allowed platform namespaces become log capabilities.
                     for c in spec.get("containers", [])[:4]:

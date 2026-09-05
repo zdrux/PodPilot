@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-02
+Last reviewed: 2026-09-05
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -9,18 +9,27 @@ selected.
 
 Incident response PoC is implemented on `codex/incident-response-poc`, after
 merging/pushing the evidence-ledger UI branch into main at `e2e4505`. The feature is
-opt-in and has not been deployed. It adds fleet incidents, authenticated per-cluster
+opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authenticated per-cluster
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 789 model-free tests pass (77% aggregate coverage), migration upgrade/
+Validation: 792 model-free tests pass, migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
-connector pages were checked in the browser. Corporate connectors and a real model
-incident run still require end-to-end environment validation before enabling ingress.
+connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
+authenticated, TLS-verified webhooks. A live synthetic Prometheus rule produced
+repeated deliveries, one completed model investigation with operator evidence,
+and a resolved incident. Connections and webhook status have dedicated settings
+pages. Corporate connectors still require end-to-end environment validation.
+The lab investigation reader token lasts 24 hours; rerun the documented configure
+helper to renew it. The smoke-test rule is left inert.
 
-PodPilot 0.12.0 from the delegated-sessions feature branch is deployed on the
-disposable SNO lab at schema head `0021_user_delegated_access`. The 2026-09-01 rollout uses
+The current SNO application image is
+`sha256:fd271b4f0ada724bdbd3e164b7ea02e1961bf84f510d5fefcb3edff581d0b091`
+with schema head `0023_fleet_incidents`; the runner remains unchanged.
+
+The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
+disposable SNO lab at schema head `0021_user_delegated_access`. That 2026-09-01 rollout used
 application image digest `sha256:02b041afb5824019941cc1e62067dd90748063992f9514106d83c4464fced061`
 and runner digest `sha256:fc7c654ea5f3ea9c86b69e698f2640f038aab511d6de360edb4f1742ccaac05e`.
 The deployed implementation makes Ask user-delegated for every role, uses a 24-hour local maximum,

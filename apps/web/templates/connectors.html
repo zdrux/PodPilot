@@ -2,6 +2,7 @@
 {% block title %}Connectors · PodPilot{% endblock %}
 {% block content %}
 <header class="topbar"><div><p class="eyebrow">Administration · Incident response</p><h1>Connectors</h1><p class="subtitle">Shared read-only credentials for unattended platform investigations.</p></div><a class="button" href="/settings/connectors">Add connection</a></header>
+{% include "connection_navigation.html" %}
 <div class="settings-grid cluster-settings-grid"><aside class="panel incident-panel"><h2>Connections</h2>{% for row in connections %}<p><a href="/settings/connectors?edit={{ row.id }}">{{ row.name }}</a><small class="incident-muted">{{ row.kind }} · {{ 'Enabled' if row.enabled else 'Disabled' }}</small></p>{% else %}<p>No connections configured.</p>{% endfor %}</aside>
 <section class="panel incident-panel"><h2>{{ selected.name if selected else 'Add connection' }}</h2>
 <form id="incident-connection-form" class="settings-form">

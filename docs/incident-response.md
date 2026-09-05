@@ -1,6 +1,7 @@
 # Incident response PoC
 
-Status: implemented on `codex/incident-response-poc`; opt-in, single-process PoC.
+Status: implemented on `codex/incident-response-poc`; enabled in the disposable SNO lab.
+Other deployment compositions remain opt-in, single-process PoC.
 
 ## Operator workflow
 
@@ -37,6 +38,12 @@ does not modify Ask credentials. An optional Thanos/Prometheus HTTPS origin enab
 fixed platform-availability range queries with the same cluster token. Its custom
 CA bundle is configured on the connection. Connection tests check the core reads;
 operators must separately ensure that this identity is read-only in cluster RBAC.
+
+**Manage → Connections & webhooks** links the cluster registry, investigation
+credentials/Argo CD/GitHub connectors, and a dedicated **Webhook receivers** panel.
+The receiver panel displays each HTTPS endpoint, enabled state, last admitted
+delivery and incident count, with links to credential/policy editing and incidents.
+The receiver is a POST API; it is not an interactive browser page.
 
 Secrets are opaque keys in the pre-created `podpilot-incident-credentials` Secret.
 Override its namespace/name with `PODPILOT_INCIDENT_SECRET_NAMESPACE` and
@@ -158,3 +165,55 @@ A total cluster outage may prevent that cluster's Alertmanager from delivering
 anything. This trigger cannot replace independent external availability monitoring.
 SNO rule presence validates seed names, not multi-node failure behavior. Corporate
 Argo CD/GitHub end-to-end verification requires configured instances and credentials.
+
+## SNO webhook smoke test
+
+SNO runs Alertmanager 0.31.1 (`openshift-monitoring/alertmanager-main-0`). The lab
+setup uses a dedicated `ai-ops/podpilot-incident-reader` ServiceAccount with
+`cluster-reader` and `cluster-monitoring-view`. It has no Deployment patch,
+Secret read, or ClusterRoleBinding create permission. PodPilot's own runtime
+identity remains separate.
+
+After connecting with the external bootstrap path through `connect-sno.ps1`:
+
+```powershell
+.\scripts\deploy-incident-sno.ps1 -BootstrapKubeconfig $env:PODPILOT_BOOTSTRAP_KUBECONFIG
+. .\scripts\connect-sno.ps1
+.\.venv\Scripts\python.exe scripts/configure-incident-sno.py configure
+.\.venv\Scripts\python.exe scripts/configure-incident-sno.py fire
+.\.venv\Scripts\python.exe scripts/configure-incident-sno.py status
+.\.venv\Scripts\python.exe scripts/configure-incident-sno.py resolve
+```
+
+`configure` preserves existing Alertmanager routing and adds the
+`podpilot-platform-incidents` receiver. The cluster's router CA is mounted through
+`alertmanagerMain.secrets` as `podpilot-webhook-ca`; webhook HTTPS verification
+remains enabled. Synthetic `podpilot_test=true` signals route exclusively to
+PodPilot. Reviewed real critical alerts also reach PodPilot while retaining their
+original routing. The previous Alertmanager Secret and monitoring ConfigMap are
+backed up outside the repository under `%LOCALAPPDATA%/PodPilot/incident-backups`.
+Deployment backs up the SQLite database on its existing PVC before migration.
+
+The helper mints a **24-hour** reader token and stores it in PodPilot's incident
+Secret. Run `configure` again to refresh it; the existing webhook token is preserved.
+This lab helper is not a production credential-rotation solution. Token values are
+never printed. A TokenRequest expiry is printed as non-secret setup metadata.
+
+`fire` creates/updates only the owned `podpilot-webhook-smoke-test` PrometheusRule.
+It uses the admitted `etcdNoLeader` name with explicit synthetic labels and
+annotations, producing a `[TEST]` incident rather than implying a real outage.
+`resolve` changes its expression to return no alert; the inert rule is retained
+for repeatable testing. Allow time for Prometheus Operator reconciliation and
+Alertmanager grouping. A repeat delivery should update the same incident while
+retaining one run; resolution should preserve the incident and evidence history.
+The agent treats synthetic signals as connectivity tests and does not pursue a
+root cause based on the test signal alone.
+
+Validated on 2026-09-05: unauthenticated ingress returns 401; a valid but
+non-admitted signal returns 202 without creating an incident. The live synthetic
+rule delivered repeated firing notifications into one investigation, which
+completed with operator evidence and correctly identified the signal as a test.
+Its resolved notification updated incident
+`69fcfb0c-1386-40a7-bc40-2e8d022ecd0a` without removing the investigation history.
+An earlier smoke run reached its evidence/time budget; bounded operator and Pod
+projections were corrected before the successful rerun.

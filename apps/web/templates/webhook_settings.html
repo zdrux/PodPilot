@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Webhook receivers · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Administration · Connections</p><h1>Webhook receivers</h1><p class="subtitle">Receive Alertmanager signals using a separate authenticated endpoint for each cluster.</p></div></header>
+{% include "connection_navigation.html" %}
+{% for item in receivers %}
+<section class="panel incident-panel"><h2>{{ item.name }}</h2><p>{{ item.cluster_name }} · {{ 'Enabled' if item.enabled else 'Disabled' }}</p>
+<p>Send <strong>POST</strong> requests to:</p><pre>{{ item.url }}</pre>
+<p>Authentication: <code>Authorization: Bearer &lt;configured webhook token&gt;</code>. Tokens are stored in a Secret and are never displayed here.</p>
+<p>Enable resolved notifications in Alertmanager. Accepted signals are validated, grouped and queued for one investigation; repeat notifications update the incident.</p>
+<p>Last accepted delivery: {{ item.last_delivery | est_time if item.last_delivery else 'None yet' }} · {{ item.incident_count }} incidents recorded.</p>
+<a class="button" href="/settings/connectors?edit={{ item.id }}">Configure credential &amp; alert policy</a>
+<a class="button" href="/incidents?cluster={{ item.cluster_id }}">View cluster incidents</a>
+</section>
+{% else %}<section class="panel incident-panel"><h2>No webhook receivers yet</h2><p>Add a cluster investigation connection, save its cluster-reader token and webhook credential, then enable it.</p><a class="button primary" href="/settings/connectors">Add connection</a></section>{% endfor %}
+{% endblock %}

@@ -128,7 +128,7 @@ class IncidentService:
                 if pending >= 100:
                     raise HTTPException(503, "Incident queue is full; retry this notification.")
                 incident = FleetIncident(id=str(uuid4()), cluster_id=cluster.id, source_id=source.id,
-                    group_key=key, title=", ".join(sorted({a.labels["alertname"] for a in alerts}))[:500],
+                    group_key=key, title=(("[TEST] " if all(a.labels.get('podpilot_test') == 'true' for a in alerts) else "") + ", ".join(sorted({a.labels["alertname"] for a in alerts})))[:500],
                     alert_state="firing", alerts_json="{}", limitations_json="[]")
                 db.add(incident)
                 previous = {}
@@ -300,6 +300,7 @@ class IncidentService:
                 if not source.enabled or not cluster.is_enabled or cluster.visibility != "shared":
                     raise ValueError("Incident connection is disabled.")
                 alert_snapshot = json.loads(run.alert_snapshot_json)
+                synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
             token = self.credentials().get(source.credential_key)
@@ -316,7 +317,7 @@ class IncidentService:
             record("Alertmanager notification", {"alerts": [{
                 "status": a["status"], "starts_at": a["startsAt"],
                 "labels": {k:v[:500] for k,v in a["labels"].items() if k in {
-                    "alertname", "severity", "namespace", "name", "pod", "node", "instance", "job", "reason"}},
+                    "alertname", "severity", "namespace", "name", "pod", "node", "instance", "job", "reason", "podpilot_test"}},
                 "summary": a.get("annotations", {}).get("summary", "")[:500],
             } for a in list(alert_snapshot.values())[:20]], "total_alerts": len(alert_snapshot),
                 "partial": len(alert_snapshot)>20})
@@ -407,7 +408,11 @@ class IncidentService:
                         status = "budget_exhausted"
                         break
                     decision = self.provider.incident_step(profile, api_key, {
-                        "objective": "Investigate this critical OpenShift platform incident; identify impact, likely causes, contradictions, recent changes and operator next steps.",
+                        "objective": (
+                            "This signal is labelled as a synthetic webhook test. Verify basic platform access from the operator snapshot and at most version/node snapshots, then finish with a concise test result. The test signal is not evidence of an etcd outage. Report any independently observed health issues separately; do not pursue an RCA for the synthetic signal."
+                            if synthetic else
+                            "Investigate this critical OpenShift platform incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
+                        ),
                         "evidence": evidence, "limitations": limitations,
                         "available_collectors": available if step < 5 else {},
                         "remaining_rounds": 5-step})
@@ -589,6 +594,24 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         selected = next((r for r in rows if r.id == request.query_params.get("edit")), None)
         return page(request, user, "connectors.html", {"connections": rows, "clusters": clusters,
             "selected": selected, "config": json.loads(selected.config_json) if selected else {}, "default_alerts": DEFAULT_ALERTS})
+
+    @app.get("/settings/webhooks")
+    async def webhook_settings(request: Request, user=Depends(current_user)):
+        service.manage(user)
+        receivers = []
+        with Session(app.state.engine) as db:
+            for row in db.scalars(select(IncidentConnection).where(IncidentConnection.kind == 'cluster').order_by(IncidentConnection.name)):
+                cluster = db.get(Cluster, row.cluster_id)
+                latest = db.scalar(select(func.max(FleetIncident.updated_at)).where(FleetIncident.source_id == row.id))
+                count = db.scalar(select(func.count()).select_from(FleetIncident).where(FleetIncident.source_id == row.id))
+                # Deployment uses an edge-terminated Route; display HTTPS even behind its HTTP upstream.
+                origin = str(request.base_url).rstrip('/')
+                if service.settings.auth_mode == 'proxy':
+                    origin = 'https://' + request.url.netloc
+                receivers.append({'id':row.id,'name':row.name,'cluster_name':cluster.name if cluster else row.cluster_id,
+                    'cluster_id':row.cluster_id,'enabled':row.enabled,'last_delivery':latest,'incident_count':count,
+                    'url':f'{origin}/api/v1/incident-webhooks/{row.id}'})
+        return page(request, user, 'webhook_settings.html', {'receivers':receivers})
 
     @app.post("/api/v1/incident-connections")
     async def save(request: Request, user=Depends(current_user)):

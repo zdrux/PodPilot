@@ -2374,7 +2374,7 @@ class OpenAIResponsesProvider:
 class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     def incident_step(self, profile, api_key, context):
         return self._parse(profile, api_key, schema=IncidentDecision,
-            instructions=INCIDENT_INSTRUCTIONS, payload=context)
+            instructions=INCIDENT_INSTRUCTIONS, payload=context, limit=_output_limit(profile, 2400))
 
     """Strict JSON-schema adapter for OpenAI-compatible Chat Completions APIs."""
 

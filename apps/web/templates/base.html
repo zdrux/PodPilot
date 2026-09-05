@@ -88,7 +88,7 @@
         {% endif %}
         {% if user is defined and user.can_manage_configuration %}
         <p class="nav-label section-gap">Manage</p>
-        {% if incidents_enabled %}<a class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connectors</a>{% endif %}
+        {% if incidents_enabled %}<a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connections &amp; webhooks</a>{% endif %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
           Cluster Management
