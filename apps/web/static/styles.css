@@ -59,6 +59,9 @@ a { color: inherit; }
 .nav-session-delete svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .nav-session-empty { margin: 4px 7px 2px; color: var(--subtle); font-size: 10px; line-height: 1.45; }
 .nav-cluster-list li { grid-template-columns: minmax(0, 1fr); }
+.nav-incident-list li, .nav-settings-list li { grid-template-columns: minmax(0, 1fr); }
+.nav-more-link { display: block; padding: 8px 6px 3px 9px; color: var(--cyan); font-size: 10px; font-weight: 700; text-decoration: none; }
+.nav-more-link:hover { text-decoration: underline; }
 .nav-cluster-link { display: flex; align-items: center; gap: 8px; }
 .nav-cluster-link > span:last-child { min-width: 0; display: grid; gap: 3px; }
 .nav-cluster-link strong { font-size: 12px; }

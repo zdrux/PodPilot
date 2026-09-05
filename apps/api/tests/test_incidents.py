@@ -1,6 +1,6 @@
 import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app, SYSTEM_CLUSTER_ID
-from podpilot_api.models import Base
+from podpilot_api.models import AdHocConversation, Base
 from podpilot_api.incident_models import IncidentConnection, FleetIncident, IncidentRun
 from podpilot_api.model_provider import AdHocLogAnalysis, ModelProfileConfig
 from podpilot_api.settings import Settings
@@ -473,6 +473,39 @@ def test_webhook_settings_shows_receiver_and_delivery_without_secrets(client):
     assert '1 incidents recorded' in page.text
     assert 'None yet' not in page.text
     assert client.get('/settings/webhooks',headers={'x-forwarded-user':'sre'}).status_code==403
+
+
+def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client):
+    sid = source(client)
+    with Session(client.app.state.engine) as db:
+        db.add(AdHocConversation(
+            id='00000000-0000-0000-0000-000000000001', created_by='admin',
+            title='Active platform investigation', status='active', evidence_json='[]'))
+        for index in range(11):
+            db.add(FleetIncident(
+                id=f'00000000-0000-0000-0000-{index:012d}',
+                cluster_id=SYSTEM_CLUSTER_ID, source_id=sid, group_key=f'group-{index}',
+                title=f'Incident {index:02d}', alert_state='firing', alerts_json='{}',
+                updated_at=datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc) + timedelta(minutes=index)))
+        db.commit()
+
+    connectors = client.get('/settings/connectors', headers={'x-forwarded-user':'admin'})
+    webhooks = client.get('/settings/webhooks', headers={'x-forwarded-user':'admin'})
+
+    for page in (connectors, webhooks):
+        assert page.status_code == 200
+        assert 'Active platform investigation' in page.text
+        assert 'aria-label="Recent incidents"' in page.text
+        assert 'Incident 10' in page.text and 'Incident 01' in page.text
+        assert 'Incident 00' not in page.text
+        assert 'More incidents →' in page.text
+        assert 'aria-label="Connections and webhooks"' in page.text
+        assert 'Investigation access &amp; connectors' in page.text
+        assert 'Webhook receivers' in page.text
+        assert 'Cluster registry' not in page.text
+
+    assert 'href="/incidents/00000000-0000-0000-0000-000000000010"' in connectors.text
+
 
 
 def test_synthetic_incidents_are_clearly_labelled(client):

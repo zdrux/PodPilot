@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=email-table-copy-20">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=incident-sidebar-21">
   <script src="{{ url_for('static', path='/app.js') }}?v=email-table-copy-20" defer></script>
 </head>
 <body class="{% block body_class %}{% endblock %}">
@@ -23,7 +23,28 @@
       <nav class="nav-list">
         <p class="nav-label">Workspace</p>
         {% if incidents_enabled and user is defined and user.role.value >= 20 %}
-        <a class="nav-link {% if request.url.path.startswith('/incidents') %}active{% endif %}" href="/incidents"><span class="nav-icon" aria-hidden="true">⚑</span>Incidents</a>
+        <div class="nav-tree {% if recent_incidents is defined and recent_incidents %}expanded{% endif %}">
+          <a class="nav-link {% if request.url.path.startswith('/incidents') %}active{% endif %}" href="/incidents"><span class="nav-icon" aria-hidden="true">⚑</span>Incidents</a>
+          {% if recent_incidents is defined and recent_incidents %}
+          <div class="nav-subtree" aria-label="Recent incidents">
+            <div class="nav-subtree-heading">
+              <span>Recent</span>
+              <a href="/incidents" title="View all incidents" aria-label="View all incidents">→</a>
+            </div>
+            <ul class="nav-session-list nav-incident-list">
+              {% for item in recent_incidents %}
+              <li class="{% if incident is defined and incident and item.id == incident.id %}active{% endif %}">
+                <a class="nav-session-link" href="/incidents/{{ item.id }}" title="{{ item.title }}">
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ item.alert_state | capitalize }} · {{ item.updated_at | est_time('%b %d · %H:%M') }}</small>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+            {% if has_more_incidents %}<a class="nav-more-link" href="/incidents">More incidents →</a>{% endif %}
+          </div>
+          {% endif %}
+        </div>
         {% endif %}
         {% if not ask_first %}
         <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
@@ -88,7 +109,17 @@
         {% endif %}
         {% if user is defined and user.can_manage_configuration %}
         <p class="nav-label section-gap">Manage</p>
-        {% if incidents_enabled %}<a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connections &amp; webhooks</a>{% endif %}
+        {% if incidents_enabled %}
+        <div class="nav-tree expanded">
+          <a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connections &amp; webhooks</a>
+          <div class="nav-subtree" aria-label="Connections and webhooks">
+            <ul class="nav-session-list nav-settings-list">
+              <li class="{% if request.url.path == '/settings/connectors' %}active{% endif %}"><a class="nav-session-link" href="/settings/connectors"><strong>Investigation access &amp; connectors</strong></a></li>
+              <li class="{% if request.url.path == '/settings/webhooks' %}active{% endif %}"><a class="nav-session-link" href="/settings/webhooks"><strong>Webhook receivers</strong></a></li>
+            </ul>
+          </div>
+        </div>
+        {% endif %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <span class="nav-icon" aria-hidden="true">⌘</span>
           Cluster Management

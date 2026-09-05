@@ -10305,6 +10305,7 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
+    from podpilot_api.incident_models import FleetIncident
     from podpilot_api.incidents import IncidentService, install_incidents
     def incident_model_context(engine):
         with Session(engine) as db_session:
@@ -10415,7 +10416,12 @@ def create_app(
 
         username = request.headers.get(app_settings.proxy_user_header, "").strip()
         if not username:
-            return {"workspace_clusters": []}
+            return {
+                "workspace_clusters": [],
+                "recent_conversations": [],
+                "recent_incidents": [],
+                "has_more_incidents": False,
+            }
         session_id = _delegated_session_id(request)
         connected_ids = {
             item.cluster_id for item in request.app.state.delegated_vault.list_for(
@@ -10428,6 +10434,12 @@ def create_app(
                     Cluster.is_enabled.is_(True), _visible_clusters(username)
                 ).order_by(Cluster.environment, Cluster.name)
             ))
+            recent_conversations = recent_conversations_for(db_session, username)
+            incident_rows = list(db_session.scalars(
+                select(FleetIncident)
+                .order_by(FleetIncident.updated_at.desc())
+                .limit(11)
+            )) if app_settings.incidents_enabled else []
         clusters: list[dict[str, object]] = []
         for row in rows:
             item = _cluster_summary(row)
@@ -10435,7 +10447,12 @@ def create_app(
                 row.id in connected_ids if app_settings.delegated_access_enabled else True
             )
             clusters.append(item)
-        return {"workspace_clusters": clusters}
+        return {
+            "workspace_clusters": clusters,
+            "recent_conversations": recent_conversations,
+            "recent_incidents": incident_rows[:10],
+            "has_more_incidents": len(incident_rows) > 10,
+        }
 
     templates = Jinja2Templates(
         directory=app_settings.web_dir / "templates",
