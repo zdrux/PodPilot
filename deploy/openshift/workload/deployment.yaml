@@ -129,6 +129,16 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: loki_max_series
+            - name: PODPILOT_INCIDENT_RUN_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: incident_run_timeout_seconds
+            - name: PODPILOT_INCIDENT_MAX_ROUNDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: incident_max_rounds
             - name: PODPILOT_ADHOC_MAX_ROUNDS
               valueFrom:
                 configMapKeyRef:

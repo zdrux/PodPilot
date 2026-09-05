@@ -139,8 +139,10 @@ minutes at 60-second resolution, capped at 12 series.
 
 An initial operator snapshot and configured change enrichment seed a model-guided
 coordinator. The model chooses only available collector IDs, or finalizes with cited
-evidence, hypotheses and next steps. A normal incident has a 15-minute outer deadline,
-ten coordinator rounds and up to three reads per round. Retained evidence is capped at
+evidence, hypotheses and next steps. A normal incident is primarily bounded by ten
+coordinator turns, with a 45-minute outer safety deadline and up to three reads per turn.
+The coordinator can finish early when the evidence is sufficient; productive collection is
+not stopped merely because a shorter elapsed-time target was crossed. Retained evidence is capped at
 384 KiB while the coordinator context has a separate 128 KiB ceiling. These defaults
 are configurable with the `PODPILOT_INCIDENT_*` settings defined in `settings.py`;
 schema bounds prevent unbounded autonomy. Synthetic smoke tests retain their shorter

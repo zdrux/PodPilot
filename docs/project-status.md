@@ -23,8 +23,9 @@ and a resolved incident. Connections and webhook status have dedicated settings
 pages. Corporate connectors still require end-to-end environment validation.
 Incident mode now isolates Argo CD, GitHub and selected Pod-log analysis in specialist
 contexts, returns their compact cited reports to a bounded coordinator context, and
-retains the bounded source evidence for operators. Normal runs have a configurable
-15-minute deadline, ten coordinator rounds and up to twelve specialist reports. The
+retains the bounded source evidence for operators. Normal runs are primarily bounded by
+ten coordinator turns, with a configurable 45-minute hard safety deadline and up to twelve
+specialist reports. The
 SNO deployment simulates a 64,000-token total model window (45,952 effective input
 tokens with its current output reserve), runs three incident coordinators concurrently,
 and fans out up to three Pod-log specialists per round. A four-scenario live stress run

@@ -188,10 +188,26 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
     assert runtime["data"]["chat_max_chars"] == "4000"
+    assert runtime["data"]["incident_run_timeout_seconds"] == "2700"
+    assert runtime["data"]["incident_max_rounds"] == "10"
     chat_limit = next(item for item in env if item["name"] == "PODPILOT_CHAT_MAX_CHARS")
     assert chat_limit["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "chat_max_chars",
+    }
+    incident_timeout = next(
+        item for item in env if item["name"] == "PODPILOT_INCIDENT_RUN_TIMEOUT_SECONDS"
+    )
+    assert incident_timeout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "incident_run_timeout_seconds",
+    }
+    incident_rounds = next(
+        item for item in env if item["name"] == "PODPILOT_INCIDENT_MAX_ROUNDS"
+    )
+    assert incident_rounds["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "incident_max_rounds",
     }
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
     assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"

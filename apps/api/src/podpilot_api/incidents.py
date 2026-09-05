@@ -623,6 +623,10 @@ class IncidentService:
                 synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
                 simulation = all(a.get('labels', {}).get('podpilot_simulation') == 'true' for a in alert_snapshot.values())
                 run_timeout = 240 if synthetic else self.settings.incident_run_timeout_seconds
+                hard_deadline_minutes = run_timeout / 60
+                hard_deadline_limit = (
+                    f"Overall {hard_deadline_minutes:g}-minute safety deadline reached."
+                )
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
             coordinator_activity("Validating cluster access and investigation policy", phase="Starting")
@@ -747,7 +751,7 @@ class IncidentService:
                 max_rounds = 6 if synthetic else self.settings.incident_max_rounds
                 for step in range(max_rounds):
                     if time.monotonic()-started > run_timeout:
-                        limitations.append("Investigation time budget reached.")
+                        limitations.append(hard_deadline_limit)
                         status = "budget_exhausted"
                         break
                     coordinator_activity(
@@ -777,12 +781,15 @@ class IncidentService:
                         break
                     if step == max_rounds-1:
                         status = "budget_exhausted"
-                        limitations.append(f"Model did not finalize within the {max_rounds}-round limit.")
+                        limitations.append(
+                            f"Coordinator turn budget reached after {max_rounds} investigation rounds."
+                        )
                         break
                     log_items = []
                     for key in decision.collect:
                         if time.monotonic()-started > run_timeout:
-                            limitations.append("Read time budget reached.")
+                            limitations.append(hard_deadline_limit)
+                            status = "budget_exhausted"
                             break
                         if key not in available:
                             limitations.append("Model requested an unavailable collector; request rejected.")
