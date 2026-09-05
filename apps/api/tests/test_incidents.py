@@ -219,6 +219,7 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
     assert 'incident-live-board-4' in page.text
+    assert '<th aria-hidden="true"></th><th>Investigation</th>' in page.text
 
 
 def test_connections_secret_isolation_and_access(client):
@@ -319,6 +320,11 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
         assert specialist['started_at'] and specialist['ended_at']
         assert 'Analyze bounded platform logs' in specialist['work']
         assert specialist['result']=='No meaningful anomaly identified.'
+        assert any(
+            str(event.get('summary')).startswith('Planning investigation round ')
+            and str(event.get('summary')).endswith('(max 10)')
+            for event in activity['events']
+        )
 
 
 def test_connector_specialist_isolated_from_coordinator_context(client):

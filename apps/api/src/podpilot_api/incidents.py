@@ -751,7 +751,7 @@ class IncidentService:
                         status = "budget_exhausted"
                         break
                     coordinator_activity(
-                        f"Planning investigation round {step + 1} of {max_rounds}",
+                        f"Planning investigation round {step + 1} (max {max_rounds})",
                         phase="Investigation planning",
                     )
                     decision = self.provider.incident_step(deadline_profile(), api_key, {

@@ -2043,8 +2043,8 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
 .incident-live-label { color: var(--theme-accent-strong) !important; }
 .incident-board-table-wrap { overflow-x: auto; }
 .incident-board-table { width: 100%; min-width: 980px; border-collapse: collapse; table-layout: fixed; }
-.incident-board-table thead { display: table-header-group; }
-.incident-board-table thead tr { display: grid; grid-template-columns: minmax(320px, 1.4fr) minmax(180px, .75fr) 155px 190px 115px; gap: 18px; padding: 12px 8px 9px 42px; }
+.incident-board-table thead { display: block; width: 100%; }
+.incident-board-table thead tr { display: grid; width: 100%; box-sizing: border-box; grid-template-columns: 24px minmax(320px, 1.4fr) minmax(180px, .75fr) 155px 190px 115px; gap: 18px; padding: 12px 8px 9px; }
 .incident-board-table th { padding: 0; color: var(--theme-subtle); font-size: 9px; font-weight: 800; letter-spacing: .09em; text-align: left; text-transform: uppercase; }
 .incident-board-item { border-bottom: 1px solid color-mix(in srgb, var(--theme-border) 78%, transparent); }
 .incident-board-item > tr > td { padding: 0; }
