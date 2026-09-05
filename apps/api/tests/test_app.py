@@ -14846,7 +14846,7 @@ def test_management_sections_require_approver_or_breakglass(tmp_path: Path) -> N
 
         for username in ("ada", "bea"):
             home = client.get("/", headers={"x-forwarded-user": username})
-            assert home.text.count('<p class="nav-label section-gap">Manage</p>') == 1
+            assert home.text.count('<p class="nav-label section-gap admin-section-label">Manage</p>') == 1
             for href in ('/settings/clusters', '/settings/model', '/memory'):
                 assert f'href="{href}"' in home.text
 

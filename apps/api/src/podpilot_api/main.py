@@ -10438,7 +10438,7 @@ def create_app(
             incident_rows = list(db_session.scalars(
                 select(FleetIncident)
                 .order_by(FleetIncident.updated_at.desc())
-                .limit(11)
+                .limit(6)
             )) if app_settings.incidents_enabled else []
         clusters: list[dict[str, object]] = []
         for row in rows:
@@ -10450,8 +10450,8 @@ def create_app(
         return {
             "workspace_clusters": clusters,
             "recent_conversations": recent_conversations,
-            "recent_incidents": incident_rows[:10],
-            "has_more_incidents": len(incident_rows) > 10,
+            "recent_incidents": incident_rows[:5],
+            "has_more_incidents": len(incident_rows) > 5,
         }
 
     templates = Jinja2Templates(

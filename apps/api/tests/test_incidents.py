@@ -1,6 +1,8 @@
 import json
+import re
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -496,15 +498,26 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
         assert page.status_code == 200
         assert 'Active platform investigation' in page.text
         assert 'aria-label="Recent incidents"' in page.text
-        assert 'Incident 10' in page.text and 'Incident 01' in page.text
-        assert 'Incident 00' not in page.text
+        assert 'Incident 10' in page.text and 'Incident 06' in page.text
+        assert 'Incident 05' not in page.text
         assert 'More incidents →' in page.text
         assert 'aria-label="Connections and webhooks"' in page.text
         assert 'Investigation access &amp; connectors' in page.text
         assert 'Webhook receivers' in page.text
         assert 'Cluster registry' not in page.text
+        assert 'class="nav-label section-gap admin-section-label">Manage</p>' in page.text
 
     assert 'href="/incidents/00000000-0000-0000-0000-000000000010"' in connectors.text
+    assert len(set(re.findall(r'href="/incidents/([0-9a-f-]{36})"', connectors.text))) == 5
+
+    base_template = (Path(__file__).parents[2] / 'web/templates/base.html').read_text(encoding='utf-8')
+    assert base_template.index('href="/delegated/connect"') < base_template.index('href="/incidents"')
+    assert base_template.index('href="/incidents"') < base_template.index('>Manage</p>')
+
+    investigator = client.get('/incidents', headers={'x-forwarded-user':'sre'})
+    assert investigator.status_code == 200
+    assert 'Connections &amp; webhooks' not in investigator.text
+    assert 'aria-label="Connections and webhooks"' not in investigator.text
 
 
 

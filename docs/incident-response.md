@@ -18,7 +18,8 @@ Resolution never erases the investigation. A newer firing occurrence after
 resolution creates a new incident; delayed firing notifications from a resolved
 occurrence do not reopen it. Manual reruns preserve previous run snapshots.
 
-The shared sidebar lists the ten most recently updated incidents with links to each
+The shared sidebar lists the five most recently updated incidents below the cluster
+tree, with links to each
 case and indicates when more are available on the full **Incidents** dashboard. The
 incident page shows alerts separately from investigation state, a preliminary
 briefing, ranked hypotheses, evidence citations, next steps, limitations and an
@@ -43,7 +44,8 @@ operators must separately ensure that this identity is read-only in cluster RBAC
 
 **Manage → Connections & webhooks** contains child links for **Investigation access
 & connectors** and **Webhook receivers**. The shared cluster registry remains under
-the separate **Cluster Management** sidebar entry.
+the separate **Cluster Management** sidebar entry. A divider separates this
+configuration-administrator-only section from the shared workspace navigation.
 The receiver panel displays each HTTPS endpoint, enabled state, last admitted
 delivery and incident count, with links to credential/policy editing and incidents.
 The receiver is a POST API; it is not an interactive browser page.
