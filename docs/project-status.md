@@ -13,7 +13,7 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 798 model-free tests pass (78% aggregate coverage), migration upgrade/
+Validation: 799 model-free tests pass (78% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -30,12 +30,16 @@ tokens with its current output reserve), runs three incident coordinators concur
 and fans out up to three Pod-log specialists per round. A four-scenario live stress run
 finished in about 11 minutes with three completed investigations and one correctly
 partial result due to invalid final citations. SNO has no Argo CD Application CRD or
-corporate GitHub connector, so those specialists remain model-free tested.
+corporate GitHub connector, so those specialists remain model-free tested. The shared
+sidebar now retains active Ask sessions on the incident configuration pages, lists the
+ten most recently updated incidents with a link to the full fleet view, and nests the
+connector and webhook pages under **Connections & webhooks**. Cluster Management remains
+its own administration entry rather than a duplicate configuration tab.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:50d232916dbb4e28bb5c0afe88eb869b70ac0798dbb6194d7e1513222b7b2fc4`
+`sha256:40c4f78ed1a1435f213b3f0b3a21aad1e64ad6228fc79f76e6d86fd223fd75be`
 with schema head `0023_fleet_incidents`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
