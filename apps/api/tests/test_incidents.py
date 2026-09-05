@@ -95,6 +95,51 @@ def test_alert_policy_and_truncation(client):
     assert 'truncated' in page.text
 
 
+def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(client):
+    sid = source(client)
+    iid = send(client, sid, notification()).json()['incident_id']
+    repeated = notification()['alerts'][0]
+    with Session(client.app.state.engine) as db:
+        incident = db.get(FleetIncident, iid)
+        incident.alerts_json = json.dumps({f'fingerprint-{index}': repeated for index in range(3)})
+        run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == iid))
+        run.status = 'completed'
+        run.briefing_json = json.dumps({
+            'summary': 'The **API server is healthy** based on Evidence E1.',
+            'hypotheses': ['1. **Synthetic signal** - verify the simulation label.'],
+            'evidence_ids': ['E1'],
+            'next_steps': ['- Confirm the alert rule source.'],
+            'limitations': ['Only a bounded snapshot was collected.'],
+        })
+        run.evidence_json = json.dumps([{
+            'id': 'E1', 'source': 'operators', 'observed_at': '2026-09-05T12:01:00Z',
+            'data': {'rows': [{'name': 'kube-apiserver', 'available': True}]},
+        }])
+        run_id = run.id
+        db.commit()
+
+    page = client.get(f'/incidents/{iid}', headers={'x-forwarded-user':'sre'})
+
+    assert page.status_code == 200
+    assert 'role="tablist"' in page.text
+    assert 'data-incident-tab="incident-panel-overview"' in page.text
+    assert '<h2>Platform incident assessment</h2>' in page.text
+    assert '<strong>API server is healthy</strong>' in page.text
+    assert '**API server is healthy**' not in page.text
+    assert '<td>3</td>' in page.text
+    alert_table = re.search(r'<table class="incident-detail-table">(.*?)</table>', page.text, re.DOTALL).group(1)
+    assert alert_table.count('<strong>etcdNoLeader</strong>') == 1
+    assert 'data-evidence-link' in page.text
+    assert f'href="#evidence-{run_id}-E1"' in page.text
+    assert f'id="evidence-{run_id}-E1"' in page.text
+    assert 'class="panel incident-panel"' not in page.text
+    assert '>- Confirm' not in page.text
+
+    script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
+    assert "target.open = true" in script
+    assert "target.scrollIntoView" in script
+
+
 def test_connections_secret_isolation_and_access(client):
     sid = source(client)
     with Session(client.app.state.engine) as db:

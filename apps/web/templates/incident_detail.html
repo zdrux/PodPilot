@@ -1,20 +1,44 @@
 {% extends "base.html" %}
 {% block title %}{{ incident.title }} · PodPilot{% endblock %}
+{% block body_class %}incident-detail-page{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow"><a href="/incidents">Incidents</a> / {{ cluster.name }}</p><h1>{{ incident.title }}</h1><p class="subtitle">Critical · Alerts {{ incident.alert_state }} · First seen {{ incident.created_at | est_time }}</p></div><div class="topbar-actions"><button class="button primary" data-incident-post="/api/v1/incidents/{{ incident.id }}/rerun">Rerun investigation</button><a class="button" href="/incidents/{{ incident.id }}">Refresh</a></div></header>
-<p role="status" id="incident-feedback"></p>
-<p><button class="button" data-incident-post="/api/v1/incidents/{{ incident.id }}/continue">Continue in Ask</button> <small>Uses your own delegated cluster sign-in.</small></p>
-{% if not cluster.tls_verify and not cluster.is_system %}<section class="notice warning-notice">TLS certificate and hostname verification is disabled for this cluster.</section>{% endif %}
-{% for limitation in incident_limitations %}<section class="notice warning-notice">{{ limitation }}</section>{% endfor %}
-<section class="panel incident-panel"><h2>Source alerts</h2>{% for alert in alerts %}<p><strong>{{ alert.labels.alertname }}</strong> · {{ alert.status }} · {{ alert.startsAt }}</p>{% endfor %}</section>
-{% for run in runs %}
-<section class="panel incident-panel"><div class="panel-header"><h2>Investigation {{ loop.revindex }}</h2><span class="tag">{{ run.row.status }}</span></div><p class="incident-muted">{{ run.row.created_at | est_time }} · {{ run.row.actor }}</p>
-<h3>Preliminary briefing</h3><p class="incident-prose">{{ run.briefing.get('summary', 'Waiting for the incident worker. Refresh to see progress.') }}</p>
-{% if run.briefing.get('hypotheses') %}<h3>Hypotheses · require operator verification</h3><ol>{% for hypothesis in run.briefing.hypotheses %}<li>{{ hypothesis }}</li>{% endfor %}</ol>{% endif %}
-{% if run.briefing.get('evidence_ids') %}<p>Supporting evidence: {% for id in run.briefing.evidence_ids %}<a href="#{{ run.row.id }}-{{ id }}">{{ id }}</a> {% endfor %}</p>{% endif %}
-{% if run.briefing.get('next_steps') %}<h3>Operator next steps</h3><ol>{% for step in run.briefing.next_steps %}<li>{{ step }}</li>{% endfor %}</ol>{% endif %}
-{% if run.briefing.get('limitations') %}<h3>Limitations</h3><ul>{% for limitation in run.briefing.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>{% endif %}
-<h3>Evidence timeline</h3>{% for item in run.evidence %}<details id="{{ run.row.id }}-{{ item.id }}"><summary>{{ item.id }} · {{ item.source }} · {{ item.observed_at }}</summary><pre>{{ item.data | tojson(indent=2) }}</pre></details>{% else %}<p>No evidence collected yet.</p>{% endfor %}
-</section>{% endfor %}
-<script src="{{ url_for('static', path='/incidents.js') }}" defer></script>
+<div class="incident-detail-shell" data-incident-tabs>
+  <header class="topbar incident-detail-header">
+    <div>
+      <p class="eyebrow"><a href="/incidents">Incidents</a> / {{ cluster.name }}</p>
+      <h1>{{ incident.title }}</h1>
+      <div class="incident-header-meta"><span>Critical</span><span class="incident-state incident-state-{{ incident.alert_state }}">{{ incident.alert_state | capitalize }}</span><span>First seen {{ incident.created_at | est_time }}</span></div>
+    </div>
+    <div class="topbar-actions"><button class="button" data-incident-post="/api/v1/incidents/{{ incident.id }}/continue">Continue in Ask</button><button class="button primary" data-incident-post="/api/v1/incidents/{{ incident.id }}/rerun">Rerun investigation</button><a class="button" href="/incidents/{{ incident.id }}">Refresh</a></div>
+  </header>
+  <p role="status" id="incident-feedback" class="incident-feedback"></p>
+  {% if not cluster.tls_verify and not cluster.is_system %}<section class="notice warning-notice">TLS certificate and hostname verification is disabled for this cluster.</section>{% endif %}
+  {% for limitation in incident_limitations %}<section class="notice warning-notice">{{ limitation }}</section>{% endfor %}
+
+  <nav class="incident-tabs" role="tablist" aria-label="Incident details">
+    <button type="button" role="tab" id="incident-tab-overview" aria-controls="incident-panel-overview" aria-selected="true" data-incident-tab="incident-panel-overview">Overview</button>
+    {% for run in runs %}<button type="button" role="tab" id="incident-tab-run-{{ run.row.id }}" aria-controls="incident-panel-run-{{ run.row.id }}" aria-selected="false" tabindex="-1" data-incident-tab="incident-panel-run-{{ run.row.id }}">Investigation {{ run.number }}{% if loop.first and runs | length > 1 %}<small>Latest</small>{% endif %}</button>{% endfor %}
+  </nav>
+
+  <section class="incident-tab-panel" id="incident-panel-overview" role="tabpanel" aria-labelledby="incident-tab-overview" data-incident-tab-panel>
+    <dl class="incident-facts"><div><dt>Cluster</dt><dd>{{ cluster.name }}</dd></div><div><dt>Alert state</dt><dd>{{ incident.alert_state | capitalize }}</dd></div><div><dt>Signals</dt><dd>{{ alerts | length }} across {{ alert_groups | length }} group{% if alert_groups | length != 1 %}s{% endif %}</dd></div><div><dt>Investigations</dt><dd>{{ runs | length }}</dd></div><div><dt>First seen</dt><dd>{{ incident.created_at | est_time }}</dd></div><div><dt>Last notification</dt><dd>{{ incident.updated_at | est_time }}</dd></div></dl>
+    <section class="incident-report-row incident-alerts-section">
+      <div class="incident-row-label"><p class="eyebrow">Signals</p><h2>Source alerts</h2><p>Identical notifications are grouped.</p></div>
+      <div class="incident-row-content incident-table-wrap"><table class="incident-detail-table"><thead><tr><th>Alert</th><th>State</th><th>Started</th><th>Occurrences</th></tr></thead><tbody>{% for alert in alert_groups %}<tr><td><strong>{{ alert.name }}</strong>{% if alert.summary %}<small>{{ alert.summary }}</small>{% endif %}</td><td><span class="incident-state incident-state-{{ alert.status }}">{{ alert.status | capitalize }}</span></td><td>{{ alert.started_at | est_time if alert.started_at else 'Unknown' }}</td><td>{{ alert.count }}</td></tr>{% else %}<tr><td colspan="4">No source alerts are retained.</td></tr>{% endfor %}</tbody></table></div>
+    </section>
+  </section>
+
+  {% for run in runs %}
+  <section class="incident-tab-panel" id="incident-panel-run-{{ run.row.id }}" role="tabpanel" aria-labelledby="incident-tab-run-{{ run.row.id }}" data-incident-tab-panel hidden>
+    <header class="incident-run-header"><div><p class="eyebrow">Investigation {{ run.number }}</p><h2>Platform incident assessment</h2><p>{{ run.row.created_at | est_time }} · {{ run.row.actor }}</p></div><span class="incident-run-status incident-run-status-{{ run.row.status }}">{{ run.row.status | replace('_', ' ') | capitalize }}</span></header>
+    <section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Assessment</p><h3>Preliminary briefing</h3></div><div class="incident-row-content incident-markdown">{{ run.briefing.get('summary', 'Waiting for the incident worker. Refresh to see progress.') | safe_markdown }}</div></section>
+    {% if run.hypotheses %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Analysis</p><h3>Ranked hypotheses</h3><p>Require operator verification.</p></div><div class="incident-row-content"><ol class="incident-ranked-list">{% for hypothesis in run.hypotheses %}<li><span class="incident-list-index">{{ '%02d' | format(loop.index) }}</span><div class="incident-markdown">{{ hypothesis | safe_markdown }}</div></li>{% endfor %}</ol></div></section>{% endif %}
+    {% if run.supporting_ids %}<section class="incident-report-row incident-support-row"><div class="incident-row-label"><p class="eyebrow">Traceability</p><h3>Supporting evidence</h3></div><div class="incident-row-content incident-citation-list">{% for id in run.supporting_ids %}<a href="#evidence-{{ run.row.id }}-{{ id }}" data-evidence-link>{{ id }}</a>{% endfor %}</div></section>{% endif %}
+    {% if run.next_steps %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Response</p><h3>Operator next steps</h3></div><div class="incident-row-content"><ol class="incident-next-steps">{% for step in run.next_steps %}<li><span>{{ loop.index }}</span><div class="incident-markdown">{{ step | safe_markdown }}</div></li>{% endfor %}</ol></div></section>{% endif %}
+    {% if run.limitations %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Confidence</p><h3>Limitations</h3></div><div class="incident-row-content"><ul class="incident-limitations">{% for limitation in run.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></div></section>{% endif %}
+    <section class="incident-report-row incident-evidence-section"><div class="incident-row-label"><p class="eyebrow">Evidence</p><h3>Collected timeline</h3><p>{{ run.evidence | length }} retained item{% if run.evidence | length != 1 %}s{% endif %}</p></div><div class="incident-row-content incident-evidence-list">{% for item in run.evidence %}<details id="evidence-{{ run.row.id }}-{{ item.id }}"><summary><span class="incident-evidence-id">{{ item.id }}</span><span class="incident-evidence-source">{{ item.source }}</span><time>{{ item.observed_at | est_time }}</time><span class="incident-disclosure" aria-hidden="true">⌄</span></summary><div class="incident-evidence-payload"><pre>{{ item.data | tojson(indent=2) }}</pre></div></details>{% else %}<p class="incident-empty">No evidence collected yet.</p>{% endfor %}</div></section>
+  </section>
+  {% else %}<section class="incident-tab-panel incident-empty-run"><h2>Investigation queued</h2><p>Refresh after the incident worker begins collecting evidence.</p></section>{% endfor %}
+</div>
+<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-detail-tabs-2" defer></script>
 {% endblock %}

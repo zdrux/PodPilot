@@ -627,9 +627,49 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 raise HTTPException(404, "Incident not found.")
             cluster = db.get(Cluster, incident.cluster_id)
             runs = list(db.scalars(select(IncidentRun).where(IncidentRun.incident_id == incident_id).order_by(IncidentRun.created_at.desc()).limit(25)))
+        alerts = list(json.loads(incident.alerts_json).values())
+        grouped_alerts = {}
+        for alert in alerts:
+            labels = alert.get("labels") or {}
+            annotations = alert.get("annotations") or {}
+            key = (labels.get("alertname", "Unknown alert"), alert.get("status", "unknown"), alert.get("startsAt", ""))
+            if key not in grouped_alerts:
+                grouped_alerts[key] = {
+                    "name": key[0], "status": key[1], "started_at": key[2],
+                    "severity": labels.get("severity", "unknown"),
+                    "summary": annotations.get("summary") or annotations.get("description") or "",
+                    "count": 0,
+                }
+            grouped_alerts[key]["count"] += 1
+
+        run_views = []
+        for index, run in enumerate(runs):
+            briefing = json.loads(run.briefing_json)
+            evidence = json.loads(run.evidence_json)
+            valid_ids = {str(item.get("id")) for item in evidence}
+            narrative = json.dumps({
+                "summary": briefing.get("summary", ""),
+                "hypotheses": briefing.get("hypotheses", []),
+                "next_steps": briefing.get("next_steps", []),
+            })
+            mentioned_ids = re.findall(r"\bE\d+\b", narrative)
+            supporting_ids = list(dict.fromkeys([
+                *[str(item) for item in briefing.get("evidence_ids", [])],
+                *mentioned_ids,
+            ]))
+            run_views.append({
+                "row": run,
+                "number": len(runs) - index,
+                "briefing": briefing,
+                "evidence": evidence,
+                "supporting_ids": [item for item in supporting_ids if item in valid_ids],
+                "hypotheses": [re.sub(r"^\s*(?:\d+\s*[.)]\s*|[-*•]\s*)", "", str(item)) for item in briefing.get("hypotheses", [])],
+                "next_steps": [re.sub(r"^\s*(?:\d+\s*[.)]\s*|[-*•]\s*)", "", str(item)) for item in briefing.get("next_steps", [])],
+                "limitations": [re.sub(r"^\s*[-*•]\s*", "", str(item)) for item in briefing.get("limitations", [])],
+            })
         return page(request, user, "incident_detail.html", {"incident": incident, "cluster": cluster,
-            "alerts": json.loads(incident.alerts_json).values(), "incident_limitations": json.loads(incident.limitations_json),
-            "runs": [{"row": r, "briefing": json.loads(r.briefing_json), "evidence": json.loads(r.evidence_json)} for r in runs]})
+            "alerts": alerts, "alert_groups": list(grouped_alerts.values()),
+            "incident_limitations": json.loads(incident.limitations_json), "runs": run_views})
 
     @app.post("/api/v1/incidents/{incident_id}/rerun")
     async def rerun(incident_id: str, request: Request, user=Depends(current_user)):

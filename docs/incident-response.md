@@ -19,11 +19,14 @@ resolution creates a new incident; delayed firing notifications from a resolved
 occurrence do not reopen it. Manual reruns preserve previous run snapshots.
 
 The shared sidebar lists the five most recently updated incidents below the cluster
-tree, with links to each
-case and indicates when more are available on the full **Incidents** dashboard. The
-incident page shows alerts separately from investigation state, a preliminary
-briefing, ranked hypotheses, evidence citations, next steps, limitations and an
-expandable evidence timeline. Refresh retrieves worker progress. Continue in Ask
+tree, with links to each case and an indication when more are available on the full
+**Incidents** dashboard. The incident detail page uses a flat tabbed report: Overview
+groups identical source alerts into table rows with occurrence counts, and every
+immutable run has its own Investigation tab. Briefings render as sanitized Markdown,
+while hypotheses, next steps and limitations use compact reading lists. Supporting
+evidence links activate the owning run, expand the exact run-scoped evidence row and
+scroll it into view; retained payloads remain collapsed until requested. Refresh
+retrieves worker progress. Continue in Ask
 creates a private read-only conversation with copied historical evidence and
 requires the operator's own delegated sign-in before additional reads.
 
