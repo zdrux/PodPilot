@@ -432,8 +432,25 @@ def test_agentic_deploy_restarts_latest_tag_workload_after_build() -> None:
     assert "oc auth can-i get groups.user.openshift.io" in script
     assert "podpilot-investigator can read workload Pods" in script
     assert "--from-archive=$buildArchive" in script
+    assert "oc apply --dry-run=server -k deploy/openshift/overlays/sno-incident-response" in script
+    assert "oc apply -k deploy/openshift/overlays/sno-incident-response" in script
+    assert "oc apply -k deploy/openshift/overlays/sno-milestone-one" not in script
     assert "oc rollout restart deployment/podpilot -n ai-ops" in script
     assert "oc rollout status deployment/podpilot -n ai-ops --timeout=600s" in script
+
+
+def test_sno_incident_overlay_composes_agentic_and_incident_features() -> None:
+    overlays = ROOT / "deploy" / "openshift" / "overlays"
+    incident = yaml.safe_load(
+        (overlays / "sno-incident-response" / "kustomization.yaml").read_text()
+    )
+    milestone = yaml.safe_load(
+        (overlays / "sno-milestone-one" / "kustomization.yaml").read_text()
+    )
+
+    assert "../sno-milestone-one" in incident["resources"]
+    assert incident["components"] == ["../../components/incident-response"]
+    assert milestone["components"] == ["../../components/agentic-runner"]
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:

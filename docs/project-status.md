@@ -13,7 +13,9 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 802 model-free tests pass (78% aggregate coverage), migration upgrade/
+The SNO agentic deployment script applies the combined incident overlay so routine image
+or model-profile deployments cannot silently remove the incident panel and worker.
+Validation: 805 model-free tests pass (78% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers

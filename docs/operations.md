@@ -618,6 +618,10 @@ machine environment, then run:
 .\scripts\deploy-agentic-sno.ps1
 ```
 
+The script applies the combined `sno-incident-response` overlay. This preserves the
+incident feature flag, webhook ingress exception, credential Secret and reader RBAC when
+the application or model profile is rebuilt.
+
 The helper connects through the existing short-lived lab bootstrap flow, checks the runtime RBAC,
 applies both binary BuildConfigs, builds both images, deploys the SNO overlay, waits for rollout,
 and pipes the OpenRouter key over stdin to the API container. The bootstrap module stores it under
