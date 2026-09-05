@@ -152,6 +152,12 @@ evidence. Without a configured usable model, fixed platform snapshots are retain
 with partial status and an explicit limitation. Every run uses the currently active
 model profile behind the existing API provider boundary.
 
+Every coordinator and specialist model call inherits the active model profile's transient
+retry allowance, which defaults to three retries for timeouts, disconnects, rate limits and
+transient server failures. The timeout applies per attempt. As the outer incident safety
+deadline approaches, PodPilot shortens the per-attempt timeout so retry opportunities remain
+available without discarding the hard deadline.
+
 `PODPILOT_INCIDENT_CONTEXT_WINDOW_TOKENS` models the provider's complete context
 window and defaults to 64,000. Incident mode reserves the smaller of the profile's
 output allowance and one quarter of that window, plus a 2,048-token protocol margin;

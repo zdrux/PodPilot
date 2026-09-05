@@ -533,6 +533,10 @@ def test_model_client_uses_profile_transient_retry_count(monkeypatch) -> None:
     assert captured["max_retries"] == 5
 
 
+def test_model_profile_config_defaults_to_three_transient_retries() -> None:
+    assert profile().max_retries == 3
+
+
 def test_inquiry_schema_advertises_only_focused_metric_semantics() -> None:
     definitions = InquirySemantics.model_json_schema()["$defs"]
 

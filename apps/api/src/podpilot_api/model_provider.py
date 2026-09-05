@@ -99,7 +99,7 @@ class ModelProfileConfig:
     max_input_tokens: int = 128_000
     reasoning_effort: str | None = None
     temperature: float | None = None
-    max_retries: int = 1
+    max_retries: int = 3
 
 
 def _responses_reasoning(profile: ModelProfileConfig) -> dict[str, object]:

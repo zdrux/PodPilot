@@ -639,12 +639,17 @@ class IncidentService:
                 output_limit = min(profile.max_output_tokens, max(1024, context_window // 4))
                 input_limit = min(profile.max_input_tokens, max(1024, context_window - output_limit - 2048))
                 profile = replace(profile, timeout_seconds=self.settings.incident_model_timeout_seconds,
-                    max_output_tokens=output_limit, max_input_tokens=input_limit, max_retries=0)
+                    max_output_tokens=output_limit, max_input_tokens=input_limit)
             def deadline_profile():
                 remaining = run_timeout - (time.monotonic()-started)
                 if remaining <= 1:
                     raise TimeoutError("Incident run deadline reached.")
-                return replace(profile, timeout_seconds=min(profile.timeout_seconds, remaining))
+                # Preserve the model profile's retry policy for every coordinator and
+                # specialist call. Near the outer safety deadline, shorten each attempt
+                # so the configured retry opportunities still fit inside the run.
+                attempts = profile.max_retries + 1
+                attempt_timeout = min(profile.timeout_seconds, remaining / attempts)
+                return replace(profile, timeout_seconds=max(1.0, attempt_timeout))
             reader = self.cluster_reader(cluster, token)
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):

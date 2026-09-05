@@ -28,7 +28,8 @@ ten coordinator turns, with a configurable 45-minute hard safety deadline and up
 specialist reports. The
 SNO deployment simulates a 64,000-token total model window (45,952 effective input
 tokens with its current output reserve), runs three incident coordinators concurrently,
-and fans out up to three Pod-log specialists per round. A four-scenario live stress run
+fans out up to three Pod-log specialists per round, and applies the active model profile's
+three transient retries to every coordinator and specialist call. A four-scenario live stress run
 finished in about 11 minutes with three completed investigations and one correctly
 partial result due to invalid final citations. SNO has no Argo CD Application CRD or
 corporate GitHub connector, so those specialists remain model-free tested. The shared
