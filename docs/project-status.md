@@ -67,10 +67,17 @@ scoped choice panels, and a dedicated save/test footer. Existing connector field
 integration visibility, server-side credential handling, and API endpoints are unchanged. The local
 connector route passed visual comparison against the cluster sign-in reference and the API application
 test suite passed.
-OpenShift binary builds `podpilot-133` and `podpilot-oc-runner-15` completed successfully, and
+Model settings, Cluster memory, and Cluster Management now use the same administration workspace:
+compact record directories, staged configuration headings, consistent inset controls and option groups,
+sticky observation panels where relevant, and grounded action footers. Their existing authorization,
+credential, search, tag, TLS, status, and destructive-action contracts are unchanged. The three routes
+passed a combined browser comparison against the Connections screen and the complete API application
+test suite.
+OpenShift application build `podpilot-134` completed successfully while retaining runner build
+`podpilot-oc-runner-15`, and
 the deployment rolled out with one ready application replica and no API-container restarts.
 The current SNO application image is
-`sha256:4f4b30ae9ec9cad2f8ad06d71a8528157e06ba97b88472b9ab16750641a9c208`
+`sha256:1f070b05550bb972d1ce6413c63279af68fb179b59b215a964887fb05247bccd`
 with schema head `0024_incident_activity`; the rebuilt runner image is
 `sha256:668c3be1a5f3fcd5b256f77c7436ebf403eb8a45316865dd65f30187fb3b332c`.
 The post-rollout OpenRouter profile probe was manually stopped after remaining silent beyond its
