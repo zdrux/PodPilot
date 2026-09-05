@@ -10280,6 +10280,7 @@ def create_app(
     cluster_credential_store: CredentialStore | None = None,
     remote_read_explorer_factory: Callable[[Cluster, str], ReadOnlyExplorer] | None = None,
     agent_runner: AgentRunner | None = None,
+    incident_credential_store: CredentialStore | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
     resolver = role_resolver or LazyOpenShiftGroupRoleResolver(
@@ -10304,6 +10305,14 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
+    from podpilot_api.incidents import IncidentService, install_incidents
+    def incident_model_context(engine):
+        with Session(engine) as db_session:
+            profile = _active_profile(db_session)
+            if not _profile_is_usable(profile):
+                return None, None
+            return _profile_config(profile), credentials.get(profile.credential_key)
+    incident_service = IncidentService(app_settings, incident_credential_store, incident_model_context, provider)
     agent_runner_client = agent_runner or OcAgentRunnerClient(
         app_settings.agent_runner_url,
         timeout_seconds=app_settings.agent_command_timeout_seconds + 10,
@@ -10486,6 +10495,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
+        application.state.incident_service = incident_service
         application.state.engine = build_engine(app_settings)
         application.state.delegated_vault = DelegatedSessionVault(
             lifetime_seconds=app_settings.delegated_session_lifetime_seconds
@@ -10563,15 +10573,21 @@ def create_app(
             _delegated_session_reaper(application),
             name="podpilot-delegated-session-reaper",
         )
+        incident_task = asyncio.create_task(incident_service.worker(application)) if (
+            app_settings.incidents_enabled and app_settings.incident_worker_enabled
+        ) else None
         try:
             yield
         finally:
             delegated_reaper_task.cancel()
+            if incident_task:
+                incident_task.cancel()
             for worker_task in worker_tasks:
                 worker_task.cancel()
             await asyncio.gather(
                 delegated_reaper_task,
                 *worker_tasks,
+                *([incident_task] if incident_task else []),
                 return_exceptions=True,
             )
             await _revoke_delegated_connections(
@@ -10734,6 +10750,8 @@ def create_app(
         return response
 
     current_user = auth_dependency(app_settings, resolver)
+    templates.env.globals["incidents_enabled"] = app_settings.incidents_enabled
+    install_incidents(app, incident_service, current_user, templates, _csrf_token, _verify_csrf)
 
     async def _execute_agent_turn(
         *,

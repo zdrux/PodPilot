@@ -5,6 +5,11 @@ Update when: target user, product scope, core workflow, or non-goals change.
 
 ## Current access model
 
+The optional [incident response PoC](incident-response.md) adds a shared SRE fleet
+view for critical OpenShift platform alerts. It uses separate read-only automation
+connections for unattended investigations and platform change correlation. It does
+not change the delegated Ask access model described below.
+
 Ask is the product landing experience. Every cluster request uses a temporary OpenShift token
 created from the signed-in user's own credentials; PodPilot stores cluster metadata but no remote
 bearer tokens. Investigator conversations are always read-only. Read-Write users choose read-only

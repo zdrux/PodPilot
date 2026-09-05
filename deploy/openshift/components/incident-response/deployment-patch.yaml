@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podpilot
+  namespace: ai-ops
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: PODPILOT_INCIDENTS_ENABLED
+              value: "true"
+            - name: PODPILOT_INCIDENT_SECRET_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+        - name: oauth-proxy
+          # Keep base arguments in sync; test_incident_component_preserves_proxy_args checks this.
+          args:
+            - --provider=openshift
+            - --openshift-service-account=podpilot-investigator
+            - --client-secret-file=/var/run/podpilot-oauth/client-secret
+            - --http-address=0.0.0.0:4180
+            - --https-address=
+            - --upstream=http://127.0.0.1:8080
+            - --upstream-timeout=300s
+            - --cookie-secret-file=/etc/oauth-cookie/session_secret
+            - --cookie-name=_podpilot_oauth
+            - --cookie-refresh=0
+            - --cookie-expire=8h
+            - --cookie-samesite=lax
+            - --skip-provider-button=true
+            - --pass-basic-auth=false
+            - --pass-user-headers=true
+            - --pass-access-token=false
+            - --pass-user-bearer-token=false
+            - --scope=user:info user:check-access
+            - --openshift-sar={"namespace":"ai-ops","resource":"services","resourceName":"podpilot","verb":"get"}
+            - --request-logging=true
+            - --skip-auth-regex=^/api/v1/incident-webhooks/[a-f0-9-]+$

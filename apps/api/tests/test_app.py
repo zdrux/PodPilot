@@ -9537,7 +9537,7 @@ def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
             created.headers["location"], headers={"x-forwarded-user": "ivy"}
         )
         assert "RBAC denied the mutation" in rendered.text
-        assert "Agent evidence ledger" in rendered.text
+        assert "Investigation activity" in rendered.text
         assert "oc auth can-i patch deployments --all-namespaces" in rendered.text
 
     assert runner.commands == ["oc auth can-i patch deployments --all-namespaces"]
@@ -11028,7 +11028,7 @@ def test_delegated_agent_brokers_each_selected_remote_cluster_and_surfaces_failu
     ]
     assert all(call[1].tls_verify is True for call in runner.calls)
     assert "synthetic failure" in rendered.text
-    assert "Agent evidence ledger" in rendered.text
+    assert "Investigation activity" in rendered.text
     assert "Exploratory checks" in rendered.text
     assert "Command failed" in rendered.text
     assert "East DEV" in rendered.text

@@ -5,6 +5,13 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 
 ## Trust Boundaries
 
+The optional [incident response PoC](incident-response.md) adds a separate,
+resourceName-restricted credential Secret for unattended read-only investigations
+and Argo CD/GitHub connectors. Its authenticated webhook route bypasses interactive
+OAuth only for the exact incident ingress path. Shared incident evidence is visible
+to SRE Investigator-or-higher roles, never Viewer/Delegated Operator roles. Ask
+continues to require user-delegated access, including incident handoffs.
+
 - Cluster objects, events, logs, annotations, and alert text are untrusted data and may contain prompt injection.
 - Model output is untrusted advice and never authorization.
 - Chat Markdown is parsed with raw HTML disabled. Template output is marked safe

@@ -1,5 +1,13 @@
 # PodPilot Architecture
 
+## Incident response PoC addition
+
+The opt-in fleet incident service has separate Secret-backed automation identities,
+durable incident/run records, authenticated Alertmanager ingress, bounded platform
+collectors, Argo CD/GitHub metadata connectors and a model-selected read loop. Ask
+remains delegated. See [incident response](incident-response.md) for the contract,
+single-process constraints, evidence boundary and configuration.
+
 Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
 

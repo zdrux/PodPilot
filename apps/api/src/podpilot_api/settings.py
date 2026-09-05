@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     )
 
     environment: str = "development"
+    incidents_enabled: bool = False
+    incident_worker_enabled: bool = True
+    incident_secret_namespace: str = "ai-ops"
+    incident_secret_name: str = "podpilot-incident-credentials"
     cluster_name: str = "local"
     data_dir: Path = Path("/var/lib/podpilot")
     database_url: str = "sqlite:////var/lib/podpilot/podpilot.db"

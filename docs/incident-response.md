@@ -1,0 +1,160 @@
+# Incident response PoC
+
+Status: implemented on `codex/incident-response-poc`; opt-in, single-process PoC.
+
+## Operator workflow
+
+Incidents is a shared fleet view for PodPilot Investigator, Approver and Breakglass
+roles. Viewer and Delegated Operator roles cannot access incident evidence. Assign
+these SRE roles only to the intended OpenShift administrator audience. PodPilot
+does not infer cluster-admin membership from a remote token.
+
+Each cluster's Alertmanager sends an authenticated webhook to its registered
+incident connection. PodPilot admits only critical alerts in a reviewed allowlist,
+groups by connection and Alertmanager group key, and queues one read-only run.
+Repeated notifications update alert states without additional model calls.
+Resolution never erases the investigation. A newer firing occurrence after
+resolution creates a new incident; delayed firing notifications from a resolved
+occurrence do not reopen it. Manual reruns preserve previous run snapshots.
+
+The incident page shows alerts separately from investigation state, a preliminary
+briefing, ranked hypotheses, evidence citations, next steps, limitations and an
+expandable evidence timeline. Refresh retrieves worker progress. Continue in Ask
+creates a private read-only conversation with copied historical evidence and
+requires the operator's own delegated sign-in before additional reads.
+
+## Configuration
+
+Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migration
+`0023_fleet_incidents`. The default is false. Connectors configuration requires
+configuration-administrator access as well as an SRE role.
+
+Under Connectors, add a **Cluster investigation + Alertmanager** connection for
+each enabled shared registry entry. Supply the existing cluster-reader token and
+a distinct randomly generated webhook bearer credential (at least 32 characters).
+The cluster registry owns API URL, environment and TLS policy; unattended access
+does not modify Ask credentials. An optional Thanos/Prometheus HTTPS origin enables
+fixed platform-availability range queries with the same cluster token. Its custom
+CA bundle is configured on the connection. Connection tests check the core reads;
+operators must separately ensure that this identity is read-only in cluster RBAC.
+
+Secrets are opaque keys in the pre-created `podpilot-incident-credentials` Secret.
+Override its namespace/name with `PODPILOT_INCIDENT_SECRET_NAMESPACE` and
+`PODPILOT_INCIDENT_SECRET_NAME`. Database rows contain key references, never tokens.
+Blank token fields preserve existing credentials. To rotate, save a replacement;
+to revoke use cluster/GitHub token revocation and disable the connection. Disabled
+connections reject new webhooks and queued investigations; a run already executing
+may finish its bounded reads. Credential updates affect subsequent runs.
+
+For **Argo CD**, choose the hosting shared/system cluster, namespace, allowed
+platform projects and managed target cluster IDs. It can inherit the enabled
+hosting cluster's incident credential, or use a separate Kubernetes reader token.
+This PoC reads Application CRs through Kubernetes, so an Argo CD API token is not
+used. Each instance/namespace can have a separate connection. Destination API URLs
+must match the registered target; `https://kubernetes.default.svc` matches only when
+the hosting and target cluster are identical. For Applications using destination
+names, configure the explicit cluster-ID-to-Argo-destination-name mapping.
+
+For **GitHub**, configure the corporate HTTPS origin, REST prefix (`/api/v3` for
+Enterprise Server, empty for an API origin), optional custom CA, PAT and exact
+allowed `owner/repository` entries. Connection tests validate repository metadata
+reads. Hosting type is configured, not inferred solely from a custom hostname.
+The current correlation matches repository hostname to connector hostname; the
+PoC targets custom-host Enterprise installations. Separate github.com/api.github.com
+host mapping is not implemented. Use a PAT restricted to read access to the same
+platform repositories. PodPilot cannot prove every scope attached to a PAT.
+
+Argo CD history is limited to the two hours preceding the source alert onset and
+later retained entries at collection time. Revisions are joined to GitHub only for
+allowed repositories on the configured host and exact commit SHAs. Git commit
+metadata and associated PR metadata are projected; diffs and PR bodies are not
+sent to the model. Current health and nearby changes are correlation, not proof of
+causation. Missing history or unsupported revisions remain visible limitations.
+
+## Alertmanager delivery
+
+The save page displays `/api/v1/incident-webhooks/<connection-id>`. Configure an
+HTTPS webhook receiver at the PodPilot Route plus this path, with `send_resolved:
+true` and HTTP bearer authorization matching the connection's webhook credential.
+Keep the credential in Alertmanager's supported Secret-backed configuration. Do
+not put it in URL query strings. Route only the selected platform-critical alerts.
+Use `max_alerts: 100` or lower; PodPilot accepts at most 100 alerts / 128 KiB per
+delivery and 200 fingerprints per incident. Existing rule `for` durations provide
+the initial firing delay. PodPilot adds no further delay.
+
+Reviewed SNO seed allowlist (severity must also be critical):
+
+- etcdNoLeader
+- etcdInsufficientMembers
+- etcdDatabaseQuotaLowSpace
+- KubeAPIDown
+- KubeAPIErrorBudgetBurn
+- KubeControllerManagerDown
+- KubeSchedulerDown
+- ClusterOperatorDown
+- NoRunningOvnControlPlane
+- NoOvnClusterManagerLeader
+- KubeletDown
+
+Administrators can disable individual entries. Arbitrary new alert names require
+a policy change and review; critical severity alone does not admit an alert.
+Unknown/non-admitted alerts return success with zero admitted entries. Queue
+saturation returns 503 for retry. Truncated notifications explicitly report
+incomplete coverage and cannot assert full group resolution. Missing alerts are
+not implicitly marked resolved. Group-key changes can create separate incidents;
+automatic cross-group merging is intentionally absent.
+
+## Execution and evidence boundaries
+
+The incident worker is separate from Ask and exposes no shell or mutation tool.
+It uses server-owned GET collectors for cluster operators, OpenShift versions and
+upgrade history, nodes, MachineConfigPools, fixed platform namespaces' Pod status,
+Deployment rollout state and recent warning events. Pod environment variables,
+arbitrary annotations and full specs are excluded. Only exact observed platform
+Pod/container names can become bounded log capabilities (100 lines, 16 KiB, last
+30 minutes). The platform namespace allowlist lives in `packages/diagnostics/`.
+Optional metric collection uses one fixed platform availability query over 30
+minutes at 60-second resolution, capped at 12 series.
+
+An initial operator snapshot and configured change enrichment seed a model-guided
+loop. The model chooses only available collector IDs, or finalizes with cited
+evidence, hypotheses and next steps. Six model rounds, up to three reads per round,
+bounded HTTP payloads, a 96,000-character aggregate evidence budget, and elapsed-time
+checks constrain execution. Missing or
+invalid citations label the briefing unverified. Model failures preserve collected
+evidence. Without a configured usable model, fixed platform snapshots are retained
+with partial status and an explicit limitation. Every run uses the currently active
+model profile behind the existing API provider boundary.
+
+Credentials are kept out of model context; projected observations, webhook data,
+Git metadata and model output are redacted before durable evidence/display.
+All external content remains untrusted. Evidence carries IDs, source, cluster and
+observation time. Connector save/test, webhook acceptance, rerun, handoff and run
+completion write metadata-only audit events. Connector HTTP requests use HTTPS,
+bounded GETs and no redirects. Existing explicitly accepted per-cluster TLS bypass
+is honored and displayed; GitHub/model TLS is not bypassed by this feature.
+
+## Packaging, operations and limits
+
+`deploy/openshift/components/incident-response` adds the feature environment flag,
+an empty Secret, a resourceName-restricted Secret get/patch Role and RoleBinding,
+and an exact webhook-path OAuth proxy exception. The webhook handler always
+validates its own bearer credential; other routes retain normal proxy identity.
+The reusable base remains unchanged. The disposable SNO composition is
+`deploy/openshift/overlays/sno-incident-response`. Validate it with server dry-run
+before deployment. Never replace a populated Secret with a credential-bearing
+manifest in source control.
+
+This PoC requires one application process/replica. The serialized ingress lock and
+single incident worker are not a distributed queue design. At most 100 runs can be
+queued/running. Startup marks interrupted runs explicitly and continues queued
+runs; it does not automatically repeat an interrupted investigation. Set
+`PODPILOT_INCIDENT_WORKER_ENABLED=false` to pause processing while retaining ingress.
+Retention/archival and production HA require a later operational design; the UI
+shows the latest 100 incidents and latest 25 runs per incident, and storage grows
+until operators apply an approved retention procedure.
+
+A total cluster outage may prevent that cluster's Alertmanager from delivering
+anything. This trigger cannot replace independent external availability monitoring.
+SNO rule presence validates seed names, not multi-node failure behavior. Corporate
+Argo CD/GitHub end-to-end verification requires configured instances and credentials.

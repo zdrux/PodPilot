@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Incidents · PodPilot{% endblock %}
+{% block content %}
+<header class="topbar"><div><p class="eyebrow">Fleet operations · PoC</p><h1>Incidents</h1><p class="subtitle">Critical OpenShift platform alerts and their investigations.</p></div><a class="button" href="/incidents">Refresh</a></header>
+<section class="panel incident-panel">
+<form method="get" class="settings-form"><label>Cluster<select name="cluster"><option value="">All clusters</option>{% for id, name in clusters.items() %}<option value="{{ id }}" {% if request.query_params.get('cluster') == id %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label><button class="button" type="submit">Filter</button></form>
+<div class="incident-table-wrap"><table><thead><tr><th>Incident</th><th>Cluster</th><th>Alerts</th><th>Investigation</th><th>Last notification</th></tr></thead><tbody>
+{% for incident in incidents %}<tr><td><a href="/incidents/{{ incident.id }}"><strong>{{ incident.title }}</strong></a><small class="incident-muted">Critical · {{ incident.created_at | est_time }}</small></td><td>{{ clusters.get(incident.cluster_id, incident.cluster_id) }}</td><td><span class="tag">{{ incident.alert_state }}</span></td><td>{{ runs[incident.id].status if runs[incident.id] else 'Not started' }}</td><td>{{ incident.updated_at | est_time }}</td></tr>
+{% else %}<tr><td colspan="5"><h2>No incidents yet</h2><p>Admitted critical platform alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div><p class="incident-muted">Showing up to 100 most recently updated incidents. Alert resolution does not confirm a root cause.</p>
+</section>
+{% endblock %}

@@ -3,8 +3,10 @@
 Last reviewed: 2026-08-24
 Update when: release surfaces, QA coverage, migrations, rollback, or deployment gates change.
 
-Current releases must verify that no active manifest grants access to a remote cluster-credential
-Secret, every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
+Current releases must verify that the base grants no legacy remote cluster-credential
+Secret access. The optional incident-response component may grant get/patch on its one
+dedicated incident credential Secret; it must not grant cluster operations to the runtime.
+Every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
 select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
 and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
 Verify the Workspace cluster tree is owner-filtered, reflects current in-memory connection state,
@@ -19,6 +21,13 @@ selected cluster, reports all-namespace permissions without resource-list ceilin
 the same result shape across repeated runs.
 
 ## Release Surfaces
+
+The optional incident-response component additionally requires webhook authentication,
+repeat/out-of-order notification and recurrence tests, platform-scope denial tests,
+Secret isolation, connector target/repository filtering, migration round-trip,
+worker restart recovery and delegated Ask handoff checks. The seed SNO composition
+must pass server-side dry-run. Confirm corporate Argo CD/GitHub connectivity and a
+real model-backed run before enabling Alertmanager ingress in an environment.
 
 - Single API/web container with Alembic migrations and an OpenShift Deployment.
 - OAuth proxy sidecar, OpenShift Service/Route, and NetworkPolicy.

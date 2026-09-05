@@ -2002,3 +2002,15 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
   html[data-theme] .ask-thread .chat-message:last-child { border-bottom: 1px solid var(--theme-border); }
   html[data-theme] .ask-thread .chat-message::after { display: none; }
 }
+:root { --incident-space: 24px; }
+.incident-panel { padding: var(--incident-space); margin-bottom: 20px; }
+.incident-panel .settings-form { margin-bottom: 20px; }
+.incident-table-wrap { overflow-x: auto; }
+.incident-table-wrap table { width: 100%; border-collapse: collapse; text-align: left; }
+.incident-table-wrap td, .incident-table-wrap th { padding: 14px; border-bottom: 1px solid var(--border, #536071); }
+.incident-muted { display: block; opacity: .75; font-size: .85em; margin-top: 6px; }
+.incident-prose { white-space: pre-wrap; }
+.incident-panel details { padding: 12px 0; }
+.incident-panel pre { overflow: auto; max-height: 500px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.incident-panel fieldset { margin: 16px 0; padding: 14px; }
+.incident-panel [data-connection-kinds]:not([hidden]) { display: grid; gap: 16px; }

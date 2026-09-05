@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from podpilot_api.models import Base
+from podpilot_api import incident_models  # noqa: F401 - register incident metadata
 from podpilot_api.settings import get_settings
 
 config = context.config

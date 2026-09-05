@@ -1,5 +1,10 @@
 # PodPilot Operations
 
+The opt-in incident-response feature, connector credentials, Alertmanager setup,
+single-process worker limits and SNO component packaging are documented in
+[Incident response](incident-response.md). It requires migration `0023_fleet_incidents`
+and remains disabled in existing deployment compositions.
+
 Last reviewed: 2026-08-24
 Update when: setup, environment variables, deployment, external services, or runbooks change.
 

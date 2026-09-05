@@ -7,6 +7,18 @@ selected.
 
 ## Resume Here
 
+Incident response PoC is implemented on `codex/incident-response-poc`, after
+merging/pushing the evidence-ledger UI branch into main at `e2e4505`. The feature is
+opt-in and has not been deployed. It adds fleet incidents, authenticated per-cluster
+Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
+metadata enrichment and a bounded platform-only agent. See
+[incident-response.md](incident-response.md) for configuration and current limits.
+Validation: 789 model-free tests pass (77% aggregate coverage), migration upgrade/
+downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
+and live read-only platform collector probes succeed. Local synthetic incident and
+connector pages were checked in the browser. Corporate connectors and a real model
+incident run still require end-to-end environment validation before enabling ingress.
+
 PodPilot 0.12.0 from the delegated-sessions feature branch is deployed on the
 disposable SNO lab at schema head `0021_user_delegated_access`. The 2026-09-01 rollout uses
 application image digest `sha256:02b041afb5824019941cc1e62067dd90748063992f9514106d83c4464fced061`
