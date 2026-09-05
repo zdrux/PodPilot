@@ -191,6 +191,8 @@ tasks and 12 recent transitions. Entries contain server-authored task labels, st
 timestamps, bounded work descriptions, evidence IDs and short redacted results. Raw
 logs, connector payloads, prompts, credentials and model reasoning remain in their
 existing evidence or provider boundaries and are not copied into activity telemetry.
+Only the current workstream animates running tasks. Historical journal transitions use
+a static started marker so an earlier start event cannot appear to still be active.
 
 ## Packaging, operations and limits
 

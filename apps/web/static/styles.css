@@ -2063,6 +2063,8 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
 .incident-activity-row > summary > time { color: var(--theme-subtle); font-size: 9px; white-space: nowrap; }
 .incident-activity-mark { position: relative; display: inline-grid; width: 13px; height: 13px; flex: 0 0 13px; place-items: center; border: 1px solid var(--theme-border-strong); border-radius: 50%; }
 .incident-activity-mark-running { border: 2px solid color-mix(in srgb, var(--theme-accent) 28%, var(--theme-border)); border-top-color: var(--theme-accent); animation: incident-activity-spin .85s linear infinite; }
+.incident-activity-mark-started { border-color: color-mix(in srgb, var(--theme-accent) 60%, var(--theme-border)); }
+.incident-activity-mark-started::after { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--theme-accent); }
 .incident-activity-mark-queued { border-color: var(--theme-subtle); }
 .incident-activity-mark-queued::after { content: ""; width: 3px; height: 3px; border-radius: 50%; background: var(--theme-subtle); }
 .incident-activity-mark-completed { border-color: color-mix(in srgb, var(--green) 58%, var(--theme-border)); background: color-mix(in srgb, var(--green) 14%, transparent); }

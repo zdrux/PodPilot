@@ -43,7 +43,7 @@
                 </div>
               </section>
               <section class="incident-activity-section">
-                <div class="incident-activity-section-heading"><div><p class="eyebrow">Live journal</p><h4>Recent activity</h4></div><span>{{ item.events | length }} updates</span></div>
+                <div class="incident-activity-section-heading"><div><p class="eyebrow">Activity journal</p><h4>Recent transitions</h4></div><span>{{ item.events | length }} updates</span></div>
                 <ol class="incident-event-list">
                   {% for event in item.events | reverse %}<li>{{ state_mark(event.state) }}<div><strong>{{ event.label }}</strong><p>{{ event.summary }}</p></div><time>{{ event.at | est_time }}</time></li>
                   {% else %}<li class="incident-activity-empty">This run predates live activity tracking.</li>{% endfor %}

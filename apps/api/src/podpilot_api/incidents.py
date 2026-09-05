@@ -92,6 +92,12 @@ def _incident_activity_view(incident, run):
     ))[:6]
     activity = _json_object(run.activity_json) if run else {}
     tasks = [task for task in activity.get("tasks", []) if isinstance(task, dict)][:24]
+    for task in tasks:
+        if task.get("state") == "stopped" and task.get("result") == "Stopped when the incident worker restarted.":
+            task["result"] = (
+                "The PodPilot incident worker restarted before this task finished. "
+                "Collected evidence was retained; rerun the investigation to continue."
+            )
     evidence = []
     if run:
         try:
@@ -151,7 +157,12 @@ def _incident_activity_view(incident, run):
     events = [{
         "at": event.get("at"),
         "label": str(event.get("label") or "Investigation")[:120],
-        "state": str(event.get("state") or "completed")[:32],
+        # Journal entries are immutable history. A recorded running transition
+        # means the task started; only the current workstream may look active.
+        "state": (
+            "started" if str(event.get("state") or "") == "running"
+            else str(event.get("state") or "completed")[:32]
+        ),
         "summary": str(event.get("summary") or "")[:240],
     } for event in activity.get("events", [])[-6:] if isinstance(event, dict)]
     return {
@@ -847,10 +858,13 @@ class IncidentService:
                     if task.get("state") in {"queued", "running"}:
                         task["state"] = "stopped"
                         task["ended_at"] = interrupted_at
-                        task["result"] = "Stopped when the incident worker restarted."
+                        task["result"] = (
+                            "The PodPilot incident worker restarted before this task finished. "
+                            "Collected evidence was retained; rerun the investigation to continue."
+                        )
                 run.status = "interrupted"
                 run.activity_json = json.dumps(activity)
-                run.briefing_json = json.dumps({"summary": "Worker restarted during investigation. Retained evidence is available; an operator can rerun."})
+                run.briefing_json = json.dumps({"summary": "The PodPilot incident worker restarted during the investigation. Retained evidence is available; an operator can rerun."})
             db.commit()
         claim_lock = asyncio.Lock()
         async def slot():

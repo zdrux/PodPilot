@@ -184,6 +184,10 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
                  'state': 'error', 'work': 'Checking route state',
                  'started_at': '2026-09-05T12:00:10Z', 'ended_at': '2026-09-05T12:00:15Z',
                  'result': '<script>unsafe</script>'},
+                {'id': 's5', 'role': 'specialist', 'label': 'Deployment specialist',
+                 'state': 'stopped', 'work': 'Reviewing deployment state',
+                 'started_at': '2026-09-05T12:00:10Z', 'ended_at': '2026-09-05T12:00:15Z',
+                 'result': 'Stopped when the incident worker restarted.'},
             ], 'events': [
                 {'at': '2026-09-05T12:01:30Z', 'label': 'Coordinator',
                  'state': 'running', 'summary': 'Requested bounded platform log analysis.'},
@@ -202,12 +206,16 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     dashboard = page.text[page.text.index('data-incident-dashboard'):]
     assert dashboard.index(active_id) < dashboard.index(historical_id)
     assert 'Waiting for platform log specialists' in page.text
-    assert '1 active' in page.text and '1 queued · 1 done · 1 error' in page.text
-    for state in ('running', 'queued', 'completed', 'error'):
+    assert '1 active' in page.text and '1 queued · 1 done · 2 error' in page.text
+    for state in ('running', 'queued', 'completed', 'error', 'stopped'):
         assert f'incident-activity-mark-{state}' in page.text
     assert 'Analyzing kube-apiserver logs' in page.text
     assert 'Requested bounded platform log analysis.' in page.text
+    assert 'incident-activity-mark-started' in page.text
+    assert 'Recent transitions' in page.text
     assert 'No related platform PR was found.' in page.text
+    assert 'The PodPilot incident worker restarted before this task finished.' in page.text
+    assert 'Stopped when the incident worker restarted.' not in page.text
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
     assert 'incident-live-board-4' in page.text
