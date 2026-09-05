@@ -13,7 +13,7 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 801 model-free tests pass (78% aggregate coverage), migration upgrade/
+Validation: 802 model-free tests pass (78% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -42,12 +42,20 @@ are collapsed, and run-scoped evidence links open and focus the corresponding ti
 entry. Incident narrative Markdown disables table parsing so pipe-delimited model output
 cannot collapse hypothesis prose into narrow table columns; the deployed
 ClusterOperatorDown page retains only its intentional source-alert table.
+The fleet dashboard now pins queued and running investigations above fleet history,
+shows at-a-glance fleet and specialist counts, and expands each case in place. The
+expanded workstream exposes coordinator and specialist states, timestamps, current
+work, recent activity, and bounded collected results. It refreshes active work every
+four seconds, discovers new work from an idle page every twelve seconds, and preserves
+open rows during refresh. A live SNO validation displayed five completed Pod-log
+specialists and retained nineteen evidence items; restarting the worker correctly
+recorded the still-running coordinator as stopped and the investigation as interrupted.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:6d70e9c46e6b0879382a4227bab0af8f729a16832f1f041d1ba173a7cd036b39`
-with schema head `0023_fleet_incidents`; the runner remains unchanged.
+`sha256:fd29105bceac853e43eaf6312cf4fb4b60ede939ca8d524d8abfb2a5b3e7d25f`
+with schema head `0024_incident_activity`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
 disposable SNO lab at schema head `0021_user_delegated_access`. That 2026-09-01 rollout used
