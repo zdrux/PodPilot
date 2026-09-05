@@ -67,6 +67,16 @@
   let incidentBoard = document.querySelector('[data-incident-dashboard]');
   if (incidentBoard) {
     let timer;
+    let interactionUntil = 0;
+    document.addEventListener('pointerdown', event => {
+      if (event.target.closest?.('[data-incident-dashboard]')) {
+        interactionUntil = Date.now() + 1500;
+      }
+    }, true);
+    function scheduleActivityRefresh() {
+      const delay = incidentBoard.dataset.activeIncidents === '0' ? 12000 : 4000;
+      timer = window.setTimeout(refreshActivity, delay);
+    }
     function openIds(root, attribute) {
       return new Set(Array.from(root.querySelectorAll(`details[${attribute}][open]`))
         .map(item => item.getAttribute(attribute)));
@@ -77,9 +87,8 @@
       });
     }
     async function refreshActivity() {
-      if (incidentBoard.dataset.activeIncidents === '0') return;
-      if (document.hidden) {
-        timer = window.setTimeout(refreshActivity, 4000);
+      if (document.hidden || Date.now() < interactionUntil) {
+        scheduleActivityRefresh();
         return;
       }
       const expandedIncidents = openIds(incidentBoard, 'data-incident-activity-id');
@@ -91,7 +100,7 @@
         if (!response.ok) throw new Error('Incident activity refresh failed.');
         const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
         const replacement = documentCopy.querySelector('[data-incident-dashboard]');
-        if (replacement) {
+        if (replacement && Date.now() >= interactionUntil && replacement.innerHTML !== incidentBoard.innerHTML) {
           incidentBoard.replaceWith(replacement);
           incidentBoard = replacement;
           restoreOpen(incidentBoard, 'data-incident-activity-id', expandedIncidents);
@@ -100,11 +109,9 @@
       } catch (_error) {
         // The visible data remains usable; the next bounded poll retries automatically.
       }
-      if (incidentBoard.dataset.activeIncidents !== '0') {
-        timer = window.setTimeout(refreshActivity, 4000);
-      }
+      scheduleActivityRefresh();
     }
-    timer = window.setTimeout(refreshActivity, 4000);
+    scheduleActivityRefresh();
     window.addEventListener('pagehide', () => window.clearTimeout(timer), {once: true});
   }
 

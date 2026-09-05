@@ -43,7 +43,12 @@
                 </div>
               </section>
               <section class="incident-activity-section">
-                <div class="incident-activity-section-heading"><div><p class="eyebrow">Latest evidence</p><h4>Results collected</h4></div><span>{{ item.evidence_count }} total</span></div>
+                <div class="incident-activity-section-heading"><div><p class="eyebrow">Live journal</p><h4>Recent activity</h4></div><span>{{ item.events | length }} updates</span></div>
+                <ol class="incident-event-list">
+                  {% for event in item.events | reverse %}<li>{{ state_mark(event.state) }}<div><strong>{{ event.label }}</strong><p>{{ event.summary }}</p></div><time>{{ event.at | est_time }}</time></li>
+                  {% else %}<li class="incident-activity-empty">This run predates live activity tracking.</li>{% endfor %}
+                </ol>
+                <div class="incident-result-heading"><p class="eyebrow">Latest evidence</p><h4>Results collected</h4><span>{{ item.evidence_count }} total</span></div>
                 <ol class="incident-result-list">
                   {% for result in item.results | reverse %}<li><span class="incident-result-id">{{ result.id }}</span><div><strong>{{ result.source }}</strong><p>{{ result.summary }}</p></div><time>{{ result.observed_at | est_time }}</time></li>
                   {% else %}<li class="incident-activity-empty">No evidence has been retained yet.</li>{% endfor %}
@@ -80,5 +85,5 @@
   </section>
   <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>
 </section>
-<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-board-3" defer></script>
+<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-board-4" defer></script>
 {% endblock %}

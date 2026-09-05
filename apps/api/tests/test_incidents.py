@@ -184,6 +184,9 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
                  'state': 'error', 'work': 'Checking route state',
                  'started_at': '2026-09-05T12:00:10Z', 'ended_at': '2026-09-05T12:00:15Z',
                  'result': '<script>unsafe</script>'},
+            ], 'events': [
+                {'at': '2026-09-05T12:01:30Z', 'label': 'Coordinator',
+                 'state': 'running', 'summary': 'Requested bounded platform log analysis.'},
             ],
         })
         historical_run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == historical_id))
@@ -203,10 +206,11 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     for state in ('running', 'queued', 'completed', 'error'):
         assert f'incident-activity-mark-{state}' in page.text
     assert 'Analyzing kube-apiserver logs' in page.text
+    assert 'Requested bounded platform log analysis.' in page.text
     assert 'No related platform PR was found.' in page.text
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
-    assert 'incident-live-board-3' in page.text
+    assert 'incident-live-board-4' in page.text
 
 
 def test_connections_secret_isolation_and_access(client):

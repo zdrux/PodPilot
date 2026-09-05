@@ -148,6 +148,12 @@ def _incident_activity_view(incident, run):
             "observed_at": item.get("observed_at"),
             "summary": _activity_result(item.get("source"), item.get("data")),
         })
+    events = [{
+        "at": event.get("at"),
+        "label": str(event.get("label") or "Investigation")[:120],
+        "state": str(event.get("state") or "completed")[:32],
+        "summary": str(event.get("summary") or "")[:240],
+    } for event in activity.get("events", [])[-6:] if isinstance(event, dict)]
     return {
         "incident": incident,
         "run": run,
@@ -167,6 +173,7 @@ def _incident_activity_view(incident, run):
         "specialists": specialists,
         "counts": counts,
         "results": results,
+        "events": events,
         "evidence_count": len(evidence),
     }
 
@@ -543,7 +550,11 @@ class IncidentService:
                 return None
             if time.monotonic()-started > run_timeout:
                 return None
-            task_id = queue_specialist(label, objective, source_item)
+            specialist_work = {
+                "Argo CD": "Correlate recent platform deployment revisions with the alert onset",
+                "GitHub": "Review commit and pull-request metadata for the correlated revision",
+            }.get(label, objective)
+            task_id = queue_specialist(label, specialist_work, source_item)
             update_specialist(task_id, "running")
             try:
                 decision = self.provider.incident_step(deadline_profile(), api_key, {
