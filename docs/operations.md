@@ -618,6 +618,10 @@ machine environment, then run:
 .\scripts\deploy-agentic-sno.ps1
 ```
 
+The script applies the combined `sno-incident-response` overlay. This preserves the
+incident feature flag, webhook ingress exception, credential Secret and reader RBAC when
+the application or model profile is rebuilt.
+
 The helper connects through the existing short-lived lab bootstrap flow, checks the runtime RBAC,
 applies both binary BuildConfigs, builds both images, deploys the SNO overlay, waits for rollout,
 and pipes the OpenRouter key over stdin to the API container. The bootstrap module stores it under
@@ -796,7 +800,7 @@ by `adhoc_run_timeout_seconds` (900 seconds by default). The agent stops startin
 the final `adhoc_finalization_reserve_seconds` (60 seconds by default) and asks the model to produce the
 best supported answer from retained evidence. Keep command and model-attempt timeouts below the Ask
 deadline so PodPilot can preserve redacted timeout details and persist an answer. New model profiles
-default to a 180-second attempt timeout with one transient retry; tune those values to the provider's
+default to a 180-second attempt timeout with three transient retries; tune those values to the provider's
 observed latency rather than allowing one call's retry window to consume the complete Ask deadline.
 Timeout diagnostics identify the agent or finalization operation and retain elapsed time, the effective
 per-attempt timeout, and retry allowance. If a provider call fails after agent operations have run,

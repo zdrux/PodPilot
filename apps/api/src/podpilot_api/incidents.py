@@ -623,6 +623,10 @@ class IncidentService:
                 synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
                 simulation = all(a.get('labels', {}).get('podpilot_simulation') == 'true' for a in alert_snapshot.values())
                 run_timeout = 240 if synthetic else self.settings.incident_run_timeout_seconds
+                hard_deadline_minutes = run_timeout / 60
+                hard_deadline_limit = (
+                    f"Overall {hard_deadline_minutes:g}-minute safety deadline reached."
+                )
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
             coordinator_activity("Validating cluster access and investigation policy", phase="Starting")
@@ -635,12 +639,17 @@ class IncidentService:
                 output_limit = min(profile.max_output_tokens, max(1024, context_window // 4))
                 input_limit = min(profile.max_input_tokens, max(1024, context_window - output_limit - 2048))
                 profile = replace(profile, timeout_seconds=self.settings.incident_model_timeout_seconds,
-                    max_output_tokens=output_limit, max_input_tokens=input_limit, max_retries=0)
+                    max_output_tokens=output_limit, max_input_tokens=input_limit)
             def deadline_profile():
                 remaining = run_timeout - (time.monotonic()-started)
                 if remaining <= 1:
                     raise TimeoutError("Incident run deadline reached.")
-                return replace(profile, timeout_seconds=min(profile.timeout_seconds, remaining))
+                # Preserve the model profile's retry policy for every coordinator and
+                # specialist call. Near the outer safety deadline, shorten each attempt
+                # so the configured retry opportunities still fit inside the run.
+                attempts = profile.max_retries + 1
+                attempt_timeout = min(profile.timeout_seconds, remaining / attempts)
+                return replace(profile, timeout_seconds=max(1.0, attempt_timeout))
             reader = self.cluster_reader(cluster, token)
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):
@@ -747,7 +756,7 @@ class IncidentService:
                 max_rounds = 6 if synthetic else self.settings.incident_max_rounds
                 for step in range(max_rounds):
                     if time.monotonic()-started > run_timeout:
-                        limitations.append("Investigation time budget reached.")
+                        limitations.append(hard_deadline_limit)
                         status = "budget_exhausted"
                         break
                     coordinator_activity(
@@ -777,12 +786,15 @@ class IncidentService:
                         break
                     if step == max_rounds-1:
                         status = "budget_exhausted"
-                        limitations.append(f"Model did not finalize within the {max_rounds}-round limit.")
+                        limitations.append(
+                            f"Coordinator turn budget reached after {max_rounds} investigation rounds."
+                        )
                         break
                     log_items = []
                     for key in decision.collect:
                         if time.monotonic()-started > run_timeout:
-                            limitations.append("Read time budget reached.")
+                            limitations.append(hard_deadline_limit)
+                            status = "budget_exhausted"
                             break
                         if key not in available:
                             limitations.append("Model requested an unavailable collector; request rejected.")

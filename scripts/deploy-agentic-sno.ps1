@@ -80,8 +80,12 @@ finally {
     }
 }
 
-oc apply -k deploy/openshift/overlays/sno-milestone-one
-if ($LASTEXITCODE -ne 0) { throw 'Unable to apply the agentic SNO overlay.' }
+# Use the combined SNO composition so an agent/model refresh cannot remove the
+# opt-in incident environment, webhook route bypass, reader RBAC, or credentials.
+oc apply --dry-run=server -k deploy/openshift/overlays/sno-incident-response
+if ($LASTEXITCODE -ne 0) { throw 'Unable to validate the agentic incident SNO overlay.' }
+oc apply -k deploy/openshift/overlays/sno-incident-response
+if ($LASTEXITCODE -ne 0) { throw 'Unable to apply the agentic incident SNO overlay.' }
 oc rollout restart deployment/podpilot -n ai-ops
 if ($LASTEXITCODE -ne 0) { throw 'Unable to restart PodPilot onto the newly built image.' }
 oc rollout status deployment/podpilot -n ai-ops --timeout=600s

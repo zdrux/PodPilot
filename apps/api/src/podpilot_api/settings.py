@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     incident_worker_concurrency: int = Field(default=3, ge=1, le=8)
     incident_secret_namespace: str = "ai-ops"
     incident_secret_name: str = "podpilot-incident-credentials"
-    incident_run_timeout_seconds: float = Field(default=900.0, ge=120.0, le=1800.0)
+    incident_run_timeout_seconds: float = Field(default=2700.0, ge=120.0, le=3600.0)
     incident_connector_timeout_seconds: float = Field(default=300.0, ge=30.0, le=900.0)
     incident_model_timeout_seconds: float = Field(default=90.0, ge=30.0, le=240.0)
     incident_context_window_tokens: int = Field(default=64_000, ge=8_192, le=2_000_000)

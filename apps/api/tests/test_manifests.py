@@ -188,10 +188,26 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
     assert runtime["data"]["chat_max_chars"] == "4000"
+    assert runtime["data"]["incident_run_timeout_seconds"] == "2700"
+    assert runtime["data"]["incident_max_rounds"] == "10"
     chat_limit = next(item for item in env if item["name"] == "PODPILOT_CHAT_MAX_CHARS")
     assert chat_limit["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "chat_max_chars",
+    }
+    incident_timeout = next(
+        item for item in env if item["name"] == "PODPILOT_INCIDENT_RUN_TIMEOUT_SECONDS"
+    )
+    assert incident_timeout["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "incident_run_timeout_seconds",
+    }
+    incident_rounds = next(
+        item for item in env if item["name"] == "PODPILOT_INCIDENT_MAX_ROUNDS"
+    )
+    assert incident_rounds["valueFrom"]["configMapKeyRef"] == {
+        "name": "podpilot-runtime",
+        "key": "incident_max_rounds",
     }
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
     assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"
@@ -416,8 +432,25 @@ def test_agentic_deploy_restarts_latest_tag_workload_after_build() -> None:
     assert "oc auth can-i get groups.user.openshift.io" in script
     assert "podpilot-investigator can read workload Pods" in script
     assert "--from-archive=$buildArchive" in script
+    assert "oc apply --dry-run=server -k deploy/openshift/overlays/sno-incident-response" in script
+    assert "oc apply -k deploy/openshift/overlays/sno-incident-response" in script
+    assert "oc apply -k deploy/openshift/overlays/sno-milestone-one" not in script
     assert "oc rollout restart deployment/podpilot -n ai-ops" in script
     assert "oc rollout status deployment/podpilot -n ai-ops --timeout=600s" in script
+
+
+def test_sno_incident_overlay_composes_agentic_and_incident_features() -> None:
+    overlays = ROOT / "deploy" / "openshift" / "overlays"
+    incident = yaml.safe_load(
+        (overlays / "sno-incident-response" / "kustomization.yaml").read_text()
+    )
+    milestone = yaml.safe_load(
+        (overlays / "sno-milestone-one" / "kustomization.yaml").read_text()
+    )
+
+    assert "../sno-milestone-one" in incident["resources"]
+    assert incident["components"] == ["../../components/incident-response"]
+    assert milestone["components"] == ["../../components/agentic-runner"]
 
 
 def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> None:

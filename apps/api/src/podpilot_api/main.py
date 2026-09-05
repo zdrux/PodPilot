@@ -14685,7 +14685,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="Custom CA input must not contain a private key.")
         try:
             timeout_seconds = float(form.get("timeout_seconds", "30"))
-            max_retries = int(form.get("max_retries", "1"))
+            max_retries = int(form.get("max_retries", "3"))
             max_input_tokens = int(form.get("max_input_tokens", "128000"))
             max_output_tokens = int(form.get("max_output_tokens", "1200"))
             temperature = float(temperature_text) if temperature_text else None

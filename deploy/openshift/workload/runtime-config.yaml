@@ -9,6 +9,8 @@ metadata:
 data:
   environment: openshift-poc
   cluster_name: configure-cluster-name
+  incident_run_timeout_seconds: "2700"
+  incident_max_rounds: "10"
   chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"
   adhoc_detail_fanout_max_objects: "10"

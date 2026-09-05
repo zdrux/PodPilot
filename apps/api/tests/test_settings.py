@@ -152,7 +152,7 @@ def test_adhoc_run_deadline_is_bounded() -> None:
 def test_incident_autonomy_and_context_budgets_are_larger_and_bounded() -> None:
     defaults = Settings(_env_file=None)
     assert defaults.incident_worker_concurrency == 3
-    assert defaults.incident_run_timeout_seconds == 900
+    assert defaults.incident_run_timeout_seconds == 2700
     assert defaults.incident_connector_timeout_seconds == 300
     assert defaults.incident_model_timeout_seconds == 90
     assert defaults.incident_context_window_tokens == 64_000
@@ -161,7 +161,7 @@ def test_incident_autonomy_and_context_budgets_are_larger_and_bounded() -> None:
     assert defaults.incident_max_coordinator_bytes == 131_072
     assert defaults.incident_max_specialist_reports == 12
     with pytest.raises(ValidationError):
-        Settings(incident_run_timeout_seconds=1801)
+        Settings(incident_run_timeout_seconds=3601)
     with pytest.raises(ValidationError):
         Settings(incident_max_coordinator_bytes=47_999)
     with pytest.raises(ValidationError):

@@ -62,7 +62,7 @@ class ModelProfile(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     embedding_model: Mapped[str | None] = mapped_column(String(253), nullable=True)
     timeout_seconds: Mapped[float] = mapped_column(Float, nullable=False)
-    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_tested")
     capabilities_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

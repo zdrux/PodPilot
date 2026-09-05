@@ -274,10 +274,63 @@ def test_worker_model_selection_rejects_out_of_scope_reads(client):
         assert 'model-secret' not in run.briefing_json
 
 
+def test_incident_uses_coordinator_turns_as_its_primary_budget(client):
+    sid = source(client)
+    iid = send(client, sid, notification()).json()['incident_id']
+    service = client.app.state.incident_service
+    service.settings.incident_max_rounds = 2
+
+    class Reader:
+        def collect(self, key):
+            return {'rows': []}
+
+        def catalog(self):
+            return {'operators': 'Operators', 'nodes': 'Node health'}
+
+        def close(self):
+            pass
+
+    class Provider:
+        def incident_step(self, *_args):
+            return IncidentDecision(collect=['nodes'])
+
+    service.cluster_reader = lambda *_args: Reader()
+    service.model_context = lambda _engine: (
+        ModelProfileConfig(
+            provider_label='test', base_url='https://model.invalid', chat_model='test',
+            embedding_model=None, timeout_seconds=30, max_output_tokens=2000,
+        ),
+        'model-secret',
+    )
+    service.provider = Provider()
+    with Session(client.app.state.engine) as db:
+        run_id = db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id == iid))
+
+    service.investigate(client.app.state.engine, run_id)
+
+    with Session(client.app.state.engine) as db:
+        run = db.get(IncidentRun, run_id)
+        assert run.status == 'budget_exhausted'
+        briefing = json.loads(run.briefing_json)
+        assert 'Coordinator turn budget reached after 2 investigation rounds.' in briefing['limitations']
+        assert 'Investigation time budget reached.' not in briefing['limitations']
+        assert 'Read time budget reached.' not in briefing['limitations']
+        activity = json.loads(run.activity_json)
+        planning = [
+            event['summary'] for event in activity['events']
+            if str(event.get('summary', '')).startswith('Planning investigation round ')
+        ]
+        assert planning == [
+            'Planning investigation round 1 (max 2)',
+            'Planning investigation round 2 (max 2)',
+        ]
+
+
 def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(client):
     sid=source(client); iid=send(client,sid,notification()).json()['incident_id']
     service=client.app.state.incident_service
     contexts=[]
+    retry_budgets=[]
     class Reader:
         exposed=False
         def collect(self,key):
@@ -292,12 +345,14 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
         def close(self): pass
     class Provider:
         def incident_step(self,_profile,_key,context):
+            retry_budgets.append((_profile.max_retries, _profile.timeout_seconds))
             contexts.append(context)
             coordinator_calls=[item for item in contexts if 'specialist' not in item]
             if len(coordinator_calls)==1: return IncidentDecision(collect=['pods:openshift-etcd'])
             if len(coordinator_calls)==2: return IncidentDecision(collect=['logs:exact'])
             return IncidentDecision(summary='Log specialist found no incident anomaly.',evidence_ids=['E5'])
         def analyze_logs(self,_profile,_key,context):
+            retry_budgets.append((_profile.max_retries, _profile.timeout_seconds))
             assert context['logs'][0]['evidence_id']=='E4'
             return AdHocLogAnalysis(overview='No meaningful anomaly identified.',issues=[],limitations=[])
     service.cluster_reader=lambda *args:Reader()
@@ -325,6 +380,9 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
             and str(event.get('summary')).endswith('(max 10)')
             for event in activity['events']
         )
+        assert retry_budgets
+        assert all(retries == 3 for retries, _timeout in retry_budgets)
+        assert all(1 <= timeout <= 90 for _retries, timeout in retry_budgets)
 
 
 def test_connector_specialist_isolated_from_coordinator_context(client):
@@ -631,6 +689,9 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
 
     connectors = client.get('/settings/connectors', headers={'x-forwarded-user':'admin'})
     webhooks = client.get('/settings/webhooks', headers={'x-forwarded-user':'admin'})
+
+    assert 'Primary budget: 10 coordinator turns' in webhooks.text
+    assert 'Hard safety deadline: 45.0 minutes' in webhooks.text
 
     for page in (connectors, webhooks):
         assert page.status_code == 200

@@ -13,7 +13,9 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 802 model-free tests pass (78% aggregate coverage), migration upgrade/
+The SNO agentic deployment script applies the combined incident overlay so routine image
+or model-profile deployments cannot silently remove the incident panel and worker.
+Validation: 805 model-free tests pass (78% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -23,11 +25,13 @@ and a resolved incident. Connections and webhook status have dedicated settings
 pages. Corporate connectors still require end-to-end environment validation.
 Incident mode now isolates Argo CD, GitHub and selected Pod-log analysis in specialist
 contexts, returns their compact cited reports to a bounded coordinator context, and
-retains the bounded source evidence for operators. Normal runs have a configurable
-15-minute deadline, ten coordinator rounds and up to twelve specialist reports. The
+retains the bounded source evidence for operators. Normal runs are primarily bounded by
+ten coordinator turns, with a configurable 45-minute hard safety deadline and up to twelve
+specialist reports. The
 SNO deployment simulates a 64,000-token total model window (45,952 effective input
 tokens with its current output reserve), runs three incident coordinators concurrently,
-and fans out up to three Pod-log specialists per round. A four-scenario live stress run
+fans out up to three Pod-log specialists per round, and applies the active model profile's
+three transient retries to every coordinator and specialist call. A four-scenario live stress run
 finished in about 11 minutes with three completed investigations and one correctly
 partial result due to invalid final citations. SNO has no Argo CD Application CRD or
 corporate GitHub connector, so those specialists remain model-free tested. The shared
@@ -54,7 +58,7 @@ The lab investigation reader token lasts 24 hours; rerun the documented configur
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:ecacc32e3e263037e2b6a5a02879334b5d9380d44b9b9155721d9b563306d8c9`
+`sha256:61aa98d88b4575fb7124a8dd813aad8170585ad4b0fd22d6b100591ae2c8b38a`
 with schema head `0024_incident_activity`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
