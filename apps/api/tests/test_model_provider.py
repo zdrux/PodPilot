@@ -29,6 +29,7 @@ from podpilot_api.model_provider import (
     _minimal_action_payload,
     _minimal_answer_payload,
     _chat_input_token_estimate,
+    _prepare_incident_payload,
     _prepare_chat_input,
     _record_model_failure,
     _validation_failure_details,
@@ -38,6 +39,7 @@ from podpilot_api.model_provider import (
     validate_model_endpoint,
 )
 from podpilot_diagnostics.adhoc import ReadIntent, ReadPlan
+from podpilot_diagnostics.incidents import IncidentDecision
 
 
 def profile(**overrides) -> ModelProfileConfig:
@@ -781,6 +783,27 @@ def test_chat_input_budget_stops_request_when_fixed_context_exceeds_limit() -> N
 
     assert failure.value.failure_type == "input_limit"
     assert "before transmission" in str(failure.value)
+
+
+def test_incident_payload_compacts_evidence_for_limited_context_window() -> None:
+    limited = profile(max_input_tokens=4_000)
+    context = {
+        "objective": "Investigate the platform incident.",
+        "available_collectors": {"nodes": "Node health"},
+        "limitations": [],
+        "evidence": [
+            {"id": "E1", "source": "Alertmanager notification", "data": {"alert": "KubeAPIDown"}},
+            *[{"id": f"E{index}", "source": f"events:{index}", "data": {"message": "x" * 4_000}}
+              for index in range(2, 12)],
+            {"id": "E12", "source": "Pod log specialist", "data": {"overview": "connection refused"}},
+        ],
+    }
+
+    prepared = _prepare_incident_payload(limited, context)
+
+    assert prepared["context_compaction"]["applied"] is True
+    assert {item["id"] for item in prepared["evidence"]} >= {"E1", "E12"}
+    assert prepared["context_compaction"]["retained_evidence_count"] < 12
 
 
 def test_safe_provider_error_includes_bounded_redacted_response_detail() -> None:

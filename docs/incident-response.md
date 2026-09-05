@@ -136,6 +136,17 @@ evidence. Without a configured usable model, fixed platform snapshots are retain
 with partial status and an explicit limitation. Every run uses the currently active
 model profile behind the existing API provider boundary.
 
+`PODPILOT_INCIDENT_CONTEXT_WINDOW_TOKENS` models the provider's complete context
+window and defaults to 64,000. Incident mode reserves the smaller of the profile's
+output allowance and one quarter of that window, plus a 2,048-token protocol margin;
+the remainder becomes the effective input ceiling. With the SNO profile this is
+45,952 input tokens plus 16,000 output tokens and the reserve. Provider-bound
+incident payloads use the same tokenizer-independent estimate as Ask. If needed,
+PodPilot structurally compacts coordinator evidence, retaining alerts, operator
+health and specialist reports first. It stops a request locally when even the fixed
+context cannot fit. The active setting and evidence ceilings are visible under
+**Webhook receivers → Investigation runtime policy**.
+
 Large or separate evidence domains use isolated specialist calls. Argo CD and GitHub
 specialists each receive only one connector result and return a compact cited report.
 The coordinator receives that report; the bounded source result remains in the
@@ -146,10 +157,12 @@ while the raw bounded log remains available in retained evidence. At most 12 spe
 reports are admitted per run. A failed or uncited specialist is recorded as a
 limitation and cannot silently establish a conclusion.
 
-The PoC executes specialist calls serially inside its single worker. Their isolated
-contexts establish the handoff boundary needed for later parallel fan-out, but a
-durable multi-worker queue, per-specialist lifecycle records, cancellation and join
-policy remain production work.
+Up to three Pod-log specialists selected in one coordinator round execute concurrently.
+The single Pod also runs three incident-worker slots, allowing separate coordinators
+to progress concurrently. Queue claims remain process-local and serialized. A durable
+multi-replica queue, per-specialist lifecycle records, cancellation and join policy
+remain production work. Each provider call receives only the time remaining in its
+run, so a late specialist call cannot overrun the outer deadline by its full timeout.
 
 Credentials are kept out of model context; projected observations, webhook data,
 Git metadata and model output are redacted before durable evidence/display.
@@ -171,7 +184,7 @@ before deployment. Never replace a populated Secret with a credential-bearing
 manifest in source control.
 
 This PoC requires one application process/replica. The serialized ingress lock and
-single incident worker are not a distributed queue design. At most 100 runs can be
+three process-local worker slots are not a distributed queue design. At most 100 runs can be
 queued/running. Startup marks interrupted runs explicitly and continues queued
 runs; it does not automatically repeat an interrupted investigation. Set
 `PODPILOT_INCIDENT_WORKER_ENABLED=false` to pause processing while retaining ingress.
@@ -183,6 +196,32 @@ A total cluster outage may prevent that cluster's Alertmanager from delivering
 anything. This trigger cannot replace independent external availability monitoring.
 SNO rule presence validates seed names, not multi-node failure behavior. Corporate
 Argo CD/GitHub end-to-end verification requires configured instances and credentials.
+
+## SNO specialist stress test
+
+`scripts/stress-incident-sno.py` creates one owned, non-privileged log fixture Pod in
+`openshift-monitoring`, submits four controlled scenarios through the real TLS-verified,
+authenticated webhook, waits for their runs, sends resolved notifications, and removes
+the fixture in `finally`. It never changes an OpenShift control-plane workload. Run it
+only against the documented disposable SNO after using `connect-sno.ps1`:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/stress-incident-sno.py
+```
+
+The scenarios cover an API/log failure chain, contradictory etcd+kubelet alerts, a
+supposed monitoring rollout regression, and a 20-series API error-budget fanout.
+`--resolve-open` is a narrowly scoped recovery command for a terminated harness: it
+closes only firing `[SIMULATION]` incidents and records an audit event.
+
+The 2026-09-05 run first exposed serial-worker and soft-deadline bottlenecks. After
+parallel fan-out and deadline propagation, four fresh investigations reached terminal
+status in about 11 minutes while three coordinators ran concurrently: three completed
+and the 36-item/12-specialist log-heavy run correctly became partial because its final
+citation list was invalid. All four were resolved and the fixture was removed. No
+provider context-limit failure occurred under the effective 45,952-token input cap.
+SNO has no Argo CD Application CRD and no corporate GitHub connector, so connector
+specialists remain covered by model-free isolation tests rather than this live run.
 
 ## SNO webhook smoke test
 

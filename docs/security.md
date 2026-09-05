@@ -1,6 +1,6 @@
 # PodPilot Security Model
 
-Last reviewed: 2026-08-30
+Last reviewed: 2026-09-05
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
 ## Trust Boundaries
@@ -11,6 +11,14 @@ and Argo CD/GitHub connectors. Its authenticated webhook route bypasses interact
 OAuth only for the exact incident ingress path. Shared incident evidence is visible
 to SRE Investigator-or-higher roles, never Viewer/Delegated Operator roles. Ask
 continues to require user-delegated access, including incident handoffs.
+
+Incident Pod logs remain bounded retained evidence. Each selected log is sent alone
+to the structured log specialist; the coordinator receives its redacted cited report
+instead of the raw excerpt. Connector specialists likewise receive one bounded
+connector result. The 64,000-token incident context setting reserves output and
+protocol space, structurally compacts coordinator evidence by evidence type when
+needed, and rejects an over-limit request before transmission. Concurrent specialist
+and incident workers do not share evidence lists, credentials, or model contexts.
 
 - Cluster objects, events, logs, annotations, and alert text are untrusted data and may contain prompt injection.
 - Model output is untrusted advice and never authorization.

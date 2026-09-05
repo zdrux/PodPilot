@@ -183,6 +183,61 @@ def _chat_input_token_estimate(
     return _estimated_serialized_tokens(payload)
 
 
+def _prepare_incident_payload(
+    profile: ModelProfileConfig, context: dict[str, object]
+) -> dict[str, object]:
+    """Fit incident evidence structurally within the profile's effective input limit."""
+
+    prepared = deepcopy(context)
+    request = {
+        "instructions": INCIDENT_INSTRUCTIONS,
+        "payload": prepared,
+        "schema": IncidentDecision.model_json_schema(),
+    }
+    if _estimated_serialized_tokens(request) <= profile.max_input_tokens:
+        return prepared
+    evidence = prepared.get("evidence")
+    if not isinstance(evidence, list):
+        raise ModelProviderError(
+            "Incident model input exceeds the configured context limit.",
+            failure_type="input_limit",
+        )
+    prepared["evidence"] = []
+    prepared["context_compaction"] = {
+        "applied": True,
+        "original_evidence_count": len(evidence),
+        "policy": "alerts, operator health and specialist reports first; newest remaining evidence next",
+    }
+    limitations = list(prepared.get("limitations") or [])
+    limitations.append("Coordinator evidence was compacted to fit the incident model context window.")
+    prepared["limitations"] = limitations[-20:]
+    indexed = list(enumerate(item for item in evidence if isinstance(item, dict)))
+    def priority(pair):
+        index, item = pair
+        source = str(item.get("source") or "")
+        essential = source in {"Alertmanager notification", "operators"} or source.endswith(" specialist")
+        return (0 if essential else 1, index if essential else -index)
+    selected = []
+    for index, item in sorted(indexed, key=priority):
+        candidate = sorted([*selected, (index, item)], key=lambda pair: pair[0])
+        prepared["evidence"] = [value for _, value in candidate]
+        if _estimated_serialized_tokens({**request, "payload": prepared}) <= profile.max_input_tokens:
+            selected = candidate
+    prepared["evidence"] = [value for _, value in sorted(selected, key=lambda pair: pair[0])]
+    prepared["context_compaction"]["retained_evidence_count"] = len(selected)
+    estimated = _estimated_serialized_tokens({**request, "payload": prepared})
+    if estimated > profile.max_input_tokens:
+        raise ModelProviderError(
+            "PodPilot stopped the incident model request before transmission because its fixed "
+            f"context requires an estimated {estimated} input tokens, above the configured "
+            f"maximum of {profile.max_input_tokens}.",
+            failure_type="input_limit",
+            failure={"failure_type": "input_limit", "estimated_input_tokens": estimated,
+                "configured_input_tokens": profile.max_input_tokens},
+        )
+    return prepared
+
+
 def _prepare_chat_input(
     profile: ModelProfileConfig,
     messages: list[dict[str, object]],
@@ -1726,6 +1781,7 @@ def _normalized_concise_answer(
 class OpenAIResponsesProvider:
     def incident_step(self, profile, api_key, context):
         try:
+            context = _prepare_incident_payload(profile, context)
             response = self._client(profile, api_key).responses.parse(
                 model=profile.chat_model, instructions=INCIDENT_INSTRUCTIONS,
                 input=json.dumps(context, default=str), text_format=IncidentDecision,
@@ -2373,6 +2429,7 @@ class OpenAIResponsesProvider:
 
 class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
     def incident_step(self, profile, api_key, context):
+        context = _prepare_incident_payload(profile, context)
         return self._parse(profile, api_key, schema=IncidentDecision,
             instructions=INCIDENT_INSTRUCTIONS, payload=context, limit=_output_limit(profile, 2400))
 

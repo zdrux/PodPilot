@@ -3,6 +3,11 @@
 {% block content %}
 <header class="topbar"><div><p class="eyebrow">Administration · Connections</p><h1>Webhook receivers</h1><p class="subtitle">Receive Alertmanager signals using a separate authenticated endpoint for each cluster.</p></div></header>
 {% include "connection_navigation.html" %}
+<section class="panel incident-panel"><h2>Investigation runtime policy</h2>
+<p>Incident model context window: <strong>{{ incident_policy.context_window_tokens }} tokens</strong>. PodPilot reserves output and reasoning space before calculating the effective input ceiling.</p>
+<p>Run deadline: {{ (incident_policy.run_timeout_seconds / 60) | round(1) }} minutes · Concurrent incident workers: {{ incident_policy.worker_concurrency }} · Coordinator rounds: {{ incident_policy.max_rounds }} · Specialist reports: {{ incident_policy.max_specialists }}</p>
+<p>Retained evidence: {{ (incident_policy.evidence_bytes / 1024) | round | int }} KiB · Coordinator evidence context: {{ (incident_policy.coordinator_bytes / 1024) | round | int }} KiB. Change these bounded values through the <code>PODPILOT_INCIDENT_*</code> deployment settings.</p>
+</section>
 {% for item in receivers %}
 <section class="panel incident-panel"><h2>{{ item.name }}</h2><p>{{ item.cluster_name }} · {{ 'Enabled' if item.enabled else 'Disabled' }}</p>
 <p>Send <strong>POST</strong> requests to:</p><pre>{{ item.url }}</pre>

@@ -1,11 +1,12 @@
 import json
+import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role, StaticRoleResolver
@@ -222,6 +223,45 @@ def test_connector_specialist_isolated_from_coordinator_context(client):
         assert any(e['source'].startswith('Argo CD:') for e in retained)
 
 
+def test_log_specialists_fan_out_in_parallel(client):
+    sid=source(client); iid=send(client,sid,notification()).json()['incident_id']
+    service=client.app.state.incident_service
+    barrier=threading.Barrier(3); threads=set(); lock=threading.Lock()
+    class Reader:
+        exposed=False
+        def collect(self,key):
+            if key=='pods:openshift-etcd': self.exposed=True; return {'rows':[{'name':'etcd-0'}]}
+            if key.startswith('logs:'): return {'namespace':'openshift-etcd','pod':'etcd-0',
+                'container':key,'logs':'bounded log'}
+            return {'rows':[]}
+        def catalog(self):
+            result={'operators':'Operators','pods:openshift-etcd':'Etcd Pods'}
+            if self.exposed: result.update({f'logs:{i}':f'Log {i}' for i in range(3)})
+            return result
+        def close(self): pass
+    class Provider:
+        calls=0
+        def incident_step(self,*args):
+            self.calls+=1
+            if self.calls==1: return IncidentDecision(collect=['pods:openshift-etcd'])
+            if self.calls==2: return IncidentDecision(collect=['logs:0','logs:1','logs:2'])
+            return IncidentDecision(summary='Parallel specialists completed.',evidence_ids=['E7'])
+        def analyze_logs(self,*args):
+            with lock: threads.add(threading.get_ident())
+            barrier.wait(timeout=2)
+            return AdHocLogAnalysis(overview='No meaningful anomaly identified.',issues=[],limitations=[])
+    service.cluster_reader=lambda *args:Reader()
+    service.model_context=lambda engine:(ModelProfileConfig(provider_label='test',base_url='https://model.invalid',
+        chat_model='test',embedding_model=None,timeout_seconds=30,max_output_tokens=2000),'model-secret')
+    service.provider=Provider()
+    with Session(client.app.state.engine) as db: rid=db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id==iid))
+    service.investigate(client.app.state.engine,rid)
+    assert len(threads)==3
+    with Session(client.app.state.engine) as db:
+        evidence=json.loads(db.get(IncidentRun,rid).evidence_json)
+        assert sum(e['source']=='Pod log specialist' for e in evidence)==3
+
+
 def test_reader_denies_arbitrary_paths_and_projects():
     calls=[]
     def respond(request):
@@ -382,6 +422,36 @@ def test_worker_restart_marks_inflight_interrupted_without_rerun(client):
         assert db.scalar(select(func.count()).select_from(IncidentRun))==1
 
 
+def test_incident_worker_runs_three_queued_incidents_concurrently(client):
+    import asyncio
+    sid=source(client)
+    for index in range(3):
+        body=notification(starts=f'2026-09-05T1{index}:00:00Z')
+        body['groupKey']=f'parallel/{index}'
+        body['alerts'][0]['fingerprint']=f'parallel-{index}'
+        send(client,sid,body)
+    service=client.app.state.incident_service
+    barrier=threading.Barrier(3); threads=set(); commit_lock=threading.Lock()
+    def investigate(engine,run_id):
+        threads.add(threading.get_ident())
+        barrier.wait(timeout=2)
+        with commit_lock, Session(engine) as db:
+            db.execute(update(IncidentRun).where(IncidentRun.id==run_id).values(status='completed'))
+            db.commit()
+    service.investigate=investigate
+    async def run_worker():
+        task=asyncio.create_task(service.worker(client.app))
+        for _ in range(100):
+            await asyncio.sleep(.02)
+            with Session(client.app.state.engine) as db:
+                if db.scalar(select(func.count()).select_from(IncidentRun).where(IncidentRun.status=='completed'))==3:
+                    break
+        task.cancel()
+        await asyncio.gather(task,return_exceptions=True)
+    asyncio.run(run_worker())
+    assert len(threads)==3
+
+
 def test_webhook_rejects_naive_dates_and_oversized_payload(client):
     sid=source(client)
     body=notification(starts='2026-09-05T12:00:00')
@@ -395,6 +465,7 @@ def test_webhook_settings_shows_receiver_and_delivery_without_secrets(client):
     page=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'})
     assert page.status_code==200
     assert f'/api/v1/incident-webhooks/{sid}' in page.text
+    assert '64000 tokens' in page.text
     assert 'None yet' in page.text
     assert 'private-cluster-token' not in page.text and 'w'*40 not in page.text
     send(client,sid,notification())
@@ -411,6 +482,15 @@ def test_synthetic_incidents_are_clearly_labelled(client):
     with Session(client.app.state.engine) as db:
         row=db.get(FleetIncident,response.json()['incident_id'])
         assert row.title=='[TEST] etcdNoLeader'
+
+    payload=notification(starts='2026-09-05T13:00:00Z')
+    payload['groupKey']='cluster/simulation'
+    payload['alerts'][0]['fingerprint']='simulation-abc'
+    payload['alerts'][0]['labels']['podpilot_simulation']='true'
+    response=send(client,sid,payload)
+    with Session(client.app.state.engine) as db:
+        row=db.get(FleetIncident,response.json()['incident_id'])
+        assert row.title=='[SIMULATION] etcdNoLeader'
 
 
 def test_platform_projection_preserves_failures_without_large_status_bodies():

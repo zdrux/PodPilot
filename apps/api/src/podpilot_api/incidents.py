@@ -5,6 +5,7 @@ import hmac
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
@@ -127,8 +128,10 @@ class IncidentService:
                 pending = db.scalar(select(func.count()).select_from(IncidentRun).where(IncidentRun.status.in_(["queued", "running"])))
                 if pending >= 100:
                     raise HTTPException(503, "Incident queue is full; retry this notification.")
+                prefix = ("[TEST] " if all(a.labels.get('podpilot_test') == 'true' for a in alerts)
+                    else "[SIMULATION] " if all(a.labels.get('podpilot_simulation') == 'true' for a in alerts) else "")
                 incident = FleetIncident(id=str(uuid4()), cluster_id=cluster.id, source_id=source.id,
-                    group_key=key, title=(("[TEST] " if all(a.labels.get('podpilot_test') == 'true' for a in alerts) else "") + ", ".join(sorted({a.labels["alertname"] for a in alerts})))[:500],
+                    group_key=key, title=(prefix + ", ".join(sorted({a.labels["alertname"] for a in alerts})))[:500],
                     alert_state="firing", alerts_json="{}", limitations_json="[]")
                 db.add(incident)
                 previous = {}
@@ -306,7 +309,7 @@ class IncidentService:
             if time.monotonic()-started > run_timeout:
                 return None
             try:
-                decision = self.provider.incident_step(profile, api_key, {
+                decision = self.provider.incident_step(deadline_profile(), api_key, {
                     "objective": objective,
                     "evidence": [source_item], "limitations": [],
                     "available_collectors": {}, "remaining_rounds": 0,
@@ -326,25 +329,21 @@ class IncidentService:
                 return None
 
         def analyze_log(source_item):
-            nonlocal specialist_reports
             analyzer = getattr(self.provider, "analyze_logs", None)
-            if not callable(analyzer) or specialist_reports >= self.settings.incident_max_specialist_reports:
-                return None
+            if not callable(analyzer):
+                return None, f"Pod log specialist is unavailable for {source_item['id']}."
             data = source_item["data"]
             try:
-                analysis = analyzer(profile, api_key, {
+                analysis = analyzer(deadline_profile(), api_key, {
                     "operator_request": "Identify incident-relevant anomalies in this platform container log.",
                     "investigation_context": [item for item in coordination_evidence if item["source"] == "Alertmanager notification"],
                     "logs": [{"evidence_id": source_item["id"], "namespace": data.get("namespace"),
                         "pod": data.get("pod"), "container": data.get("container"),
                         "excerpt": data.get("logs", "")}],
                 })
-                specialist_reports += 1
-                return record("Pod log specialist", {**analysis.model_dump(),
-                    "source_evidence_ids": [source_item["id"]]})
+                return ({**analysis.model_dump(), "source_evidence_ids": [source_item["id"]]}, None)
             except Exception:
-                limitations.append(f"Pod log specialist could not analyze {source_item['id']}; raw bounded logs are retained.")
-                return None
+                return None, f"Pod log specialist could not analyze {source_item['id']}; raw bounded logs are retained."
         try:
             with Session(engine) as db:
                 run = db.get(IncidentRun, run_id)
@@ -355,6 +354,7 @@ class IncidentService:
                     raise ValueError("Incident connection is disabled.")
                 alert_snapshot = json.loads(run.alert_snapshot_json)
                 synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
+                simulation = all(a.get('labels', {}).get('podpilot_simulation') == 'true' for a in alert_snapshot.values())
                 run_timeout = 240 if synthetic else self.settings.incident_run_timeout_seconds
                 limitations.extend(json.loads(incident.limitations_json))
                 connectors = list(db.scalars(select(IncidentConnection).where(IncidentConnection.enabled.is_(True), IncidentConnection.kind != "cluster").limit(10)))
@@ -363,7 +363,16 @@ class IncidentService:
             profile, api_key = self.model_context(engine)
             secrets.append(api_key)
             if profile and api_key:
-                profile = replace(profile, timeout_seconds=self.settings.incident_model_timeout_seconds, max_retries=0)
+                context_window = self.settings.incident_context_window_tokens
+                output_limit = min(profile.max_output_tokens, max(1024, context_window // 4))
+                input_limit = min(profile.max_input_tokens, max(1024, context_window - output_limit - 2048))
+                profile = replace(profile, timeout_seconds=self.settings.incident_model_timeout_seconds,
+                    max_output_tokens=output_limit, max_input_tokens=input_limit, max_retries=0)
+            def deadline_profile():
+                remaining = run_timeout - (time.monotonic()-started)
+                if remaining <= 1:
+                    raise TimeoutError("Incident run deadline reached.")
+                return replace(profile, timeout_seconds=min(profile.timeout_seconds, remaining))
             reader = self.cluster_reader(cluster, token)
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):
@@ -376,7 +385,7 @@ class IncidentService:
             record("Alertmanager notification", {"alerts": [{
                 "status": a["status"], "starts_at": a["startsAt"],
                 "labels": {k:v[:500] for k,v in a["labels"].items() if k in {
-                    "alertname", "severity", "namespace", "name", "pod", "node", "instance", "job", "reason", "podpilot_test"}},
+                    "alertname", "severity", "namespace", "name", "pod", "node", "instance", "job", "reason", "podpilot_test", "podpilot_simulation"}},
                 "summary": a.get("annotations", {}).get("summary", "")[:500],
             } for a in list(alert_snapshot.values())[:20]], "total_alerts": len(alert_snapshot),
                 "partial": len(alert_snapshot)>20})
@@ -469,10 +478,12 @@ class IncidentService:
                         limitations.append("Investigation time budget reached.")
                         status = "budget_exhausted"
                         break
-                    decision = self.provider.incident_step(profile, api_key, {
+                    decision = self.provider.incident_step(deadline_profile(), api_key, {
                         "objective": (
                             "This signal is labelled as a synthetic webhook test. Verify basic platform access from the operator snapshot and at most version/node snapshots, then finish with a concise test result. The test signal is not evidence of an etcd outage. Report any independently observed health issues separately; do not pursue an RCA for the synthetic signal."
                             if synthetic else
+                            "This is a controlled incident simulation. Conduct a normal, thorough platform investigation across relevant bounded collectors and specialist reports, but do not assume the simulated alert labels prove a real failure. Separate observed cluster impact from the scenario premise and finish with cited findings and operator next steps."
+                            if simulation else
                             "Investigate this critical OpenShift platform incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
                         ),
                         "evidence": coordination_evidence, "limitations": limitations,
@@ -491,6 +502,7 @@ class IncidentService:
                         status = "budget_exhausted"
                         limitations.append(f"Model did not finalize within the {max_rounds}-round limit.")
                         break
+                    log_items = []
                     for key in decision.collect:
                         if time.monotonic()-started > run_timeout:
                             limitations.append("Read time budget reached.")
@@ -503,12 +515,26 @@ class IncidentService:
                         try:
                             source_item = record(key, reader.collect(key), coordinate=not key.startswith("logs:"))
                             if key.startswith("logs:"):
-                                report = analyze_log(source_item)
-                                if report is None and len(json.dumps(coordination_evidence)) + len(json.dumps(source_item)) <= self.settings.incident_max_coordinator_bytes:
-                                    coordination_evidence.append(source_item)
+                                log_items.append(source_item)
                             available = {k:v for k,v in reader.catalog().items() if k not in consumed}
                         except Exception:
                             limitations.append(f"{key}: read unavailable or response too large.")
+                    slots = max(0, self.settings.incident_max_specialist_reports-specialist_reports)
+                    selected_logs = log_items[:slots]
+                    if selected_logs:
+                        with ThreadPoolExecutor(max_workers=min(3, len(selected_logs)),
+                                thread_name_prefix="incident-log-specialist") as pool:
+                            analyses = list(pool.map(analyze_log, selected_logs))
+                        for source_item, (analysis, error) in zip(selected_logs, analyses):
+                            if analysis:
+                                specialist_reports += 1
+                                record("Pod log specialist", analysis)
+                            else:
+                                limitations.append(error)
+                                if len(json.dumps(coordination_evidence)) + len(json.dumps(source_item)) <= self.settings.incident_max_coordinator_bytes:
+                                    coordination_evidence.append(source_item)
+                    for source_item in log_items[slots:]:
+                        limitations.append(f"Pod log specialist report limit reached; {source_item['id']} remains in retained evidence.")
         except Exception:
             status = "partial" if evidence else "failed"
             limitations.append("Investigation interrupted by an unavailable credential, API, or model. Inspect connection tests and retained evidence.")
@@ -530,24 +556,29 @@ class IncidentService:
             db.execute(update(IncidentRun).where(IncidentRun.status == "running").values(status="interrupted",
                 briefing_json=json.dumps({"summary": "Worker restarted during investigation. Retained evidence is available; an operator can rerun."})))
             db.commit()
-        while True:
-            with Session(engine) as db:
-                run_id = db.scalar(select(IncidentRun.id).where(IncidentRun.status == "queued").order_by(IncidentRun.created_at).limit(1))
-                if run_id:
-                    claimed = db.execute(update(IncidentRun).where(IncidentRun.id == run_id, IncidentRun.status == "queued").values(status="running")).rowcount
-                    db.commit()
+        claim_lock = asyncio.Lock()
+        async def slot():
+            while True:
+                async with claim_lock:
+                    with Session(engine) as db:
+                        run_id = db.scalar(select(IncidentRun.id).where(IncidentRun.status == "queued").order_by(IncidentRun.created_at).limit(1))
+                        if run_id:
+                            claimed = db.execute(update(IncidentRun).where(IncidentRun.id == run_id,
+                                IncidentRun.status == "queued").values(status="running")).rowcount
+                            db.commit()
+                        else:
+                            claimed = False
+                if claimed:
+                    task = asyncio.create_task(asyncio.to_thread(self.investigate, engine, run_id))
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        # Drain bounded in-flight reads before the lifespan disposes its engine.
+                        await task
+                        raise
                 else:
-                    claimed = False
-            if claimed:
-                task = asyncio.create_task(asyncio.to_thread(self.investigate, engine, run_id))
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    # Drain bounded in-flight reads before the lifespan disposes its engine.
-                    await task
-                    raise
-            else:
-                await asyncio.sleep(2)
+                    await asyncio.sleep(2)
+        await asyncio.gather(*(slot() for _ in range(self.settings.incident_worker_concurrency)))
 
 
 def install_incidents(app, service, current_user, templates, csrf_token, verify_csrf):
@@ -678,7 +709,16 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 receivers.append({'id':row.id,'name':row.name,'cluster_name':cluster.name if cluster else row.cluster_id,
                     'cluster_id':row.cluster_id,'enabled':row.enabled,'last_delivery':latest,'incident_count':count,
                     'url':f'{origin}/api/v1/incident-webhooks/{row.id}'})
-        return page(request, user, 'webhook_settings.html', {'receivers':receivers})
+        return page(request, user, 'webhook_settings.html', {'receivers':receivers,
+            'incident_policy': {
+                'context_window_tokens': service.settings.incident_context_window_tokens,
+                'run_timeout_seconds': service.settings.incident_run_timeout_seconds,
+                'max_rounds': service.settings.incident_max_rounds,
+                'max_specialists': service.settings.incident_max_specialist_reports,
+                'worker_concurrency': service.settings.incident_worker_concurrency,
+                'evidence_bytes': service.settings.incident_max_evidence_bytes,
+                'coordinator_bytes': service.settings.incident_max_coordinator_bytes,
+            }})
 
     @app.post("/api/v1/incident-connections")
     async def save(request: Request, user=Depends(current_user)):

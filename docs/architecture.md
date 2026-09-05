@@ -12,9 +12,10 @@ Incident orchestration separates the durable evidence ledger from the coordinato
 model context. Bounded connector results and Pod logs remain in the ledger, while
 isolated Argo CD, GitHub and Pod-log specialist calls return compact cited reports to
 the coordinator. This prevents one high-volume evidence domain from consuming the
-entire cross-domain reasoning context. The PoC runs these handoffs serially; the same
-boundary can later be backed by parallel durable workers without changing collector
-trust or evidence ownership.
+entire cross-domain reasoning context. Up to three Pod-log specialists selected in one
+coordinator round run concurrently, and three process-local incident workers can
+investigate separate incidents concurrently. A durable lease-backed queue is still
+required before multiple PodPilot replicas can share this work safely.
 
 Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.

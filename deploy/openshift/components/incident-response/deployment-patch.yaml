@@ -16,6 +16,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # Simulate the constrained remote model used by production environments.
+            - name: PODPILOT_INCIDENT_CONTEXT_WINDOW_TOKENS
+              value: "64000"
         - name: oauth-proxy
           # Keep base arguments in sync; test_incident_component_preserves_proxy_args checks this.
           args:
