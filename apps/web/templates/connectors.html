@@ -1,26 +1,92 @@
 {% extends "base.html" %}
 {% block title %}Connectors · PodPilot{% endblock %}
+{% block body_class %}connector-page{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Administration · Incident response</p><h1>Connectors</h1><p class="subtitle">Shared read-only credentials for unattended platform investigations.</p></div><a class="button" href="/settings/connectors">Add connection</a></header>
-<div class="settings-grid cluster-settings-grid"><aside class="panel incident-panel"><h2>Connections</h2>{% for row in connections %}<p><a href="/settings/connectors?edit={{ row.id }}">{{ row.name }}</a><small class="incident-muted">{{ row.kind }} · {{ 'Enabled' if row.enabled else 'Disabled' }}</small></p>{% else %}<p>No connections configured.</p>{% endfor %}</aside>
-<section class="panel incident-panel"><h2>{{ selected.name if selected else 'Add connection' }}</h2>
-<form id="incident-connection-form" class="settings-form">
-<input type="hidden" name="id" value="{{ selected.id if selected else '' }}">
-<label>Connection type<select name="kind" {% if selected %}disabled{% endif %}>{% for kind, label in [('cluster','Cluster investigation + Alertmanager'),('argocd','Argo CD'),('github','GitHub')] %}<option value="{{ kind }}" {% if selected and selected.kind == kind %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-<label>Name<input name="name" required maxlength="100" value="{{ selected.name if selected else '' }}"></label>
-<div data-connection-kinds="cluster argocd"><label>Hosting cluster<select name="cluster_id"><option value="">Select cluster</option>{% for cluster in clusters %}<option value="{{ cluster.id }}" {% if selected and selected.cluster_id == cluster.id %}selected{% endif %}>{{ cluster.name }} · {{ cluster.environment }}{% if cluster.is_system %} · System{% endif %}{% if not cluster.tls_verify %} · TLS verification disabled{% endif %}</option>{% endfor %}</select></label><p>Uses the selected cluster’s configured API and TLS policy.</p></div>
-<label>Read-only token<input type="password" name="token" autocomplete="new-password"><small>Stored in the incident credential Secret. Leave blank to preserve the saved value. Argo CD can inherit its hosting cluster’s incident credential, or use a separate Kubernetes token with Application read access.</small></label>
-<div data-connection-kinds="cluster">
-<label>Thanos/Prometheus HTTPS origin (optional)<input type="url" name="monitoring_url" value="{{ config.get('monitoring_url','') }}"><small>Uses this cluster’s read-only token and TLS policy. Custom CA below is used for this endpoint.</small></label>
-<label>Alertmanager webhook bearer token<input type="password" name="webhook_token" minlength="32" autocomplete="new-password"><small>Use a random value of at least 32 characters. Configure the same value in Alertmanager.</small></label>
-{% if selected and selected.kind == 'cluster' %}<p>Webhook path: <code>/api/v1/incident-webhooks/{{ selected.id }}</code></p>{% endif %}
-<fieldset><legend>Admitted critical platform alerts</legend>{% for alert in default_alerts %}<label class="checkbox-field"><input type="checkbox" name="allowed_alerts" value="{{ alert }}" {% if alert in config.get('allowed_alerts', default_alerts) %}checked{% endif %}>{{ alert }}</label>{% endfor %}</fieldset>
+<div class="connector-page-frame">
+  <header class="topbar connector-page-header">
+    <div><p class="eyebrow">Administration · Incident response</p><h1>Connectors</h1><p class="subtitle">Manage the read-only access PodPilot uses for unattended platform investigations.</p></div>
+    <a class="button" href="/settings/connectors">Add connection</a>
+  </header>
+
+  <div class="connector-layout">
+    <aside class="connector-directory" aria-label="Configured connections">
+      <div class="connector-directory-header">
+        <div><p class="eyebrow">Connection directory</p><h2>Configured access</h2><p>Credentials and endpoints available to incident response.</p></div>
+        <span class="connector-count">{{ connections | length }}</span>
+      </div>
+      <div class="connector-directory-list">
+        {% for row in connections %}
+        <a class="connector-directory-item{% if selected and selected.id == row.id %} is-selected{% endif %}" href="/settings/connectors?edit={{ row.id }}">
+          <span class="connector-directory-mark" aria-hidden="true"></span>
+          <span class="connector-directory-copy"><strong>{{ row.name }}</strong><small>{{ 'Cluster investigation' if row.kind == 'cluster' else ('Argo CD' if row.kind == 'argocd' else 'GitHub') }}</small></span>
+          <span class="connector-state{% if row.enabled %} is-enabled{% endif %}">{{ 'Enabled' if row.enabled else 'Disabled' }}</span>
+        </a>
+        {% else %}
+        <div class="connector-directory-empty"><strong>No connections yet</strong><p>Add a read-only source to begin unattended investigations.</p></div>
+        {% endfor %}
+      </div>
+      <div class="connector-directory-note"><strong>Least-privilege by default</strong><p>Connector credentials are stored server-side and scoped to investigation access.</p></div>
+    </aside>
+
+    <section class="connector-editor" aria-labelledby="connector-editor-title">
+      <div class="connector-editor-accent" aria-hidden="true"></div>
+      <header class="connector-editor-header">
+        <div><p class="eyebrow">Connection setup</p><h2 id="connector-editor-title">{{ selected.name if selected else 'Add connection' }}</h2><p>{{ 'Update access, scope, and endpoint settings for this connector.' if selected else 'Configure a trusted read-only source for incident investigations.' }}</p></div>
+        <span class="connector-editor-status">{{ 'Configured' if selected else 'New connection' }}</span>
+      </header>
+
+      <form id="incident-connection-form" class="settings-form connector-form">
+        <input type="hidden" name="id" value="{{ selected.id if selected else '' }}">
+
+        <section class="connector-form-section" aria-labelledby="connector-step-one">
+          <div class="connector-step-heading"><span class="cluster-signin-step-number">1</span><div><h3 id="connector-step-one">Connection details</h3><p>Choose the integration and identify where it is hosted.</p></div></div>
+          <div class="connector-field-grid">
+            <label class="connector-field"><span>Connection type</span><span class="connector-control-frame"><select name="kind" {% if selected %}disabled{% endif %}>{% for kind, label in [('cluster','Cluster investigation + Alertmanager'),('argocd','Argo CD'),('github','GitHub')] %}<option value="{{ kind }}" {% if selected and selected.kind == kind %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></span><small>Determines which credentials, endpoints, and access controls are required.</small></label>
+            <label class="connector-field"><span>Connection name</span><span class="connector-control-frame"><input name="name" required maxlength="100" value="{{ selected.name if selected else '' }}" placeholder="e.g. SNO platform investigations"></span><small>Use a recognizable name for operators reviewing investigation access.</small></label>
+            <div class="connector-field connector-field-full" data-connection-kinds="cluster argocd"><label for="connector-cluster">Hosting cluster</label><span class="connector-control-frame"><select id="connector-cluster" name="cluster_id"><option value="">Select cluster</option>{% for cluster in clusters %}<option value="{{ cluster.id }}" {% if selected and selected.cluster_id == cluster.id %}selected{% endif %}>{{ cluster.name }} · {{ cluster.environment }}{% if cluster.is_system %} · System{% endif %}{% if not cluster.tls_verify %} · TLS verification disabled{% endif %}</option>{% endfor %}</select></span><small>Uses the selected cluster’s configured API origin and TLS verification policy.</small></div>
+          </div>
+        </section>
+
+        <section class="connector-form-section" aria-labelledby="connector-step-two">
+          <div class="connector-step-heading"><span class="cluster-signin-step-number">2</span><div><h3 id="connector-step-two">Credentials and endpoints</h3><p>Provide server-side access details for the selected integration.</p></div></div>
+          <div class="connector-field-grid">
+            <label class="connector-field connector-field-full"><span>Read-only token <em>Secret</em></span><span class="connector-control-frame"><input type="password" name="token" autocomplete="new-password" placeholder="{{ 'Leave blank to keep the saved token' if selected else 'Paste a read-only service token' }}"></span><small>Stored in the incident credential Secret. Argo CD may inherit its hosting cluster credential or use a separate Kubernetes token with Application read access.</small></label>
+            <div class="connector-field-grid connector-field-full" data-connection-kinds="cluster">
+              <label class="connector-field connector-field-full"><span>Thanos/Prometheus HTTPS origin <em>Optional</em></span><span class="connector-control-frame"><input type="url" name="monitoring_url" value="{{ config.get('monitoring_url','') }}" placeholder="https://thanos-querier.example.com"></span><small>Uses this cluster’s read-only token and TLS policy. The custom CA below also applies to this endpoint.</small></label>
+              <label class="connector-field connector-field-full"><span>Alertmanager webhook bearer token <em>Secret</em></span><span class="connector-control-frame"><input type="password" name="webhook_token" minlength="32" autocomplete="new-password" placeholder="At least 32 random characters"></span><small>Configure the same bearer value in Alertmanager. It is never returned to the browser.</small></label>
+              {% if selected and selected.kind == 'cluster' %}<div class="connector-endpoint-note"><span>Webhook receiver path</span><code>/api/v1/incident-webhooks/{{ selected.id }}</code></div>{% endif %}
+            </div>
+            <div class="connector-field-grid connector-field-full" data-connection-kinds="argocd">
+              <label class="connector-field"><span>Argo CD namespace</span><span class="connector-control-frame"><input name="namespace" value="{{ config.get('namespace','openshift-gitops') }}"></span></label>
+              <label class="connector-field"><span>Platform projects</span><span class="connector-control-frame"><textarea name="projects" rows="4" placeholder="One project per line">{{ config.get('projects',[]) | join('\n') }}</textarea></span></label>
+            </div>
+            <div class="connector-field-grid connector-field-full" data-connection-kinds="github">
+              <label class="connector-field"><span>Corporate GitHub origin</span><span class="connector-control-frame"><input name="url" type="url" value="{{ config.get('url','') }}" placeholder="https://github.example.com"></span></label>
+              <label class="connector-field"><span>REST API prefix</span><span class="connector-control-frame"><select name="api_prefix"><option value="/api/v3" {% if config.get('api_prefix','/api/v3') == '/api/v3' %}selected{% endif %}>Enterprise Server (/api/v3)</option><option value="" {% if config.get('api_prefix') == '' %}selected{% endif %}>API origin (no prefix)</option></select></span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="connector-form-section" aria-labelledby="connector-step-three">
+          <div class="connector-step-heading"><span class="cluster-signin-step-number">3</span><div><h3 id="connector-step-three">Investigation scope</h3><p>Limit the resources this connection can contribute to an investigation.</p></div></div>
+          <fieldset class="connector-choice-panel" data-connection-kinds="cluster"><legend>Admitted critical platform alerts</legend><p>Only matching critical alerts can start an unattended investigation.</p><div class="connector-choice-grid">{% for alert in default_alerts %}<label class="connector-choice"><input type="checkbox" name="allowed_alerts" value="{{ alert }}" {% if alert in config.get('allowed_alerts', default_alerts) %}checked{% endif %}><span>{{ alert }}</span></label>{% endfor %}</div></fieldset>
+          <div class="connector-field-grid" data-connection-kinds="argocd">
+            <fieldset class="connector-choice-panel connector-field-full"><legend>Managed target clusters</legend><p>Select the cluster inventory Argo CD may map to applications.</p><div class="connector-choice-grid">{% for cluster in clusters %}<label class="connector-choice"><input type="checkbox" name="target_cluster_ids" value="{{ cluster.id }}" {% if cluster.id in config.get('target_cluster_ids',[]) %}checked{% endif %}><span>{{ cluster.name }}</span></label>{% endfor %}</div></fieldset>
+            <label class="connector-field connector-field-full"><span>Named Argo CD destinations <em>Optional JSON</em></span><span class="connector-control-frame"><textarea name="destination_names" rows="4">{{ config.get('destination_names',{}) | tojson }}</textarea></span><small>Map cluster IDs to destination names when Applications use destination.name instead of destination.server.</small></label>
+          </div>
+          <div class="connector-field-grid" data-connection-kinds="github"><label class="connector-field connector-field-full"><span>Allowed repositories</span><span class="connector-control-frame"><textarea name="repositories" rows="4" placeholder="owner/repository — one per line">{{ config.get('repositories',[]) | join('\n') }}</textarea></span></label></div>
+          <div class="connector-field-grid" data-connection-kinds="github cluster"><label class="connector-field connector-field-full"><span>Custom CA certificate bundle <em>Optional</em></span><span class="connector-control-frame connector-control-code"><textarea name="custom_ca_pem" rows="5" placeholder="-----BEGIN CERTIFICATE-----">{{ config.get('custom_ca_pem') or '' }}</textarea></span><small>Used only for this connection’s GitHub or monitoring TLS verification.</small></label></div>
+          <label class="connector-enable-card"><input type="checkbox" name="enabled" {% if selected and selected.enabled %}checked{% endif %}><span><strong>Enable this connection</strong><small>Allow PodPilot to use it for incident-response investigations.</small></span></label>
+        </section>
+
+        <footer class="connector-form-footer">
+          <div class="connector-form-assurance"><strong>Server-side credential storage</strong><span>Secrets are never displayed after saving.</span></div>
+          <div class="topbar-actions">{% if selected %}<button type="button" class="button" data-incident-post="/api/v1/incident-connections/{{ selected.id }}/test">Test connection</button>{% endif %}<button class="button primary" type="submit">{{ 'Save changes' if selected else 'Save connection' }}</button></div>
+        </footer>
+      </form>
+      <p id="incident-feedback" class="incident-feedback connector-feedback" role="status"></p>
+    </section>
+  </div>
 </div>
-<div data-connection-kinds="argocd"><label>Argo CD namespace<input name="namespace" value="{{ config.get('namespace','openshift-gitops') }}"></label><label>Platform projects (one per line)<textarea name="projects">{{ config.get('projects',[]) | join('\n') }}</textarea></label><fieldset><legend>Managed target clusters</legend>{% for cluster in clusters %}<label class="checkbox-field"><input type="checkbox" name="target_cluster_ids" value="{{ cluster.id }}" {% if cluster.id in config.get('target_cluster_ids',[]) %}checked{% endif %}>{{ cluster.name }}</label>{% endfor %}</fieldset><label>Named Argo CD destinations (JSON: cluster ID → destination name)<textarea name="destination_names">{{ config.get('destination_names',{}) | tojson }}</textarea><small>Optional when Applications use destination.name instead of destination.server.</small></label></div>
-<div data-connection-kinds="github"><label>Corporate GitHub origin<input name="url" type="url" value="{{ config.get('url','') }}" placeholder="https://github.example.com"></label><label>REST API prefix<select name="api_prefix"><option value="/api/v3" {% if config.get('api_prefix','/api/v3') == '/api/v3' %}selected{% endif %}>Enterprise Server (/api/v3)</option><option value="" {% if config.get('api_prefix') == '' %}selected{% endif %}>API origin (no prefix)</option></select></label><label>Allowed repositories (owner/repository, one per line)<textarea name="repositories">{{ config.get('repositories',[]) | join('\n') }}</textarea></label></div>
-<div data-connection-kinds="github cluster"><label>Custom CA certificate bundle for GitHub or monitoring (optional)<textarea name="custom_ca_pem">{{ config.get('custom_ca_pem') or '' }}</textarea></label></div>
-<label class="checkbox-field"><input type="checkbox" name="enabled" {% if selected and selected.enabled %}checked{% endif %}>Enable connection</label>
-<div class="topbar-actions"><button class="button primary" type="submit">Save connection</button>{% if selected %}<button type="button" class="button" data-incident-post="/api/v1/incident-connections/{{ selected.id }}/test">Test connection</button>{% endif %}</div>
-</form><p id="incident-feedback" role="status"></p></section></div>
 <script src="{{ url_for('static', path='/incidents.js') }}" defer></script>
 {% endblock %}

@@ -1,49 +1,45 @@
-# Shared SaaS Shell Design QA
+# Connector form design QA
 
-## Comparison setup
-
-- Source visual truth: browser-rendered Incidents page from `codex/incident-dashboard-saas` at `http://127.0.0.1:8766/incidents`.
-- Pre-change comparison source: browser-rendered Cluster sign-ins page at `http://127.0.0.1:8766/delegated/connect` before the shared-shell change.
-- Implementation screenshots: same-turn Codex in-app browser captures of `/incidents`, `/delegated/connect`, and `/clusters/personal?new=1` after the shared-shell change.
-- Deployed implementation: `https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/incidents`; the in-app browser reached the OpenShift OAuth login boundary.
-- Viewport and pixels: 718 × 856 CSS pixels and 718 × 856 captured pixels at device pixel ratio 1.
-- State: dark theme, authenticated local Investigator fixture, Local SNO available, one active incident, three historical incidents, empty personal-cluster list, and populated cluster sign-in form.
-- Density normalization: all visual comparisons used the same in-app browser viewport and 1× density without browser chrome.
-
-## Full-view comparison evidence
-
-The Incidents source and the revised Cluster pages now share the same 224px tablet navigation rail, 30–38px page-title scale, 14px body copy, 38px controls, 28px responsive content gutter, quiet surface palette, 10px panel radius, and one-pixel borders. Switching routes no longer changes the sidebar width, brand sizing, title rhythm, or page origin. Incidents remains visually stable after the shared rules were introduced.
-
-## Focused-region comparison evidence
-
-The Cluster sign-in workflow and personal-cluster form were inspected separately because their long labels and field stacks are not legible in a dashboard-only comparison. Step labels, form controls, consent copy, notice treatment, panel headings, and empty-state copy remain readable and aligned. The navigation accessibility tree retains Ask PodPilot, Clusters, Incidents, recent incidents, appearance choices, and identity. No new assets were introduced.
-
-## Required fidelity surfaces
-
-- Fonts and typography: every route inherits the same Inter/system-sans stack, 14px base size, 13px navigation, 30–38px H1 range, 17px panel headings, and 12px controls. Existing dense evidence and chat typography remains intentionally specialized.
-- Spacing and layout rhythm: desktop uses a 260px rail and 40px/clamped page gutters; the tested tablet viewport uses a 224px rail and 28px/18px content gutters. Panels use a consistent 16px grid gap and 10px radius.
-- Colors and visual tokens: the implementation reuses existing semantic theme variables across dark, classic, light, medium-light, and CIBC Red modes. No route-specific color palette was added.
-- Image quality and asset fidelity: the existing PodPilot mark and theme icons are unchanged. This interface contains no illustrative raster assets, and no placeholder or generated imagery was added.
-- Copy and content: operational labels, cluster/OAuth warnings, incident state, evidence counts, timestamps, configuration fields, and role information are unchanged.
-
-## Comparison history
-
-1. P1 — Route changes altered the shell geometry and typography because the SaaS rules were scoped only to `.incident-dashboard-page`. The shared `saas-app` shell now owns the rail, brand, navigation, type scale, page gutters, controls, and panel surfaces. Post-fix comparison shows the Incidents and Cluster routes beginning on identical columns and baselines.
-2. P2 — Existing Quiet Ledger grid rules removed card gaps and side borders on non-Incidents pages. Later shared-shell rules restore 16px grid gaps and complete one-pixel panel boundaries. The personal-cluster capture confirms distinct list and form work areas.
-3. P2 — The global 720px rule previously hid navigation on non-Incidents routes. The shared responsive rule now keeps all navigation and identity controls visible through 641px, matching the corrected Incidents behavior.
+- Source visual truth: cluster sign-in screen at `http://127.0.0.1:8766/delegated/connect` and `C:/Users/zdrux/AppData/Local/Temp/codex-clipboard-b70bc70a-e678-474d-ac9a-3c1f73e7eb0a.png`
+- Implementation: connector administration screen at `http://127.0.0.1:8766/settings/connectors`
+- Viewport: Codex in-app browser, 718 × 856 CSS pixels
+- Capture dimensions: source 718 × 856 pixels; implementation 718 × 856 pixels; device density 1; no density normalization required
+- State: dark theme, breakglass administrator, one configured cluster connector, new-connection editor
+- Browser evidence: both rendered captures were placed in the same comparison input in the Codex in-app browser session.
 
 ## Findings
 
-No actionable P0, P1, or P2 findings remain in the tested routes and viewport. Ask retains its purpose-built full-height conversation canvas while using the same outer navigation geometry and typography. A dedicated compact mobile navigation below 640px remains optional P3 work.
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: both screens use the shared Inter/system sans stack, matching heading weight, compact labels, muted helper copy, and cyan uppercase eyebrows. The connector page preserves the application's established scale rather than introducing route-specific typography.
+- Spacing and layout rhythm: the implementation repeats the sign-in screen's bordered header, numbered setup steps, 44px framed controls, restrained radii, and section dividers. The connection directory intentionally becomes a stacked card at the captured narrow viewport; at desktop width it occupies a compact left rail beside the editor.
+- Colors and visual tokens: all new surfaces, borders, focus states, and semantic status text use the existing theme tokens. The implementation matches the dark navy, cyan accent, subdued border, and inset-control balance of the source.
+- Image quality and assets: neither screen depends on raster imagery. No source logo, illustration, or product image was replaced. Existing navigation brand and icons remain unchanged.
+- Copy and content: labels are concise, secrets and optional values are identified consistently, helper text explains storage and TLS behavior, and configuration is grouped by operator task.
+- Interaction and accessibility: every input retains its existing `name`, form id, endpoint, and dynamic connector-kind hook. Controls have programmatic labels, visible focus treatment, practical target sizing, and responsive one-column fallbacks.
+
+## Full-view comparison evidence
+
+The combined capture shows the source sign-in card and connector implementation at the same viewport and theme. Both use the same layered card structure, compact cyan hierarchy, numbered progression, framed input surfaces, and quiet supporting copy. The connector page adds a connection directory because selecting existing records is part of this screen's task; this is an intentional information-architecture difference.
+
+## Focused region comparison evidence
+
+A separate crop was not needed because the 718px-wide captures render the step headings, field labels, helper copy, frame borders, and selected navigation states legibly. The first connector setup section was directly compared with the source's credential section.
+
+## Comparison history
+
+- Initial implementation review: no P0/P1/P2 findings. The previous unstructured field stack was replaced before this pass with a directory, staged configuration sections, framed controls, scoped choice panels, and a grounded action footer.
+- Post-build comparison: no additional visual fixes required.
 
 ## Verification
 
-- Browser: paired before/after Cluster comparison; Incidents stability check; personal-cluster form check; sidebar route and theme controls remained available.
-- Automated: all 805 model-free tests passed.
-- SNO: builds `podpilot-132` and `podpilot-oc-runner-14` completed; deployment has one available replica; API container is ready with zero restarts.
-- Deployed artifact: the running API container contains the shared SaaS CSS marker, `saas-app` body class, and `saas-shell-32` cache key.
-- Source hygiene: `git diff --check` passed before commit.
+- Browser-rendered routes checked: `/delegated/connect`, `/settings/connectors`
+- Primary behavior checked: existing form hooks and connector-kind visibility logic preserved; add/edit/test/save controls remain wired to the existing JavaScript and API contract.
+- Automated check: `python -m pytest apps/api/tests/test_app.py -q` passed.
+- Console errors: no application errors observed during route rendering; the in-app browser does not expose a separate console log surface.
 
-## Final result
+## Follow-up polish
+
+- P3: Consider adding a persisted success toast after save/test in a future interaction-focused pass.
 
 final result: passed
