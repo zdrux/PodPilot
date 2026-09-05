@@ -57,9 +57,16 @@ recorded the still-running coordinator as stopped and the investigation as inter
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
+The Incidents-selected SaaS visual system now applies through the shared application shell,
+so navigation width, Inter typography, page gutters, headings, buttons, metrics, forms, and
+bordered panels remain stable when moving among Ask, Clusters, Incidents, and management pages.
+The responsive shell keeps the full workspace navigation visible through the tablet breakpoint.
+OpenShift binary builds `podpilot-132` and `podpilot-oc-runner-14` completed successfully, and
+the deployment rolled out with one ready application replica and no API-container restarts.
 The current SNO application image is
-`sha256:61aa98d88b4575fb7124a8dd813aad8170585ad4b0fd22d6b100591ae2c8b38a`
-with schema head `0024_incident_activity`; the runner remains unchanged.
+`sha256:9640bd7a3e1867897f89a78b080c40528021c7a8df031862cf244f5e22778b0b`
+with schema head `0024_incident_activity`; the rebuilt runner image is
+`sha256:cce2062b9bd961901eb38c70acf8a834080d23bcebece934e8bc6b3780af6964`.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
 disposable SNO lab at schema head `0021_user_delegated_access`. That 2026-09-01 rollout used
