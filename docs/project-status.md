@@ -13,7 +13,7 @@ opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authe
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
 metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
-Validation: 800 model-free tests pass (78% aggregate coverage), migration upgrade/
+Validation: 801 model-free tests pass (78% aggregate coverage), migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -38,13 +38,15 @@ its own administration entry rather than a duplicate configuration tab. The divi
 Manage section and all connector/webhook navigation remain configuration-admin-only.
 Incident details now use a flat Overview/Investigation tab layout. Duplicate source
 signals are grouped with occurrence counts, verbose annotations and evidence payloads
-are collapsed, briefing Markdown is rendered safely, and run-scoped evidence links
-open and focus the corresponding timeline entry.
+are collapsed, and run-scoped evidence links open and focus the corresponding timeline
+entry. Incident narrative Markdown disables table parsing so pipe-delimited model output
+cannot collapse hypothesis prose into narrow table columns; the deployed
+ClusterOperatorDown page retains only its intentional source-alert table.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
 helper to renew it. The smoke-test rule is left inert.
 
 The current SNO application image is
-`sha256:c2c688491cfff2cf17aeb56f69dc48d7a65fb66afc99905963ae73aba05dc0b7`
+`sha256:6d70e9c46e6b0879382a4227bab0af8f729a16832f1f041d1ba173a7cd036b39`
 with schema head `0023_fleet_incidents`; the runner remains unchanged.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
