@@ -1,6 +1,6 @@
 # PodPilot Codebase Map
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-09-05
 Update when: top-level structure, core tooling, or verification commands change.
 
 ## Workspaces
@@ -37,6 +37,7 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 ## Important Files
 
 - `AGENTS.md`: repository router and invariants.
+- `apps/web/DESIGN.md`: semantic visual system, reusable screen patterns, responsive rules, and UI review checklist.
 - `.gitignore`: credential, local cluster state, build output, and editor exclusions.
 - `Dockerfile`: pinned UBI Python image and non-root application runtime.
 - `Dockerfile.oc-runner`: pinned agentic sidecar containing Linux `oc` and the loopback runner.
