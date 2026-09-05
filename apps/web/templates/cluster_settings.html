@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Cluster management · PodPilot{% endblock %}
+{% block body_class %}admin-config-page cluster-config-page{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Administration</p><h1>Cluster Management</h1><p class="subtitle">Configure the shared cluster registry and manage availability for PodPilot users.</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/settings/clusters?new=1">Add cluster</a></div>{% endif %}</header>
+<div class="admin-config-frame">
+<header class="topbar admin-config-header"><div><p class="eyebrow">Administration · Fleet access</p><h1>Cluster Management</h1><p class="subtitle">Configure trusted OpenShift targets, visibility, TLS policy, and operator-facing metadata.</p></div>{% if selected %}<div class="topbar-actions"><a class="button primary" href="/settings/clusters?new=1">Add cluster</a></div>{% endif %}</header>
 <section class="notice warning-notice"><span class="notice-icon" aria-hidden="true">!</span><div><strong>TLS verification exceptions carry credentials</strong><p>Disabling verification sends the cluster bearer token and receives evidence without authenticating the Kubernetes API or discovered telemetry endpoints. Use only for explicitly accepted internal environments.</p></div></section>
-<div class="settings-grid cluster-settings-grid">
-  <aside class="panel side-list-panel">
+<div class="settings-grid cluster-settings-grid admin-config-layout">
+  <aside class="panel side-list-panel admin-config-directory">
     <div class="panel-header"><div><p class="eyebrow">Registry</p><h2>Configured clusters</h2></div><span class="tag">{{ clusters | length }}</span></div>
     <ul class="model-profile-list cluster-registry-list">
     {% for cluster in clusters %}
@@ -12,14 +14,16 @@
     {% else %}<li class="side-empty">No cluster entries are configured.</li>{% endfor %}
     </ul>
   </aside>
-  <section class="panel settings-panel">
+  <section class="panel settings-panel admin-config-editor">
     <div class="panel-header"><div><p class="eyebrow">{% if selected %}Connection{% else %}New connection{% endif %}</p><h2>{% if selected %}{{ selected.name }}{% else %}Add cluster{% endif %}</h2></div>{% if selected %}<span class="tag">{{ selected.status }}</span>{% endif %}</div>
     {% if selected and selected.is_system %}
-      <form class="settings-form" id="cluster-settings-form"
+      <form class="settings-form admin-config-form" id="cluster-settings-form"
         data-save-url="/api/v1/clusters/{{ selected.id }}/metadata"
         data-success-message="Runtime cluster metadata saved.">
+        <div class="admin-form-step"><span class="cluster-signin-step-number">1</span><div><strong>Cluster identity</strong><small>Control how the runtime cluster appears throughout PodPilot.</small></div></div>
         <label>Display name<input name="name" required maxlength="253" value="{{ selected.name }}" placeholder="prod-openshift-east"></label>
         <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment }}" placeholder="dev"><small>Used to label and group this cluster with other connection targets in the cluster picker.</small></label>
+        <div class="admin-form-step admin-form-divider"><span class="cluster-signin-step-number">2</span><div><strong>Operator scope</strong><small>Use tags to target memory and guidance without changing runtime access.</small></div></div>
         <label>Tags
           <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson }}'>
             <div class="tag-chip-list" data-tag-list aria-live="polite"></div>
@@ -39,18 +43,21 @@
         <div class="form-actions"><a class="button primary" href="/delegated/connect">Connect clusters</a></div>
       </div>
     {% else %}
-    <form class="settings-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/settings/clusters">
+    <form class="settings-form admin-config-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/settings/clusters">
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
+      <div class="admin-form-step"><span class="cluster-signin-step-number">1</span><div><strong>Cluster identity</strong><small>Name this target and choose who can discover it.</small></div></div>
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>
       <label>Environment<input name="environment" required maxlength="64" value="{{ selected.environment if selected else 'dev' }}" placeholder="dev"><small>Credentials are submitted once per selected environment.</small></label>
       {% if can_manage_shared_clusters %}
       <label>Visibility<select name="visibility"><option value="shared" {% if not selected or selected.visibility == 'shared' %}selected{% endif %}>Shared · all PodPilot users</option><option value="private" {% if selected and selected.visibility == 'private' %}selected{% endif %}>Private · only me</option></select></label>
       {% else %}<input type="hidden" name="visibility" value="private">{% endif %}
+      <div class="admin-form-step admin-form-divider"><span class="cluster-signin-step-number">2</span><div><strong>API trust</strong><small>Configure the Kubernetes API origin and its certificate policy.</small></div></div>
       <label>OpenShift API URL<input name="api_url" type="url" required value="{{ selected.api_url if selected else '' }}" placeholder="https://api.cluster.example:6443"><small>HTTPS origin only; no path, query, or embedded credentials.</small></label>
       <label>Custom Kubernetes API CA bundle
         <textarea name="custom_ca_pem" rows="8" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----">{{ selected.custom_ca_pem if selected else '' }}</textarea>
         <small>Optional PEM certificate bundle appended to system trust for OAuth login, identity verification, API proxying, and connection tests. Private keys are rejected.</small>
       </label>
+      <div class="admin-form-step admin-form-divider"><span class="cluster-signin-step-number">3</span><div><strong>Targeting and availability</strong><small>Apply operational tags and confirm whether PodPilot may trust this endpoint.</small></div></div>
       <label>Tags
         <div class="tag-editor" data-tag-editor data-tags='{{ selected.tags | tojson if selected else '{}' }}'>
           <div class="tag-chip-list" data-tag-list aria-live="polite"></div>
@@ -71,4 +78,5 @@
   </section>
 </div>
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+</div>
 {% endblock %}

@@ -2570,3 +2570,117 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
   .connector-form-footer .topbar-actions { width: 100%; }
   .connector-form-footer .button { flex: 1 1 auto; justify-content: center; }
 }
+
+/* Shared administration configuration workspace. */
+.admin-config-page .main { background: var(--theme-surface); }
+.admin-config-frame { width: 100%; max-width: 1420px; margin: 0 auto; }
+.admin-config-header { margin-bottom: 24px !important; }
+.admin-config-page > .shell > .main .notice { display: flex; align-items: flex-start; gap: 11px; margin: 0 0 18px; padding: 12px 14px; border-color: var(--theme-border); border-radius: 9px; background: var(--app-card-muted); box-shadow: none; }
+.admin-config-page > .shell > .main .notice strong { font-size: 11px; }
+.admin-config-page > .shell > .main .notice p { margin-top: 3px; color: var(--theme-muted); font-size: 10px; line-height: 1.5; }
+.admin-config-page .notice-icon { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 6px; font-size: 10px; }
+.admin-config-layout { gap: 18px !important; align-items: start; margin-top: 0; }
+.cluster-settings-grid.admin-config-layout,
+.memory-layout.admin-config-layout { grid-template-columns: minmax(250px, 290px) minmax(560px, 1fr); }
+.model-registry-layout.admin-config-layout { grid-template-columns: minmax(230px, 270px) minmax(520px, 1fr); }
+.model-registry-layout.admin-config-layout:has(.admin-config-observation) { grid-template-columns: minmax(220px, 250px) minmax(480px, 1fr) minmax(240px, 280px); }
+.admin-config-directory,
+.admin-config-editor,
+.admin-config-observation,
+.admin-config-search { overflow: hidden !important; border: 1px solid var(--theme-border) !important; border-radius: 11px !important; background: var(--app-card) !important; box-shadow: 0 1px 2px var(--theme-shadow) !important; }
+.admin-config-directory { position: sticky; top: 24px; }
+.admin-config-page .panel-header { min-height: 76px; padding: 17px 18px; background: color-mix(in srgb, var(--app-card-muted) 48%, transparent); }
+.admin-config-page .panel-header .eyebrow { margin: 0 0 5px; color: var(--theme-accent-strong); font-size: 10px; letter-spacing: .075em; }
+.admin-config-page .panel-header h2 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.015em; }
+.admin-config-page .panel-header .tag { min-height: 24px; padding-inline: 8px; border: 1px solid var(--theme-border); border-radius: 999px; color: var(--theme-muted); background: var(--app-card-muted); font-size: 9px; }
+.admin-config-page .model-profile-list,
+.admin-config-page .memory-document-list,
+.admin-config-page .cluster-registry-list { padding: 8px; }
+.admin-config-page .model-profile-list li,
+.admin-config-page .memory-document-list li { border: 1px solid transparent; border-radius: 8px; }
+.admin-config-page .model-profile-list li + li,
+.admin-config-page .memory-document-list li + li { margin-top: 3px; }
+.admin-config-page .model-profile-list a,
+.admin-config-page .memory-document-list li a { min-height: 64px; padding: 11px; border-radius: 7px; }
+.admin-config-page .model-profile-list li:hover,
+.admin-config-page .memory-document-list li:hover { border-color: var(--theme-border); background: color-mix(in srgb, var(--theme-text) 3%, transparent); }
+.admin-config-page .model-profile-list li.selected,
+.admin-config-page .memory-document-list li.selected { border-color: color-mix(in srgb, var(--theme-accent) 44%, var(--theme-border)); background: color-mix(in srgb, var(--theme-accent) 8%, transparent); box-shadow: inset 2px 0 var(--theme-accent); }
+.admin-config-page .model-profile-list strong,
+.admin-config-page .memory-document-list strong { font-size: 12px; font-weight: 650; }
+.admin-config-page .model-profile-list b { margin-top: 2px; color: var(--theme-muted); font-size: 11px; font-weight: 600; }
+.admin-config-page .model-profile-list small,
+.admin-config-page .memory-document-list small { color: var(--theme-subtle); font-size: 10px; }
+.admin-config-page .model-profile-list em,
+.admin-config-page .memory-document-list em { padding: 2px 5px; border: 1px solid var(--theme-border); border-radius: 5px; background: var(--app-card-muted); font-size: 8px; font-weight: 750; }
+.admin-config-page .side-empty { padding: 24px 18px; }
+.admin-config-page .side-empty strong { font-size: 12px; }
+.admin-config-page .side-empty p { margin-top: 6px; color: var(--theme-muted); font-size: 11px; line-height: 1.5; }
+.settings-form.admin-config-form { padding: 0 22px 22px; }
+.admin-config-form > * + * { margin-top: 16px; }
+.admin-form-step { display: flex; align-items: flex-start; gap: 11px; margin: 0 -22px 18px !important; padding: 20px 22px 0; }
+.admin-form-step.admin-form-divider { margin-top: 24px !important; padding-top: 20px; border-top: 1px solid var(--theme-border); }
+.admin-form-step > div { display: grid; gap: 3px; }
+.admin-form-step strong { color: var(--theme-text); font-size: 13px; font-weight: 675; }
+.admin-form-step small { color: var(--theme-muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.admin-config-form .field-row { gap: 14px; }
+.settings-form.admin-config-form label { gap: 7px; color: var(--theme-muted); font-size: 11px; font-weight: 650; }
+.settings-form.admin-config-form input:not([type="checkbox"]):not([type="hidden"]),
+.settings-form.admin-config-form select,
+.settings-form.admin-config-form textarea,
+.admin-config-search .memory-search input,
+.admin-config-search .memory-search select { min-height: 44px; border: 1px solid color-mix(in srgb, var(--theme-border-strong) 78%, var(--theme-border)); border-radius: 8px; color: var(--theme-text); background: var(--theme-surface-inset); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-text) 2.5%, transparent); font-family: inherit; font-size: 12px; transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease; }
+.settings-form.admin-config-form textarea { min-height: 94px; padding: 12px 13px; line-height: 1.5; }
+.settings-form.admin-config-form input:not([type="checkbox"]):focus,
+.settings-form.admin-config-form select:focus,
+.settings-form.admin-config-form textarea:focus,
+.admin-config-search .memory-search input:focus,
+.admin-config-search .memory-search select:focus { outline: 0; border-color: var(--theme-accent); background: color-mix(in srgb, var(--theme-surface-inset) 92%, var(--theme-accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 9%, transparent); }
+.settings-form.admin-config-form label > small { color: var(--theme-subtle); font-size: 10px; font-weight: 400; line-height: 1.5; }
+.settings-form.admin-config-form .tag-editor { min-height: 46px; border-color: color-mix(in srgb, var(--theme-border-strong) 78%, var(--theme-border)); border-radius: 8px; background: var(--theme-surface-inset); }
+.settings-form.admin-config-form .tag-editor:focus-within { border-color: var(--theme-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 9%, transparent); }
+.settings-form.admin-config-form fieldset,
+.settings-form.admin-config-form .capability-hints { padding: 14px; border: 1px solid var(--theme-border); border-radius: 9px; background: var(--app-card-muted); }
+.settings-form.admin-config-form fieldset legend { padding: 0 6px; color: var(--theme-text); font-size: 11px; font-weight: 675; }
+.settings-form.admin-config-form fieldset > p { color: var(--theme-subtle); font-size: 10px; line-height: 1.45; }
+.settings-form.admin-config-form .reasoning-option-grid,
+.settings-form.admin-config-form .capability-hints { gap: 7px; }
+.settings-form.admin-config-form .reasoning-option-grid label,
+.settings-form.admin-config-form .capability-hints label,
+.settings-form.admin-config-form .knowledge-targets .checkbox-field,
+.settings-form.admin-config-form > .checkbox-field { min-height: 36px; padding: 8px 10px; border: 1px solid var(--theme-border); border-radius: 7px; color: var(--theme-muted); background: var(--app-card); font-size: 10px; cursor: pointer; }
+.settings-form.admin-config-form input[type="checkbox"] { width: 15px; min-height: 15px; margin: 0; accent-color: var(--theme-accent); }
+.settings-form.admin-config-form .form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 24px -22px -22px; padding: 16px 22px; border-top: 1px solid var(--theme-border); background: var(--app-card-muted); }
+.settings-form.admin-config-form .form-actions .button.primary { min-width: 126px; justify-content: center; }
+.settings-form.admin-config-form .inline-warning { border-radius: 8px; font-size: 10px; }
+.admin-config-search { margin: 0 0 18px !important; }
+.admin-config-search .panel-header { min-height: 68px; }
+.admin-config-search .memory-search { padding: 16px 18px; border-top: 1px solid var(--theme-border); background: var(--app-card); }
+.admin-config-search .memory-search label { color: var(--theme-muted); font-size: 10px; font-weight: 650; }
+.admin-config-search .memory-search .button { min-height: 44px; }
+.admin-config-page .memory-results { border-top: 1px solid var(--theme-border); }
+.admin-config-page .memory-results li { border-color: var(--theme-border); border-radius: 8px; background: var(--app-card-muted); }
+.admin-config-observation { position: sticky; top: 24px; }
+.admin-config-observation .capability-list > div { padding: 11px 16px; border-bottom-color: var(--theme-border); }
+.admin-config-observation .capability-list span,
+.admin-config-observation .capability-list strong { font-size: 10px; }
+.admin-config-page .settings-summary { gap: 0; overflow: hidden; border: 1px solid var(--theme-border); border-radius: 8px; }
+.admin-config-page .settings-summary > div { padding: 12px; background: var(--app-card-muted); }
+@media (max-width: 1180px) {
+  .model-registry-layout.admin-config-layout:has(.admin-config-observation) { grid-template-columns: minmax(230px, 270px) minmax(520px, 1fr); }
+  .admin-config-observation { position: static; grid-column: 2; }
+}
+@media (max-width: 980px) {
+  .cluster-settings-grid.admin-config-layout,
+  .memory-layout.admin-config-layout,
+  .model-registry-layout.admin-config-layout,
+  .model-registry-layout.admin-config-layout:has(.admin-config-observation) { grid-template-columns: 1fr; }
+  .admin-config-directory,
+  .admin-config-observation { position: static; grid-column: auto; }
+}
+@media (max-width: 700px) {
+  .admin-config-form .field-row,
+  .admin-config-search .memory-search { grid-template-columns: 1fr; }
+  .settings-form.admin-config-form .form-actions { align-items: stretch; flex-direction: column; }
+  .settings-form.admin-config-form .form-actions .button { width: 100%; justify-content: center; }
+}

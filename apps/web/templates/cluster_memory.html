@@ -1,26 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Cluster memory · PodPilot{% endblock %}
+{% block body_class %}admin-config-page memory-config-page{% endblock %}
 {% block content %}
-<header class="topbar"><div><p class="eyebrow">Manage</p><h1>Cluster memory</h1><p class="subtitle">Curated, scoped knowledge retrieved for Ask PodPilot only when the selected cluster or its tags match.</p></div>{% if user.can_manage_configuration %}<div class="topbar-actions"><a class="button primary" href="/memory">Add knowledge</a></div>{% endif %}</header>
+<div class="admin-config-frame">
+<header class="topbar admin-config-header"><div><p class="eyebrow">Administration · Knowledge</p><h1>Cluster memory</h1><p class="subtitle">Curate scoped operational guidance retrieved for Ask PodPilot, and preview exactly what it can use.</p></div>{% if user.can_manage_configuration %}<div class="topbar-actions"><a class="button primary" href="/memory">Add knowledge</a></div>{% endif %}</header>
 <section class="notice evidence-notice"><span class="notice-icon" aria-hidden="true">i</span><div><strong>Evidence boundary</strong><p>Only enabled, reviewed, unexpired entries can appear in search. Curated memory is guidance, not live cluster evidence, and cannot define tools or remediation.</p></div></section>
-<section class="panel memory-search-panel">
+<section class="panel memory-search-panel admin-config-search">
   <div class="panel-header"><div><p class="eyebrow">Retrieval preview</p><h2>Test the memory index</h2></div><span class="tag">{{ cluster_name }}</span></div>
   <form class="memory-search" method="get" action="/memory"><label>Search terms<input name="q" maxlength="500" value="{{ query }}" placeholder="image pull internal registry"></label><label>Cluster<select name="cluster_id">{% for cluster in clusters %}<option value="{{ cluster.id }}" {% if cluster.id == cluster_id %}selected{% endif %}>{{ cluster.name }}</option>{% endfor %}</select></label><label>Namespace scope<input name="namespace" maxlength="253" value="{{ namespace }}" placeholder="Optional namespace"></label><button class="button secondary" type="submit">Search</button></form>
   {% if query %}<div class="memory-results"><p class="muted-copy">{{ results | length }} eligible chunks matched.</p>{% if results %}<ol>{% for result in results %}<li><div><strong>{{ result.title }}</strong><span>{{ result.source_type | replace('_',' ') }} · v{{ result.version }} · {{ result.cluster_id }}{% if result.namespace %}/{{ result.namespace }}{% endif %}</span></div>{% if result.heading %}<h3>{{ result.heading }}</h3>{% endif %}<p>{{ result.content }}</p><small>Source: {{ result.source }} · Owner: {{ result.owner }} · Chunk {{ result.chunk_id }}</small></li>{% endfor %}</ol>{% else %}<div class="side-empty"><strong>No eligible memory matched</strong><p>Draft, disabled, expired, restricted, or out-of-scope entries are intentionally excluded.</p></div>{% endif %}</div>{% endif %}
 </section>
-<div class="memory-layout">
-  <aside class="panel settings-panel">
+<div class="memory-layout admin-config-layout">
+  <aside class="panel settings-panel admin-config-directory">
     <div class="panel-header"><div><p class="eyebrow">Current versions</p><h2>{{ documents | length }} entries</h2></div></div>
     {% if documents %}<ul class="memory-document-list">{% for item in documents %}<li class="{% if selected and selected.id == item.id %}selected{% endif %}"><a href="/memory?edit={{ item.id }}&cluster_id={{ cluster_id }}"><span><strong>{{ item.title }}</strong>{% if not item.is_enabled %}<em>Disabled</em>{% elif item.verification_state == 'draft' %}<em>Draft</em>{% endif %}</span><small>{{ item.source_type | replace('_',' ') }} · v{{ item.version }}</small><small>{% if item.target_cluster_ids_json == '[]' and item.target_tags_json == '{}' %}All clusters{% else %}Targeted knowledge{% endif %}{% if item.namespace %} · {{ item.namespace }}{% endif %}</small></a></li>{% endfor %}</ul>{% else %}<div class="side-empty"><strong>No curated knowledge</strong><p>A configuration administrator can add a reviewed cluster fact or runbook.</p></div>{% endif %}
   </aside>
-  <section class="panel settings-panel">
+  <section class="panel settings-panel admin-config-editor">
     <div class="panel-header"><div><p class="eyebrow">{% if selected %}Version {{ selected.version }}{% else %}New entry{% endif %}</p><h2>{% if selected %}Revise knowledge{% else %}Add knowledge{% endif %}</h2></div>{% if selected %}<span class="tag">{{ selected.verification_state }}</span>{% endif %}</div>
-    {% if user.can_manage_configuration %}<form id="knowledge-form" class="settings-form" data-save-url="/api/v1/knowledge">
+    {% if user.can_manage_configuration %}<form id="knowledge-form" class="settings-form admin-config-form" data-save-url="/api/v1/knowledge">
       <input type="hidden" name="logical_id" value="{{ selected.logical_id if selected else '' }}">
+      <div class="admin-form-step"><span class="cluster-signin-step-number">1</span><div><strong>Knowledge content</strong><small>Capture the reviewed fact, runbook, or approved incident guidance.</small></div></div>
       <label>Title<input name="title" required maxlength="253" value="{{ selected.title if selected else '' }}"></label>
       <div class="field-row"><label>Type<select name="source_type"><option value="cluster_fact" {% if not selected or selected.source_type == 'cluster_fact' %}selected{% endif %}>Cluster fact</option><option value="runbook" {% if selected and selected.source_type == 'runbook' %}selected{% endif %}>Runbook</option><option value="incident_summary" {% if selected and selected.source_type == 'incident_summary' %}selected{% endif %}>Approved incident summary</option><option value="product_knowledge" {% if selected and selected.source_type == 'product_knowledge' %}selected{% endif %}>Product knowledge</option></select></label><label>Verification<select name="verification_state"><option value="draft" {% if not selected or selected.verification_state == 'draft' %}selected{% endif %}>Draft</option><option value="reviewed" {% if selected and selected.verification_state == 'reviewed' %}selected{% endif %}>Reviewed</option></select></label></div>
       <label>Content (Markdown or text)<textarea name="content" rows="12" maxlength="100000" required>{{ selected.content if selected else '' }}</textarea><small>Credentials and common secret patterns are redacted before persistence.</small></label>
+      <div class="admin-form-step admin-form-divider"><span class="cluster-signin-step-number">2</span><div><strong>Provenance</strong><small>Record who owns this guidance and where operators can verify it.</small></div></div>
       <div class="field-row"><label>Source<input name="source" required maxlength="512" value="{{ selected.source if selected else '' }}" placeholder="Platform team runbook"></label><label>Owner<input name="owner" required maxlength="253" value="{{ selected.owner if selected else user.username }}"></label></div>
+      <div class="admin-form-step admin-form-divider"><span class="cluster-signin-step-number">3</span><div><strong>Retrieval scope</strong><small>Limit where this guidance is eligible by cluster, tags, namespace, or resource.</small></div></div>
       <fieldset class="knowledge-targets"><legend>Explicit clusters</legend><p class="muted-copy">Optional. No explicit clusters plus no required tags means global knowledge.</p>{% for cluster in clusters %}<label class="checkbox-field"><input type="checkbox" value="{{ cluster.id }}" data-knowledge-cluster data-cluster-name="{{ cluster.name }}" data-cluster-tags='{{ cluster.tags | tojson }}' {% if cluster.id in selected_target_ids %}checked{% endif %}><span>{{ cluster.name }}{% if cluster.tags %}<small class="cluster-tag-summary">{% for key, value in cluster.tags.items() %}{{ key }}{% if value %}:{{ value }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</small>{% endif %}</span></label>{% endfor %}</fieldset>
       <input type="hidden" name="target_cluster_ids_json" data-knowledge-cluster-ids value='{{ selected_target_ids | tojson }}'>
       <label>Required cluster tags
@@ -41,4 +46,5 @@
   </section>
 </div>
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>
+</div>
 {% endblock %}
