@@ -2381,3 +2381,86 @@ html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red
   .incident-activity-totals > div:nth-child(3) { border-top: 1px solid var(--theme-border); border-left: 0; }
   .incident-activity-totals > div:nth-child(4) { border-top: 1px solid var(--theme-border); }
 }
+
+/* Shared SaaS shell — keep typography and workspace geometry stable across routes. */
+.saas-app {
+  --app-card: color-mix(in srgb, var(--theme-surface-raised) 72%, var(--theme-surface));
+  --app-card-muted: color-mix(in srgb, var(--theme-surface-inset) 76%, var(--theme-surface));
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  background: var(--theme-surface-inset);
+}
+.saas-app .shell { grid-template-columns: 260px minmax(0, 1fr); }
+.saas-app .sidebar { padding: 20px 16px; background: var(--theme-surface-inset); }
+.saas-app .brand { padding: 0 8px 22px; }
+.saas-app .brand-mark { width: 36px; height: 36px; border-radius: 9px; font-size: 16px; }
+.saas-app .nav-link { min-height: 38px; border-radius: 7px; font-size: 13px; }
+.saas-app .nav-session-link { padding-block: 7px; }
+.saas-app .main { padding: 40px clamp(28px, 4vw, 64px) 56px; background: var(--theme-surface); }
+.saas-app .topbar { align-items: center; margin-bottom: 28px; }
+.saas-app .topbar .eyebrow { margin-bottom: 7px; color: var(--theme-accent-strong); font-size: 11px; letter-spacing: .08em; }
+.saas-app .topbar h1 { margin: 0; font-size: clamp(30px, 3vw, 38px); font-weight: 700; letter-spacing: -.035em; line-height: 1.1; }
+.saas-app .topbar .subtitle { max-width: 720px; margin-top: 8px; color: var(--theme-muted); font-size: 14px; line-height: 1.55; }
+.saas-app .button { min-height: 38px; border-radius: 7px; font-size: 12px; }
+.saas-app .panel,
+.saas-app .metric-card,
+.saas-app .settings-panel,
+.saas-app .memory-search-panel,
+.saas-app .investigation-summary,
+.saas-app .investigation-plan,
+.saas-app .model-analysis,
+.saas-app .investigation-chat,
+.saas-app .action-panel,
+.saas-app .connected-cluster-section,
+.saas-app .cluster-signin-card {
+  border: 1px solid var(--theme-border);
+  border-radius: 10px;
+  color: var(--theme-text);
+  background: var(--app-card);
+  box-shadow: 0 1px 2px var(--theme-shadow);
+}
+.saas-app .panel-header { min-height: 72px; padding: 16px 18px; border-bottom: 1px solid var(--theme-border); }
+.saas-app .panel-header h2 { font-size: 17px; font-weight: 650; letter-spacing: -.015em; }
+.saas-app .content-grid,
+.saas-app .settings-grid,
+.saas-app .model-registry-layout,
+.saas-app .memory-layout,
+.saas-app .investigation-grid { gap: 16px; border: 0; }
+.saas-app .content-grid > *,
+.saas-app .settings-grid > *,
+.saas-app .model-registry-layout > *,
+.saas-app .memory-layout > *,
+.saas-app .investigation-grid > *,
+.saas-app .content-grid > * + *,
+.saas-app .settings-grid > * + *,
+.saas-app .model-registry-layout > * + *,
+.saas-app .memory-layout > * + *,
+.saas-app .investigation-grid > * + * { border: 1px solid var(--theme-border); }
+.saas-app .metrics { gap: 12px; border: 0; }
+.saas-app .metric-card { min-height: 118px; padding: 19px 20px; }
+.saas-app .metric-card + .metric-card { border-left: 1px solid var(--theme-border); }
+.saas-app .metric-value { margin: 12px 0 5px; font-size: 30px; }
+.saas-app .tag { border-radius: 6px; background: var(--app-card-muted); }
+.saas-app .notice { border-width: 1px; border-radius: 9px; }
+
+/* Ask keeps its full-height working canvas while sharing the same navigation rail. */
+.saas-app.ask-page .main { padding: 0; }
+.saas-app.ask-page .topbar { margin-bottom: 0; }
+.saas-app.ask-page .ask-panel { border: 0; border-radius: 0; box-shadow: none; }
+
+@media (max-width: 840px) {
+  .saas-app .shell { grid-template-columns: 224px minmax(0, 1fr); }
+  .saas-app .sidebar { position: sticky; top: 0; width: auto; height: 100vh; flex-direction: column; align-items: stretch; padding: 16px 12px; border-right: 1px solid var(--theme-border); border-bottom: 0; }
+  .saas-app .brand { margin: 0; padding: 0 6px 18px; }
+  .saas-app .brand small { display: block; }
+  .saas-app .nav-list { display: flex; }
+  .saas-app .sidebar-theme-control { display: grid; }
+  .saas-app .identity-card { display: flex; }
+  .saas-app .main { padding: 28px 18px 40px; }
+  .saas-app.ask-page .main { padding: 0; }
+}
+@media (max-width: 640px) {
+  .saas-app .shell { grid-template-columns: 1fr; }
+  .saas-app .sidebar { position: relative; width: 100%; height: auto; padding: 14px 16px 18px; border-right: 0; border-bottom: 1px solid var(--theme-border); }
+  .saas-app .brand { padding-bottom: 14px; }
+}

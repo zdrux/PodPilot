@@ -6,10 +6,10 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=incident-saas-dashboard-31">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=saas-shell-32">
   <script src="{{ url_for('static', path='/app.js') }}?v=email-table-copy-20" defer></script>
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="saas-app {% block body_class %}{% endblock %}">
   <div class="shell">
     <aside class="sidebar" aria-label="Primary navigation">
       <a class="brand" href="/ask?new=1" aria-label="PodPilot home">
