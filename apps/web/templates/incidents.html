@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Incidents · PodPilot{% endblock %}
+{% block body_class %}incident-dashboard-page{% endblock %}
 {% macro state_mark(state) -%}<span class="incident-activity-mark incident-activity-mark-{{ state }}" aria-label="{{ state | replace('_', ' ') }}"></span>{%- endmacro %}
 {% macro incident_table(items, active=false) %}
 <div class="incident-board-table-wrap">
-  <table class="incident-board-table">
-    <thead><tr><th aria-hidden="true"></th><th>Investigation</th><th>Cluster</th><th>State</th><th>Specialists</th><th>Last activity</th></tr></thead>
+  <div class="incident-board-table-header" role="row"><span aria-hidden="true"></span><span role="columnheader">Investigation</span><span role="columnheader">Cluster</span><span role="columnheader">State</span><span role="columnheader">Specialists</span><span role="columnheader">Last activity</span></div>
+  <table class="incident-board-table" aria-label="Incident investigations">
     {% for item in items %}
     <tbody class="incident-board-item{% if active %} incident-board-item-active{% endif %}">
-      <tr><td colspan="5">
+      <tr><td colspan="6">
         <details class="incident-activity-row" data-incident-activity-id="{{ item.incident.id }}">
           <summary>
             <span class="incident-row-disclosure" aria-hidden="true">⌄</span>
@@ -65,12 +66,23 @@
 </div>
 {% endmacro %}
 {% block content %}
-<header class="topbar incident-dashboard-header"><div><p class="eyebrow">Fleet operations · PoC</p><h1>Incidents</h1><p class="subtitle">Critical OpenShift platform alerts and live investigation activity.</p></div><a class="button" href="/incidents">Refresh</a></header>
-<section class="incident-dashboard-content" data-incident-dashboard data-active-incidents="{{ active_incidents | length }}">
-  <div class="incident-dashboard-overview">
-    <dl class="incident-dashboard-stats"><div><dt>Active</dt><dd>{{ dashboard_stats.active }}</dd><small>queued or running</small></div><div><dt>Specialists</dt><dd>{{ dashboard_stats.specialists }}</dd><small>working now</small></div><div><dt>Firing alerts</dt><dd>{{ dashboard_stats.firing }}</dd><small>awaiting resolution</small></div><div><dt>Fleet cases</dt><dd>{{ dashboard_stats.total }}</dd><small>in current view</small></div></dl>
-    <form method="get" class="incident-dashboard-filter"><label>Cluster<select name="cluster"><option value="">All clusters</option>{% for id, name in clusters.items() %}<option value="{{ id }}" {% if request.query_params.get('cluster') == id %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label><button class="button" type="submit">Apply</button></form>
-  </div>
+<div class="incident-dashboard-frame">
+  <header class="topbar incident-dashboard-header">
+    <div><p class="eyebrow">Fleet operations</p><h1>Incidents</h1><p class="subtitle">Monitor critical OpenShift alerts and investigation progress across your fleet.</p></div>
+    <a class="button incident-refresh-button" href="/incidents">Refresh data</a>
+  </header>
+  <section class="incident-dashboard-content" data-incident-dashboard data-active-incidents="{{ active_incidents | length }}">
+    <dl class="incident-dashboard-stats" aria-label="Fleet incident overview">
+      <div><dt>Active investigations</dt><dd>{{ dashboard_stats.active }}</dd><small>Queued or running</small></div>
+      <div><dt>Specialists working</dt><dd>{{ dashboard_stats.specialists }}</dd><small>Active right now</small></div>
+      <div><dt>Firing alerts</dt><dd>{{ dashboard_stats.firing }}</dd><small>Awaiting resolution</small></div>
+      <div><dt>Fleet cases</dt><dd>{{ dashboard_stats.total }}</dd><small>In the current view</small></div>
+    </dl>
+    <form method="get" class="incident-dashboard-filter">
+      <div><strong>Investigations</strong><span>Filter the incident history by cluster.</span></div>
+      <label><span>Cluster</span><select name="cluster"><option value="">All clusters</option>{% for id, name in clusters.items() %}<option value="{{ id }}" {% if request.query_params.get('cluster') == id %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+      <button class="button" type="submit">Apply filter</button>
+    </form>
   {% if active_incidents %}
   <section class="incident-board incident-board-live">
     <header class="incident-board-heading"><div><p class="eyebrow"><span class="incident-live-pulse"></span> Live response</p><h2>Active investigations</h2><p>Coordinator and specialist activity refreshes automatically.</p></div><span class="incident-live-label">Live · 4 sec</span></header>
@@ -83,7 +95,8 @@
     {% elif not active_incidents %}<div class="incident-dashboard-empty"><h3>No incidents yet</h3><p>Admitted critical platform alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</div>
     {% else %}<p class="incident-dashboard-empty">Completed, partial, and stopped investigations will move here automatically.</p>{% endif %}
   </section>
-  <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>
-</section>
+    <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>
+  </section>
+</div>
 <script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-board-4" defer></script>
 {% endblock %}

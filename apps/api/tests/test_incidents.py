@@ -219,7 +219,7 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
     assert 'incident-live-board-4' in page.text
-    assert '<th aria-hidden="true"></th><th>Investigation</th>' in page.text
+    assert 'class="incident-board-table-header" role="row"' in page.text
 
 
 def test_connections_secret_isolation_and_access(client):
