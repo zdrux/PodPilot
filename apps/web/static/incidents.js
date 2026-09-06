@@ -18,6 +18,7 @@
         try {
           const result = await post(button.dataset.incidentPost);
           if (result.url) { window.location.assign(result.url); return; }
+          if (button.hasAttribute('data-incident-rerun')) { window.location.reload(); return; }
           const feedback = document.getElementById('incident-feedback');
           if (feedback) feedback.textContent = result.checks ? result.checks.join(' · ') :
             result.discovery_status ? 'Connector discovery queued. Results will appear automatically.' :
@@ -83,12 +84,16 @@
       if (!target) return;
       const panel = target.closest('[data-incident-tab-panel]');
       if (panel) activate(panel.id, false);
-      target.open = true;
       if (updateHash) history.replaceState(null, '', '#' + target.id);
       requestAnimationFrame(() => {
         target.scrollIntoView({behavior: 'smooth', block: 'center'});
         target.classList.add('evidence-highlight');
         window.setTimeout(() => target.classList.remove('evidence-highlight'), 1800);
+        const dialog = document.getElementById(target.dataset.incidentEvidenceOpen);
+        if (dialog && !dialog.open) {
+          if (typeof dialog.showModal === 'function') dialog.showModal();
+          else dialog.setAttribute('open', '');
+        }
       });
     }
     tabsRoot.querySelectorAll('[data-evidence-link]').forEach(link => link.addEventListener('click', event => {
@@ -98,7 +103,7 @@
     const initialTarget = preferredPanelId ? document.getElementById(preferredPanelId) :
       (location.hash ? document.getElementById(location.hash.slice(1)) : null);
     if (initialTarget?.matches('[data-incident-tab-panel]')) activate(initialTarget.id, false);
-    else if (initialTarget?.matches('details')) revealEvidence(initialTarget, false);
+    else if (initialTarget?.matches('[data-incident-evidence-open]')) revealEvidence(initialTarget, false);
   }
 
   function openIds(root, attribute) {
@@ -119,12 +124,15 @@
   function connectLive(getRoot, refresh) {
     const root = getRoot();
     const eventsUrl = root?.dataset.eventsUrl;
-    if (!eventsUrl) return;
+    if (!eventsUrl) return () => {};
     let source;
     let fallbackTimer;
+    let stopped = false;
     const fallback = () => {
+      if (stopped) return;
       window.clearTimeout(fallbackTimer);
       fallbackTimer = window.setTimeout(async () => {
+        if (stopped) return;
         await refresh();
         fallback();
       }, 12000);
@@ -132,11 +140,13 @@
     if (window.EventSource) {
       source = new EventSource(eventsUrl);
       source.addEventListener('open', () => {
+        if (stopped) return;
         window.clearTimeout(fallbackTimer);
         setLiveState(getRoot(), 'live', 'Live updates');
       });
       source.addEventListener('update', refresh);
       source.addEventListener('error', () => {
+        if (stopped) return;
         setLiveState(getRoot(), 'reconnecting', 'Reconnecting…');
         fallback();
       });
@@ -144,10 +154,13 @@
       setLiveState(getRoot(), 'reconnecting', 'Auto-updating');
       fallback();
     }
-    window.addEventListener('pagehide', () => {
+    const stop = () => {
+      stopped = true;
       source?.close();
       window.clearTimeout(fallbackTimer);
-    }, {once: true});
+    };
+    window.addEventListener('pagehide', stop, {once: true});
+    return stop;
   }
 
   bindPostButtons();
@@ -156,12 +169,10 @@
     bindTabs(incidentDetail);
     let refreshRunning = false;
     let refreshPending = false;
+    let stopDetailLive = () => {};
     async function refreshDetail() {
       if (refreshRunning) { refreshPending = true; return; }
       refreshRunning = true;
-      const selected = incidentDetail.querySelector('[data-incident-tab][aria-selected="true"]')?.dataset.incidentTab;
-      const openEvidence = new Set(Array.from(incidentDetail.querySelectorAll('details[id][open]')).map(item => item.id));
-      const openEvidenceDialog = incidentDetail.querySelector('[data-incident-evidence-dialog][open]')?.id;
       try {
         const response = await fetch(window.location.href, {
           headers: {'X-PodPilot-Activity-Refresh': '1'}, cache: 'no-store'
@@ -169,16 +180,20 @@
         if (!response.ok) throw new Error('Incident refresh failed.');
         const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
         const replacement = documentCopy.querySelector('[data-incident-detail]');
-        if (replacement && replacement.innerHTML !== incidentDetail.innerHTML) {
+        if (replacement && replacement.dataset.stateVersion !== incidentDetail.dataset.stateVersion) {
+          const selected = incidentDetail.querySelector('[data-incident-tab][aria-selected="true"]')?.dataset.incidentTab;
+          const expandedDetails = openIds(incidentDetail, 'data-incident-detail-open-id');
+          const openEvidenceDialog = incidentDetail.querySelector('[data-incident-evidence-dialog][open]')?.id;
           incidentDetail.replaceWith(replacement);
           incidentDetail = replacement;
           bindPostButtons(incidentDetail);
           const latest = preferLatestRun ?
-            incidentDetail.querySelector('[data-incident-tab]:not([data-incident-tab="incident-panel-overview"])')?.dataset.incidentTab : null;
+            incidentDetail.querySelector('[data-incident-tab]')?.dataset.incidentTab : null;
           bindTabs(incidentDetail, latest || selected);
-          incidentDetail.querySelectorAll('details[id]').forEach(item => { item.open = openEvidence.has(item.id); });
+          restoreOpen(incidentDetail, 'data-incident-detail-open-id', expandedDetails);
           if (openEvidenceDialog) document.getElementById(openEvidenceDialog)?.showModal();
           preferLatestRun = false;
+          if (incidentDetail.dataset.investigationActive !== 'true') stopDetailLive();
         }
         setLiveState(incidentDetail, 'live', 'Live updates');
       } catch (_error) {
@@ -188,7 +203,9 @@
         if (refreshPending) { refreshPending = false; refreshDetail(); }
       }
     }
-    connectLive(() => incidentDetail, refreshDetail);
+    if (incidentDetail.dataset.investigationActive === 'true') {
+      stopDetailLive = connectLive(() => incidentDetail, refreshDetail);
+    }
   }
 
   let incidentBoard = document.querySelector('[data-incident-dashboard]');

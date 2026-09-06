@@ -22,7 +22,7 @@ from podpilot_api.auth import Role
 from podpilot_api.models import Cluster, AuditEvent, AdHocConversation, AdHocMessage
 from podpilot_api.incident_models import ConnectorDiscovery, IncidentConnection, FleetIncident, IncidentRun
 from podpilot_diagnostics.incidents import DEFAULT_ALERTS, AlertWebhook, admitted
-from podpilot_openshift.incidents import IncidentReader, https_origin, clean_evidence
+from podpilot_openshift.incidents import IncidentReadError, IncidentReader, https_origin, clean_evidence
 from podpilot_openshift.log_metrics import LokiQueryClient
 from podpilot_openshift.credentials import KubernetesSecretCredentialStore
 
@@ -287,6 +287,7 @@ def _incident_activity_view(incident, run):
         for alert in alerts if isinstance(alert, dict)
     ))[:6]
     activity = _json_object(run.activity_json) if run else {}
+    briefing = _json_object(getattr(run, "briefing_json", "{}")) if run else {}
     tasks = [task for task in activity.get("tasks", []) if isinstance(task, dict)][:24]
     for task in tasks:
         if task.get("state") == "stopped" and task.get("result") == "Stopped when the incident worker restarted.":
@@ -393,6 +394,7 @@ def _incident_activity_view(incident, run):
             "Waiting for an incident worker" if status == "queued" else
             "Investigation finished; open the case for the full assessment."
         ))[:300],
+        "findings": _briefing_problems(briefing),
         "updated_at": activity.get("updated_at") or (
             run.completed_at.isoformat() if run and run.completed_at else incident.updated_at.isoformat()
         ),
@@ -508,16 +510,20 @@ def _dedupe_limitations(values, *, exclude_keys=()):
     return result
 
 
-def _evidence_limitations(evidence):
+def _evidence_limitations(evidence, *, model_authored=None):
     grouped = {}
     for item in evidence:
         data = item.get("data") if isinstance(item, dict) else None
         if not isinstance(data, dict):
             continue
+        source = str(item.get("source") or "Evidence")
+        is_model_authored = source.casefold().endswith(" specialist")
+        if model_authored is not None and is_model_authored is not model_authored:
+            continue
         for limitation in data.get("limitations", []):
             if not isinstance(limitation, str) or not limitation.strip():
                 continue
-            grouped.setdefault(limitation.strip(), []).append(str(item.get("source") or "Evidence"))
+            grouped.setdefault(limitation.strip(), []).append(source)
     result = []
     for limitation, sources in grouped.items():
         unique_sources = list(dict.fromkeys(sources))
@@ -526,6 +532,16 @@ def _evidence_limitations(evidence):
             source_label += f", and {len(unique_sources) - 5} more collectors"
         result.append(f"{source_label}: {limitation}")
     return result
+
+
+def _collector_failure_reason(exc):
+    """Return only package-normalized failures; never persist arbitrary exception text."""
+
+    if isinstance(exc, IncidentReadError):
+        return str(exc)
+    if isinstance(exc, TimeoutError):
+        return "collector operation timed out."
+    return "unexpected collector error."
 
 
 class ConnectionInput(BaseModel):
@@ -1202,16 +1218,22 @@ class IncidentService:
                 "partial": len(alert_snapshot)>20})
             try:
                 record("operators", reader.collect("operators"))
-            except Exception:
-                limitations.append("Cluster operator snapshot unavailable; other evidence collection will continue.")
+            except Exception as exc:
+                limitations.append(
+                    f"Cluster operator snapshot failed: {_collector_failure_reason(exc)} "
+                    "Other evidence collection continued."
+                )
             cluster_health_collected = False
             if "cluster-health" in reader.catalog():
                 try:
                     coordinator_activity("Surveying unhealthy resources across the cluster", phase="Initial assessment")
                     record("cluster-health", reader.collect("cluster-health"))
                     cluster_health_collected = True
-                except Exception:
-                    limitations.append("Cluster-wide unhealthy-resource survey unavailable; scoped investigation will continue.")
+                except Exception as exc:
+                    limitations.append(
+                        "Cluster-wide unhealthy-resource survey failed: "
+                        f"{_collector_failure_reason(exc)} Scoped investigation continued."
+                    )
             # Preserve recent changes before model-guided investigation; no arbitrary repository traversal.
             changes = []
             onset = min(datetime.fromisoformat(a["startsAt"]) for a in alert_snapshot.values())
@@ -1264,8 +1286,10 @@ class IncidentService:
                                     "repository": app_source["repository"], "path": app_source.get("path"),
                                     "revision": app_source["deployed_revision"],
                                     "relationship": "current Argo CD sync"})
-                except Exception:
-                    limitations.append(f"Argo CD connector {connector.name}: read unavailable.")
+                except Exception as exc:
+                    limitations.append(
+                        f"Argo CD connector {connector.name} failed: {_collector_failure_reason(exc)}"
+                    )
                 finally:
                     if other:
                         other.close()
@@ -1305,8 +1329,10 @@ class IncidentService:
                             metadata, coordinate=False)
                         summarize_specialist("GitHub", source_item,
                             "Assess only this revision and pull-request metadata for incident relevance. Return a compact cited report of timing, likely relationship, contradictions, and gaps. Do not infer diff contents or request more collection.")
-                except Exception:
-                    limitations.append(f"GitHub connector {connector.name}: revision/PR metadata unavailable.")
+                except Exception as exc:
+                    limitations.append(
+                        f"GitHub connector {connector.name} failed: {_collector_failure_reason(exc)}"
+                    )
                 finally:
                     if other:
                         other.close()
@@ -1385,7 +1411,7 @@ class IncidentService:
                                 log_items.append(source_item)
                             available = {k:v for k,v in reader.catalog().items() if k not in consumed}
                         except Exception as exc:
-                            detail = str(exc).strip()
+                            detail = _collector_failure_reason(exc)
                             limitations.append(
                                 f"{key}: {detail}" if detail else
                                 f"{key}: read unavailable or response too large."
@@ -1422,9 +1448,12 @@ class IncidentService:
         finally:
             if reader:
                 reader.close()
-        model_limitations = _dedupe_limitations(briefing.get("limitations", []))
+        model_limitations = _dedupe_limitations([
+            *_evidence_limitations(evidence, model_authored=True),
+            *briefing.get("limitations", []),
+        ])
         system_limitations = _dedupe_limitations([
-            *_evidence_limitations(evidence),
+            *_evidence_limitations(evidence, model_authored=False),
             *limitations,
         ])
         system_keys = {_limitation_key(item) for item in system_limitations}
@@ -1541,12 +1570,6 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         return page(request, user, "incidents.html", {
             "incidents": rows, "clusters": clusters, "runs": runs,
             "active_incidents": active, "historical_incidents": history,
-            "dashboard_stats": {
-                "active": len(active),
-                "total": len(views),
-                "firing": sum(row.alert_state == "firing" for row in rows),
-                "specialists": sum(item["counts"]["running"] for item in active),
-            },
         })
 
     @app.get("/incidents/{incident_id}")
@@ -1558,6 +1581,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 raise HTTPException(404, "Incident not found.")
             cluster = db.get(Cluster, incident.cluster_id)
             runs = list(db.scalars(select(IncidentRun).where(IncidentRun.incident_id == incident_id).order_by(IncidentRun.created_at.desc()).limit(25)))
+            state_version = _incident_state_version(db, incident_id=incident_id)
         alerts = list(json.loads(incident.alerts_json).values())
         grouped_alerts = {}
         for alert in alerts:
@@ -1633,7 +1657,8 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             })
         return page(request, user, "incident_detail.html", {"incident": incident, "cluster": cluster,
             "alerts": alerts, "alert_groups": list(grouped_alerts.values()),
-            "incident_limitations": json.loads(incident.limitations_json), "runs": run_views})
+            "incident_limitations": json.loads(incident.limitations_json), "runs": run_views,
+            "state_version": state_version})
 
     @app.get("/api/v1/incidents/events")
     async def incident_events(request: Request, user=Depends(current_user)):

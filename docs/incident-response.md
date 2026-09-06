@@ -20,26 +20,49 @@ occurrence do not reopen it. Manual reruns preserve previous run snapshots.
 
 The shared sidebar lists the five most recently updated incidents below the cluster
 tree, with links to each case and an indication when more are available on the full
-**Incidents** dashboard. The dashboard pins queued and running investigations in a
-separate live table above fleet history. Rows expand in place to show the current
+**Incidents** dashboard. The dashboard opens directly with queued and running
+investigations in a live table above fleet history; active work is marked with a
+green pulse. Rows expand in place to show the current
 coordinator phase, retained evidence results, specialist counts, and specialist
 start/end times, work descriptions, results and queued/running/completed/error state.
-The board and each incident detail page subscribe to authenticated server-sent events and
-refresh their own content only when durable orchestrator state changes. Expanded rows,
-selected run tabs and open evidence are preserved. EventSource reconnects automatically;
-a bounded polling fallback is used when streaming is unavailable. The incident detail page uses a flat tabbed report: Overview
-groups identical source alerts into table rows with occurrence counts, and every
-immutable run has its own Investigation tab. Briefings, hypotheses and next steps
+The history table begins directly with its column headings rather than a redundant
+section banner. Each collapsed row provides a right-aligned full-investigation action;
+when expanded, that action moves beneath the current phase title. Final assessment
+findings appear above Workstream as soon as the coordinator persists its briefing.
+The coordinator currently authors these findings together during its final evidence
+pass, so they normally arrive as one terminal update rather than incrementally during
+collection. Specialist activity and retained evidence continue to update progressively.
+The board and each active incident detail page subscribe to authenticated server-sent events.
+The detail page compares a server-authored state version before replacing content, preserves
+expanded activity and limitation rows, the selected run tab, and an open evidence modal, then
+stops replacing the report after the final terminal-state render. Completed reports do not
+open a live stream; rerunning one reloads it into active mode. EventSource reconnects
+automatically, and a bounded polling fallback is used while active when streaming is unavailable.
+The incident detail
+page opens the newest immutable Investigation run directly, without a separate Overview
+tab. Every run identifies its source alert, alert state and cluster in its summary, and
+queued or running work is marked with a green pulse in the title and run tab. Briefings,
+hypotheses and next steps
 render as sanitized narrative Markdown without table parsing, so pipe-delimited model
 output cannot distort the report layout. The preliminary briefing presents distinct
-findings as a flat at-a-glance list with its evidence basis, while a sticky quick-view rail
-lists retained evidence and exact object coordinates projected from that evidence. Evidence
-and object entries in the rail open the run-scoped retained payload in the same modal pattern
-as Ask activity. Valid E-ID citations in briefing prose, hypotheses and next steps activate
-the owning run, expand the exact timeline row and scroll it into view. Limitations use a
+findings as a flat at-a-glance list with its evidence basis. Each evidence-ledger row opens
+the run-scoped retained payload and projected object coordinates in the same modal pattern
+as Ask activity; large JSON payloads are never expanded inline into the report. Valid E-ID
+citations in briefing prose, hypotheses and next steps activate the owning run, scroll the
+exact evidence row into view, and open its modal. Limitations use a
 compact reading list. Continue in Ask
 creates a private read-only conversation with copied historical evidence and
 requires the operator's own delegated sign-in before additional reads.
+
+Collector footnotes are outcome-based. Configured safety ceilings remain silent when a
+collection completes within them. If Kubernetes pagination, evidence projection, retained
+bytes, or a result-count ceiling is actually reached, the footnote identifies the collector,
+the applicable limit, and the observed/retained count when available. Failed Kubernetes reads
+retain a sanitized reason such as the HTTP status, connection failure, request timeout,
+15-second read deadline, invalid JSON response, or 512 KiB response limit; arbitrary exception
+text is never persisted. A successful cluster-health survey with no failed or partial resource
+reads therefore has no generic cap warning. Limitations authored by Argo CD, GitHub, and Pod-log
+specialist model calls appear under model-reported uncertainty rather than collection/policy limits.
 
 ## Configuration
 

@@ -19,6 +19,10 @@ def https_origin(value):
     return value.rstrip("/")
 
 
+class IncidentReadError(ValueError):
+    """A sanitized collector failure that is safe to retain as operator evidence."""
+
+
 class IncidentReader:
     def __init__(self, origin, token, ca=None, verify=True, transport=None,
             log_tail_lines=1000, max_log_bytes=98304, log_range_seconds=7200,
@@ -81,17 +85,25 @@ class IncidentReader:
     def get(self, path, params=None):
         # Paths are owned by this module, never arbitrary model/webhook URLs.
         started = time.monotonic()
-        with self.client.stream("GET", self.origin + path, params=params) as response:
-            if response.status_code != 200:
-                raise ValueError(f"Read unavailable (HTTP {response.status_code}).")
-            data = bytearray()
-            for chunk in response.iter_bytes():
-                if time.monotonic() - started > 15:
-                    raise ValueError("Response exceeded the read time budget.")
-                data.extend(chunk)
-                if len(data) > 524288:
-                    raise ValueError("Response exceeded the 512 KiB evidence limit.")
-        return json.loads(data)
+        try:
+            with self.client.stream("GET", self.origin + path, params=params) as response:
+                if response.status_code != 200:
+                    raise IncidentReadError(f"Kubernetes API returned HTTP {response.status_code}.")
+                data = bytearray()
+                for chunk in response.iter_bytes():
+                    if time.monotonic() - started > 15:
+                        raise IncidentReadError("Kubernetes API read exceeded the 15-second time limit.")
+                    data.extend(chunk)
+                    if len(data) > 524288:
+                        raise IncidentReadError("Kubernetes API response exceeded the 512 KiB response limit.")
+        except httpx.TimeoutException as exc:
+            raise IncidentReadError("Kubernetes API request timed out.") from exc
+        except httpx.RequestError as exc:
+            raise IncidentReadError("Kubernetes API connection failed.") from exc
+        try:
+            return json.loads(data)
+        except (TypeError, ValueError) as exc:
+            raise IncidentReadError("Kubernetes API returned an invalid JSON response.") from exc
 
     def catalog(self):
         return {
@@ -130,13 +142,18 @@ class IncidentReader:
                     raise
                 try:
                     result = self._collect_loki_logs(ns, pod, container)
-                except ValueError as loki_exc:
-                    raise ValueError(
-                        "Previous Kubernetes logs were unavailable and the scoped Loki fallback failed."
+                except IncidentReadError as loki_exc:
+                    raise IncidentReadError(
+                        f"Previous Kubernetes logs failed: {exc} Scoped Loki fallback failed: {loki_exc}"
+                    ) from loki_exc
+                except Exception as loki_exc:
+                    raise IncidentReadError(
+                        f"Previous Kubernetes logs failed: {exc} Scoped Loki fallback failed with an "
+                        "unexpected collector error."
                     ) from loki_exc
                 result["limitations"].insert(
                     0,
-                    "Previous Kubernetes logs were unavailable; scoped Loki history was used instead and may span container instances.",
+                    f"Previous Kubernetes logs failed: {exc} Scoped Loki history was used instead and may span container instances.",
                 )
                 result["kubernetes_previous_error"] = str(exc)
                 return result
@@ -147,10 +164,15 @@ class IncidentReader:
                 "query": 'up{job=~"apiserver|etcd"} or cluster_operator_up{job="cluster-version-operator"}',
                 "start": int(time.time())-1800, "end": int(time.time()), "step": 60})
             if result.get("status") != "success":
-                raise ValueError("Monitoring query failed.")
+                raise IncidentReadError("Monitoring query returned an unsuccessful response.")
             series = result.get("data", {}).get("result", [])
+            limitations = []
+            if len(series) > 12:
+                limitations.append(
+                    f"Platform metrics returned {len(series)} series; retained the first 12."
+                )
             return {"series": series[:12], "partial": len(series)>12,
-                    "limitations": ["Last 30 minutes, 60-second resolution, at most 12 platform availability series."]}
+                    "limitations": limitations}
         paths = {"operators": "/apis/config.openshift.io/v1/clusteroperators",
                  "version": "/apis/config.openshift.io/v1/clusterversions",
                  "nodes": "/api/v1/nodes",
@@ -166,8 +188,11 @@ class IncidentReader:
         else:
             path = paths[key]
         payload = self.get(path, params)
+        items = payload.get("items", [])
+        if not isinstance(items, list):
+            raise IncidentReadError("Kubernetes API response did not contain an object list.")
         rows = []
-        for item in payload.get("items", [])[:60]:
+        for item in items[:60]:
             meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
             row = {"name": meta.get("name"), "namespace": meta.get("namespace"),
                    "uid": meta.get("uid"), "created_at": meta.get("creationTimestamp")}
@@ -275,14 +300,21 @@ class IncidentReader:
                     row.update(machine_count=status.get("machineCount"), ready=status.get("readyMachineCount"),
                                updated=status.get("updatedMachineCount"), degraded=status.get("degradedMachineCount"))
             rows.append(row)
-        upstream_partial = bool(payload.get("metadata", {}).get("continue"))
-        limitations = ["Bounded current-state snapshot; historical coverage is not guaranteed."]
+        upstream_partial = bool(payload.get("metadata", {}).get("continue")) or len(items) > 60
+        limitations = []
+        if upstream_partial:
+            limitations.append(
+                f"Kubernetes pagination limit reached for {key}: inspected the first "
+                f"{min(len(items), 60)} objects; additional objects were available."
+            )
         if kind == "events":
+            observed_rows = len(rows)
             rows, projection_partial = self._project_event_rows(rows)
             upstream_partial = upstream_partial or projection_partial
             if projection_partial:
                 limitations.append(
-                    "Recent warning events were ranked and truncated to the evidence projection budget."
+                    f"Recent warning-event projection found {observed_rows} rows and retained {len(rows)} "
+                    f"within the {self.event_projection_bytes // 1024} KiB evidence limit."
                 )
         return {"rows": rows, "partial": upstream_partial,
                 "scope": key, "limitations": limitations}
@@ -307,12 +339,31 @@ class IncidentReader:
                 params["fieldSelector"] = "type=Warning"
             try:
                 payload = self.get(path, params)
-            except Exception:
-                limitations.append(f"Cluster-wide {kind} health survey was unavailable.")
+            except IncidentReadError as exc:
+                limitations.append(f"Cluster-wide {kind} health survey failed: {exc}")
                 partial = True
                 continue
-            partial = partial or bool(payload.get("metadata", {}).get("continue"))
-            for item in payload.get("items", [])[:60]:
+            except Exception:
+                limitations.append(
+                    f"Cluster-wide {kind} health survey failed: unexpected response-processing error."
+                )
+                partial = True
+                continue
+            items = payload.get("items", [])
+            if not isinstance(items, list):
+                limitations.append(
+                    f"Cluster-wide {kind} health survey failed: response did not contain an object list."
+                )
+                partial = True
+                continue
+            resource_partial = bool(payload.get("metadata", {}).get("continue")) or len(items) > 60
+            partial = partial or resource_partial
+            if resource_partial:
+                limitations.append(
+                    f"Cluster-wide {kind} health survey reached its pagination limit: inspected "
+                    f"the first {min(len(items), 60)} objects; additional objects were available."
+                )
+            for item in items[:60]:
                 meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
                 namespace = meta.get("namespace")
                 row = {"kind": kind, "namespace": namespace, "name": meta.get("name")}
@@ -369,13 +420,13 @@ class IncidentReader:
                 if unhealthy and self._valid_namespace(str(namespace or "")):
                     rows.append(row)
         if len(rows) > 120:
+            observed_rows = len(rows)
             rows = rows[:120]
             partial = True
-            limitations.append("Cluster health survey retained the first 120 unhealthy observations.")
+            limitations.append(
+                f"Cluster health survey found {observed_rows} unhealthy observations and retained the first 120."
+            )
         self._extend_namespaces(row.get("namespace") for row in rows)
-        limitations.append(
-            "Cluster-wide exception survey is capped per resource type and may not represent every unhealthy object."
-        )
         return {"rows": rows, "partial": partial, "scope": "cluster-health",
                 "discovered_namespaces": list(self.namespaces), "limitations": limitations}
 
@@ -391,31 +442,47 @@ class IncidentReader:
         if previous:
             params["previous"] = "true"
             params.pop("sinceSeconds")
-        with self.client.stream(
-            "GET", self.origin + f"/api/v1/namespaces/{namespace}/pods/{pod}/log",
-            params=params,
-        ) as response:
-            if response.status_code != 200:
-                label = "Previous container logs" if previous else "Pod logs"
-                raise ValueError(f"{label} unavailable (HTTP {response.status_code}).")
-            body = bytearray()
-            for chunk in response.iter_bytes():
-                if time.monotonic() - started > 15:
-                    raise ValueError("Log response exceeded the read time budget.")
-                body.extend(chunk)
-                if len(body) > self.max_log_bytes:
-                    break
+        try:
+            with self.client.stream(
+                "GET", self.origin + f"/api/v1/namespaces/{namespace}/pods/{pod}/log",
+                params=params,
+            ) as response:
+                if response.status_code != 200:
+                    label = "Previous container logs" if previous else "Pod logs"
+                    raise IncidentReadError(f"{label} request returned HTTP {response.status_code}.")
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if time.monotonic() - started > 15:
+                        raise IncidentReadError("Pod log read exceeded the 15-second time limit.")
+                    body.extend(chunk)
+                    if len(body) > self.max_log_bytes:
+                        break
+        except httpx.TimeoutException as exc:
+            raise IncidentReadError("Pod log request timed out.") from exc
+        except httpx.RequestError as exc:
+            raise IncidentReadError("Pod log connection failed.") from exc
         mode = "previous terminated container" if previous else "current container"
+        retained = body[:self.max_log_bytes]
+        text = retained.decode("utf-8", errors="replace")
+        limitations = []
+        if len(body) > self.max_log_bytes or len(retained) >= self.max_log_bytes:
+            limitations.append(
+                f"Pod log collection reached the {self.max_log_bytes // 1024} KiB byte limit for the "
+                f"{mode}; remaining response bytes were omitted."
+            )
+        elif len(text.splitlines()) >= self.log_tail_lines:
+            limitations.append(
+                f"Pod log collection returned the configured {self.log_tail_lines}-line maximum for the "
+                f"{mode}; earlier lines may exist."
+            )
         return {
             "namespace": namespace,
             "pod": pod,
             "container": container,
             "mechanism": "kubernetes-pod-log",
             "previous": previous,
-            "logs": body[:self.max_log_bytes].decode("utf-8", errors="replace"),
-            "limitations": [
-                f"At most {self.log_tail_lines} lines / {self.max_log_bytes // 1024} KiB from the {mode}; not complete log history."
-            ],
+            "logs": text,
+            "limitations": limitations,
         }
 
     def _collect_loki_logs(self, namespace, pod, container):
@@ -430,8 +497,12 @@ class IncidentReader:
                 namespace=namespace, pod=pod, container=container,
                 start=start, end=end, limit=self.loki_log_limit,
             )
+        except httpx.TimeoutException as exc:
+            raise IncidentReadError("Scoped Loki container log request timed out.") from exc
+        except httpx.RequestError as exc:
+            raise IncidentReadError("Scoped Loki container log connection failed.") from exc
         except Exception as exc:
-            raise ValueError("Scoped Loki container logs were unavailable.") from exc
+            raise IncidentReadError("Scoped Loki container log query failed.") from exc
         retained = []
         retained_bytes = 0
         for entry in snapshot.entries:
@@ -447,9 +518,16 @@ class IncidentReader:
             retained_bytes += len(encoded) + 1
         retained.reverse()
         partial = not snapshot.is_complete or len(retained) < len(snapshot.entries)
-        limitations = [
-            f"Scoped Loki history is bounded to {self.loki_log_limit} lines / {self.max_log_bytes // 1024} KiB and cannot identify a Kubernetes previous-container instance."
-        ]
+        limitations = []
+        if not snapshot.is_complete:
+            limitations.append(
+                f"Scoped Loki history reached the {self.loki_log_limit}-line query limit; additional lines may exist."
+            )
+        if len(retained) < len(snapshot.entries):
+            limitations.append(
+                f"Scoped Loki history returned {len(snapshot.entries)} lines and retained {len(retained)} before "
+                f"reaching the {self.max_log_bytes // 1024} KiB evidence limit."
+            )
         if not retained:
             limitations.append("Loki returned no lines for the exact container and alert window.")
         return {
@@ -588,9 +666,21 @@ class IncidentReader:
                         "health": (status.get("health", {}).get("status")
                             if isinstance(status.get("health", {}), dict) else None),
                         "sync": sync.get("status")})
+        upstream_partial = bool(payload.get("metadata", {}).get("continue"))
+        retained_partial = len(rows) > 30 or len(applications) > 30
+        partial = upstream_partial or retained_partial
+        limitations = []
+        if upstream_partial:
+            limitations.append(
+                "Argo CD API pagination limit was reached; additional applications were available."
+            )
+        if retained_partial:
+            limitations.append(
+                f"Argo CD collection found {len(applications)} applications and {len(rows)} recent changes; "
+                "retained at most 30 of each."
+            )
         return {"applications": applications[:30], "changes": rows[:30],
-                "partial": bool(payload.get("metadata", {}).get("continue")) or len(rows)>30 or len(applications)>30,
-                "limitations": ["Argo CD ownership and nearby deployment history are correlation evidence; neither alone establishes causation."]}
+                "partial": partial, "limitations": limitations}
 
     def github(self, repository, revision, api_prefix):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[a-fA-F0-9]{40,64}", revision or ""):

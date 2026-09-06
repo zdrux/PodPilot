@@ -21,6 +21,7 @@ from podpilot_api.incidents import (
     _dedupe_limitations,
     _incident_activity_view,
     _incident_state_version,
+    _evidence_limitations,
     _limitation_key,
     _project_evidence_item,
 )
@@ -65,6 +66,9 @@ def test_activity_view_recovers_complete_specialist_summary_from_evidence():
             "id": "E5", "source": "Argo CD specialist",
             "observed_at": "2026-09-06T17:27:00Z", "data": {"summary": full_summary},
         }]),
+        briefing_json=json.dumps({
+            "problems": ["Revision timing correlates with the rollout failure."],
+        }),
     )
 
     view = _incident_activity_view(incident, run)
@@ -72,6 +76,7 @@ def test_activity_view_recovers_complete_specialist_summary_from_evidence():
     specialist = next(task for task in view["tasks"] if task.get("role") == "specialist")
     assert specialist["result"] == full_summary
     assert view["events"][0]["summary"] == full_summary
+    assert view["findings"] == ["Revision timing correlates with the rollout failure."]
     bounded = _activity_result("Argo CD", {"summary": "word " * 200})
     assert len(bounded) <= 600
     assert bounded.endswith("…")
@@ -207,8 +212,14 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     page = client.get(f'/incidents/{iid}', headers={'x-forwarded-user':'sre'})
 
     assert page.status_code == 200
+    assert 'data-investigation-active="false"' in page.text
+    assert 'data-state-version="' in page.text
+    assert 'data-live-status' not in page.text
     assert 'role="tablist"' in page.text
-    assert 'data-incident-tab="incident-panel-overview"' in page.text
+    assert 'incident-panel-overview' not in page.text
+    assert '>Overview</button>' not in page.text
+    assert f'aria-selected="true" data-incident-tab="incident-panel-run-{run_id}"' in page.text
+    assert f'data-incident-tab-panel>\n    <dl class="incident-ledger-summary"' in page.text
     assert 'incident-tab-activity' not in page.text
     assert '<h2>Assessment findings</h2>' in page.text
     assert '<strong>API server is healthy</strong>' in page.text
@@ -218,23 +229,24 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
         r'<ol class="incident-ledger-findings">(.*?)</ol>', page.text, re.DOTALL,
     ).group(1)
     assert problems.count('<li>') == 2
-    assert '<td>3</td>' in page.text
-    alert_table = re.search(r'<table class="incident-detail-table">(.*?)</table>', page.text, re.DOTALL).group(1)
-    assert alert_table.count('<strong>etcdNoLeader</strong>') == 1
-    assert '<details class="incident-alert-annotation"><summary>View alert annotation</summary>' in alert_table
+    assert '<dt>Alert</dt><dd title="etcdNoLeader">etcdNoLeader</dd>' in page.text
+    assert '<dt>Alert state</dt><dd>Firing</dd>' in page.text
     assert 'data-evidence-link' in page.text
     assert f'href="#evidence-{run_id}-E1"' in page.text
     assert f'id="evidence-{run_id}-E1"' in page.text
     assert 'class="incident-ledger-summary"' in page.text
-    assert 'class="incident-ledger-evidence"' in page.text
+    assert '<button type="button" class="incident-ledger-evidence"' in page.text
+    assert '<details class="incident-ledger-evidence"' not in page.text
     assert '<h2>Assessment findings</h2>' in page.text
     assert '<h2>Evidence ledger</h2>' in page.text
     assert '<h2>Investigation activity</h2>' in page.text
     assert 'class="incident-run-task incident-run-task-' in page.text
+    assert 'data-incident-detail-open-id="task-' in page.text
     assert '<dt>Activity</dt>' in page.text
     assert '<strong>Result</strong>' in page.text
     assert f'data-incident-evidence-open="evidence-dialog-{run_id}-E1"' in page.text
     assert f'id="evidence-dialog-{run_id}-E1"' in page.text
+    assert 'class="incident-evidence-dialog-objects"' in page.text
     assert 'Retained payload' in page.text
     assert 'Recommendations only. No changes have been made.' in page.text
     assert 'Observed objects' in page.text
@@ -248,12 +260,17 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert '<table>' not in ranked_hypotheses
     assert '<code>restartCount=9</code>' in ranked_hypotheses
     assert 'Collection and policy limits' in page.text
+    assert f'data-incident-detail-open-id="limits-{run_id}-system"' in page.text
     assert 'Model-reported uncertainty' in page.text
     assert 'A distinct inference remains uncertain.' in page.text
 
     script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
-    assert "target.open = true" in script
+    assert "target.open = true" not in script
+    assert "target.dataset.incidentEvidenceOpen" in script
     assert "dialog.showModal()" in script
+    assert "replacement.dataset.stateVersion !== incidentDetail.dataset.stateVersion" in script
+    assert "restoreOpen(incidentDetail, 'data-incident-detail-open-id', expandedDetails)" in script
+    assert "incidentDetail.dataset.investigationActive === 'true'" in script
     styles = (Path(__file__).parents[2] / 'web/static/styles.css').read_text(encoding='utf-8')
     assert '.incident-next-steps > li {' in styles
     assert '.incident-next-steps li {' not in styles
@@ -287,6 +304,12 @@ def test_incident_live_version_tracks_orchestrator_progress(client):
         board_progressed = _incident_state_version(db)
     assert progressed != initial
     assert board_progressed == progressed
+    page = client.get(f'/incidents/{iid}', headers={'x-forwarded-user': 'sre'})
+    assert 'data-investigation-active="true"' in page.text
+    assert 'data-live-status' in page.text
+    assert 'incident-title-live-pulse' in page.text
+    assert 'incident-tab-live-pulse' in page.text
+    assert 'aria-label="Investigation in progress"' in page.text
 
 
 def test_incident_live_streams_require_incident_access(client):
@@ -367,6 +390,9 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
                  'state': 'running', 'summary': 'Requested bounded platform log analysis.'},
             ],
         })
+        active_run.briefing_json = json.dumps({
+            'problems': ['The affected pod remains pending based on E6.'],
+        })
         historical_run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == historical_id))
         historical_run.status = 'completed'
         historical_run.completed_at = datetime(2026, 9, 5, 13, 3, tzinfo=timezone.utc)
@@ -376,10 +402,16 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
 
     assert page.status_code == 200
     assert 'data-active-incidents="1"' in page.text
-    assert page.text.index('Active investigations') < page.text.index('All other investigations')
+    assert 'incident-dashboard-stats' not in page.text
+    assert 'incident-dashboard-filter' not in page.text
+    assert 'Monitor critical OpenShift alerts' not in page.text
+    assert 'Fleet history' not in page.text
+    assert 'All other investigations' not in page.text
     dashboard = page.text[page.text.index('data-incident-dashboard'):]
     assert dashboard.index(active_id) < dashboard.index(historical_id)
     assert 'Waiting for platform log specialists' in page.text
+    assert page.text.index('The affected pod remains pending based on E6.') < page.text.index('Workstream')
+    assert 'class="incident-activity-findings"' in page.text
     assert '1 active' in page.text and '1 queued · 1 done · 2 error' in page.text
     for state in ('running', 'queued', 'completed', 'error', 'stopped'):
         assert f'incident-activity-mark-{state}' in page.text
@@ -392,7 +424,11 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert 'Stopped when the incident worker restarted.' not in page.text
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
-    assert 'incident-live-stream-1' in page.text
+    assert page.text.count('incident-live-pulse') >= 2
+    assert 'incident-row-live-pulse' in page.text
+    assert page.text.count('Open full investigation') == 2
+    assert page.text.count('class="incident-row-open-case"') == 2
+    assert 'incident-list-findings-1' in page.text
     assert 'data-events-url="/api/v1/incidents/events"' in page.text
     assert 'class="incident-board-table-header" role="row"' in page.text
 
@@ -817,6 +853,61 @@ def test_cluster_health_discovers_cross_namespace_workload_and_storage_scope():
     assert 'pods:openshift-image-registry' in reader.catalog()
     assert 'events:openshift-image-registry' in reader.catalog()
     assert 'storage:openshift-image-registry' in reader.catalog()
+    assert result['partial'] is False
+    assert result['limitations'] == []
+    reader.close()
+
+
+def test_cluster_health_reports_sanitized_failures_and_actual_pagination():
+    def respond(request):
+        if request.url.path == '/api/v1/pods':
+            return httpx.Response(403, json={'message': 'credential detail must not be retained'})
+        if request.url.path == '/apis/apps/v1/deployments':
+            return httpx.Response(200, json={
+                'metadata': {'continue': 'opaque-server-token'},
+                'items': [{'metadata': {'name': f'app-{index}', 'namespace': 'team-a'},
+                    'spec': {'replicas': 1}, 'status': {'availableReplicas': 1}}
+                    for index in range(60)],
+            })
+        return httpx.Response(200, json={'items': []})
+
+    reader = IncidentReader('https://host', 'credential',
+        transport=httpx.MockTransport(respond))
+    result = reader.collect('cluster-health')
+
+    assert result['partial'] is True
+    assert result['limitations'] == [
+        'Cluster-wide Pod health survey failed: Kubernetes API returned HTTP 403.',
+        'Cluster-wide Deployment health survey reached its pagination limit: inspected '
+        'the first 60 objects; additional objects were available.',
+    ]
+    assert 'credential detail' not in json.dumps(result)
+    reader.close()
+
+
+def test_namespaced_collection_reports_pagination_only_when_reached():
+    responses = iter((
+        httpx.Response(200, json={'items': []}),
+        httpx.Response(200, json={
+            'metadata': {'continue': 'opaque-server-token'},
+            'items': [{'metadata': {'name': f'pod-{index}', 'namespace': 'team-a'},
+                'spec': {'containers': []}, 'status': {'phase': 'Running'}}
+                for index in range(60)],
+        }),
+    ))
+    reader = IncidentReader('https://host', 'credential', namespaces=['team-a'],
+        transport=httpx.MockTransport(lambda _request: next(responses)))
+
+    complete = reader.collect('events:team-a')
+    partial = reader.collect('pods:team-a')
+
+    assert complete['partial'] is False
+    assert complete['limitations'] == []
+    assert partial['partial'] is True
+    assert partial['limitations'] == [
+        'Kubernetes pagination limit reached for pods:team-a: inspected the first 60 objects; '
+        'additional objects were available.'
+    ]
     reader.close()
 
 
@@ -938,6 +1029,7 @@ def test_restarted_container_exposes_previous_logs_and_scoped_loki_history():
     result=reader.collect(previous)
     assert result['previous'] is True
     assert result['logs']=='previous crash output'
+    assert result['limitations'] == []
     assert requests[-1].url.params['previous']=='true'
     assert 'sinceSeconds' not in requests[-1].url.params
     reader.close()
@@ -967,7 +1059,10 @@ def test_missing_previous_logs_fall_back_to_exact_loki_container_history():
     result=reader.collect(previous)
     assert result['mechanism']=='loki-infrastructure-query'
     assert result['logs'].splitlines()==['1 older context','2 newer failure']
-    assert result['kubernetes_previous_error']=='Previous container logs unavailable (HTTP 400).'
+    assert result['kubernetes_previous_error']=='Previous container logs request returned HTTP 400.'
+    assert result['limitations'][0].startswith(
+        'Previous Kubernetes logs failed: Previous container logs request returned HTTP 400.'
+    )
     assert Loki.calls[0]['namespace']=='openshift-etcd'
     assert Loki.calls[0]['pod']=='api-0'
     assert Loki.calls[0]['container']=='api'
@@ -989,7 +1084,7 @@ def test_event_projection_keeps_ranked_rows_instead_of_discarding_collection():
     assert 0 < len(result['rows']) < len(items)
     assert any(row['reason']=='FailedMount' for row in result['rows'])
     assert result['partial'] is True
-    assert 'ranked and truncated' in result['limitations'][-1]
+    assert 'found 60 rows and retained' in result['limitations'][-1]
     reader.close()
 
 
@@ -1011,6 +1106,20 @@ def test_system_projection_limit_suppresses_model_paraphrase():
     ]
     filtered=_dedupe_limitations(model, exclude_keys={_limitation_key(item) for item in system})
     assert filtered==['The exact alert-generation path remains unknown.']
+
+
+def test_evidence_limitations_separate_collectors_from_model_specialists():
+    evidence = [
+        {'source': 'cluster-health', 'data': {'limitations': ['Pod survey returned HTTP 403.']}},
+        {'source': 'Argo CD specialist', 'data': {'limitations': ['Deployment timing remains uncertain.']}},
+    ]
+
+    assert _evidence_limitations(evidence, model_authored=False) == [
+        'cluster-health: Pod survey returned HTTP 403.'
+    ]
+    assert _evidence_limitations(evidence, model_authored=True) == [
+        'Argo CD specialist: Deployment timing remains uncertain.'
+    ]
 
 
 def test_argocd_correlates_only_exact_target_project_and_window():
