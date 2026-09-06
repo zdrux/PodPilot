@@ -1,9 +1,23 @@
 from podpilot_api.markdown import (
+    render_incident_prose_markdown,
     render_safe_markdown,
     render_safe_prose_markdown,
     render_safe_table_markdown,
     split_markdown_tables,
 )
+
+
+def test_incident_markdown_links_only_valid_evidence_outside_code() -> None:
+    rendered = str(render_incident_prose_markdown(
+        "Observed E1; missing E9; literal `E1`.",
+        "run-123",
+        ["E1"],
+    ))
+
+    assert 'href="#evidence-run-123-E1"' in rendered
+    assert "missing E9" in rendered
+    assert "<code>E1</code>" in rendered
+    assert rendered.count("data-evidence-link") == 1
 
 
 def test_prose_markdown_does_not_turn_pipe_delimited_evidence_into_a_table() -> None:

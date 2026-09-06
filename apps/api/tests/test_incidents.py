@@ -106,6 +106,32 @@ def test_alert_policy_and_truncation(client):
     assert 'truncated' in page.text
 
 
+def test_cluster_connector_accepts_custom_alert_names(client):
+    sid = source(client)
+    response = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'id': sid, 'kind': 'cluster', 'name': 'SNO incidents',
+        'cluster_id': SYSTEM_CLUSTER_ID, 'enabled': True,
+        'allowed_alerts': ['GitOpsRolloutFailed', 'GitOpsRolloutFailed'],
+    })
+    assert response.status_code == 200, response.text
+    assert send(client, sid, notification(name='etcdNoLeader')).json()['accepted'] == 0
+    assert send(client, sid, notification(name='GitOpsRolloutFailed')).json()['accepted'] == 1
+    with Session(client.app.state.engine) as db:
+        row = db.get(IncidentConnection, sid)
+        assert json.loads(row.config_json)['allowed_alerts'] == ['GitOpsRolloutFailed']
+
+
+def test_cluster_connector_rejects_invalid_alert_names(client):
+    sid = source(client)
+    response = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'id': sid, 'kind': 'cluster', 'name': 'SNO incidents',
+        'cluster_id': SYSTEM_CLUSTER_ID, 'enabled': True,
+        'allowed_alerts': ['../../namespaces/customer'],
+    })
+    assert response.status_code == 422
+    assert 'valid Prometheus alert name' in response.text
+
+
 def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(client):
     sid = source(client)
     iid = send(client, sid, notification()).json()['incident_id']
@@ -140,7 +166,7 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert page.status_code == 200
     assert 'role="tablist"' in page.text
     assert 'data-incident-tab="incident-panel-overview"' in page.text
-    assert '<h2>Platform incident assessment</h2>' in page.text
+    assert '<h2>Incident assessment</h2>' in page.text
     assert '<strong>API server is healthy</strong>' in page.text
     assert '**API server is healthy**' not in page.text
     assert '<td>3</td>' in page.text
@@ -150,6 +176,11 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert 'data-evidence-link' in page.text
     assert f'href="#evidence-{run_id}-E1"' in page.text
     assert f'id="evidence-{run_id}-E1"' in page.text
+    assert 'class="incident-evidence-rail"' in page.text
+    assert 'class="incident-evidence-card"' in page.text
+    assert 'Observed objects' in page.text
+    assert 'kube-apiserver' in page.text
+    assert 'class="incident-inline-citation"' in page.text
     assert 'class="panel incident-panel"' not in page.text
     assert '>- Confirm' not in page.text
     ranked_hypotheses = re.search(
@@ -163,6 +194,9 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
 
     script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
     assert "target.open = true" in script
+    styles = (Path(__file__).parents[2] / 'web/static/styles.css').read_text(encoding='utf-8')
+    assert '.incident-next-steps > li {' in styles
+    assert '.incident-next-steps li {' not in styles
     assert "target.scrollIntoView" in script
     assert "new EventSource" in script
     assert f'data-events-url="/api/v1/incidents/{iid}/events"' in page.text
@@ -375,6 +409,38 @@ def test_worker_model_selection_rejects_out_of_scope_reads(client):
         assert 'model-secret' not in run.briefing_json
 
 
+def test_worker_scopes_namespaced_collectors_from_admitted_alert_labels(client):
+    sid = source(client)
+    body = notification()
+    body['alerts'][0]['labels']['namespace'] = 'team-checkout'
+    iid = send(client, sid, body).json()['incident_id']
+    service = client.app.state.incident_service
+    observed_scopes = []
+
+    class Reader:
+        def collect(self, _key):
+            return {'rows': []}
+
+        def catalog(self):
+            return {'operators': 'Operators'}
+
+        def close(self):
+            pass
+
+    def scoped_reader(_cluster, _token, namespaces=()):
+        observed_scopes.append(tuple(namespaces))
+        return Reader()
+
+    service.cluster_reader = scoped_reader
+    service.model_context = lambda _engine: (None, None)
+    with Session(client.app.state.engine) as db:
+        run_id = db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id == iid))
+
+    service.investigate(client.app.state.engine, run_id)
+
+    assert observed_scopes == [('team-checkout',)]
+
+
 def test_incident_uses_coordinator_turns_as_its_primary_budget(client):
     sid = source(client)
     iid = send(client, sid, notification()).json()['incident_id']
@@ -474,7 +540,7 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
         specialist=next(item for item in activity['tasks'] if item.get('role')=='specialist')
         assert specialist['state']=='completed'
         assert specialist['started_at'] and specialist['ended_at']
-        assert 'Analyze bounded platform logs' in specialist['work']
+        assert 'Analyze bounded incident logs' in specialist['work']
         assert specialist['result']=='No meaningful anomaly identified.'
         assert any(
             str(event.get('summary')).startswith('Planning investigation round ')
@@ -617,13 +683,108 @@ def test_reader_denies_arbitrary_paths_and_projects():
     def respond(request):
         calls.append(request)
         return httpx.Response(200,json={'items':[{'metadata':{'name':'app'},'spec':{'project':'userland','destination':{'server':'https://target'}},'status':{'history':[]}}]})
-    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader=IncidentReader('https://host','credential',namespaces=['openshift-etcd'],
+        transport=httpx.MockTransport(respond))
     with pytest.raises(ValueError): reader.collect('pods:customer')
     assert calls==[]
     result=reader.argocd(['platform'],{'https://target'},[],datetime.now(timezone.utc))
     assert result['changes']==[]
     assert all(r.method=='GET' for r in calls)
     assert calls[0].url.path=='/api/v1/applications'
+    reader.close()
+
+
+def test_reader_exposes_only_configured_incident_namespaces():
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={'items': []})
+
+    reader = IncidentReader('https://host', 'credential', namespaces=['team-checkout'],
+        transport=httpx.MockTransport(respond))
+    assert 'pods:team-checkout' in reader.catalog()
+    assert reader.collect('events:team-checkout')['scope'] == 'events:team-checkout'
+    with pytest.raises(ValueError):
+        reader.collect('pods:openshift-etcd')
+    assert len(calls) == 1
+    with pytest.raises(ValueError):
+        IncidentReader('https://host', 'credential', namespaces=['../customer'])
+    reader.close()
+
+
+def test_cluster_health_discovers_cross_namespace_workload_and_storage_scope():
+    now = datetime.now(timezone.utc).isoformat()
+
+    def respond(request):
+        if request.url.path == '/api/v1/pods':
+            return httpx.Response(200, json={'items': [{
+                'metadata': {'name': 'image-registry-0', 'namespace': 'openshift-image-registry'},
+                'spec': {'volumes': [{'name': 'storage', 'persistentVolumeClaim': {
+                    'claimName': 'registry-storage',
+                }}]},
+                'status': {'phase': 'Pending', 'containerStatuses': [{
+                    'name': 'registry', 'ready': False,
+                    'state': {'waiting': {'reason': 'ContainerCreating'}},
+                }]},
+            }]})
+        if request.url.path == '/api/v1/persistentvolumeclaims':
+            return httpx.Response(200, json={'items': [{
+                'metadata': {'name': 'registry-storage', 'namespace': 'openshift-image-registry'},
+                'spec': {'storageClassName': 'lvms-vg1'}, 'status': {'phase': 'Pending'},
+            }]})
+        if request.url.path == '/api/v1/events':
+            return httpx.Response(200, json={'items': [{
+                'metadata': {'name': 'registry-mount', 'namespace': 'openshift-image-registry'},
+                'reason': 'FailedMount', 'message': 'PVC is not available',
+                'lastTimestamp': now, 'involvedObject': {'kind': 'Pod', 'name': 'image-registry-0'},
+            }]})
+        return httpx.Response(200, json={'items': []})
+
+    reader = IncidentReader('https://host', 'credential',
+        transport=httpx.MockTransport(respond))
+    result = reader.collect('cluster-health')
+    assert {row['kind'] for row in result['rows']} == {
+        'Pod', 'PersistentVolumeClaim', 'Event',
+    }
+    assert result['discovered_namespaces'] == ['openshift-image-registry']
+    pod = next(row for row in result['rows'] if row['kind'] == 'Pod')
+    assert pod['persistent_volume_claims'] == ['registry-storage']
+    assert 'pods:openshift-image-registry' in reader.catalog()
+    assert 'events:openshift-image-registry' in reader.catalog()
+    assert 'storage:openshift-image-registry' in reader.catalog()
+    reader.close()
+
+
+def test_degraded_cluster_operator_exposes_related_namespace_scope():
+    payload = {'items': [{
+        'metadata': {'name': 'image-registry'},
+        'status': {
+            'conditions': [
+                {'type': 'Available', 'status': 'False', 'reason': 'Unavailable'},
+                {'type': 'Degraded', 'status': 'True', 'reason': 'StorageError'},
+            ],
+            'relatedObjects': [{
+                'group': '', 'resource': 'namespaces', 'name': 'openshift-image-registry',
+            }, {
+                'group': '', 'resource': 'pods', 'namespace': 'openshift-image-registry',
+                'name': 'image-registry-0',
+            }, {
+                'group': '', 'resource': 'secrets', 'namespace': 'openshift-image-registry',
+                'name': 'registry-secret',
+            }],
+        },
+    }]}
+    reader = IncidentReader('https://host', 'credential',
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload)))
+    result = reader.collect('operators')
+    assert result['rows'][0]['related_objects'] == [{
+        'resource': 'namespaces', 'name': 'openshift-image-registry',
+    }, {
+        'resource': 'pods', 'namespace': 'openshift-image-registry',
+        'name': 'image-registry-0',
+    }]
+    assert 'pods:openshift-image-registry' in reader.catalog()
     reader.close()
 
 
@@ -679,7 +840,8 @@ def test_logs_only_become_available_for_observed_platform_containers():
         return httpx.Response(200,json={'items':[{'metadata':{'name':'etcd-0'},
             'spec':{'containers':[{'name':'etcd','image':'example/etcd','env':[{'name':'PASSWORD','value':'never-send'}]}]},
             'status':{'phase':'Running'}}]})
-    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader=IncidentReader('https://host','credential',namespaces=['openshift-etcd'],
+        transport=httpx.MockTransport(respond))
     assert not any(k.startswith('logs:') for k in reader.catalog())
     evidence=reader.collect('pods:openshift-etcd')
     assert 'never-send' not in json.dumps(evidence)
@@ -702,7 +864,8 @@ def test_restarted_container_exposes_previous_logs_and_scoped_loki_history():
             'spec':{'containers':[{'name':'etcd','image':'example/etcd'}]},
             'status':{'phase':'Running','containerStatuses':[{'name':'etcd','restartCount':2,
                 'lastState':{'terminated':{'exitCode':1,'reason':'Error'}}}]}}]})
-    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader=IncidentReader('https://host','credential',namespaces=['openshift-etcd'],
+        transport=httpx.MockTransport(respond))
     reader.loki=SimpleNamespace()
     pods=reader.collect('pods:openshift-etcd')
     assert pods['rows'][0]['containers'][0]['lastState']['terminated']['exitCode']==1
@@ -731,7 +894,8 @@ def test_missing_previous_logs_fall_back_to_exact_loki_container_history():
         return httpx.Response(200,json={'items':[{'metadata':{'name':'api-0'},
             'spec':{'containers':[{'name':'api'}]},
             'status':{'containerStatuses':[{'name':'api','restartCount':1}]}}]})
-    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader=IncidentReader('https://host','credential',namespaces=['openshift-etcd'],
+        transport=httpx.MockTransport(respond))
     reader.loki=Loki()
     reader.set_log_window(datetime.now(timezone.utc)-timedelta(hours=1))
     reader.collect('pods:openshift-etcd')
@@ -755,6 +919,7 @@ def test_event_projection_keeps_ranked_rows_instead_of_discarding_collection():
             'message':('important failure ' if index==59 else 'routine warning ')*180,
             'type':'Warning','lastTimestamp':now,'involvedObject':{'kind':'Pod','name':f'pod-{index}'}})
     reader=IncidentReader('https://host','credential',event_projection_bytes=8192,
+        namespaces=['openshift-monitoring'],
         transport=httpx.MockTransport(lambda _request:httpx.Response(200,json={'items':items})))
     result=reader.collect('events:openshift-monitoring')
     assert 0 < len(result['rows']) < len(items)

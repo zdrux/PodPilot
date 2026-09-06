@@ -31,9 +31,13 @@ a bounded polling fallback is used when streaming is unavailable. The incident d
 groups identical source alerts into table rows with occurrence counts, and every
 immutable run has its own Investigation tab. Briefings, hypotheses and next steps
 render as sanitized narrative Markdown without table parsing, so pipe-delimited model
-output cannot distort the report layout. Limitations use a compact reading list. Supporting
-evidence links activate the owning run, expand the exact run-scoped evidence row and
-scroll it into view; retained payloads remain collapsed until requested. Continue in Ask
+output cannot distort the report layout. The preliminary briefing is presented as a
+bounded assessment card with its evidence basis, while a sticky quick-view rail lists
+retained evidence and exact object coordinates projected from that evidence. Valid E-ID
+citations in the briefing, hypotheses and next steps, along with evidence and object links
+in the rail, activate the owning run, expand the exact run-scoped evidence row and scroll
+it into view. Retained payloads remain collapsed until requested. Limitations use a compact
+reading list. Continue in Ask
 creates a private read-only conversation with copied historical evidence and
 requires the operator's own delegated sign-in before additional reads.
 
@@ -132,8 +136,9 @@ Reviewed SNO seed allowlist (severity must also be critical):
 - NoOvnClusterManagerLeader
 - KubeletDown
 
-Administrators can disable individual entries. Arbitrary new alert names require
-a policy change and review; critical severity alone does not admit an alert.
+The list seeds new cluster connectors, but Approvers may add or remove exact
+Prometheus alert names on each connector. Critical severity alone does not admit
+an alert; its exact name must also be configured.
 Unknown/non-admitted alerts return success with zero admitted entries. Queue
 saturation returns 503 for retry. Truncated notifications explicitly report
 incomplete coverage and cannot assert full group resolution. Missing alerts are
@@ -144,9 +149,12 @@ automatic cross-group merging is intentionally absent.
 
 The incident worker is separate from Ask and exposes no shell or mutation tool.
 It uses server-owned GET collectors for cluster operators, OpenShift versions and
-upgrade history, nodes, MachineConfigPools, fixed platform namespaces' Pod status,
-Deployment rollout state and recent warning events. Pod environment variables,
-arbitrary annotations and full specs are excluded. Only exact observed platform
+upgrade history, nodes, MachineConfigPools, and a bounded cluster-wide exception survey
+covering unhealthy Pods, Deployments, StatefulSets, DaemonSets, unbound PVCs, and recent
+warning events. Validated namespaces from firing alerts are prioritized. Unhealthy-resource
+observations and degraded ClusterOperator related objects can add exact namespaces for
+deeper Pod, Deployment, PVC, warning-event, and log collection. Pod environment variables,
+arbitrary annotations and full specs are excluded. Only exact observed incident
 Pod/container names can become bounded log capabilities. Current Kubernetes logs default
 to 1,000 lines / 96 KiB from the last two hours. A container with observed restart or
 last-termination state additionally exposes a bounded `previous=true` read. If Kubernetes
@@ -154,8 +162,11 @@ no longer retains that previous stream, PodPilot attempts an exact namespace/Pod
 query against the Loki infrastructure tenant; the same scoped Loki collector remains
 available for deeper history when useful. Loki defaults to 2,000 lines / 96 KiB over a
 six-hour window anchored thirty minutes before alert onset. Missing Kubernetes or Loki
-history remains an explicit limitation and does not stop other collection. The platform
-namespace allowlist lives in `packages/diagnostics/`.
+history remains an explicit limitation and does not stop other collection. Alerts without
+a valid Kubernetes `namespace` label begin with the cluster-wide exception survey rather
+than losing workload visibility. A run accepts no more than 20 initial alert namespaces and
+40 total namespaces after evidence-led expansion. Each cluster-wide resource list is capped
+at 60 objects and the combined unhealthy projection at 120 observations.
 Optional metric collection uses one fixed platform availability query over 30
 minutes at 60-second resolution, capped at 12 series.
 
@@ -170,7 +181,7 @@ are configurable with the `PODPILOT_INCIDENT_*` settings defined in `settings.py
 schema bounds prevent unbounded autonomy. Synthetic smoke tests retain their shorter
 four-minute/six-round path. Missing or
 invalid citations label the briefing unverified. Model failures preserve collected
-evidence. Without a configured usable model, fixed platform snapshots are retained
+evidence. Without a configured usable model, deterministic cluster snapshots are retained
 with partial status and an explicit limitation. Every run uses the currently active
 model profile behind the existing API provider boundary.
 

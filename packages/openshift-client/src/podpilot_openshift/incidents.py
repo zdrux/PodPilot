@@ -1,4 +1,4 @@
-"""Bounded GET-only transports for unattended platform investigation."""
+"""Bounded GET-only transports for unattended incident investigation."""
 import json
 import re
 import time
@@ -9,7 +9,6 @@ from urllib.parse import urlsplit, quote
 import httpx
 
 from podpilot_openshift.delegated import tls_context
-from podpilot_diagnostics.incidents import PLATFORM_NAMESPACES
 from podpilot_diagnostics.redaction import redact_text
 
 
@@ -24,7 +23,7 @@ class IncidentReader:
     def __init__(self, origin, token, ca=None, verify=True, transport=None,
             log_tail_lines=1000, max_log_bytes=98304, log_range_seconds=7200,
             loki_log_limit=2000, loki_range_seconds=21600,
-            event_projection_bytes=32768):
+            event_projection_bytes=32768, namespaces=()):
         self.origin = https_origin(origin)
         if not token:
             raise ValueError("Investigation credential is missing.")
@@ -38,6 +37,11 @@ class IncidentReader:
         self.loki_log_limit = max(100, min(int(loki_log_limit), 5000))
         self.loki_range_seconds = max(1800, min(int(loki_range_seconds), 86400))
         self.event_projection_bytes = max(8192, min(int(event_projection_bytes), 131072))
+        initial_namespaces = tuple(dict.fromkeys(str(namespace).strip() for namespace in namespaces))
+        if len(initial_namespaces) > 20 or any(not self._valid_namespace(namespace)
+                for namespace in initial_namespaces):
+            raise ValueError("Incident namespaces must be valid Kubernetes namespace names (maximum 20).")
+        self.namespaces = initial_namespaces
         self.log_window_start = None
         self.log_window_end = None
         self.client = httpx.Client(verify=tls_context(ca) if verify else False,
@@ -57,6 +61,22 @@ class IncidentReader:
             datetime.now(timezone.utc),
             self.log_window_start + timedelta(seconds=self.loki_range_seconds),
         )
+
+    @staticmethod
+    def _valid_namespace(namespace):
+        return bool(re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", namespace))
+
+    def _extend_namespaces(self, namespaces):
+        """Expose exact namespaced capabilities discovered by server-owned collectors."""
+
+        expanded = list(self.namespaces)
+        for namespace in namespaces:
+            namespace = str(namespace or "").strip()
+            if self._valid_namespace(namespace) and namespace not in expanded:
+                expanded.append(namespace)
+            if len(expanded) >= 40:
+                break
+        self.namespaces = tuple(expanded)
 
     def get(self, path, params=None):
         # Paths are owned by this module, never arbitrary model/webhook URLs.
@@ -79,22 +99,24 @@ class IncidentReader:
             "version": "OpenShift upgrade history and current version",
             "nodes": "Node conditions and capacity (no workload enumeration)",
             "machine-pools": "MachineConfigPool rollout and degraded conditions",
-            **{f"pods:{ns}": f"Platform Pod status and images in {ns}" for ns in PLATFORM_NAMESPACES},
-            **{f"events:{ns}": f"Recent warning events in {ns}" for ns in PLATFORM_NAMESPACES},
-            **{f"rollouts:{ns}": f"Platform Deployment rollout state in {ns}" for ns in PLATFORM_NAMESPACES},
+            "cluster-health": "Cluster-wide survey of unhealthy workloads, warning events, and unbound PVCs",
+            **{f"pods:{ns}": f"Pod status and images in incident namespace {ns}" for ns in self.namespaces},
+            **{f"events:{ns}": f"Recent warning events in incident namespace {ns}" for ns in self.namespaces},
+            **{f"rollouts:{ns}": f"Deployment rollout state in incident namespace {ns}" for ns in self.namespaces},
+            **{f"storage:{ns}": f"PersistentVolumeClaim state in incident namespace {ns}" for ns in self.namespaces},
             **{key: (
-                f"Previous Kubernetes logs for restarted platform container {ns}/{pod}/{container}"
+                f"Previous Kubernetes logs for restarted incident container {ns}/{pod}/{container}"
                 if mode == "previous" else
-                f"Deeper Loki history for observed platform container {ns}/{pod}/{container}"
+                f"Deeper Loki history for observed incident container {ns}/{pod}/{container}"
                 if mode == "loki" else
-                f"Expanded current logs for observed platform container {ns}/{pod}/{container}"
+                f"Expanded current logs for observed incident container {ns}/{pod}/{container}"
             ) for key, (ns, pod, container, mode) in self.log_targets.items()},
             **({"platform-metrics": "Recent API/etcd/cluster-operator availability metrics"} if self.monitor else {}),
         }
 
     def collect(self, key):
         if key not in self.catalog():
-            raise ValueError("Collector is outside the platform allowlist.")
+            raise ValueError("Collector is outside the admitted incident scope.")
         if key in self.log_targets:
             ns, pod, container, mode = self.log_targets[key]
             if mode == "loki":
@@ -118,6 +140,8 @@ class IncidentReader:
                 )
                 result["kubernetes_previous_error"] = str(exc)
                 return result
+        if key == "cluster-health":
+            return self._collect_cluster_health()
         if key == "platform-metrics":
             result = self.monitor.get("/api/v1/query_range", {
                 "query": 'up{job=~"apiserver|etcd"} or cluster_operator_up{job="cluster-version-operator"}',
@@ -133,9 +157,9 @@ class IncidentReader:
                  "machine-pools": "/apis/machineconfiguration.openshift.io/v1/machineconfigpools"}
         params = {"limit": 60}
         kind, _, ns = key.partition(":")
-        if kind in ("pods", "events", "rollouts"):
+        if kind in ("pods", "events", "rollouts", "storage"):
             prefix = "/apis/apps/v1" if kind == "rollouts" else "/api/v1"
-            resource = "deployments" if kind == "rollouts" else kind
+            resource = "deployments" if kind == "rollouts" else "persistentvolumeclaims" if kind == "storage" else kind
             path = f"{prefix}/namespaces/{ns}/{resource}"
             if kind == "events":
                 params["fieldSelector"] = "type=Warning"
@@ -184,8 +208,16 @@ class IncidentReader:
                             'restartCount':container.get('restartCount'),'state':state,
                             'lastState':last_state})
                     row.update(phase=status.get("phase"), containers=containers,
-                        images=[c.get("image") for c in spec.get("containers", [])])
-                    # Only exact names read from allowed platform namespaces become log capabilities.
+                        images=[c.get("image") for c in spec.get("containers", [])],
+                        owner_references=[{field: owner.get(field) for field in (
+                            "apiVersion", "kind", "name", "uid", "controller"
+                        ) if owner.get(field) is not None} for owner in meta.get("ownerReferences", [])[:4]],
+                        persistent_volume_claims=[
+                            volume.get("persistentVolumeClaim", {}).get("claimName")
+                            for volume in spec.get("volumes", [])[:20]
+                            if volume.get("persistentVolumeClaim", {}).get("claimName")
+                        ])
+                    # Only exact names read from admitted alert namespaces become log capabilities.
                     statuses = {str(c.get("name")): c for c in projected_statuses}
                     current_targets = sum(mode == "current" for *_, mode in self.log_targets.values())
                     candidate_containers = [
@@ -209,6 +241,9 @@ class IncidentReader:
                     row.update(generation=meta.get("generation"), observed_generation=status.get("observedGeneration"),
                         replicas=spec.get("replicas"), available=status.get("availableReplicas"),
                         images=[c.get("image") for c in spec.get("template", {}).get("spec", {}).get("containers", [])])
+                elif kind == "storage":
+                    row.update(phase=status.get("phase"), storage_class=spec.get("storageClassName"),
+                        volume=spec.get("volumeName"), capacity=status.get("capacity", {}).get("storage"))
                 elif kind == "version":
                     row.update(history=status.get("history", [])[:10], desired=status.get("desired"))
                 elif kind == "nodes":
@@ -216,6 +251,26 @@ class IncidentReader:
                         roles=[k.removeprefix('node-role.kubernetes.io/') for k in meta.get('labels', {}) if k.startswith('node-role.kubernetes.io/')])
                 elif kind == "operators":
                     row["versions"] = status.get("versions", [])
+                    unhealthy = any(
+                        (condition.get("type") == "Available" and condition.get("status") == "False")
+                        or (condition.get("type") == "Degraded" and condition.get("status") == "True")
+                        for condition in status.get("conditions", [])
+                    )
+                    if unhealthy:
+                        related = []
+                        for item_ref in status.get("relatedObjects", [])[:40]:
+                            if item_ref.get("resource") == "secrets":
+                                continue
+                            projected = {field: item_ref.get(field) for field in (
+                                "group", "resource", "namespace", "name"
+                            ) if item_ref.get(field)}
+                            if projected:
+                                related.append(projected)
+                        row["related_objects"] = related
+                        self._extend_namespaces(
+                            item.get("namespace") or (item.get("name") if item.get("resource") == "namespaces" else "")
+                            for item in related
+                        )
                 elif kind == "machine-pools":
                     row.update(machine_count=status.get("machineCount"), ready=status.get("readyMachineCount"),
                                updated=status.get("updatedMachineCount"), degraded=status.get("degradedMachineCount"))
@@ -231,6 +286,98 @@ class IncidentReader:
                 )
         return {"rows": rows, "partial": upstream_partial,
                 "scope": key, "limitations": limitations}
+
+    def _collect_cluster_health(self):
+        """Return a bounded cross-namespace exception survey, never full object specs."""
+
+        now = datetime.now(timezone.utc)
+        rows, limitations = [], []
+        partial = False
+        requests = (
+            ("Pod", "/api/v1/pods"),
+            ("Deployment", "/apis/apps/v1/deployments"),
+            ("StatefulSet", "/apis/apps/v1/statefulsets"),
+            ("DaemonSet", "/apis/apps/v1/daemonsets"),
+            ("PersistentVolumeClaim", "/api/v1/persistentvolumeclaims"),
+            ("Event", "/api/v1/events"),
+        )
+        for kind, path in requests:
+            params = {"limit": 60}
+            if kind == "Event":
+                params["fieldSelector"] = "type=Warning"
+            try:
+                payload = self.get(path, params)
+            except Exception:
+                limitations.append(f"Cluster-wide {kind} health survey was unavailable.")
+                partial = True
+                continue
+            partial = partial or bool(payload.get("metadata", {}).get("continue"))
+            for item in payload.get("items", [])[:60]:
+                meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
+                namespace = meta.get("namespace")
+                row = {"kind": kind, "namespace": namespace, "name": meta.get("name")}
+                unhealthy = False
+                if kind == "Pod":
+                    statuses = [*status.get("initContainerStatuses", []), *status.get("containerStatuses", [])]
+                    unhealthy = status.get("phase") not in ("Running", "Succeeded") or any(
+                        not container.get("ready", False) and container.get("state", {}).get("waiting")
+                        for container in statuses
+                    )
+                    if unhealthy:
+                        row.update(phase=status.get("phase"), containers=[{
+                            "name": container.get("name"), "ready": container.get("ready"),
+                            "restartCount": container.get("restartCount"),
+                            "waiting_reason": (container.get("state", {}).get("waiting") or {}).get("reason"),
+                            "last_reason": (container.get("lastState", {}).get("terminated") or {}).get("reason"),
+                        } for container in statuses[:12]],
+                            owner_references=[{field: owner.get(field) for field in (
+                                "apiVersion", "kind", "name", "uid", "controller"
+                            ) if owner.get(field) is not None} for owner in meta.get("ownerReferences", [])[:4]],
+                            persistent_volume_claims=[
+                                volume.get("persistentVolumeClaim", {}).get("claimName")
+                                for volume in spec.get("volumes", [])[:20]
+                                if volume.get("persistentVolumeClaim", {}).get("claimName")
+                            ])
+                elif kind in ("Deployment", "StatefulSet"):
+                    desired = int(spec.get("replicas") or 0)
+                    ready = int((status.get("availableReplicas") if kind == "Deployment" else status.get("readyReplicas")) or 0)
+                    unhealthy = desired > ready
+                    if unhealthy:
+                        row.update(desired=desired, ready=ready, generation=meta.get("generation"),
+                            observed_generation=status.get("observedGeneration"))
+                elif kind == "DaemonSet":
+                    desired = int(status.get("desiredNumberScheduled") or 0)
+                    ready = int(status.get("numberReady") or 0)
+                    unhealthy = desired > ready
+                    if unhealthy:
+                        row.update(desired=desired, ready=ready, unavailable=status.get("numberUnavailable"))
+                elif kind == "PersistentVolumeClaim":
+                    unhealthy = status.get("phase") != "Bound"
+                    if unhealthy:
+                        row.update(phase=status.get("phase"), storage_class=spec.get("storageClassName"),
+                            volume=spec.get("volumeName"))
+                else:
+                    stamp = item.get("lastTimestamp") or item.get("eventTime") or meta.get("creationTimestamp")
+                    try:
+                        recent = bool(stamp) and datetime.fromisoformat(stamp.replace("Z", "+00:00")) >= now - timedelta(hours=2)
+                    except (TypeError, ValueError):
+                        recent = False
+                    unhealthy = recent
+                    if unhealthy:
+                        row.update(reason=item.get("reason"), message=str(item.get("message") or "")[:1000],
+                            last_seen=stamp, involved_object=item.get("involvedObject"))
+                if unhealthy and self._valid_namespace(str(namespace or "")):
+                    rows.append(row)
+        if len(rows) > 120:
+            rows = rows[:120]
+            partial = True
+            limitations.append("Cluster health survey retained the first 120 unhealthy observations.")
+        self._extend_namespaces(row.get("namespace") for row in rows)
+        limitations.append(
+            "Cluster-wide exception survey is capped per resource type and may not represent every unhealthy object."
+        )
+        return {"rows": rows, "partial": partial, "scope": "cluster-health",
+                "discovered_namespaces": list(self.namespaces), "limitations": limitations}
 
     def _collect_kubernetes_logs(self, namespace, pod, container, *, previous):
         started = time.monotonic()

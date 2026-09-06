@@ -36,9 +36,12 @@ to configured projects and the bounded Application projection. Exact matches are
 as observed topology and confer no new credential, permission, target-cluster assignment,
 or repository scope.
 
-Incident Pod logs remain bounded retained evidence. Current and Kubernetes previous-container
-reads are issued only for exact platform Pod/container names observed in a prior bounded Pod
-snapshot. When deeper or missing crash history warrants it, a server-authored Loki query uses
+Incident Pod logs remain bounded retained evidence. Namespaced collectors are created from
+validated labels on admitted firing alerts and exact namespaces observed by server-owned
+cluster health or degraded-ClusterOperator relationship collectors. An alert, cluster object,
+or model response never becomes a free-form path or selector. Current and Kubernetes
+previous-container reads are issued only for exact Pod/container names observed in a prior bounded
+Pod snapshot. When deeper or missing crash history warrants it, a server-authored Loki query uses
 those same immutable coordinates against the infrastructure tenant; arbitrary LogQL, label
 selectors, tenants, and time ranges are not model inputs. The default Loki incident window is
 six hours around alert onset with 2,000 lines / 96 KiB retained. Each selected log is sent alone

@@ -92,7 +92,7 @@
   <section class="incident-board incident-board-history">
     <header class="incident-board-heading"><div><p class="eyebrow">Fleet history</p><h2>{% if active_incidents %}All other investigations{% else %}Investigations{% endif %}</h2><p>Expand a case for its latest evidence and completed specialist work.</p></div><span>{{ historical_incidents | length }} case{% if historical_incidents | length != 1 %}s{% endif %}</span></header>
     {% if historical_incidents %}{{ incident_table(historical_incidents) }}
-    {% elif not active_incidents %}<div class="incident-dashboard-empty"><h3>No incidents yet</h3><p>Admitted critical platform alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</div>
+    {% elif not active_incidents %}<div class="incident-dashboard-empty"><h3>No incidents yet</h3><p>Admitted critical alerts will appear here when Alertmanager sends a notification.</p>{% if user.can_manage_configuration %}<a class="button" href="/settings/connectors">Configure incident connections</a>{% endif %}</div>
     {% else %}<p class="incident-dashboard-empty">Completed, partial, and stopped investigations will move here automatically.</p>{% endif %}
   </section>
     <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>

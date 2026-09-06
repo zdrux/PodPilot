@@ -177,6 +177,56 @@ def _activity_result(source, data):
     return "Evidence retained for review."
 
 
+def _evidence_object_refs(item):
+    """Project exact object coordinates from one evidence item for UI navigation."""
+
+    data = item.get("data") if isinstance(item, dict) else None
+    if not isinstance(data, dict):
+        return []
+    candidates = []
+    rows = data.get("rows")
+    if isinstance(rows, list):
+        candidates.extend(row for row in rows if isinstance(row, dict))
+    alerts = data.get("alerts")
+    if isinstance(alerts, list):
+        for alert in alerts:
+            if not isinstance(alert, dict):
+                continue
+            labels = alert.get("labels")
+            if isinstance(labels, dict):
+                for field, kind in (
+                    ("pod", "Pod"), ("deployment", "Deployment"),
+                    ("statefulset", "StatefulSet"), ("daemonset", "DaemonSet"),
+                ):
+                    if labels.get(field):
+                        candidates.append({
+                            "kind": kind, "namespace": labels.get("namespace"),
+                            "name": labels[field],
+                        })
+
+    refs = []
+    seen = set()
+    for candidate in candidates:
+        name = str(candidate.get("name") or candidate.get("pod") or "").strip()
+        if not name:
+            continue
+        namespace = str(candidate.get("namespace") or "").strip()
+        kind = str(candidate.get("kind") or candidate.get("resource") or "Resource").strip()
+        key = (kind.casefold(), namespace, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append({
+            "kind": kind,
+            "namespace": namespace,
+            "name": name,
+            "evidence_id": str(item.get("id") or ""),
+        })
+        if len(refs) >= 12:
+            break
+    return refs
+
+
 def _queued_activity():
     now = utcnow().isoformat()
     return json.dumps({
@@ -447,7 +497,7 @@ class ConnectionInput(BaseModel):
     api_prefix: str = Field(default="/api/v3", pattern=r"^(/api/v3)?$")
     repositories: list[str] = Field(default_factory=list, max_length=30)
     custom_ca_pem: str | None = Field(default=None, max_length=32768)
-    allowed_alerts: list[str] = Field(default_factory=lambda: list(DEFAULT_ALERTS), min_length=1, max_length=40)
+    allowed_alerts: list[str] = Field(default_factory=lambda: list(DEFAULT_ALERTS), min_length=1, max_length=100)
 
 
 class IncidentService:
@@ -514,7 +564,7 @@ class IncidentService:
         if not user.can_manage_configuration:
             raise HTTPException(403, "Connector configuration requires administrator access.")
 
-    def cluster_reader(self, cluster, token):
+    def cluster_reader(self, cluster, token, namespaces=()):
         origin = self.settings.delegated_system_api_url if cluster.is_system else cluster.api_url
         ca = cluster.custom_ca_pem
         if cluster.is_system:
@@ -526,6 +576,7 @@ class IncidentService:
             log_range_seconds=self.settings.incident_log_range_seconds,
             loki_log_limit=self.settings.incident_loki_log_limit,
             loki_range_seconds=self.settings.incident_loki_range_seconds,
+            namespaces=namespaces,
         )
         loki_options = {
             "token": token,
@@ -637,8 +688,13 @@ class IncidentService:
                 if any(len(alias) > 253 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", alias)
                         for alias in value.cluster_aliases):
                     raise HTTPException(422, "Argo CD destination aliases must be exact names without spaces.")
-                if set(value.allowed_alerts) - set(DEFAULT_ALERTS):
-                    raise HTTPException(422, "PoC alert policy must be a subset of the reviewed platform allowlist.")
+                value.allowed_alerts = list(dict.fromkeys(
+                    alert.strip() for alert in value.allowed_alerts if alert.strip()
+                ))
+                if not value.allowed_alerts or any(
+                        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]{0,252}", alert)
+                        for alert in value.allowed_alerts):
+                    raise HTTPException(422, "Specify at least one valid Prometheus alert name.")
                 duplicate = db.scalar(select(IncidentConnection).where(IncidentConnection.kind == "cluster",
                     IncidentConnection.cluster_id == value.cluster_id))
                 if duplicate and (not row or duplicate.id != row.id):
@@ -1007,7 +1063,7 @@ class IncidentService:
             data = source_item["data"]
             try:
                 analysis = analyzer(deadline_profile(), api_key, {
-                    "operator_request": "Identify incident-relevant anomalies in this platform container log.",
+                    "operator_request": "Identify incident-relevant anomalies in this container log.",
                     "investigation_context": [item for item in coordination_evidence if item["source"] == "Alertmanager notification"],
                     "logs": [{"evidence_id": source_item["id"], "namespace": data.get("namespace"),
                         "pod": data.get("pod"), "container": data.get("container"),
@@ -1062,7 +1118,21 @@ class IncidentService:
                 attempts = profile.max_retries + 1
                 attempt_timeout = min(profile.timeout_seconds, remaining / attempts)
                 return replace(profile, timeout_seconds=max(1.0, attempt_timeout))
-            reader = self.cluster_reader(cluster, token)
+            alert_namespaces = sorted({
+                str((alert.get("labels") or {}).get("namespace") or "")
+                for alert in alert_snapshot.values()
+                if isinstance(alert, dict) and alert.get("status") == "firing"
+                and re.fullmatch(
+                    r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?",
+                    str((alert.get("labels") or {}).get("namespace") or ""),
+                )
+            })
+            if len(alert_namespaces) > 20:
+                limitations.append(
+                    "Alert group named more than 20 namespaces; namespaced evidence collection was limited to 20."
+                )
+                alert_namespaces = alert_namespaces[:20]
+            reader = self.cluster_reader(cluster, token, alert_namespaces)
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):
                 reader.monitor = self.reader_factory(source_config["monitoring_url"], token,
@@ -1083,6 +1153,14 @@ class IncidentService:
                 record("operators", reader.collect("operators"))
             except Exception:
                 limitations.append("Cluster operator snapshot unavailable; other evidence collection will continue.")
+            cluster_health_collected = False
+            if "cluster-health" in reader.catalog():
+                try:
+                    coordinator_activity("Surveying unhealthy resources across the cluster", phase="Initial assessment")
+                    record("cluster-health", reader.collect("cluster-health"))
+                    cluster_health_collected = True
+                except Exception:
+                    limitations.append("Cluster-wide unhealthy-resource survey unavailable; scoped investigation will continue.")
             # Preserve recent changes before model-guided investigation; no arbitrary repository traversal.
             changes = []
             onset = min(datetime.fromisoformat(a["startsAt"]) for a in alert_snapshot.values())
@@ -1182,8 +1260,8 @@ class IncidentService:
                     if other:
                         other.close()
             if not profile or not api_key:
-                coordinator_activity("Collecting deterministic platform snapshots", phase="Evidence collection")
-                limitations.append("No usable model profile; deterministic platform snapshots only.")
+                coordinator_activity("Collecting deterministic cluster snapshots", phase="Evidence collection")
+                limitations.append("No usable model profile; deterministic cluster snapshots only.")
                 for key in ("version", "nodes", "machine-pools"):
                     try:
                         record(key, reader.collect(key))
@@ -1194,6 +1272,9 @@ class IncidentService:
                 available = reader.catalog()
                 available.pop("operators", None)
                 consumed = {"operators"}
+                if cluster_health_collected:
+                    available.pop("cluster-health", None)
+                    consumed.add("cluster-health")
                 max_rounds = 6 if synthetic else self.settings.incident_max_rounds
                 for step in range(max_rounds):
                     if time.monotonic()-started > run_timeout:
@@ -1208,9 +1289,9 @@ class IncidentService:
                         "objective": (
                             "This signal is labelled as a synthetic webhook test. Verify basic platform access from the operator snapshot and at most version/node snapshots, then finish with a concise test result. The test signal is not evidence of an etcd outage. Report any independently observed health issues separately; do not pursue an RCA for the synthetic signal."
                             if synthetic else
-                            "This is a controlled incident simulation. Conduct a normal, thorough platform investigation across relevant bounded collectors and specialist reports, but do not assume the simulated alert labels prove a real failure. Separate observed cluster impact from the scenario premise and finish with cited findings and operator next steps."
+                            "This is a controlled incident simulation. Conduct a normal, thorough Kubernetes or OpenShift investigation across relevant bounded collectors and specialist reports, but do not assume the simulated alert labels prove a real failure. Separate observed cluster impact from the scenario premise and finish with cited findings and operator next steps."
                             if simulation else
-                            "Investigate this critical OpenShift platform incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
+                            "Investigate this admitted critical Kubernetes or OpenShift incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
                         ),
                         "evidence": coordination_evidence,
                         "limitations": _dedupe_limitations([
@@ -1265,7 +1346,7 @@ class IncidentService:
                         for source_item in selected_logs:
                             data = source_item.get("data") or {}
                             target = "/".join(filter(None, [data.get("namespace"), data.get("pod"), data.get("container")]))
-                            work = f"Analyze bounded platform logs{f' for {target}' if target else ''}"
+                            work = f"Analyze bounded incident logs{f' for {target}' if target else ''}"
                             specialist_work.append((source_item, queue_specialist("Pod log", work, source_item)))
                         coordinator_activity(
                             f"Waiting for {len(selected_logs)} Pod log specialist{'s' if len(selected_logs) != 1 else ''}",
@@ -1459,11 +1540,24 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             has_typed_limitations = (
                 "system_limitations" in briefing or "model_limitations" in briefing
             )
+            evidence_cards = []
+            object_refs = []
+            for item in evidence:
+                card = dict(item)
+                card["summary"] = _activity_result(str(item.get("source") or ""), item.get("data"))
+                card["objects"] = _evidence_object_refs(item)
+                evidence_cards.append(card)
+                object_refs.extend(card["objects"])
             run_views.append({
                 "row": run,
                 "number": len(runs) - index,
                 "briefing": briefing,
-                "evidence": evidence,
+                "evidence": evidence_cards,
+                "object_refs": object_refs[:24],
+                "valid_evidence_ids": sorted(
+                    valid_ids,
+                    key=lambda item: int(item[1:]) if item[1:].isdigit() else 0,
+                ),
                 "supporting_ids": [item for item in supporting_ids if item in valid_ids],
                 "hypotheses": [re.sub(r"^\s*(?:\d+\s*[.)]\s*|[-*•]\s*)", "", str(item)) for item in briefing.get("hypotheses", [])],
                 "next_steps": [re.sub(r"^\s*(?:\d+\s*[.)]\s*|[-*•]\s*)", "", str(item)) for item in briefing.get("next_steps", [])],

@@ -258,7 +258,7 @@ The current deployment uses these variables:
 - `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `90`, with a hard accepted range of
   `1` through `120`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
-- `PODPILOT_INCIDENT_LOG_TAIL_LINES`, default `1000`, for exact observed platform containers
+- `PODPILOT_INCIDENT_LOG_TAIL_LINES`, default `1000`, for exact containers observed in admitted alert namespaces
 - `PODPILOT_INCIDENT_CONNECTOR_DISCOVERY_ENABLED`, default `true`; queues bounded discovery after
   an enabled connector save. Explicit **Test & discover** requests remain available when automatic
   discovery is disabled.

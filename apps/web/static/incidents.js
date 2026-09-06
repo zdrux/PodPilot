@@ -265,7 +265,7 @@
         url: data.get('url') || '', monitoring_url: data.get('monitoring_url') || '',
         api_prefix: data.has('api_prefix') ? data.get('api_prefix') : '/api/v3', repositories: lines('repositories'),
         custom_ca_pem: data.get('custom_ca_pem') || null,
-        ...(form.elements.kind.value === 'cluster' ? {allowed_alerts: data.getAll('allowed_alerts')} : {})
+        ...(form.elements.kind.value === 'cluster' ? {allowed_alerts: lines('allowed_alerts')} : {})
       });
       window.location.assign('/settings/connectors?edit=' + encodeURIComponent(result.id));
     } catch (error) {

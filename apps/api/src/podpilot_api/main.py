@@ -36,6 +36,7 @@ from podpilot_api.knowledge import (
     search_knowledge,
 )
 from podpilot_api.markdown import (
+    render_incident_prose_markdown,
     render_safe_markdown,
     render_safe_prose_markdown,
     render_safe_table_markdown,
@@ -10499,6 +10500,7 @@ def create_app(
         context_processors=[workspace_navigation_context],
     )
     templates.env.filters["safe_markdown"] = render_safe_markdown
+    templates.env.filters["incident_prose_markdown"] = render_incident_prose_markdown
     templates.env.filters["safe_prose_markdown"] = render_safe_prose_markdown
     templates.env.filters["safe_table_markdown"] = render_safe_table_markdown
     templates.env.filters["est_time"] = _format_est_time

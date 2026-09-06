@@ -470,7 +470,9 @@ one exact namespace, and totals for one exact namespace, Pod, or Node. It accept
 results and persists normalized dimensions, payload bytes, average byte rate, time bounds, and
 completeness. Neither the browser nor the model can submit LogQL or receive matching log lines
 through the metrics path. The incident worker has a separate server-authored infrastructure-tenant
-query for the exact namespace/Pod/container coordinates obtained from its platform Pod snapshot;
+query for the exact namespace/Pod/container coordinates obtained from a Pod snapshot scoped to
+either a validated namespace label of an admitted firing alert or an exact namespace exposed by
+the bounded cluster-health and ClusterOperator-relationship collectors;
 only its bounded result is sent alone to a log specialist and retained as incident evidence.
 Normal code parses common explicit relative periods before deterministic execution, while the
 semantic classifier carries `metric_range_seconds` for other wording. Requested values remain

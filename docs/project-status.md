@@ -1,6 +1,6 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-05
+Last reviewed: 2026-09-06
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
@@ -11,7 +11,10 @@ Incident response PoC is implemented on `codex/incident-response-poc`, after
 merging/pushing the evidence-ledger UI branch into main at `e2e4505`. The feature is
 opt-in and is now deployed on the disposable SNO. It adds fleet incidents, authenticated per-cluster
 Alertmanager ingress, separate Secret-backed automation connections, Argo CD/GitHub
-metadata enrichment and a bounded platform-only agent. See
+metadata enrichment and a bounded evidence-led agent. Cluster connector policies accept
+Approver-managed Prometheus alert names. Alert namespaces are prioritized, while an initial
+cluster-wide unhealthy-resource survey and degraded ClusterOperator relationships expose exact
+additional namespaces for deeper investigation. See
 [incident-response.md](incident-response.md) for configuration and current limits.
 The SNO agentic deployment script applies the combined incident overlay so routine image
 or model-profile deployments cannot silently remove the incident panel and worker.
@@ -62,7 +65,7 @@ distinct model uncertainty, expands incident Kubernetes logs to 1,000 lines / 96
 hours, exposes `previous=true` only after an observed restart, and adds an exact-container Loki
 infrastructure fallback/deeper-history collector (2,000 lines / 96 KiB over six hours). Raw logs
 remain isolated to one specialist and the Loki query coordinates come only from the bounded
-platform Pod snapshot. A read-only SNO check on 2026-09-05 found no LokiStack CRD, logging
+evidence-scoped Pod snapshot. A read-only SNO check on 2026-09-05 found no LokiStack CRD, logging
 Route, or workloads/services in `openshift-logging`; Kubernetes previous logs can work there,
 but the deeper-history fallback will report unavailable until cluster logging is installed.
 These evidence/log changes are deployed in the same build. A prior live SNO validation displayed five completed Pod-log
@@ -97,16 +100,27 @@ sticky observation panels where relevant, and grounded action footers. Their exi
 credential, search, tag, TLS, status, and destructive-action contracts are unchanged. The three routes
 passed a combined browser comparison against the Connections screen and the complete API application
 test suite.
-OpenShift application build `podpilot-137` and runner build `podpilot-oc-runner-17` completed
+OpenShift application build `podpilot-138` and runner build `podpilot-oc-runner-18` completed
 successfully, and
 the deployment rolled out with one ready application replica and no API-container restarts.
 The current SNO application image is
-`sha256:0342e88e8e8bdfd86c41b4bf84874184d071fad8cc0cf45e6ae6888cef29d572`
+`sha256:d5b20b197386e688e763fdfead3f23769bbaed2d50abcddc0573404475f5169c`
 with schema head `0025_connector_discovery`; the rebuilt runner image is
-`sha256:fdf59cfbb92fb5e91a1c49920b4c5ec83baa78a16c84d8495ff5489bd83f97fd`.
-The post-rollout OpenRouter profile probe completed ready. All three containers were ready with zero
-restarts, the API readiness check reported a healthy database, and the external connector route
-returned the expected OpenShift OAuth redirect.
+`sha256:8a8b1f56425636c86b8b6165463ccf0e05954a3ec5421bd8fc8fe8965c4e1890`.
+The deployment wrapper's optional post-rollout OpenRouter reprobe stalled and was stopped after the
+healthy rollout; the existing profile subsequently completed the live incident investigation.
+All three containers were ready with zero restarts.
+
+The remote-cluster connector now admits the custom `PodPilotGitOpsRolloutFailed` alert. An owned
+SNO PrometheusRule detects a Pending Pod in the Argo-managed `podpilot-gitops-demo` Deployment and
+a dedicated Alertmanager receiver delivers it to that connector. Git revision `560df78` introduced
+an intentionally invalid image tag; the rollout instead failed one stage earlier because Multus
+returned `Unauthorized` while creating the new Pod sandbox. Incident
+`2ba7a204-3df5-4b4f-9b90-d0319ef2944e` completed with alert, ClusterOperator, cross-namespace health,
+Argo CD, Pod, event, and Deployment evidence and identified the repeated
+`FailedCreatePodSandBox` chain. Revert `1d475e5` restored the Application to `Synced/Healthy`; the
+Prometheus alert and PodPilot incident both resolved normally. The alert rule, receiver, and custom
+allowlist entry remain installed for repeatable testing while the failing workload change was removed.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
 disposable SNO lab at schema head `0021_user_delegated_access`. That 2026-09-01 rollout used

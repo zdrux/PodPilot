@@ -99,6 +99,45 @@ def render_safe_prose_markdown(value: object) -> Markup:
     return Markup(_prose_renderer.render(_pretty_json_markdown(str(value or ""))))
 
 
+def render_incident_prose_markdown(
+    value: object,
+    run_id: object,
+    evidence_ids: object,
+) -> Markup:
+    """Render incident prose and link only server-validated evidence citations."""
+
+    rendered = str(render_safe_prose_markdown(value))
+    valid_ids = {
+        str(item)
+        for item in (evidence_ids if isinstance(evidence_ids, (list, tuple, set)) else [])
+        if re.fullmatch(r"E\d+", str(item))
+    }
+    if not valid_ids:
+        return Markup(rendered)
+
+    citation = re.compile(r"(?<![\w-])(E\d+)(?![\w-])")
+    parts = re.split(r"(<[^>]+>)", rendered)
+    blocked_depth = 0
+    run_key = re.sub(r"[^A-Za-z0-9_-]", "", str(run_id))
+    for index, part in enumerate(parts):
+        if part.startswith("<"):
+            tag = re.match(r"</?\s*([A-Za-z0-9]+)", part)
+            if tag and tag.group(1).lower() in {"code", "pre", "a"}:
+                blocked_depth += -1 if part.startswith("</") else 1
+            continue
+        if blocked_depth:
+            continue
+        parts[index] = citation.sub(
+            lambda match: (
+                f'<a class="incident-inline-citation" data-evidence-link '
+                f'href="#evidence-{run_key}-{match.group(1)}">{match.group(1)}</a>'
+                if match.group(1) in valid_ids else match.group(1)
+            ),
+            part,
+        )
+    return Markup("".join(parts))
+
+
 def _normalize_table_cell(value: str) -> str:
     """Remove bounded structured-output debris without altering balanced cell data."""
 

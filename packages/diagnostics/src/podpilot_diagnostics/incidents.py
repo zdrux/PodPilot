@@ -1,4 +1,4 @@
-"""Platform-only incident policy and evidence contracts; no transport or model dependency."""
+"""Incident admission policy and evidence contracts; no transport or model dependency."""
 from datetime import datetime
 from typing import Literal
 
@@ -10,18 +10,6 @@ DEFAULT_ALERTS = (
     "KubeSchedulerDown", "ClusterOperatorDown", "NoRunningOvnControlPlane",
     "NoOvnClusterManagerLeader", "KubeletDown",
 )
-PLATFORM_NAMESPACES = (
-    "openshift-etcd", "openshift-etcd-operator", "openshift-kube-apiserver",
-    "openshift-kube-apiserver-operator", "openshift-kube-controller-manager",
-    "openshift-kube-controller-manager-operator", "openshift-kube-scheduler",
-    "openshift-kube-scheduler-operator", "openshift-ovn-kubernetes",
-    "openshift-network-operator", "openshift-dns", "openshift-dns-operator",
-    "openshift-ingress", "openshift-ingress-operator", "openshift-monitoring",
-    "openshift-machine-config-operator", "openshift-cluster-version",
-    "openshift-cluster-storage-operator", "openshift-authentication",
-)
-
-
 class WebhookAlert(BaseModel):
     status: Literal["firing", "resolved"]
     labels: dict[str, str] = Field(max_length=80)
