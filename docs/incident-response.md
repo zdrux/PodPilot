@@ -24,15 +24,16 @@ tree, with links to each case and an indication when more are available on the f
 separate live table above fleet history. Rows expand in place to show the current
 coordinator phase, retained evidence results, specialist counts, and specialist
 start/end times, work descriptions, results and queued/running/completed/error state.
-While work is active, the board refreshes its content every four seconds and preserves
-expanded rows. The incident detail page uses a flat tabbed report: Overview
+The board and each incident detail page subscribe to authenticated server-sent events and
+refresh their own content only when durable orchestrator state changes. Expanded rows,
+selected run tabs and open evidence are preserved. EventSource reconnects automatically;
+a bounded polling fallback is used when streaming is unavailable. The incident detail page uses a flat tabbed report: Overview
 groups identical source alerts into table rows with occurrence counts, and every
 immutable run has its own Investigation tab. Briefings, hypotheses and next steps
 render as sanitized narrative Markdown without table parsing, so pipe-delimited model
 output cannot distort the report layout. Limitations use a compact reading list. Supporting
 evidence links activate the owning run, expand the exact run-scoped evidence row and
-scroll it into view; retained payloads remain collapsed until requested. Refresh
-retrieves worker progress. Continue in Ask
+scroll it into view; retained payloads remain collapsed until requested. Continue in Ask
 creates a private read-only conversation with copied historical evidence and
 requires the operator's own delegated sign-in before additional reads.
 
@@ -42,18 +43,25 @@ Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
 `0024_incident_activity`. The default is false. Connectors configuration requires
 configuration-administrator access as well as an SRE role.
 
-Under Connectors, add a **Cluster investigation + Alertmanager** connection for
-each enabled shared registry entry. Supply the existing cluster-reader token and
+**Manage → Connectors** lists independent OpenShift cluster, Argo CD, and GitHub
+instances in three groups. Its adjacent add control opens a type chooser. Adding
+an OpenShift instance registers its API identity first and returns directly to
+incident setup; already registered clusters without incident access remain visible
+as not configured. Supply the cluster-reader token and
 a distinct randomly generated webhook bearer credential (at least 32 characters).
 The cluster registry owns API URL, environment and TLS policy; unattended access
 does not modify Ask credentials. An optional Thanos/Prometheus HTTPS origin enables
 fixed platform-availability range queries with the same cluster token. Its custom
 CA bundle is configured on the connection. Connection tests check the core reads;
 operators must separately ensure that this identity is read-only in cluster RBAC.
+Kubernetes current/previous Pod logs use ordinary Pod `get`/`log` access. The optional
+deep-history path also requires `cluster-logging-infrastructure-view` and a conventional
+`openshift-logging/logging-loki` Route on registered remote clusters; absence or denial is
+reported as a limitation and does not fail the investigation.
 
-**Manage → Connections & webhooks** contains child links for **Investigation access
-& connectors** and **Webhook receivers**. The shared cluster registry remains under
-the separate **Cluster Management** sidebar entry. A divider separates this
+**Manage → Connectors** contains child links for **Configured instances** and
+**Webhook receivers**, and has a dedicated add control. The supporting shared cluster
+registry remains under **Cluster Management** for API identity and trust metadata. A divider separates this
 configuration-administrator-only section from the shared workspace navigation.
 The receiver panel displays each HTTPS endpoint, enabled state, last admitted
 delivery and incident count, with links to credential/policy editing and incidents.
@@ -67,14 +75,14 @@ to revoke use cluster/GitHub token revocation and disable the connection. Disabl
 connections reject new webhooks and queued investigations; a run already executing
 may finish its bounded reads. Credential updates affect subsequent runs.
 
-For **Argo CD**, choose the hosting shared/system cluster, namespace, allowed
-platform projects and managed target cluster IDs. It can inherit the enabled
-hosting cluster's incident credential, or use a separate Kubernetes reader token.
-This PoC reads Application CRs through Kubernetes, so an Argo CD API token is not
-used. Each instance/namespace can have a separate connection. Destination API URLs
-must match the registered target; `https://kubernetes.default.svc` matches only when
-the hosting and target cluster are identical. For Applications using destination
-names, configure the explicit cluster-ID-to-Argo-destination-name mapping.
+For **Argo CD**, configure an independent HTTPS API origin, read-only API token,
+optional CA, and allowed projects. It has no configured cluster or GitHub dependency.
+During an investigation PodPilot queries each enabled instance and retains only
+Applications whose exact destination server matches the incident cluster API URL or
+whose destination name matches the cluster name or one of that cluster incident
+connector's explicit aliases. Saved Kubernetes-hosted Argo connectors without a URL
+remain readable through their former namespace/hosting-cluster path while they are
+migrated, but all new connectors use the direct Argo CD API.
 
 For **GitHub**, configure the corporate HTTPS origin, REST prefix (`/api/v3` for
 Enterprise Server, empty for an API origin), optional custom CA, PAT and exact
@@ -85,9 +93,11 @@ PoC targets custom-host Enterprise installations. Separate github.com/api.github
 host mapping is not implemented. Use a PAT restricted to read access to the same
 platform repositories. PodPilot cannot prove every scope attached to a PAT.
 
-Argo CD history is limited to the two hours preceding the source alert onset and
-later retained entries at collection time. Revisions are joined to GitHub only for
-allowed repositories on the configured host and exact commit SHAs. Git commit
+Argo CD projections retain bounded matching Application ownership, managed-resource
+coordinates, repository origins, monorepo paths, current sync revisions, and history
+from the two hours preceding the source alert onset through collection time. A
+repository is joined to an enabled GitHub connector only when its hostname and exact
+`owner/repository` allowlist match; only exact commit SHAs are queried. Git commit
 metadata and associated PR metadata are projected; diffs and PR bodies are not
 sent to the model. Current health and nearby changes are correlation, not proof of
 causation. Missing history or unsupported revisions remain visible limitations.
@@ -132,8 +142,15 @@ It uses server-owned GET collectors for cluster operators, OpenShift versions an
 upgrade history, nodes, MachineConfigPools, fixed platform namespaces' Pod status,
 Deployment rollout state and recent warning events. Pod environment variables,
 arbitrary annotations and full specs are excluded. Only exact observed platform
-Pod/container names can become bounded log capabilities (100 lines, 16 KiB, last
-30 minutes). The platform namespace allowlist lives in `packages/diagnostics/`.
+Pod/container names can become bounded log capabilities. Current Kubernetes logs default
+to 1,000 lines / 96 KiB from the last two hours. A container with observed restart or
+last-termination state additionally exposes a bounded `previous=true` read. If Kubernetes
+no longer retains that previous stream, PodPilot attempts an exact namespace/Pod/container
+query against the Loki infrastructure tenant; the same scoped Loki collector remains
+available for deeper history when useful. Loki defaults to 2,000 lines / 96 KiB over a
+six-hour window anchored thirty minutes before alert onset. Missing Kubernetes or Loki
+history remains an explicit limitation and does not stop other collection. The platform
+namespace allowlist lives in `packages/diagnostics/`.
 Optional metric collection uses one fixed platform availability query over 30
 minutes at 60-second resolution, capped at 12 series.
 
@@ -151,6 +168,12 @@ invalid citations label the briefing unverified. Model failures preserve collect
 evidence. Without a configured usable model, fixed platform snapshots are retained
 with partial status and an explicit limitation. Every run uses the currently active
 model profile behind the existing API provider boundary.
+
+Oversized row-based evidence is projected progressively instead of being replaced by
+an empty limitation marker. Recent warning Events are ranked toward failure/error signals,
+then retained within a 32 KiB projection with an explicit retained-row count. Incident
+reports display trusted collection/policy limits separately from distinct model-reported
+uncertainty and suppress equivalent model paraphrases of a system limit.
 
 Every coordinator and specialist model call inherits the active model profile's transient
 retry allowance, which defaults to three retries for timeouts, disconnects, rate limits and

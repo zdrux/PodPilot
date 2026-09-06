@@ -13262,6 +13262,8 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'class="brand-mark" aria-hidden="true">P</span>' in base_template
     assert "--theme-surface-inset" in styles
     assert 'html[data-theme] input:not([type="checkbox"])' in styles
+    assert "html[data-theme] select option," in styles
+    assert "html[data-theme] select optgroup { color: var(--theme-text); background-color: var(--theme-surface-inset); }" in styles
     assert 'html[data-theme="light"] .ask-page' in styles
     assert 'html[data-theme="dark"] .ask-page' in styles
     assert "html[data-theme] .prompt-starters strong { color: var(--theme-text); }" in styles

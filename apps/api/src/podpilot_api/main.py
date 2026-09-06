@@ -10314,7 +10314,8 @@ def create_app(
             if not _profile_is_usable(profile):
                 return None, None
             return _profile_config(profile), credentials.get(profile.credential_key)
-    incident_service = IncidentService(app_settings, incident_credential_store, incident_model_context, provider)
+    incident_service = IncidentService(app_settings, incident_credential_store, incident_model_context, provider,
+        cluster_store=cluster_credentials)
     agent_runner_client = agent_runner or OcAgentRunnerClient(
         app_settings.agent_runner_url,
         timeout_seconds=app_settings.agent_command_timeout_seconds + 10,
@@ -10566,6 +10567,7 @@ def create_app(
             db_session.commit()
         application.state.adhoc_run_tasks = {}
         application.state.adhoc_runner_requests = {}
+        application.state.connector_discovery_tasks = set()
         worker_tasks: list[asyncio.Task[None]] = []
         if app_settings.adhoc_job_worker_enabled:
             with Session(application.state.engine) as db_session:
@@ -10601,12 +10603,16 @@ def create_app(
             delegated_reaper_task.cancel()
             if incident_task:
                 incident_task.cancel()
+            discovery_tasks = list(application.state.connector_discovery_tasks)
+            for discovery_task in discovery_tasks:
+                discovery_task.cancel()
             for worker_task in worker_tasks:
                 worker_task.cancel()
             await asyncio.gather(
                 delegated_reaper_task,
                 *worker_tasks,
                 *([incident_task] if incident_task else []),
+                *discovery_tasks,
                 return_exceptions=True,
             )
             await _revoke_delegated_connections(
@@ -14108,6 +14114,7 @@ def create_app(
                 "clusters": clusters_view,
                 "selected": selected,
                 "selected_editable": True,
+                "connector_setup": request.query_params.get("connector") == "1",
                 "recent_conversations": recent_conversations,
                 "csrf_token": csrf_token,
                 "can_manage_shared_clusters": _can_manage_configuration(user),

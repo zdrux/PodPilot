@@ -1,6 +1,7 @@
 import json
 import re
 import threading
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,11 +11,18 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app, SYSTEM_CLUSTER_ID
-from podpilot_api.models import AdHocConversation, Base
+from podpilot_api.incidents import (
+    _dedupe_limitations,
+    _incident_state_version,
+    _limitation_key,
+    _project_evidence_item,
+)
+from podpilot_api.models import AdHocConversation, Base, Cluster
 from podpilot_api.incident_models import IncidentConnection, FleetIncident, IncidentRun
 from podpilot_api.model_provider import AdHocLogAnalysis, ModelProfileConfig
 from podpilot_api.settings import Settings
@@ -33,13 +41,16 @@ class Store:
 def client(tmp_path):
     settings = Settings(auth_mode="test", data_dir=tmp_path,
         database_url=f"sqlite:///{tmp_path / 'incidents.db'}", incidents_enabled=True,
-        incident_worker_enabled=False, adhoc_job_worker_enabled=False)
+        incident_worker_enabled=False, incident_connector_discovery_enabled=False,
+        adhoc_job_worker_enabled=False)
     engine = build_engine(settings)
     Base.metadata.create_all(engine)
     engine.dispose()
+    cluster_store = Store()
     app = create_app(settings=settings, role_resolver=StaticRoleResolver({
         "sre": Role.INVESTIGATOR, "admin": Role.APPROVER, "viewer": Role.VIEWER,
-        "delegated": Role.DELEGATED_OPERATOR}), incident_credential_store=Store())
+        "delegated": Role.DELEGATED_OPERATOR}), incident_credential_store=Store(),
+        cluster_credential_store=cluster_store)
     with TestClient(app) as client:
         yield client
 
@@ -113,7 +124,9 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
             ],
             'evidence_ids': ['E1'],
             'next_steps': ['- Confirm the alert rule source.'],
-            'limitations': ['Only a bounded snapshot was collected.'],
+            'limitations': ['Only a bounded snapshot was collected.', 'A distinct inference remains uncertain.'],
+            'system_limitations': ['Only a bounded snapshot was collected.'],
+            'model_limitations': ['A distinct inference remains uncertain.'],
         })
         run.evidence_json = json.dumps([{
             'id': 'E1', 'source': 'operators', 'observed_at': '2026-09-05T12:01:00Z',
@@ -144,10 +157,73 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     ).group(1)
     assert '<table>' not in ranked_hypotheses
     assert '<code>restartCount=9</code>' in ranked_hypotheses
+    assert 'Collection and policy limits' in page.text
+    assert 'Model-reported uncertainty' in page.text
+    assert 'A distinct inference remains uncertain.' in page.text
 
     script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
     assert "target.open = true" in script
     assert "target.scrollIntoView" in script
+    assert "new EventSource" in script
+    assert f'data-events-url="/api/v1/incidents/{iid}/events"' in page.text
+    assert 'Progress will appear here automatically.' not in page.text
+
+
+def test_incident_live_version_tracks_orchestrator_progress(client):
+    sid = source(client)
+    iid = send(client, sid, notification()).json()['incident_id']
+    with Session(client.app.state.engine) as db:
+        initial = _incident_state_version(db, incident_id=iid)
+        run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == iid))
+        run.status = 'running'
+        run.activity_json = json.dumps({
+            'phase': 'Collecting evidence',
+            'current_work': 'Checking cluster operators',
+            'updated_at': '2026-09-05T12:02:00Z',
+            'tasks': [],
+            'events': [],
+        })
+        db.commit()
+    with Session(client.app.state.engine) as db:
+        progressed = _incident_state_version(db, incident_id=iid)
+        board_progressed = _incident_state_version(db)
+    assert progressed != initial
+    assert board_progressed == progressed
+
+
+def test_incident_live_streams_require_incident_access(client):
+    paths = ('/api/v1/incidents/events', '/api/v1/incidents/missing/events')
+    for path in paths:
+        assert client.get(path, headers={'x-forwarded-user': 'viewer'}).status_code == 403
+
+
+def test_incident_live_stream_emits_opaque_state_version(client):
+    sid = source(client)
+    send(client, sid, notification())
+    route = next(route for route in client.app.routes if route.path == '/api/v1/incidents/events')
+
+    async def first_event():
+        async def receive():
+            return {'type': 'http.request', 'body': b'', 'more_body': False}
+
+        request = Request({
+            'type': 'http', 'method': 'GET', 'path': route.path,
+            'headers': [], 'query_string': b'',
+        }, receive=receive)
+        response = await route.endpoint(
+            request=request, user=SimpleNamespace(role=Role.INVESTIGATOR),
+        )
+        event = await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+        return response, event
+
+    response, event = asyncio.run(first_event())
+    assert response.media_type == 'text/event-stream'
+    assert response.headers['cache-control'] == 'no-cache, no-store'
+    assert response.headers['x-accel-buffering'] == 'no'
+    assert 'event: update' in event
+    assert '"version"' in event
+    assert 'operators' not in event
 
 
 def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
@@ -218,7 +294,8 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert 'Stopped when the incident worker restarted.' not in page.text
     assert '&lt;script&gt;unsafe&lt;/script&gt;' in page.text
     assert '<script>unsafe</script>' not in page.text
-    assert 'incident-live-board-4' in page.text
+    assert 'incident-live-stream-1' in page.text
+    assert 'data-events-url="/api/v1/incidents/events"' in page.text
     assert 'class="incident-board-table-header" role="row"' in page.text
 
 
@@ -233,6 +310,27 @@ def test_connections_secret_isolation_and_access(client):
         assert client.get('/incidents',headers={'x-forwarded-user':who}).status_code == 403
     assert client.get('/settings/connectors',headers={'x-forwarded-user':'sre'}).status_code == 403
     assert client.post('/api/v1/incident-connections',headers={'x-forwarded-user':'admin'},json={}).status_code == 403
+
+
+def test_connector_directory_groups_independent_types_and_uses_type_chooser(client):
+    source(client)
+    headers=admin_headers(client)
+    assert client.post('/api/v1/incident-connections',headers=headers,json={
+        'kind':'argocd','name':'Central GitOps','enabled':True,'url':'https://argocd.example',
+        'token':'argocd-read-token','projects':['platform']}).status_code==200
+    assert client.post('/api/v1/incident-connections',headers=headers,json={
+        'kind':'github','name':'Corporate GitHub','enabled':True,'url':'https://github.example',
+        'token':'github-read-token','repositories':['platform/config']}).status_code==200
+    page=client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
+    assert all(f'id="connector-group-{kind}"' in page.text for kind in ('cluster','github','argocd'))
+    assert 'Central GitOps' in page.text and 'Corporate GitHub' in page.text
+    chooser=client.get('/settings/connectors?new=1',headers={'x-forwarded-user':'admin'})
+    assert 'Choose a connector type' in chooser.text
+    assert '/settings/clusters?new=1&amp;connector=1' in chooser.text
+    assert '/settings/connectors?new=1&amp;type=argocd' in chooser.text
+    assert '/settings/connectors?new=1&amp;type=github' in chooser.text
+    cluster_setup=client.get('/settings/clusters?new=1&connector=1',headers={'x-forwarded-user':'admin'})
+    assert 'data-redirect-template="/settings/connectors?new=1&amp;type=cluster&amp;cluster_id={cluster_id}"' in cluster_setup.text
 
 
 def test_rerun_keeps_history_and_rejects_duplicates(client):
@@ -388,8 +486,8 @@ def test_incident_log_specialist_keeps_raw_logs_out_of_coordinator_context(clien
 def test_connector_specialist_isolated_from_coordinator_context(client):
     sid=source(client)
     response=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
-        'kind':'argocd','name':'Platform GitOps','enabled':True,'cluster_id':SYSTEM_CLUSTER_ID,
-        'projects':['platform'],'target_cluster_ids':[SYSTEM_CLUSTER_ID]})
+        'kind':'argocd','name':'Platform GitOps','enabled':True,
+        'url':'https://argocd.example','token':'argocd-read-token','projects':['platform']})
     assert response.status_code==200
     iid=send(client,sid,notification()).json()['incident_id']
     service=client.app.state.incident_service
@@ -408,6 +506,7 @@ def test_connector_specialist_isolated_from_coordinator_context(client):
                     evidence_ids=[context['evidence'][0]['id']])
             return IncidentDecision(summary='No deployment correlation.',evidence_ids=['E4'])
     service.cluster_reader=lambda *args:Reader()
+    service.reader_factory=lambda *args,**kwargs:Reader()
     service.model_context=lambda engine:(ModelProfileConfig(provider_label='test',base_url='https://model.invalid',
         chat_model='test',embedding_model=None,timeout_seconds=30,max_output_tokens=2000),'model-secret')
     service.provider=Provider()
@@ -460,6 +559,56 @@ def test_log_specialists_fan_out_in_parallel(client):
         assert sum(e['source']=='Pod log specialist' for e in evidence)==3
 
 
+def test_previous_and_loki_logs_are_isolated_to_specialists(client):
+    sid=source(client); iid=send(client,sid,notification()).json()['incident_id']
+    service=client.app.state.incident_service
+    coordinator_contexts=[]
+    class Reader:
+        exposed=False
+        def collect(self,key):
+            if key=='operators': return {'rows':[]}
+            if key=='pods:openshift-etcd':
+                self.exposed=True
+                return {'rows':[{'name':'etcd-0'}]}
+            if key.startswith('logs-previous:'):
+                return {'namespace':'openshift-etcd','pod':'etcd-0','container':'etcd',
+                    'mechanism':'kubernetes-pod-log','logs':'private previous crash log'}
+            if key.startswith('loki-logs:'):
+                return {'namespace':'openshift-etcd','pod':'etcd-0','container':'etcd',
+                    'mechanism':'loki-infrastructure-query','logs':'private historical log'}
+            return {'rows':[]}
+        def catalog(self):
+            result={'operators':'Operators','pods:openshift-etcd':'Etcd Pods'}
+            if self.exposed:
+                result.update({'logs-previous:a':'Previous logs','loki-logs:a':'Loki history'})
+            return result
+        def close(self): pass
+    class Provider:
+        calls=0
+        def incident_step(self,_profile,_key,context):
+            coordinator_contexts.append(context)
+            self.calls+=1
+            if self.calls==1: return IncidentDecision(collect=['pods:openshift-etcd'])
+            if self.calls==2: return IncidentDecision(collect=['logs-previous:a','loki-logs:a'])
+            return IncidentDecision(summary='Specialists reviewed crash history.',evidence_ids=['E6','E7'])
+        def analyze_logs(self,_profile,_key,context):
+            assert len(context['logs'])==1
+            return AdHocLogAnalysis(overview='Crash evidence reviewed.',issues=[],limitations=[])
+    service.cluster_reader=lambda *args:Reader()
+    service.model_context=lambda engine:(ModelProfileConfig(provider_label='test',base_url='https://model.invalid',
+        chat_model='test',embedding_model=None,timeout_seconds=30,max_output_tokens=2000),'model-secret')
+    service.provider=Provider()
+    with Session(client.app.state.engine) as db:
+        rid=db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id==iid))
+    service.investigate(client.app.state.engine,rid)
+    assert all('private previous crash log' not in json.dumps(item) for item in coordinator_contexts)
+    assert all('private historical log' not in json.dumps(item) for item in coordinator_contexts)
+    with Session(client.app.state.engine) as db:
+        run=db.get(IncidentRun,rid)
+        assert run.status=='completed'
+        assert sum(item['source']=='Pod log specialist' for item in json.loads(run.evidence_json))==2
+
+
 def test_reader_denies_arbitrary_paths_and_projects():
     calls=[]
     def respond(request):
@@ -468,9 +617,10 @@ def test_reader_denies_arbitrary_paths_and_projects():
     reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
     with pytest.raises(ValueError): reader.collect('pods:customer')
     assert calls==[]
-    result=reader.argocd('openshift-gitops',['platform'],{'https://target'},[],datetime.now(timezone.utc))
+    result=reader.argocd(['platform'],{'https://target'},[],datetime.now(timezone.utc))
     assert result['changes']==[]
     assert all(r.method=='GET' for r in calls)
+    assert calls[0].url.path=='/api/v1/applications'
     reader.close()
 
 
@@ -530,23 +680,128 @@ def test_logs_only_become_available_for_observed_platform_containers():
     assert not any(k.startswith('logs:') for k in reader.catalog())
     evidence=reader.collect('pods:openshift-etcd')
     assert 'never-send' not in json.dumps(evidence)
+    assert not any(k.startswith('logs-previous:') for k in reader.catalog())
     key=next(k for k in reader.catalog() if k.startswith('logs:'))
     assert 'test logs' in reader.collect(key)['logs']
-    assert requests[-1].url.params['limitBytes']=='16384'
+    assert requests[-1].url.params['tailLines']=='1000'
+    assert requests[-1].url.params['limitBytes']=='98304'
+    assert requests[-1].url.params['sinceSeconds']=='7200'
     reader.close()
+
+
+def test_restarted_container_exposes_previous_logs_and_scoped_loki_history():
+    requests=[]
+    def respond(request):
+        requests.append(request)
+        if request.url.path.endswith('/log'):
+            return httpx.Response(200,text='previous crash output')
+        return httpx.Response(200,json={'items':[{'metadata':{'name':'etcd-0'},
+            'spec':{'containers':[{'name':'etcd','image':'example/etcd'}]},
+            'status':{'phase':'Running','containerStatuses':[{'name':'etcd','restartCount':2,
+                'lastState':{'terminated':{'exitCode':1,'reason':'Error'}}}]}}]})
+    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader.loki=SimpleNamespace()
+    pods=reader.collect('pods:openshift-etcd')
+    assert pods['rows'][0]['containers'][0]['lastState']['terminated']['exitCode']==1
+    previous=next(key for key in reader.catalog() if key.startswith('logs-previous:'))
+    assert any(key.startswith('loki-logs:') for key in reader.catalog())
+    result=reader.collect(previous)
+    assert result['previous'] is True
+    assert result['logs']=='previous crash output'
+    assert requests[-1].url.params['previous']=='true'
+    assert 'sinceSeconds' not in requests[-1].url.params
+    reader.close()
+
+
+def test_missing_previous_logs_fall_back_to_exact_loki_container_history():
+    class Loki:
+        calls=[]
+        def query_container_logs(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(entries=(
+                SimpleNamespace(timestamp_ns='2',line='newer failure'),
+                SimpleNamespace(timestamp_ns='1',line='older context'),
+            ), is_complete=True)
+    def respond(request):
+        if request.url.path.endswith('/log'):
+            return httpx.Response(400,text='previous terminated container not found')
+        return httpx.Response(200,json={'items':[{'metadata':{'name':'api-0'},
+            'spec':{'containers':[{'name':'api'}]},
+            'status':{'containerStatuses':[{'name':'api','restartCount':1}]}}]})
+    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    reader.loki=Loki()
+    reader.set_log_window(datetime.now(timezone.utc)-timedelta(hours=1))
+    reader.collect('pods:openshift-etcd')
+    previous=next(key for key in reader.catalog() if key.startswith('logs-previous:'))
+    result=reader.collect(previous)
+    assert result['mechanism']=='loki-infrastructure-query'
+    assert result['logs'].splitlines()==['1 older context','2 newer failure']
+    assert result['kubernetes_previous_error']=='Previous container logs unavailable (HTTP 400).'
+    assert Loki.calls[0]['namespace']=='openshift-etcd'
+    assert Loki.calls[0]['pod']=='api-0'
+    assert Loki.calls[0]['container']=='api'
+    reader.close()
+
+
+def test_event_projection_keeps_ranked_rows_instead_of_discarding_collection():
+    now=datetime.now(timezone.utc).isoformat()
+    items=[]
+    for index in range(60):
+        items.append({'metadata':{'name':f'event-{index}','creationTimestamp':now},
+            'reason':'FailedMount' if index==59 else 'GenericWarning',
+            'message':('important failure ' if index==59 else 'routine warning ')*180,
+            'type':'Warning','lastTimestamp':now,'involvedObject':{'kind':'Pod','name':f'pod-{index}'}})
+    reader=IncidentReader('https://host','credential',event_projection_bytes=8192,
+        transport=httpx.MockTransport(lambda _request:httpx.Response(200,json={'items':items})))
+    result=reader.collect('events:openshift-monitoring')
+    assert 0 < len(result['rows']) < len(items)
+    assert any(row['reason']=='FailedMount' for row in result['rows'])
+    assert result['partial'] is True
+    assert 'ranked and truncated' in result['limitations'][-1]
+    reader.close()
+
+
+def test_generic_evidence_projection_retains_rows_progressively():
+    item={'id':'E1','source':'events:test','data':{'rows':[
+        {'name':f'event-{index}','message':'x'*1000} for index in range(20)
+    ]}}
+    projected, limitation=_project_evidence_item(item, 5000)
+    assert 0 < len(projected['data']['rows']) < 20
+    assert projected['data']['partial'] is True
+    assert 'retained' in limitation
+
+
+def test_system_projection_limit_suppresses_model_paraphrase():
+    system=['events:openshift-monitoring: evidence projection retained 8 of 60 rows.']
+    model=[
+        'The `events:openshift-monitoring` collector exceeded its projection limit, so event coverage is incomplete.',
+        'The exact alert-generation path remains unknown.',
+    ]
+    filtered=_dedupe_limitations(model, exclude_keys={_limitation_key(item) for item in system})
+    assert filtered==['The exact alert-generation path remains unknown.']
 
 
 def test_argocd_correlates_only_exact_target_project_and_window():
     def application(project, server, stamp):
-        return {'metadata':{'name':'platform'}, 'spec':{'project':project,'destination':{'server':server}},
-            'status':{'history':[{'deployedAt':stamp,'source':{'repoURL':'https://git.example/platform/config'},'revision':'a'*40}]}}
+        return {'metadata':{'name':'platform'}, 'spec':{'project':project,'destination':{'server':server},
+            'source':{'repoURL':'https://git.example/platform/config','path':'clusters/dev-east'}},
+            'status':{'sync':{'status':'Synced','revision':'a'*40},
+                'resources':[{'group':'apps','kind':'Deployment','namespace':'platform','name':'operator'}],
+                'history':[{'deployedAt':stamp,'source':{'repoURL':'https://git.example/platform/config',
+                    'path':'clusters/dev-east'},'revision':'a'*40}]}}
     apps=[application('platform','https://target','2026-09-05T12:00:00Z'),
           application('userland','https://target','2026-09-05T12:00:00Z'),
           application('platform','https://other','2026-09-05T12:00:00Z'),
           application('platform','https://target','2026-01-01T12:00:00Z')]
     reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(lambda r:httpx.Response(200,json={'items':apps})))
-    result=reader.argocd('openshift-gitops',['platform'],{'https://target'},[],datetime(2026,9,5,tzinfo=timezone.utc))
+    result=reader.argocd(['platform'],{'https://target'},[],datetime(2026,9,5,tzinfo=timezone.utc))
     assert len(result['changes'])==1
+    assert len(result['applications'])==2
+    assert result['changes'][0]['path']=='clusters/dev-east'
+    assert result['applications'][0]['managed_resources'][0]['name']=='operator'
+    assert result['applications'][0]['sources'][0]['deployed_revision']=='a'*40
+    inventory=reader.argocd(['platform'],set(),set(),datetime(2010,1,1,tzinfo=timezone.utc))
+    assert len(inventory['applications'])==3
     reader.close()
 
 
@@ -582,26 +837,99 @@ def test_migration_upgrade_and_downgrade(tmp_path, monkeypatch):
         config=Config('apps/api/alembic.ini')
         command.upgrade(config,'head')
         engine=create_engine(f'sqlite:///{tmp_path / "migration.db"}')
-        assert {'fleet_incidents','incident_connections','incident_runs'} <= set(inspect(engine).get_table_names())
+        assert {'fleet_incidents','incident_connections','incident_runs','connector_discoveries'} <= set(inspect(engine).get_table_names())
         engine.dispose()
         command.downgrade(config,'0022_live_run_operations')
         engine=create_engine(f'sqlite:///{tmp_path / "migration.db"}')
-        assert 'fleet_incidents' not in inspect(engine).get_table_names()
+        assert not {'fleet_incidents','connector_discoveries'} & set(inspect(engine).get_table_names())
         engine.dispose()
         command.upgrade(config,'head')
     finally:
         get_settings.cache_clear()
 
 
-def test_argocd_inherits_host_incident_credential(client):
+def test_argocd_owns_an_independent_endpoint_and_credential(client):
     source(client)
     response=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
-        'kind':'argocd','name':'DEV GitOps','enabled':True,'cluster_id':SYSTEM_CLUSTER_ID,
-        'projects':['platform'],'target_cluster_ids':[SYSTEM_CLUSTER_ID]})
+        'kind':'argocd','name':'DEV GitOps','enabled':True,'url':'https://argocd.example',
+        'token':'independent-argocd-token','projects':['platform']})
     assert response.status_code==200,response.text
     with Session(client.app.state.engine) as db:
         row=db.get(IncidentConnection,response.json()['id'])
-        assert client.app.state.incident_service.token_for(row,db)=='private-cluster-token'
+        assert row.cluster_id is None
+        assert client.app.state.incident_service.token_for(row,db)=='independent-argocd-token'
+
+
+def test_argocd_kubernetes_access_reuses_selected_cluster_credential(client):
+    with Session(client.app.state.engine) as db:
+        cluster=db.get(Cluster,SYSTEM_CLUSTER_ID)
+        cluster.credential_key='registered-system-cluster'
+        db.commit()
+    client.app.state.incident_service.cluster_store.set('stored-cluster-reader','registered-system-cluster')
+    response=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'argocd','name':'Hosted GitOps','enabled':True,'access_mode':'kubernetes',
+        'cluster_id':SYSTEM_CLUSTER_ID,'namespace':'openshift-gitops','projects':['platform']})
+    assert response.status_code==200,response.text
+    with Session(client.app.state.engine) as db:
+        row=db.get(IncidentConnection,response.json()['id'])
+        config=json.loads(row.config_json)
+        assert config['access_mode']=='kubernetes' and config['url']==''
+        assert client.app.state.incident_service.token_for(row,db)=='stored-cluster-reader'
+        assert client.app.state.incident_service.credentials().get(row.credential_key) is None
+    page=client.get('/settings/connectors?edit='+response.json()['id'],headers={'x-forwarded-user':'admin'})
+    assert 'Kubernetes API' in page.text and 'System' in page.text
+    assert 'name="access_mode"' in page.text and 'name="cluster_id"' in page.text
+    assert 'stored read-only Kubernetes credential' in page.text
+
+
+def test_connector_discovery_builds_exact_application_topology(client):
+    source(client)
+    github=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'github','name':'Corporate GitHub','enabled':True,'url':'https://github.example',
+        'token':'github-token','repositories':['platform/config']})
+    argocd=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'argocd','name':'Central Argo','enabled':True,'url':'https://argocd.example',
+        'token':'argocd-token','projects':['platform']})
+    assert github.status_code==200 and argocd.status_code==200
+    service=client.app.state.incident_service
+    class Reader:
+        def __init__(self,origin): self.origin=origin
+        def get(self,path,*args):
+            assert path=='/api/v3/repos/platform/config'
+            return {'full_name':'platform/config','default_branch':'main','html_url':'https://github.example/platform/config'}
+        def argocd(self,*args,**kwargs):
+            return {'applications':[{'application':'payments-dev','project':'platform',
+                'destination':{'server':'https://kubernetes.default.svc','name':None,'namespace':'payments'},
+                'sources':[{'repository':'https://github.example/platform/config.git','path':'clusters/dev',
+                    'target_revision':'main','deployed_revision':'a'*40}],
+                'managed_resources':[],'health':'Healthy','sync':'Synced'}],
+                'changes':[],'partial':False,'limitations':[]}
+        def close(self): pass
+    service.reader_factory=lambda origin,*args,**kwargs:Reader(origin)
+    for connection_id in (github.json()['id'],argocd.json()['id']):
+        assert service.queue_discovery(client.app.state.engine,connection_id,'admin')['queued']
+        service.discover_connection(client.app.state.engine,connection_id)
+    page=client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
+    assert 'payments-dev' in page.text and 'clusters/dev' in page.text
+    assert 'Corporate GitHub' in page.text and 'Central Argo' in page.text
+    assert 'Confirmed' in page.text and 'Live discovery' not in page.text
+
+
+def test_enabled_connector_save_queues_discovery(client):
+    service=client.app.state.incident_service
+    service.settings.incident_connector_discovery_enabled=True
+    started=threading.Event()
+    discovered=[]
+    def discover(_engine,connection_id):
+        discovered.append(connection_id)
+        started.set()
+    service.discover_connection=discover
+    response=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'github','name':'Queued GitHub','enabled':True,'url':'https://github.example',
+        'token':'github-token','repositories':['platform/config']})
+    assert response.status_code==200,response.text
+    assert response.json()['discovery_status']=='queued'
+    assert started.wait(1) and discovered==[response.json()['id']]
 
 
 def test_worker_restart_marks_inflight_interrupted_without_rerun(client):
@@ -664,6 +992,8 @@ def test_webhook_settings_shows_receiver_and_delivery_without_secrets(client):
     assert page.status_code==200
     assert f'/api/v1/incident-webhooks/{sid}' in page.text
     assert '64000 tokens' in page.text
+    assert '1000 Kubernetes lines / 96 KiB over 2.0 hours' in page.text
+    assert 'Scoped Loki history: 2000 lines / 96 KiB over 6.0 hours' in page.text
     assert 'None yet' in page.text
     assert 'private-cluster-token' not in page.text and 'w'*40 not in page.text
     send(client,sid,notification())
@@ -700,8 +1030,8 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
         assert 'Incident 10' in page.text and 'Incident 06' in page.text
         assert 'Incident 05' not in page.text
         assert 'More incidents →' in page.text
-        assert 'aria-label="Connections and webhooks"' in page.text
-        assert 'Investigation access &amp; connectors' in page.text
+        assert 'aria-label="Connectors"' in page.text
+        assert 'Configured instances' in page.text
         assert 'Webhook receivers' in page.text
         assert 'Cluster registry' not in page.text
         assert 'class="nav-label section-gap admin-section-label">Manage</p>' in page.text
@@ -715,8 +1045,8 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
 
     investigator = client.get('/incidents', headers={'x-forwarded-user':'sre'})
     assert investigator.status_code == 200
-    assert 'Connections &amp; webhooks' not in investigator.text
-    assert 'aria-label="Connections and webhooks"' not in investigator.text
+    assert '>Connectors</a>' not in investigator.text
+    assert 'aria-label="Connectors"' not in investigator.text
 
 
 

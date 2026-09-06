@@ -43,7 +43,7 @@
         <div class="form-actions"><a class="button primary" href="/delegated/connect">Connect clusters</a></div>
       </div>
     {% else %}
-    <form class="settings-form admin-config-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/settings/clusters">
+    <form class="settings-form admin-config-form" id="cluster-settings-form" data-save-url="/api/v1/clusters" data-redirect-base="/settings/clusters"{% if connector_setup %} data-redirect-template="/settings/connectors?new=1&amp;type=cluster&amp;cluster_id={cluster_id}"{% endif %}>
       <input type="hidden" name="cluster_id" value="{{ selected.id if selected else '' }}">
       <div class="admin-form-step"><span class="cluster-signin-step-number">1</span><div><strong>Cluster identity</strong><small>Name this target and choose who can discover it.</small></div></div>
       <label>Name<input name="name" required maxlength="253" value="{{ selected.name if selected else '' }}" placeholder="prod-azure-east"></label>

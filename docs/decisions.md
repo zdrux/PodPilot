@@ -1343,3 +1343,43 @@ Repeated mutations are no longer suppressed by command hashing, so idempotence a
 the agent and cluster API's responsibility; every attempt is visible and consumes budget. Provider-failure
 fallbacks accurately disclose completed operations and warn that successful writes are not rolled back.
 This supersedes the command de-duplication safeguard named in the preceding budget decision.
+
+## 2026-09-05 - Incident connectors are independent endpoints with discovered relationships
+
+Context: One Argo CD instance may target many clusters, one GitHub installation may expose many
+repositories, and a monorepo may use different paths for different destinations. Configuring a
+static cluster→Argo→GitHub chain duplicates credentials and implies ownership that the topology
+does not actually guarantee.
+
+Decision: Configure OpenShift cluster, Argo CD, and GitHub instances independently. An Argo CD
+connector explicitly chooses either its HTTPS API with an Argo read-only token, or the Kubernetes
+API of a registered hosting cluster. Kubernetes API access reuses that cluster's stored read-only
+credential and stores no duplicate Argo credential; the hosting-cluster selection describes only
+how PodPilot reads Application custom resources, not which clusters Argo manages. During an
+incident, match the cluster to exact Argo Application destination evidence, retain managed
+resources plus repository path/revision, and select GitHub access only by exact origin and
+repository allowlist. Present the three types in one grouped directory with a type-first add flow.
+
+Consequences: Shared Argo CD and GitHub endpoints are configured once, while application state
+supplies the relationship for each investigation. Destination aliases remain cluster-owned only
+for named Argo destinations. A nearby deployment or ambiguous match is correlation evidence, not
+proof of ownership or causation. Revoking or rotating a hosting cluster credential also governs
+every Kubernetes API Argo connector that uses it.
+
+## 2026-09-05 - Connector topology is discovered from bounded Application evidence
+
+Context: Independent connectors avoid false ownership, but operators still need to see how
+Argo CD Applications currently join deployment destinations to GitHub repositories. A static
+three-way assignment becomes stale and cannot accurately represent shared Argo CD instances.
+
+Decision: Queue discovery after enabled connector saves and on explicit operator request. Retain
+the latest redacted snapshot per connector. Use Argo CD Applications as the only cross-domain
+bridge: exact destination URL/name matching identifies zero, one, or multiple registered clusters;
+exact repository host plus allowlist identity identifies zero, one, or multiple GitHub connectors.
+Do not enumerate GitHub outside its configured allowlist, mutate connector configuration, or treat
+a discovered edge as authorization. Stream discovery state to the topology view with SSE.
+
+Consequences: Operators get a current Application matrix with Confirmed, Incomplete, and Ambiguous
+states while connector credentials remain isolated. Discovery is process-local in this release;
+durable snapshots survive restarts, but queued work requires a future lease-backed worker before
+multiple replicas can execute it safely.

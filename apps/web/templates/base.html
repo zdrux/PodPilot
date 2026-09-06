@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=admin-config-34">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-discovery-37">
   <script src="{{ url_for('static', path='/app.js') }}?v=email-table-copy-20" defer></script>
 </head>
 <body class="saas-app {% block body_class %}{% endblock %}">
@@ -111,10 +111,13 @@
         <p class="nav-label section-gap admin-section-label">Manage</p>
         {% if incidents_enabled %}
         <div class="nav-tree expanded">
-          <a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connections &amp; webhooks</a>
-          <div class="nav-subtree" aria-label="Connections and webhooks">
+          <div class="nav-connector-heading">
+            <a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connectors</a>
+            <a class="nav-connector-add" href="/settings/connectors?new=1" aria-label="Add connector">+</a>
+          </div>
+          <div class="nav-subtree" aria-label="Connectors">
             <ul class="nav-session-list nav-settings-list">
-              <li class="{% if request.url.path == '/settings/connectors' %}active{% endif %}"><a class="nav-session-link" href="/settings/connectors"><strong>Investigation access &amp; connectors</strong></a></li>
+              <li class="{% if request.url.path == '/settings/connectors' %}active{% endif %}"><a class="nav-session-link" href="/settings/connectors"><strong>Configured instances</strong></a></li>
               <li class="{% if request.url.path == '/settings/webhooks' %}active{% endif %}"><a class="nav-session-link" href="/settings/webhooks"><strong>Webhook receivers</strong></a></li>
             </ul>
           </div>

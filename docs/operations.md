@@ -258,6 +258,14 @@ The current deployment uses these variables:
 - `PODPILOT_LOKI_TIMEOUT_SECONDS`, default `90`, with a hard accepted range of
   `1` through `120`
 - `PODPILOT_LOKI_MAX_SERIES`, default `50`, with a hard accepted range of `1` through `100`
+- `PODPILOT_INCIDENT_LOG_TAIL_LINES`, default `1000`, for exact observed platform containers
+- `PODPILOT_INCIDENT_CONNECTOR_DISCOVERY_ENABLED`, default `true`; queues bounded discovery after
+  an enabled connector save. Explicit **Test & discover** requests remain available when automatic
+  discovery is disabled.
+- `PODPILOT_INCIDENT_LOG_MAX_BYTES`, default `98304` (96 KiB) per Kubernetes or normalized Loki log artifact
+- `PODPILOT_INCIDENT_LOG_RANGE_SECONDS`, default `7200` (two hours) for current Kubernetes logs
+- `PODPILOT_INCIDENT_LOKI_LOG_LIMIT`, default `2000` lines for exact-container infrastructure history
+- `PODPILOT_INCIDENT_LOKI_RANGE_SECONDS`, default `21600` (six hours), anchored thirty minutes before incident onset
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_ADHOC_AUDIT_INITIAL_RANGE_SECONDS`, default `3600` (one hour), is the
   first bounded window for a “last N” audit request without an explicit period; PodPilot

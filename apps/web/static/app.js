@@ -406,8 +406,13 @@
           tone: "success",
           message: payload.detail || clusterSettingsForm.dataset.successMessage || "Cluster connection saved. Test it before using it for Ask PodPilot.",
         }));
-        const redirectBase = clusterSettingsForm.dataset.redirectBase || "/settings/clusters";
-        window.location.assign(`${redirectBase}?edit=${encodeURIComponent(payload.cluster_id)}`);
+        const redirectTemplate = clusterSettingsForm.dataset.redirectTemplate;
+        if (redirectTemplate) {
+          window.location.assign(redirectTemplate.replace("{cluster_id}", encodeURIComponent(payload.cluster_id)));
+        } else {
+          const redirectBase = clusterSettingsForm.dataset.redirectBase || "/settings/clusters";
+          window.location.assign(`${redirectBase}?edit=${encodeURIComponent(payload.cluster_id)}`);
+        }
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         if (submit) { submit.disabled = false; submit.textContent = priorSubmitText; }

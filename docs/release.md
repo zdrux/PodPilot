@@ -24,10 +24,15 @@ the same result shape across repeated runs.
 
 The optional incident-response component additionally requires webhook authentication,
 repeat/out-of-order notification and recurrence tests, platform-scope denial tests,
-Secret isolation, connector target/repository filtering, migration round-trip,
+Secret isolation, independent connector endpoint validation, exact Argo destination
+matching, GitHub origin/repository filtering, monorepo path preservation, migration round-trip,
 worker restart recovery and delegated Ask handoff checks. The seed SNO composition
 must pass server-side dry-run. Confirm corporate Argo CD/GitHub connectivity and a
 real model-backed run before enabling Alertmanager ingress in an environment.
+Incident log gates must verify expanded current-log bounds, restart-gated Kubernetes
+previous logs, exact-coordinate infrastructure-tenant Loki queries, bounded fallback
+failure, and specialist isolation from the coordinator. Event projection gates must
+retain ranked rows under pressure rather than replacing the entire collector result.
 
 - Single API/web container with Alembic migrations and an OpenShift Deployment.
 - OAuth proxy sidecar, OpenShift Service/Route, and NetworkPolicy.

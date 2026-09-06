@@ -71,7 +71,7 @@
     <div><p class="eyebrow">Fleet operations</p><h1>Incidents</h1><p class="subtitle">Monitor critical OpenShift alerts and investigation progress across your fleet.</p></div>
     <a class="button incident-refresh-button" href="/incidents">Refresh data</a>
   </header>
-  <section class="incident-dashboard-content" data-incident-dashboard data-active-incidents="{{ active_incidents | length }}">
+  <section class="incident-dashboard-content" data-incident-dashboard data-active-incidents="{{ active_incidents | length }}" data-events-url="/api/v1/incidents/events{% if request.query_params.get('cluster') %}?cluster={{ request.query_params.get('cluster') | urlencode }}{% endif %}">
     <dl class="incident-dashboard-stats" aria-label="Fleet incident overview">
       <div><dt>Active investigations</dt><dd>{{ dashboard_stats.active }}</dd><small>Queued or running</small></div>
       <div><dt>Specialists working</dt><dd>{{ dashboard_stats.specialists }}</dd><small>Active right now</small></div>
@@ -85,7 +85,7 @@
     </form>
   {% if active_incidents %}
   <section class="incident-board incident-board-live">
-    <header class="incident-board-heading"><div><p class="eyebrow"><span class="incident-live-pulse"></span> Live response</p><h2>Active investigations</h2><p>Coordinator and specialist activity refreshes automatically.</p></div><span class="incident-live-label">Live · 4 sec</span></header>
+    <header class="incident-board-heading"><div><p class="eyebrow"><span class="incident-live-pulse"></span> Live response</p><h2>Active investigations</h2><p>Coordinator and specialist activity updates as it happens.</p></div><span class="incident-live-label" data-live-status role="status">Connecting…</span></header>
     {{ incident_table(active_incidents, true) }}
   </section>
   {% endif %}
@@ -98,5 +98,5 @@
     <p class="incident-dashboard-note">Showing up to 100 recently updated incidents. Alert resolution does not confirm a root cause.</p>
   </section>
 </div>
-<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-board-4" defer></script>
+<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-live-stream-1" defer></script>
 {% endblock %}

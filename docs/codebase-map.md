@@ -50,6 +50,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `apps/api/migrations/`: Alembic schema history.
 - `apps/api/src/podpilot_api/model_provider.py`: structured interpretation and
   investigation-chat provider contracts.
+- `apps/api/src/podpilot_api/incidents.py`: independent incident connector configuration,
+  exact Argo destination/GitHub repository correlation, durable runs, and live status routes.
 - `apps/web/`: local templates, styles, and JavaScript with no CDN dependency.
 - `packages/openshift-client/src/podpilot_openshift/roles.py`: cached,
   deployment-configured OpenShift group-to-application-role resolution.
@@ -68,7 +70,8 @@ Each workspace has a local `AGENTS.md` describing its intended boundary.
 - `packages/openshift-client/src/podpilot_openshift/metric_trends.py`: registered
   metric templates, bounded range execution, normalized points, statistics, and trends.
 - `packages/openshift-client/src/podpilot_openshift/log_metrics.py`: authenticated,
-  aggregate-only LokiStack namespace-volume query and bounded evidence normalization.
+  aggregate LokiStack namespace-volume queries plus exact-container, server-authored
+  incident history queries and bounded evidence normalization.
 - `packages/openshift-client/src/podpilot_openshift/discovery.py`: cached,
   policy-filtered live API catalog and safe resource-name resolution.
 - `packages/openshift-client/src/podpilot_openshift/explorer.py`: bounded dynamic

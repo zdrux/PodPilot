@@ -15,7 +15,7 @@ metadata enrichment and a bounded platform-only agent. See
 [incident-response.md](incident-response.md) for configuration and current limits.
 The SNO agentic deployment script applies the combined incident overlay so routine image
 or model-profile deployments cannot silently remove the incident panel and worker.
-Validation: 805 model-free tests pass (78% aggregate coverage), migration upgrade/
+Validation: 821 model-free tests pass, migration upgrade/
 downgrade/re-upgrade passes, the SNO incident composition passes server-side dry-run,
 and live read-only platform collector probes succeed. Local synthetic incident and
 connector pages were checked in the browser. SNO Alertmanager 0.31.1 now delivers
@@ -37,8 +37,10 @@ partial result due to invalid final citations. SNO has no Argo CD Application CR
 corporate GitHub connector, so those specialists remain model-free tested. The shared
 sidebar now retains active Ask sessions on the incident configuration pages, lists the
 five most recently updated incidents below Clusters with a link to the full fleet view, and nests the
-connector and webhook pages under **Connections & webhooks**. Cluster Management remains
-its own administration entry rather than a duplicate configuration tab. The divided
+grouped connector and webhook pages under **Connectors**, with a dedicated add control and
+type-first chooser. Registered clusters, GitHub instances, and Argo CD instances appear as
+independent groups; new cluster registration returns directly to incident setup. Cluster
+Management remains the supporting API identity/trust registry. The divided
 Manage section and all connector/webhook navigation remain configuration-admin-only.
 Incident details now use a flat Overview/Investigation tab layout. Duplicate source
 signals are grouped with occurrence counts, verbose annotations and evidence payloads
@@ -49,9 +51,21 @@ ClusterOperatorDown page retains only its intentional source-alert table.
 The fleet dashboard now pins queued and running investigations above fleet history,
 shows at-a-glance fleet and specialist counts, and expands each case in place. The
 expanded workstream exposes coordinator and specialist states, timestamps, current
-work, recent activity, and bounded collected results. It refreshes active work every
-four seconds, discovers new work from an idle page every twelve seconds, and preserves
-open rows during refresh. A live SNO validation displayed five completed Pod-log
+work, recent activity, and bounded collected results. The current working tree replaces
+manual/detail refreshes and dashboard polling with authenticated server-sent events over
+durable orchestrator state. Fleet fragments update only when state changes; detail pages
+preserve the selected run and open evidence, and a rerun selects its new tab automatically.
+EventSource reconnect and a twelve-second polling fallback retain resilience. This live-update
+change is model-free tested locally but is not yet deployed to SNO. The same working tree now
+retains ranked rows from oversized Event collections, separates system collection limits from
+distinct model uncertainty, expands incident Kubernetes logs to 1,000 lines / 96 KiB over two
+hours, exposes `previous=true` only after an observed restart, and adds an exact-container Loki
+infrastructure fallback/deeper-history collector (2,000 lines / 96 KiB over six hours). Raw logs
+remain isolated to one specialist and the Loki query coordinates come only from the bounded
+platform Pod snapshot. A read-only SNO check on 2026-09-05 found no LokiStack CRD, logging
+Route, or workloads/services in `openshift-logging`; Kubernetes previous logs can work there,
+but the deeper-history fallback will report unavailable until cluster logging is installed.
+These evidence/log changes are also not yet deployed. A prior live SNO validation displayed five completed Pod-log
 specialists and retained nineteen evidence items; restarting the worker correctly
 recorded the still-running coordinator as stopped and the investigation as interrupted.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
@@ -61,12 +75,19 @@ The Incidents-selected SaaS visual system now applies through the shared applica
 so navigation width, Inter typography, page gutters, headings, buttons, metrics, forms, and
 bordered panels remain stable when moving among Ask, Clusters, Incidents, and management pages.
 The responsive shell keeps the full workspace navigation visible through the tablet breakpoint.
-The Connections editor now follows the cluster sign-in screen's structured form language: a compact
-connection directory, numbered configuration sections, framed controls with consistent helper text,
-scoped choice panels, and a dedicated save/test footer. Existing connector field names, dynamic
-integration visibility, server-side credential handling, and API endpoints are unchanged. The local
-connector route passed visual comparison against the cluster sign-in reference and the API application
-test suite passed.
+The Connectors editor now follows the cluster sign-in screen's structured form language: a compact
+grouped directory, type chooser, type-specific configuration sections, framed controls with consistent
+helper text, scoped choice panels, and a dedicated save/test footer. Argo CD connectors choose a
+direct HTTPS API origin/token or Kubernetes API access through a selected registered hosting cluster;
+the latter reuses the cluster credential without storing a duplicate token. Neither mode configures a
+target-cluster or GitHub dependency. Investigation-time matching
+uses exact Application destinations, managed-resource coordinates, repository origins, monorepo paths,
+and deployed revisions. Server-side
+credential isolation and API authorization are unchanged.
+Enabled connector saves now queue bounded discovery and retain the latest redacted result per
+connector. The Connectors page streams queued/running/completed/partial/error state and projects
+Argo CD Applications into an exact destination-cluster and allowlisted GitHub-repository matrix.
+Incomplete and ambiguous matches remain visible evidence and never expand connector access.
 Model settings, Cluster memory, and Cluster Management now use the same administration workspace:
 compact record directories, staged configuration headings, consistent inset controls and option groups,
 sticky observation panels where relevant, and grounded action footers. Their existing authorization,

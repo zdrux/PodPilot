@@ -268,6 +268,44 @@ def test_loki_client_normalizes_pod_and_node_dimensions(tmp_path: Path) -> None:
     ),)
 
 
+def test_loki_client_reads_only_exact_bounded_container_history(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/logs/v1/infrastructure/loki/api/v1/query_range"
+        assert request.url.params["query"] == (
+            '{kubernetes_namespace_name="openshift-etcd",'
+            'kubernetes_pod_name="etcd-0",kubernetes_container_name="etcd"}'
+        )
+        assert request.url.params["limit"] == "2"
+        assert request.url.params["direction"] == "backward"
+        return httpx.Response(200, json={
+            "status": "success",
+            "data": {"resultType": "streams", "result": [{"stream": {}, "values": [
+                ["1", "older"], ["2", "newer"],
+            ]}]},
+        })
+
+    snapshot = _client(tmp_path, handler, tenant="infrastructure").query_container_logs(
+        namespace="openshift-etcd", pod="etcd-0", container="etcd",
+        start=NOW, end=NOW.replace(hour=13), limit=2,
+    )
+
+    assert [entry.line for entry in snapshot.entries] == ["newer", "older"]
+    assert snapshot.is_complete is False
+
+
+def test_loki_container_history_rejects_untrusted_coordinates_before_request(tmp_path: Path) -> None:
+    calls = []
+    client = _client(tmp_path, lambda request: calls.append(request), tenant="infrastructure")
+
+    with pytest.raises(LogMetricsQueryError, match="exact Kubernetes resource names"):
+        client.query_container_logs(
+            namespace='openshift-etcd"} |= "secret"', pod="etcd-0", container="etcd",
+            start=NOW, end=NOW.replace(hour=13), limit=100,
+        )
+
+    assert calls == []
+
+
 def test_remote_client_discovers_standard_lokistack_route() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "api.remote.example":
@@ -324,6 +362,21 @@ def test_loki_denial_has_actionable_role_guidance(tmp_path: Path) -> None:
         match=r"application-log analytics access \(HTTP 403\).*cluster-logging-application-view",
     ):
         client.query_namespace_volume("fixed")
+
+
+def test_infrastructure_loki_denial_names_required_role(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path, lambda _request: httpx.Response(403), tenant="infrastructure",
+    )
+
+    with pytest.raises(
+        LogMetricsQueryError,
+        match=r"infrastructure-log access \(HTTP 403\).*cluster-logging-infrastructure-view",
+    ):
+        client.query_container_logs(
+            namespace="openshift-etcd", pod="etcd-0", container="etcd",
+            start=NOW, end=NOW.replace(hour=13), limit=100,
+        )
 
 
 def test_remote_loki_route_denial_preserves_http_403() -> None:

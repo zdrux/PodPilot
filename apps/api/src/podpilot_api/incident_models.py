@@ -22,6 +22,20 @@ class IncidentConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class ConnectorDiscovery(Base):
+    __tablename__ = "connector_discoveries"
+    connector_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("incident_connections.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    requested_by: Mapped[str] = mapped_column(String(253))
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
 class FleetIncident(Base):
     __tablename__ = "fleet_incidents"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

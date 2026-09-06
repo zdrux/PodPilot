@@ -11,8 +11,10 @@ single-process constraints, evidence boundary and configuration.
 Each incident run persists a separate bounded operator-facing activity journal. The
 worker updates coordinator phase, collector completion, and specialist queue/start/end
 transitions independently of the final briefing. The fleet dashboard derives live and
-historical tables from run state and refreshes only its incident-board fragment while
-work remains active. This telemetry contains concise server-authored workflow metadata
+historical tables from run state. Authenticated server-sent event streams watch the durable
+orchestrator state and prompt each fleet or incident-detail page to refresh only its live
+fragment when that state changes; browser reconnection and a bounded polling fallback keep
+the last rendered data usable through transient connection failures. This telemetry contains concise server-authored workflow metadata
 and redacted result summaries; it does not expose chain-of-thought or duplicate raw
 evidence payloads.
 
@@ -24,6 +26,28 @@ entire cross-domain reasoning context. Up to three Pod-log specialists selected 
 coordinator round run concurrently, and three process-local incident workers can
 investigate separate incidents concurrently. A durable lease-backed queue is still
 required before multiple PodPilot replicas can share this work safely.
+
+Cluster, Argo CD, and GitHub connectors are independent configuration objects with
+their own endpoint, access method, enablement, and collection scope. Direct Argo CD
+API access owns its token and TLS configuration; Kubernetes API access selects a
+registered hosting cluster and reuses that cluster's stored credential and TLS policy.
+That transport selection does not establish a managed-cluster relationship. No static
+cluster→Argo→GitHub chain grants access. At run time the correlation resolver matches
+an incident cluster to exact Argo Application destination server/name evidence, then
+matches each observed repository origin and allowlisted repository to a GitHub
+connector. Argo managed-resource coordinates, monorepo paths, and exact deployed
+revisions preserve the discovered relationship in evidence. Ambiguous or absent
+matches remain limitations rather than inferred ownership.
+
+Enabled connector saves enqueue a bounded, process-local discovery run. The latest
+snapshot and its queued/running/completed/partial/error state are durable in
+`connector_discoveries`; an authenticated server-sent event stream refreshes only the
+Connectors topology surface as state changes. Cluster discovery verifies core read
+capabilities, GitHub discovery reads only configured allowlist entries, and Argo CD
+discovery inventories at most the client's bounded Application projection. The topology
+resolver uses each Application as the bridge from its exact destination to a registered
+cluster and from its normalized repository origin to one enabled GitHub connector.
+Discovery never changes configuration or expands an allowlist.
 
 Last reviewed: 2026-08-30
 Update when: ownership boundaries, data flow, integrations, or trust boundaries change.
@@ -444,7 +468,10 @@ namespace, Pod, and Node label selectors/groupings. The broker supports cluster 
 namespace or Node, cluster-wide Pod rankings identified by namespace and Pod, Pod rankings within
 one exact namespace, and totals for one exact namespace, Pod, or Node. It accepts only vector
 results and persists normalized dimensions, payload bytes, average byte rate, time bounds, and
-completeness. Neither the browser nor the model can submit LogQL or receive matching log lines.
+completeness. Neither the browser nor the model can submit LogQL or receive matching log lines
+through the metrics path. The incident worker has a separate server-authored infrastructure-tenant
+query for the exact namespace/Pod/container coordinates obtained from its platform Pod snapshot;
+only its bounded result is sent alone to a log specialist and retained as incident evidence.
 Normal code parses common explicit relative periods before deterministic execution, while the
 semantic classifier carries `metric_range_seconds` for other wording. Requested values remain
 subject to the typed five-minute minimum and deployment maximum; absent metric periods use five

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import ssl
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -60,12 +61,25 @@ class LogVolumeSnapshot:
     is_complete: bool
 
 
+@dataclass(frozen=True)
+class ContainerLogEntry:
+    timestamp_ns: str
+    line: str
+
+
+@dataclass(frozen=True)
+class ContainerLogSnapshot:
+    entries: tuple[ContainerLogEntry, ...]
+    collected_at: datetime
+    is_complete: bool
+
+
 class LogVolumeQuerySource(Protocol):
     def query_log_volume(self, logql: str) -> LogVolumeSnapshot: ...
 
 
 class LokiQueryClient:
-    """Run bounded aggregate-only queries through an OpenShift LokiStack gateway."""
+    """Run bounded server-authored queries through an OpenShift LokiStack gateway."""
 
     def __init__(
         self,
@@ -100,8 +114,8 @@ class LokiQueryClient:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._max_series = max_series
         self._max_response_bytes = max_response_bytes
-        if tenant not in {"application", "audit"}:
-            raise ValueError("The Loki tenant must be application or audit.")
+        if tenant not in {"application", "infrastructure", "audit"}:
+            raise ValueError("The Loki tenant must be application, infrastructure, or audit.")
         self._tenant = tenant
         tenant_marker = "/api/logs/v1/"
         if tenant_marker in normalized_base_url:
@@ -195,6 +209,66 @@ class LokiQueryClient:
 
         return self.query_log_volume(logql)
 
+    def query_container_logs(
+        self,
+        *,
+        namespace: str,
+        pod: str,
+        container: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> ContainerLogSnapshot:
+        """Read exact-container logs without accepting arbitrary LogQL."""
+
+        if self._tenant not in {"application", "infrastructure"}:
+            raise LogMetricsQueryError("Container log queries require a Loki log tenant.")
+        name_pattern = re.compile(r"[a-z0-9][a-z0-9.-]{0,252}")
+        if not all(name_pattern.fullmatch(value or "") for value in (namespace, pod, container)):
+            raise LogMetricsQueryError("Loki container logs require exact Kubernetes resource names.")
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise LogMetricsQueryError("Loki container logs require a valid timezone-aware range.")
+        if (end - start).total_seconds() > 86_400:
+            raise LogMetricsQueryError("Loki container log range exceeds the 24-hour safety limit.")
+        if not 1 <= limit <= 5_000:
+            raise LogMetricsQueryError("Loki container log limit must be between 1 and 5000 lines.")
+        selectors = ",".join((
+            f"kubernetes_namespace_name={json.dumps(namespace)}",
+            f"kubernetes_pod_name={json.dumps(pod)}",
+            f"kubernetes_container_name={json.dumps(container)}",
+        ))
+        payload = self._request("/loki/api/v1/query_range", {
+            "query": "{" + selectors + "}",
+            "start": str(int(start.timestamp() * 1_000_000_000)),
+            "end": str(int(end.timestamp() * 1_000_000_000)),
+            "limit": str(limit),
+            "direction": "backward",
+        })
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            raise LogMetricsQueryError("Loki returned an unsuccessful container log result.")
+        data = payload.get("data")
+        if not isinstance(data, dict) or data.get("resultType") != "streams":
+            raise LogMetricsQueryError("Loki returned an unexpected container log result type.")
+        result = data.get("result")
+        if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+            raise LogMetricsQueryError("Loki returned an unexpected container log response shape.")
+        entries = []
+        for stream in result[:self._max_series]:
+            values = stream.get("values")
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                if (isinstance(value, list) and len(value) == 2
+                        and isinstance(value[0], str) and isinstance(value[1], str)):
+                    entries.append(ContainerLogEntry(timestamp_ns=value[0], line=value[1]))
+        entries.sort(key=lambda item: item.timestamp_ns, reverse=True)
+        complete = len(result) <= self._max_series and len(entries) < limit
+        return ContainerLogSnapshot(
+            entries=tuple(entries[:limit]),
+            collected_at=datetime.now(timezone.utc),
+            is_complete=complete,
+        )
+
     def query_audit_entries(
         self,
         logql: str,
@@ -287,13 +361,16 @@ class LokiQueryClient:
             if exc.response.status_code == 401:
                 message = "The logging API rejected the configured bearer token."
             elif exc.response.status_code == 403:
-                tenant_label = (
-                    "audit-log" if self._tenant == "audit" else "application-log analytics"
-                )
-                role = (
-                    "cluster-logging-audit-view"
-                    if self._tenant == "audit" else "cluster-logging-application-view"
-                )
+                tenant_label = {
+                    "audit": "audit-log",
+                    "infrastructure": "infrastructure-log",
+                    "application": "application-log analytics",
+                }[self._tenant]
+                role = {
+                    "audit": "cluster-logging-audit-view",
+                    "infrastructure": "cluster-logging-infrastructure-view",
+                    "application": "cluster-logging-application-view",
+                }[self._tenant]
                 message = (
                     f"The cluster denied {tenant_label} access (HTTP 403). Grant the PodPilot identity "
                     f"{role} and verify LokiStack tenant authorization."

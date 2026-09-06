@@ -6,6 +6,7 @@
 <p>Incident model context window: <strong>{{ incident_policy.context_window_tokens }} tokens</strong>. PodPilot reserves output and reasoning space before calculating the effective input ceiling.</p>
 <p>Primary budget: {{ incident_policy.max_rounds }} coordinator turns · Hard safety deadline: {{ (incident_policy.run_timeout_seconds / 60) | round(1) }} minutes · Concurrent incident workers: {{ incident_policy.worker_concurrency }} · Specialist reports: {{ incident_policy.max_specialists }}</p>
 <p>Retained evidence: {{ (incident_policy.evidence_bytes / 1024) | round | int }} KiB · Coordinator evidence context: {{ (incident_policy.coordinator_bytes / 1024) | round | int }} KiB. Change these bounded values through the <code>PODPILOT_INCIDENT_*</code> deployment settings.</p>
+<p>Per-container investigation logs: {{ incident_policy.log_tail_lines }} Kubernetes lines / {{ (incident_policy.log_bytes / 1024) | round | int }} KiB over {{ (incident_policy.log_range_seconds / 3600) | round(1) }} hours · Scoped Loki history: {{ incident_policy.loki_log_limit }} lines / {{ (incident_policy.log_bytes / 1024) | round | int }} KiB over {{ (incident_policy.loki_range_seconds / 3600) | round(1) }} hours.</p>
 </section>
 {% for item in receivers %}
 <section class="panel incident-panel"><h2>{{ item.name }}</h2><p>{{ item.cluster_name }} · {{ 'Enabled' if item.enabled else 'Disabled' }}</p>

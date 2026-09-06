@@ -12,7 +12,32 @@ OAuth only for the exact incident ingress path. Shared incident evidence is visi
 to SRE Investigator-or-higher roles, never Viewer/Delegated Operator roles. Ask
 continues to require user-delegated access, including incident handoffs.
 
-Incident Pod logs remain bounded retained evidence. Each selected log is sent alone
+Incident connector configuration does not confer trust transitively. Direct Argo CD and
+GitHub endpoints own separate credentials and allowlists. An Argo CD connector configured
+for Kubernetes API access deliberately reuses the selected registered hosting cluster's
+read-only credential and TLS policy; it stores no second token, and this transport choice
+does not authorize access to Argo-managed destination clusters. Server code matches
+only exact Argo destination API origins/names and exact GitHub origin/repository identities;
+repository URLs, monorepo paths, revisions, managed-resource coordinates, Application
+content, and all other connector responses remain untrusted evidence. An observed match
+authorizes only the connector's bounded read and never expands the reused cluster credential
+beyond its original Kubernetes API endpoint.
+
+Connector discovery runs after an enabled connector is saved and on an explicit
+**Test & discover** request. It stores only a bounded, redacted latest snapshot and
+server-authored status; credentials and raw authorization headers are excluded. GitHub
+discovery validates only repositories already present in the operator-approved allowlist
+and does not enumerate every repository visible to the token. Argo CD discovery is limited
+to configured projects and the bounded Application projection. Exact matches are displayed
+as observed topology and confer no new credential, permission, target-cluster assignment,
+or repository scope.
+
+Incident Pod logs remain bounded retained evidence. Current and Kubernetes previous-container
+reads are issued only for exact platform Pod/container names observed in a prior bounded Pod
+snapshot. When deeper or missing crash history warrants it, a server-authored Loki query uses
+those same immutable coordinates against the infrastructure tenant; arbitrary LogQL, label
+selectors, tenants, and time ranges are not model inputs. The default Loki incident window is
+six hours around alert onset with 2,000 lines / 96 KiB retained. Each selected log is sent alone
 to the structured log specialist; the coordinator receives its redacted cited report
 instead of the raw excerpt. Connector specialists likewise receive one bounded
 connector result. The 64,000-token incident context setting reserves output and
@@ -32,13 +57,15 @@ and incident workers do not share evidence lists, credentials, or model contexts
   `openshift-monitoring/podpilot-alertmanager-api-view` Role.
 - OpenShift Logging remains read-only through `cluster-logging-application-view`,
   `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. The application
-  tenant supplies aggregate namespace-volume evidence. The audit tenant supports bounded
+  tenant supplies aggregate namespace-volume evidence. The infrastructure tenant additionally
+  supplies exact-container incident history through the bounded server-owned query above. The audit tenant supports bounded
 user-activity queries through a server-owned LogQL template; the model may extract only the
 optional username, period, result limit, operation scope, and outcome filter. Omitting the
 username requests matching activity across all users; a supplied username is matched exactly and
 case-insensitively after regex escaping. PodPilot persists only projected audit fields—not raw
 lines, request objects, or response objects. Infrastructure and audit access add investigation
-visibility but no mutation authority.
+visibility but no mutation authority. Raw bounded incident log excerpts are retained with the
+incident evidence and remain visible only to SRE Investigator-or-higher roles.
 
 The audit LogQL pipeline parses and filters those typed fields in Loki, then applies a server-owned
 `line_format` projection containing only the bounded audit ID, timestamp, username, verb, object
@@ -717,8 +744,9 @@ No node shell, `/proc` access,
 host PID inspection, privileged DaemonSet, or process-level credential is introduced.
 Namespace log-volume rankings preserve the typed metric boundary. The model selects only the
 registered metric, period, and limit; server code owns LogQL and authenticates to the LokiStack
-gateway. Responses are capped and reduced to namespace/byte aggregates, with no log lines returned
-or persisted. Cluster-wide Loki authorization can technically permit raw queries, so production
+gateway. Responses on that aggregate path are capped and reduced to namespace/byte aggregates,
+with no log lines returned or persisted. The separate incident-only exact-container path is bounded
+and described above. Cluster-wide Loki authorization can technically permit raw queries, so production
 deployments should isolate this credential behind PodPilot and restrict direct gateway access.
 Operator-authored periods are parsed only into bounded integer seconds and never become LogQL text.
 Projected Route destination names are treated only as observed Kubernetes object references

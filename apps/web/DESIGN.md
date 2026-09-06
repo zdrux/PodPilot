@@ -146,6 +146,15 @@ Use the Connectors and Admin Config pattern:
 6. a grounded footer for save, test, activate, disable, or delete actions;
 7. a separate observation panel for read-only probe or capability results.
 
+The Connectors directory groups OpenShift clusters, GitHub instances, and Argo CD
+instances as independent endpoint types. Its add action opens a type chooser before
+showing a type-specific form; do not render unrelated integration fields together.
+Relationships between connector types are investigation evidence, not form nesting.
+Below the editor, use the observed-topology surface for bounded connector discovery:
+compact per-connector status cards followed by a horizontally contained Application
+relationship table. Show incomplete and ambiguous matches explicitly; never style a
+discovered relationship as a configured access grant.
+
 Use `.admin-config-page`, `.admin-config-layout`, `.admin-config-directory`,
 `.admin-config-editor`, `.admin-config-form`, and `.admin-form-step` before adding
 new page-specific equivalents.
@@ -204,6 +213,9 @@ soft accent fill. Never rely on zebra striping as the only grouping device.
 Status labels are compact and factual: Active, Completed, Partial, Firing,
 Disabled. Notices have one title and a concise consequence or operator action.
 Warnings use semantic color plus explicit wording.
+On incident reports, separate PodPilot-enforced collection/policy limits from
+model-reported uncertainty. Do not merge or repeat a model paraphrase of a trusted
+system limit; each group needs a plain-language provenance label.
 
 ### Navigation
 

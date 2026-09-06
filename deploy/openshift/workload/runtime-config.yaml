@@ -11,6 +11,11 @@ data:
   cluster_name: configure-cluster-name
   incident_run_timeout_seconds: "2700"
   incident_max_rounds: "10"
+  incident_log_tail_lines: "1000"
+  incident_log_max_bytes: "98304"
+  incident_log_range_seconds: "7200"
+  incident_loki_log_limit: "2000"
+  incident_loki_range_seconds: "21600"
   chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"
   adhoc_detail_fanout_max_objects: "10"
