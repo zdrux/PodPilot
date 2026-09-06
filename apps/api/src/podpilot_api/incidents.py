@@ -153,6 +153,16 @@ def _connector_topology(connections, discoveries, clusters):
     return connector_views, matrix
 
 
+def _bounded_activity_text(value, limit=600):
+    """Normalize activity copy and avoid leaving a visibly broken final word."""
+
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return f"{head or text[:limit - 1].rstrip()}…"
+
+
 def _activity_result(source, data):
     """Return a short operator-safe description of retained evidence."""
 
@@ -160,7 +170,7 @@ def _activity_result(source, data):
         return "Evidence retained for review."
     summary = data.get("summary") or data.get("overview")
     if isinstance(summary, str) and summary.strip():
-        return re.sub(r"\s+", " ", summary).strip()[:240]
+        return _bounded_activity_text(summary)
     alerts = data.get("alerts")
     if isinstance(alerts, list):
         return f"Received {len(alerts)} alert signal{'s' if len(alerts) != 1 else ''}."
@@ -173,7 +183,7 @@ def _activity_result(source, data):
     if "logs" in data:
         return "Collected a bounded platform log excerpt."
     if data.get("limitation"):
-        return str(data["limitation"])[:240]
+        return _bounded_activity_text(data["limitation"])
     return "Evidence retained for review."
 
 
@@ -291,6 +301,20 @@ def _incident_activity_view(incident, run):
             evidence = parsed_evidence if isinstance(parsed_evidence, list) else []
         except (TypeError, ValueError):
             evidence = []
+    specialist_summaries = {
+        str(item.get("source")): _activity_result(item.get("source"), item.get("data"))
+        for item in evidence
+        if isinstance(item, dict) and str(item.get("source") or "").endswith(" specialist")
+    }
+    # Specialist evidence retains the complete bounded report. Prefer it over
+    # activity text persisted by older builds that cut summaries at 240 chars.
+    tasks = [
+        {
+            **task,
+            "result": specialist_summaries.get(str(task.get("source")), task.get("result", "")),
+        }
+        for task in tasks
+    ]
     known_sources = {str(task.get("source", "")) for task in tasks}
     for item in evidence:
         source = str(item.get("source") or "")
@@ -340,17 +364,23 @@ def _incident_activity_view(incident, run):
             "observed_at": item.get("observed_at"),
             "summary": _activity_result(item.get("source"), item.get("data")),
         })
-    events = [{
-        "at": event.get("at"),
-        "label": str(event.get("label") or "Investigation")[:120],
-        # Journal entries are immutable history. A recorded running transition
-        # means the task started; only the current workstream may look active.
-        "state": (
-            "started" if str(event.get("state") or "") == "running"
-            else str(event.get("state") or "completed")[:32]
-        ),
-        "summary": str(event.get("summary") or "")[:240],
-    } for event in activity.get("events", [])[-6:] if isinstance(event, dict)]
+    events = []
+    for event in activity.get("events", [])[-6:]:
+        if not isinstance(event, dict):
+            continue
+        label = str(event.get("label") or "Investigation")[:120]
+        recorded_state = str(event.get("state") or "completed")
+        summary = event.get("summary") or ""
+        if recorded_state == "completed" and label in specialist_summaries:
+            summary = specialist_summaries[label]
+        events.append({
+            "at": event.get("at"),
+            "label": label,
+            # Journal entries are immutable history. A recorded running transition
+            # means the task started; only the current workstream may look active.
+            "state": "started" if recorded_state == "running" else recorded_state[:32],
+            "summary": _bounded_activity_text(summary),
+        })
     return {
         "incident": incident,
         "run": run,
@@ -960,11 +990,11 @@ class IncidentService:
                     if state in {"completed", "error", "stopped"}:
                         coordinator["ended_at"] = utcnow().isoformat()
                 if result is not None:
-                    coordinator["result"] = str(result)[:240]
+                    coordinator["result"] = _bounded_activity_text(result)
                 if changed:
                     activity["events"].append({
                         "at": utcnow().isoformat(), "label": "Coordinator",
-                        "state": state or "running", "summary": str(work)[:240],
+                        "state": state or "running", "summary": _bounded_activity_text(work),
                     })
                 write_activity_locked()
 
@@ -980,7 +1010,7 @@ class IncidentService:
                 })
                 activity["events"].append({
                     "at": utcnow().isoformat(), "label": f"{label} specialist",
-                    "state": "queued", "summary": str(work)[:240],
+                    "state": "queued", "summary": _bounded_activity_text(work),
                 })
                 write_activity_locked()
                 return task_id
@@ -998,10 +1028,10 @@ class IncidentService:
                 if state in {"completed", "error", "stopped"}:
                     task["ended_at"] = utcnow().isoformat()
                 if result is not None:
-                    task["result"] = str(result)[:240]
+                    task["result"] = _bounded_activity_text(result)
                 activity["events"].append({
                     "at": utcnow().isoformat(), "label": task.get("label", "Specialist"),
-                    "state": state, "summary": str(result or task.get("work") or "")[:240],
+                    "state": state, "summary": _bounded_activity_text(result or task.get("work") or ""),
                 })
                 write_activity_locked()
 
@@ -1569,12 +1599,19 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 card["objects"] = _evidence_object_refs(item)
                 evidence_cards.append(card)
                 object_refs.extend(card["objects"])
+            activity_view = _incident_activity_view(incident, run)
             run_views.append({
                 "row": run,
                 "number": len(runs) - index,
                 "briefing": briefing,
                 "problems": _briefing_problems(briefing),
                 "evidence": evidence_cards,
+                "source_count": len({
+                    str(item.get("source") or "").strip()
+                    for item in evidence
+                    if str(item.get("source") or "").strip()
+                }),
+                "activity": activity_view,
                 "object_refs": object_refs[:24],
                 "valid_evidence_ids": sorted(
                     valid_ids,

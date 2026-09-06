@@ -100,16 +100,34 @@ sticky observation panels where relevant, and grounded action footers. Their exi
 credential, search, tag, TLS, status, and destructive-action contracts are unchanged. The three routes
 passed a combined browser comparison against the Connections screen and the complete API application
 test suite.
-OpenShift application build `podpilot-138` and runner build `podpilot-oc-runner-18` completed
-successfully, and
-the deployment rolled out with one ready application replica and no API-container restarts.
+OpenShift application build `podpilot-146` and runner build `podpilot-oc-runner-19` completed
+successfully on 2026-09-06, deploying the dense Investigation Ledger incident-detail page and
+scoping its activity-row grid styles so expanded fleet-dashboard investigations retain the full
+table width. Specialist activity now recovers the complete bounded summary from retained evidence
+for older runs and uses word-safe bounds for newly persisted results. The redundant latest-run
+Activity tab and fleet transition journal were removed; expandable coordinator and specialist detail
+now remains attached to its owning Investigation tab while the fleet drawer retains latest evidence.
+Report findings, hypotheses, recommendations, summary values, evidence rows, and task details use a
+readable 10–13 px hierarchy instead of the original 8–10 px dense-report scale.
+The deployment rolled out with one ready application replica and zero restarts across all three
+containers.
 The current SNO application image is
-`sha256:d5b20b197386e688e763fdfead3f23769bbaed2d50abcddc0573404475f5169c`
+`sha256:3685ea422f5a81453a1039bb4b53efe5859fecdabd509121d328c84c597d240d`
 with schema head `0025_connector_discovery`; the rebuilt runner image is
-`sha256:8a8b1f56425636c86b8b6165463ccf0e05954a3ec5421bd8fc8fe8965c4e1890`.
+`sha256:4582669b979f6cd60382817335b519caaaf27efbe866131f9f0247c87d020385`.
 The deployment wrapper's optional post-rollout OpenRouter reprobe stalled and was stopped after the
 healthy rollout; the existing profile subsequently completed the live incident investigation.
-All three containers were ready with zero restarts.
+Before the test, the one prior incident and run were backed up on the PodPilot PVC and removed.
+After a preliminary webhook smoke case was removed, an isolated real workload test paused self-heal
+for the owned `podpilot-sno-demo` Application and changed its demo Deployment to a nonexistent image.
+The old replica stayed ready while the new Pod entered `ErrImagePull`; the owned alert created incident
+`98507667-0d48-4189-9699-c420e2d46e10` and run
+`9d7f4c95-272b-457c-b100-cf812ceb114d`. The run retained five distinct evidence sources and projected
+six assessment findings, correctly identifying `ErrImagePull`/`ImagePullBackOff` and the invalid image.
+It finished partial because the model returned no cited hypotheses or next steps. The deployed route
+returned the ledger, evidence, source-count, and activity surfaces. The fixture was restored to its
+healthy image, Argo CD self-heal was re-enabled, the Application returned to `Synced/Healthy`, and the
+incident resolved while preserving its evidence.
 
 The remote-cluster connector now admits the custom `PodPilotGitOpsRolloutFailed` alert. An owned
 SNO PrometheusRule detects a Pending Pod in the Argo-managed `podpilot-gitops-demo` Deployment and

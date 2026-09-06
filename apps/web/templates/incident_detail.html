@@ -7,10 +7,21 @@
     <div>
       <p class="eyebrow"><a href="/incidents">Incidents</a> / {{ cluster.name }}</p>
       <h1>{{ incident.title }}</h1>
-      <div class="incident-header-meta"><span>Critical</span><span class="incident-state incident-state-{{ incident.alert_state }}">{{ incident.alert_state | capitalize }}</span><span>First seen {{ incident.created_at | est_time }}</span></div>
+      <div class="incident-header-meta">
+        <span>Critical</span>
+        <span class="incident-state incident-state-{{ incident.alert_state }}">{{ incident.alert_state | capitalize }}</span>
+        <span>Cluster: <strong>{{ cluster.name }}</strong></span>
+        <span>First seen {{ incident.created_at | est_time }}</span>
+        <span class="incident-read-only">Read-only investigation</span>
+      </div>
     </div>
-    <div class="topbar-actions"><span class="incident-live-connection" data-live-status role="status">Connecting…</span><button class="button" data-incident-post="/api/v1/incidents/{{ incident.id }}/continue">Continue in Ask</button><button class="button primary" data-incident-rerun data-incident-post="/api/v1/incidents/{{ incident.id }}/rerun">Rerun investigation</button><a class="button" href="/incidents/{{ incident.id }}">Refresh</a></div>
+    <div class="topbar-actions">
+      <span class="incident-live-connection" data-live-status role="status">Connecting…</span>
+      <button class="button primary" data-incident-rerun data-incident-post="/api/v1/incidents/{{ incident.id }}/rerun">Rerun investigation</button>
+      <button class="button" data-incident-post="/api/v1/incidents/{{ incident.id }}/continue">Continue in Ask</button>
+    </div>
   </header>
+
   <p role="status" id="incident-feedback" class="incident-feedback"></p>
   {% if not cluster.tls_verify and not cluster.is_system %}<section class="notice warning-notice">TLS certificate and hostname verification is disabled for this cluster.</section>{% endif %}
   {% for limitation in incident_limitations %}<section class="notice warning-notice">{{ limitation }}</section>{% endfor %}
@@ -21,41 +32,95 @@
   </nav>
 
   <section class="incident-tab-panel" id="incident-panel-overview" role="tabpanel" aria-labelledby="incident-tab-overview" data-incident-tab-panel>
-    <dl class="incident-facts"><div><dt>Cluster</dt><dd>{{ cluster.name }}</dd></div><div><dt>Alert state</dt><dd>{{ incident.alert_state | capitalize }}</dd></div><div><dt>Signals</dt><dd>{{ alerts | length }} across {{ alert_groups | length }} group{% if alert_groups | length != 1 %}s{% endif %}</dd></div><div><dt>Investigations</dt><dd>{{ runs | length }}</dd></div><div><dt>First seen</dt><dd>{{ incident.created_at | est_time }}</dd></div><div><dt>Last notification</dt><dd>{{ incident.updated_at | est_time }}</dd></div></dl>
-    <section class="incident-report-row incident-alerts-section">
-      <div class="incident-row-label"><p class="eyebrow">Signals</p><h2>Source alerts</h2><p>Identical notifications are grouped.</p></div>
-      <div class="incident-row-content incident-table-wrap"><table class="incident-detail-table"><thead><tr><th>Alert</th><th>State</th><th>Started</th><th>Occurrences</th></tr></thead><tbody>{% for alert in alert_groups %}<tr><td><strong>{{ alert.name }}</strong>{% if alert.summary %}<details class="incident-alert-annotation"><summary>View alert annotation</summary><p>{{ alert.summary }}</p></details>{% endif %}</td><td><span class="incident-state incident-state-{{ alert.status }}">{{ alert.status | capitalize }}</span></td><td>{{ alert.started_at | est_time if alert.started_at else 'Unknown' }}</td><td>{{ alert.count }}</td></tr>{% else %}<tr><td colspan="4">No source alerts are retained.</td></tr>{% endfor %}</tbody></table></div>
+    <dl class="incident-facts">
+      <div><dt>Cluster</dt><dd>{{ cluster.name }}</dd></div>
+      <div><dt>Alert state</dt><dd>{{ incident.alert_state | capitalize }}</dd></div>
+      <div><dt>Signals</dt><dd>{{ alerts | length }} across {{ alert_groups | length }} group{% if alert_groups | length != 1 %}s{% endif %}</dd></div>
+      <div><dt>Investigations</dt><dd>{{ runs | length }}</dd></div>
+      <div><dt>First seen</dt><dd>{{ incident.created_at | est_time }}</dd></div>
+      <div><dt>Last notification</dt><dd>{{ incident.updated_at | est_time }}</dd></div>
+    </dl>
+    <section class="incident-overview-alerts">
+      <header class="incident-ledger-heading"><div><p class="eyebrow">Signals</p><h2>Source alerts</h2></div><p>Identical Alertmanager notifications are grouped.</p></header>
+      <div class="incident-table-wrap"><table class="incident-detail-table"><thead><tr><th>Alert</th><th>State</th><th>Started</th><th>Occurrences</th></tr></thead><tbody>{% for alert in alert_groups %}<tr><td><strong>{{ alert.name }}</strong>{% if alert.summary %}<details class="incident-alert-annotation"><summary>View alert annotation</summary><p>{{ alert.summary }}</p></details>{% endif %}</td><td><span class="incident-state incident-state-{{ alert.status }}">{{ alert.status | capitalize }}</span></td><td>{{ alert.started_at | est_time if alert.started_at else 'Unknown' }}</td><td>{{ alert.count }}</td></tr>{% else %}<tr><td colspan="4">No source alerts are retained.</td></tr>{% endfor %}</tbody></table></div>
     </section>
   </section>
 
   {% for run in runs %}
-  <section class="incident-tab-panel" id="incident-panel-run-{{ run.row.id }}" role="tabpanel" aria-labelledby="incident-tab-run-{{ run.row.id }}" data-incident-tab-panel hidden>
-    <header class="incident-run-header"><div><p class="eyebrow">Investigation {{ run.number }}</p><h2>Incident assessment</h2><p>{{ run.row.created_at | est_time }} · {{ run.row.actor }}</p></div><span class="incident-run-status incident-run-status-{{ run.row.status }}">{{ run.row.status | replace('_', ' ') | capitalize }}</span></header>
-    <div class="incident-run-layout">
-      <div class="incident-run-report">
-        <section class="incident-report-row incident-briefing-row">
-          <div class="incident-row-label"><p class="eyebrow">Assessment</p><h3>Preliminary briefing</h3><p>Key findings and context at a glance.</p></div>
-          <div class="incident-row-content incident-problems">
-            {% if run.problems %}<ul>{% for problem in run.problems %}<li><div class="incident-markdown">{{ problem | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ul>{% else %}<p class="incident-empty">Waiting for the incident worker. Progress will appear here automatically.</p>{% endif %}
-            {% if run.supporting_ids %}<div class="incident-problems-evidence"><span>Evidence cited</span><nav class="incident-citation-list" aria-label="Briefing evidence">{% for id in run.supporting_ids %}<a href="#evidence-{{ run.row.id }}-{{ id }}" data-evidence-link>{{ id }}</a>{% endfor %}</nav></div>{% endif %}
+  <section class="incident-tab-panel incident-ledger-panel" id="incident-panel-run-{{ run.row.id }}" role="tabpanel" aria-labelledby="incident-tab-run-{{ run.row.id }}" data-incident-tab-panel hidden>
+    <dl class="incident-ledger-summary" aria-label="Investigation summary">
+      <div><dt>Alert state</dt><dd>{{ incident.alert_state | capitalize }}</dd></div>
+      <div><dt>Investigation run</dt><dd>{{ run.row.status | replace('_', ' ') | capitalize }}</dd></div>
+      <div><dt>Evidence retained</dt><dd>{{ run.evidence | length }} item{% if run.evidence | length != 1 %}s{% endif %}</dd></div>
+      <div><dt>Sources collected</dt><dd>{{ run.source_count }} source{% if run.source_count != 1 %}s{% endif %}</dd></div>
+      <div><dt>Cluster</dt><dd title="{{ cluster.name }}">{{ cluster.name }}</dd></div>
+      <div><dt>Completed at</dt><dd>{{ run.row.completed_at | est_time if run.row.completed_at else 'In progress' }}</dd></div>
+    </dl>
+
+    <section class="incident-ledger-section incident-assessment-section">
+      <header class="incident-ledger-heading"><div><h2>Assessment findings</h2><p>Model-authored summary linked to retained evidence.</p></div></header>
+      {% if run.problems %}<ol class="incident-ledger-findings">{% for problem in run.problems %}<li><span>{{ loop.index }}</span><div class="incident-markdown">{{ problem | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ol>{% else %}<p class="incident-empty">Waiting for the incident worker. Progress will appear here automatically.</p>{% endif %}
+    </section>
+
+    {% if run.hypotheses %}<section class="incident-ledger-section incident-hypotheses-section">
+      <header class="incident-ledger-heading"><div><h2>Ranked hypotheses</h2><p>Requires operator verification.</p></div></header>
+      <ol class="incident-ledger-hypotheses">{% for hypothesis in run.hypotheses %}<li><span>{{ loop.index }}</span><div class="incident-markdown">{{ hypothesis | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ol>
+    </section>{% endif %}
+
+    <section class="incident-ledger-section incident-evidence-ledger">
+      <header class="incident-ledger-heading"><div><h2>Evidence ledger</h2><p>Retained platform and alert data collected during this investigation.</p></div><span>{{ run.evidence | length }} items</span></header>
+      <div class="incident-ledger-columns" aria-hidden="true"><span>ID</span><span>Source</span><span>Collected</span><span>Summary</span><span>Observed objects</span><span>Details</span></div>
+      <div class="incident-ledger-rows">
+        {% for item in run.evidence %}<details class="incident-ledger-evidence" id="evidence-{{ run.row.id }}-{{ item.id }}">
+          <summary>
+            <span class="incident-evidence-id">{{ item.id }}</span>
+            <strong class="incident-evidence-source">{{ item.source }}</strong>
+            <time>{{ item.observed_at | est_time }}</time>
+            <span class="incident-evidence-summary">{{ item.summary }}</span>
+            <span class="incident-evidence-objects">{% for object in item.objects[:2] %}<small><b>{{ object.kind }}</b> · {% if object.namespace %}{{ object.namespace }}/{% endif %}{{ object.name }}</small>{% else %}<small>—</small>{% endfor %}</span>
+            <span class="incident-evidence-toggle"><span class="incident-toggle-open">View details</span><span class="incident-toggle-close">Hide details</span></span>
+          </summary>
+          <div class="incident-ledger-evidence-body">
+            <dl>
+              <div><dt>Source</dt><dd>{{ item.source }}</dd></div>
+              <div><dt>Collected</dt><dd>{{ item.observed_at | est_time }}</dd></div>
+              <div><dt>Observed objects</dt><dd>{% for object in item.objects %}<span>{{ object.kind }} · {% if object.namespace %}{{ object.namespace }}/{% endif %}{{ object.name }}</span>{% else %}None projected{% endfor %}</dd></div>
+            </dl>
+            <div class="incident-ledger-payload"><span>Retained payload</span><pre><code>{{ item.data | tojson(indent=2) }}</code></pre></div>
+            <button type="button" class="button incident-raw-json" data-incident-evidence-open="evidence-dialog-{{ run.row.id }}-{{ item.id }}" aria-haspopup="dialog">View raw JSON</button>
           </div>
-        </section>
-        {% if run.hypotheses %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Analysis</p><h3>Ranked hypotheses</h3><p>Require operator verification.</p></div><div class="incident-row-content"><ol class="incident-ranked-list">{% for hypothesis in run.hypotheses %}<li><span class="incident-list-index">{{ '%02d' | format(loop.index) }}</span><div class="incident-markdown">{{ hypothesis | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ol></div></section>{% endif %}
-        {% if run.next_steps %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Response</p><h3>Operator next steps</h3></div><div class="incident-row-content"><ol class="incident-next-steps">{% for step in run.next_steps %}<li><span>{{ loop.index }}</span><div class="incident-markdown">{{ step | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ol></div></section>{% endif %}
-        {% if run.system_limitations or run.model_limitations or run.legacy_limitations %}<section class="incident-report-row"><div class="incident-row-label"><p class="eyebrow">Confidence</p><h3>Limitations</h3><p>Collection bounds and model uncertainty are shown separately for new runs.</p></div><div class="incident-row-content incident-limitation-groups">{% if run.system_limitations %}<section><h4>Collection and policy limits</h4><p>Enforced or observed by PodPilot.</p><ul class="incident-limitations">{% for limitation in run.system_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>{% endif %}{% if run.model_limitations %}<section><h4>Model-reported uncertainty</h4><p>Interpretive gaps not already covered by collection limits.</p><ul class="incident-limitations">{% for limitation in run.model_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>{% endif %}{% if run.legacy_limitations %}<section><h4>Recorded limitations</h4><p>This older run did not retain limitation provenance.</p><ul class="incident-limitations">{% for limitation in run.legacy_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></section>{% endif %}</div></section>{% endif %}
-        <section class="incident-report-row incident-evidence-section"><div class="incident-row-label"><p class="eyebrow">Evidence</p><h3>Collected timeline</h3><p>{{ run.evidence | length }} retained item{% if run.evidence | length != 1 %}s{% endif %}</p></div><div class="incident-row-content incident-evidence-list">{% for item in run.evidence %}<details id="evidence-{{ run.row.id }}-{{ item.id }}"><summary><span class="incident-evidence-id">{{ item.id }}</span><span class="incident-evidence-source">{{ item.source }}</span><time>{{ item.observed_at | est_time }}</time><span class="incident-disclosure" aria-hidden="true">⌄</span></summary><div class="incident-evidence-payload"><pre>{{ item.data | tojson(indent=2) }}</pre></div></details>{% else %}<p class="incident-empty">No evidence collected yet.</p>{% endfor %}</div></section>
+        </details>{% else %}<p class="incident-empty">No evidence collected yet.</p>{% endfor %}
       </div>
-      <aside class="incident-evidence-rail" aria-label="Investigation evidence">
-        <header><div><p class="eyebrow">Evidence</p><h3>Quick view</h3></div><span>{{ run.evidence | length }}</span></header>
-        <div class="incident-evidence-cards">
-          {% for item in run.evidence %}<button class="incident-evidence-card" type="button" data-incident-evidence-open="evidence-dialog-{{ run.row.id }}-{{ item.id }}" aria-haspopup="dialog"><span class="incident-evidence-card-meta"><strong>{{ item.id }}</strong><time>{{ item.observed_at | est_time('%H:%M:%S') }}</time></span><b>{{ item.source }}</b><small>{{ item.summary }}</small></button>{% else %}<p class="incident-empty">Evidence will appear here as it is collected.</p>{% endfor %}
+    </section>
+
+    <div class="incident-ledger-lower">
+      {% if run.next_steps %}<section class="incident-ledger-section incident-next-steps-panel">
+        <header class="incident-ledger-heading"><div><h2>Operator next steps</h2><p>Recommendations only. No changes have been made.</p></div></header>
+        <ol class="incident-next-steps">{% for step in run.next_steps %}<li><span>{{ loop.index }}</span><div class="incident-markdown">{{ step | incident_prose_markdown(run.row.id, run.valid_evidence_ids) }}</div></li>{% endfor %}</ol>
+        <p class="incident-action-boundary">Any remediation would require Action mode and explicit approval.</p>
+      </section>{% endif %}
+      <section class="incident-ledger-section incident-activity-panel">
+        <header class="incident-ledger-heading"><div><h2>Investigation activity</h2><p>Coordinator and specialist work for this investigation run.</p></div></header>
+        <div class="incident-run-task-list">
+          <div class="incident-run-task-columns" aria-hidden="true"><span>Role</span><span>Task</span><span>Completed</span><span>State</span><span></span></div>
+          {% for task in run.activity.tasks[:8] %}<details class="incident-run-task incident-run-task-{{ task.state }}">
+            <summary><span>{{ task.role | capitalize }}</span><strong>{{ task.label }}</strong><time>{{ task.ended_at | est_time if task.ended_at else 'In progress' }}</time><span class="incident-task-state incident-task-state-{{ task.state }}">{{ task.state | replace('_', ' ') | capitalize }}</span><span class="incident-run-task-arrow" aria-hidden="true">⌄</span></summary>
+            <div class="incident-run-task-detail"><dl><div><dt>Activity</dt><dd>{{ task.work }}</dd></div><div><dt>Started</dt><dd>{{ task.started_at | est_time if task.started_at else 'Not started' }}</dd></div><div><dt>Finished</dt><dd>{{ task.ended_at | est_time if task.ended_at else 'In progress' if task.state == 'running' else '—' }}</dd></div></dl><div><strong>Result</strong><p>{{ task.result or task.state | replace('_', ' ') | capitalize }}</p></div></div>
+          </details>{% else %}<p class="incident-empty">No activity has been retained.</p>{% endfor %}
         </div>
-        {% if run.object_refs %}<section class="incident-object-index"><h4>Observed objects</h4><p>Open the evidence item that contains each exact object.</p><div>{% for object in run.object_refs %}<button type="button" data-incident-evidence-open="evidence-dialog-{{ run.row.id }}-{{ object.evidence_id }}" aria-haspopup="dialog"><span><strong>{{ object.kind }}</strong><code>{% if object.namespace %}{{ object.namespace }}/{% endif %}{{ object.name }}</code></span><small>{{ object.evidence_id }}</small></button>{% endfor %}</div></section>{% endif %}
-      </aside>
+      </section>
     </div>
-    {% for item in run.evidence %}<dialog id="evidence-dialog-{{ run.row.id }}-{{ item.id }}" class="operation-dialog incident-evidence-dialog" data-incident-evidence-dialog aria-labelledby="evidence-dialog-title-{{ run.row.id }}-{{ item.id }}"><div class="operation-dialog-header"><div><p class="eyebrow">Evidence {{ item.id }}</p><h2 id="evidence-dialog-title-{{ run.row.id }}-{{ item.id }}">{{ item.source }}</h2></div><button type="button" data-incident-evidence-close aria-label="Close evidence details">×</button></div><div class="operation-dialog-content"><dl class="operation-facts"><div><dt>Evidence ID</dt><dd>{{ item.id }}</dd></div><div><dt>Observed</dt><dd>{{ item.observed_at | est_time }}</dd></div><div><dt>Source</dt><dd>{{ item.source }}</dd></div><div><dt>Summary</dt><dd>{{ item.summary }}</dd></div></dl><section><h3>Retained payload</h3><pre><code>{{ item.data | tojson(indent=2) }}</code></pre></section></div></dialog>{% endfor %}
+
+    {% if run.system_limitations or run.model_limitations or run.legacy_limitations %}<footer class="incident-ledger-limitations">
+      {% if run.system_limitations %}<details><summary>Collection and policy limits · {{ run.system_limitations | length }}</summary><ul>{% for limitation in run.system_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></details>{% endif %}
+      {% if run.model_limitations %}<details><summary>Model-reported uncertainty · {{ run.model_limitations | length }}</summary><ul>{% for limitation in run.model_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></details>{% endif %}
+      {% if run.legacy_limitations %}<details><summary>Recorded limitations · {{ run.legacy_limitations | length }}</summary><ul>{% for limitation in run.legacy_limitations %}<li>{{ limitation }}</li>{% endfor %}</ul></details>{% endif %}
+    </footer>{% endif %}
   </section>
+
+  {% for item in run.evidence %}<dialog id="evidence-dialog-{{ run.row.id }}-{{ item.id }}" class="operation-dialog incident-evidence-dialog" data-incident-evidence-dialog aria-labelledby="evidence-dialog-title-{{ run.row.id }}-{{ item.id }}"><div class="operation-dialog-header"><div><p class="eyebrow">Evidence {{ item.id }}</p><h2 id="evidence-dialog-title-{{ run.row.id }}-{{ item.id }}">{{ item.source }}</h2></div><button type="button" data-incident-evidence-close aria-label="Close evidence details">×</button></div><div class="operation-dialog-content"><dl class="operation-facts"><div><dt>Evidence ID</dt><dd>{{ item.id }}</dd></div><div><dt>Collected</dt><dd>{{ item.observed_at | est_time }}</dd></div><div><dt>Source</dt><dd>{{ item.source }}</dd></div><div><dt>Summary</dt><dd>{{ item.summary }}</dd></div></dl><section><h3>Retained payload</h3><pre><code>{{ item.data | tojson(indent=2) }}</code></pre></section></div></dialog>{% endfor %}
   {% else %}<section class="incident-tab-panel incident-empty-run"><h2>Investigation queued</h2><p>Worker progress will appear here automatically.</p></section>{% endfor %}
+
 </div>
-<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-evidence-modal-1" defer></script>
+<script src="{{ url_for('static', path='/incidents.js') }}?v=incident-ledger-2" defer></script>
 {% endblock %}

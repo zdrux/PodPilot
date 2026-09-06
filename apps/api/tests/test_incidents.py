@@ -17,7 +17,9 @@ from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.main import create_app, SYSTEM_CLUSTER_ID
 from podpilot_api.incidents import (
+    _activity_result,
     _dedupe_limitations,
+    _incident_activity_view,
     _incident_state_version,
     _limitation_key,
     _project_evidence_item,
@@ -35,6 +37,44 @@ class Store:
     def get(self, key=None): return self.values.get(key)
     def set(self, value, key=None): self.values[key] = value
     def delete(self, key=None): self.values.pop(key, None)
+
+
+def test_activity_view_recovers_complete_specialist_summary_from_evidence():
+    full_summary = (
+        "Argo CD reports that the application is progressing while the associated Service and "
+        "Route are healthy and synced. The out-of-sync Deployment may be linked to the incident onset."
+    )
+    incident = SimpleNamespace(
+        alerts_json=json.dumps({"alert": {"labels": {"alertname": "RolloutFailed"}}}),
+        title="Rollout failed", updated_at=datetime(2026, 9, 6, tzinfo=timezone.utc),
+    )
+    run = SimpleNamespace(
+        status="partial", created_at=datetime(2026, 9, 6, tzinfo=timezone.utc), completed_at=None,
+        activity_json=json.dumps({
+            "tasks": [{
+                "id": "specialist-1", "role": "specialist", "label": "Argo CD specialist",
+                "source": "Argo CD specialist", "state": "completed",
+                "work": "Correlate revisions", "result": full_summary[:80],
+            }],
+            "events": [{
+                "at": "2026-09-06T17:27:00Z", "label": "Argo CD specialist",
+                "state": "completed", "summary": full_summary[:80],
+            }],
+        }),
+        evidence_json=json.dumps([{
+            "id": "E5", "source": "Argo CD specialist",
+            "observed_at": "2026-09-06T17:27:00Z", "data": {"summary": full_summary},
+        }]),
+    )
+
+    view = _incident_activity_view(incident, run)
+
+    specialist = next(task for task in view["tasks"] if task.get("role") == "specialist")
+    assert specialist["result"] == full_summary
+    assert view["events"][0]["summary"] == full_summary
+    bounded = _activity_result("Argo CD", {"summary": "word " * 200})
+    assert len(bounded) <= 600
+    assert bounded.endswith("…")
 
 
 @pytest.fixture
@@ -169,12 +209,13 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert page.status_code == 200
     assert 'role="tablist"' in page.text
     assert 'data-incident-tab="incident-panel-overview"' in page.text
-    assert '<h2>Incident assessment</h2>' in page.text
+    assert 'incident-tab-activity' not in page.text
+    assert '<h2>Assessment findings</h2>' in page.text
     assert '<strong>API server is healthy</strong>' in page.text
     assert '**API server is healthy**' not in page.text
     assert 'Problems found:' not in page.text
     problems = re.search(
-        r'<div class="incident-row-content incident-problems">(.*?)</ul>', page.text, re.DOTALL,
+        r'<ol class="incident-ledger-findings">(.*?)</ol>', page.text, re.DOTALL,
     ).group(1)
     assert problems.count('<li>') == 2
     assert '<td>3</td>' in page.text
@@ -184,18 +225,25 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert 'data-evidence-link' in page.text
     assert f'href="#evidence-{run_id}-E1"' in page.text
     assert f'id="evidence-{run_id}-E1"' in page.text
-    assert 'class="incident-evidence-rail"' in page.text
-    assert 'class="incident-evidence-card"' in page.text
+    assert 'class="incident-ledger-summary"' in page.text
+    assert 'class="incident-ledger-evidence"' in page.text
+    assert '<h2>Assessment findings</h2>' in page.text
+    assert '<h2>Evidence ledger</h2>' in page.text
+    assert '<h2>Investigation activity</h2>' in page.text
+    assert 'class="incident-run-task incident-run-task-' in page.text
+    assert '<dt>Activity</dt>' in page.text
+    assert '<strong>Result</strong>' in page.text
     assert f'data-incident-evidence-open="evidence-dialog-{run_id}-E1"' in page.text
     assert f'id="evidence-dialog-{run_id}-E1"' in page.text
     assert 'Retained payload' in page.text
+    assert 'Recommendations only. No changes have been made.' in page.text
     assert 'Observed objects' in page.text
     assert 'kube-apiserver' in page.text
     assert 'class="incident-inline-citation"' in page.text
     assert 'class="panel incident-panel"' not in page.text
     assert '>- Confirm' not in page.text
     ranked_hypotheses = re.search(
-        r'<ol class="incident-ranked-list">(.*?)</ol>', page.text, re.DOTALL,
+        r'<ol class="incident-ledger-hypotheses">(.*?)</ol>', page.text, re.DOTALL,
     ).group(1)
     assert '<table>' not in ranked_hypotheses
     assert '<code>restartCount=9</code>' in ranked_hypotheses
@@ -209,6 +257,10 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     styles = (Path(__file__).parents[2] / 'web/static/styles.css').read_text(encoding='utf-8')
     assert '.incident-next-steps > li {' in styles
     assert '.incident-next-steps li {' not in styles
+    assert '.incident-ledger-section .incident-markdown { color: var(--theme-muted); font-size: 13px;' in styles
+    assert '.incident-ledger-summary dd { margin: 0; overflow: hidden; color: var(--theme-text); font-size: 13px;' in styles
+    assert '.incident-run-task > summary { display: grid;' in styles
+    assert '\n.incident-activity-columns, .incident-activity-row { display: grid;' not in styles
     assert "target.scrollIntoView" in script
     assert "new EventSource" in script
     assert f'data-events-url="/api/v1/incidents/{iid}/events"' in page.text
@@ -332,9 +384,9 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     for state in ('running', 'queued', 'completed', 'error', 'stopped'):
         assert f'incident-activity-mark-{state}' in page.text
     assert 'Analyzing kube-apiserver logs' in page.text
-    assert 'Requested bounded platform log analysis.' in page.text
-    assert 'incident-activity-mark-started' in page.text
-    assert 'Recent transitions' in page.text
+    assert 'Requested bounded platform log analysis.' not in page.text
+    assert 'Recent transitions' not in page.text
+    assert 'Activity journal' not in page.text
     assert 'No related platform PR was found.' in page.text
     assert 'The PodPilot incident worker restarted before this task finished.' in page.text
     assert 'Stopped when the incident worker restarted.' not in page.text

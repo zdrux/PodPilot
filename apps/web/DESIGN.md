@@ -168,6 +168,16 @@ use distinct headers, aligned columns, horizontal overflow containment, and row
 dividers. Details and raw evidence are collapsed when they would dominate the
 primary assessment.
 
+Completed investigation runs use the Investigation Ledger pattern: a compact
+run-summary strip, model-authored assessment findings, ranked hypotheses,
+retained evidence, operator recommendations, and collection activity. Keep these
+provenance classes visibly separate. Evidence rows may use aligned ledger columns
+because their identifiers, sources, collection timestamps, summaries, and object
+references are server-owned. Findings, hypotheses, and next steps remain cited
+narrative rows until their contracts become structured; do not invent per-row
+scope, confidence, execution mode, or completion state. Investigation task states
+describe collection work only and must not imply that a recommendation ran.
+
 ### Ask workspace
 
 Ask is the intentional full-height exception. It retains the shared sidebar but
