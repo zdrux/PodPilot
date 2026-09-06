@@ -56,7 +56,7 @@ manual/detail refreshes and dashboard polling with authenticated server-sent eve
 durable orchestrator state. Fleet fragments update only when state changes; detail pages
 preserve the selected run and open evidence, and a rerun selects its new tab automatically.
 EventSource reconnect and a twelve-second polling fallback retain resilience. This live-update
-change is model-free tested locally but is not yet deployed to SNO. The same working tree now
+change is deployed to SNO in application build `podpilot-135`. The same release
 retains ranked rows from oversized Event collections, separates system collection limits from
 distinct model uncertainty, expands incident Kubernetes logs to 1,000 lines / 96 KiB over two
 hours, exposes `previous=true` only after an observed restart, and adds an exact-container Loki
@@ -65,7 +65,7 @@ remain isolated to one specialist and the Loki query coordinates come only from 
 platform Pod snapshot. A read-only SNO check on 2026-09-05 found no LokiStack CRD, logging
 Route, or workloads/services in `openshift-logging`; Kubernetes previous logs can work there,
 but the deeper-history fallback will report unavailable until cluster logging is installed.
-These evidence/log changes are also not yet deployed. A prior live SNO validation displayed five completed Pod-log
+These evidence/log changes are deployed in the same build. A prior live SNO validation displayed five completed Pod-log
 specialists and retained nineteen evidence items; restarting the worker correctly
 recorded the still-running coordinator as stopped and the investigation as interrupted.
 The lab investigation reader token lasts 24 hours; rerun the documented configure
@@ -94,16 +94,16 @@ sticky observation panels where relevant, and grounded action footers. Their exi
 credential, search, tag, TLS, status, and destructive-action contracts are unchanged. The three routes
 passed a combined browser comparison against the Connections screen and the complete API application
 test suite.
-OpenShift application build `podpilot-134` completed successfully while retaining runner build
-`podpilot-oc-runner-15`, and
+OpenShift application build `podpilot-135` and runner build `podpilot-oc-runner-16` completed
+successfully, and
 the deployment rolled out with one ready application replica and no API-container restarts.
 The current SNO application image is
-`sha256:1f070b05550bb972d1ce6413c63279af68fb179b59b215a964887fb05247bccd`
-with schema head `0024_incident_activity`; the rebuilt runner image is
-`sha256:668c3be1a5f3fcd5b256f77c7436ebf403eb8a45316865dd65f30187fb3b332c`.
-The post-rollout OpenRouter profile probe was manually stopped after remaining silent beyond its
-normal wait; the existing model profile was already configured, and application readiness, route
-authentication, image digests, and deployed connector template/cache marker were verified directly.
+`sha256:40b62c3c041c879bd18e8851fe71ccbcda7780a06381425a87ec0ebb00d0957e`
+with schema head `0025_connector_discovery`; the rebuilt runner image is
+`sha256:c41261fce1f0939a80203a82dd6f85dec4f6c86563a83c59f305ad522f124fd2`.
+The post-rollout OpenRouter profile probe completed ready. All three containers were ready with zero
+restarts, the API readiness check reported a healthy database, and the external connector route
+returned the expected OpenShift OAuth redirect.
 
 The preceding PodPilot 0.12.0 delegated-sessions rollout deployed to the
 disposable SNO lab at schema head `0021_user_delegated_access`. That 2026-09-01 rollout used
