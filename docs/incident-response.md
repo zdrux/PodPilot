@@ -50,9 +50,17 @@ the run-scoped retained payload and projected object coordinates in the same mod
 as Ask activity; large JSON payloads are never expanded inline into the report. Valid E-ID
 citations in briefing prose, hypotheses and next steps activate the owning run, scroll the
 exact evidence row into view, and open its modal. Limitations use a
-compact reading list. Continue in Ask
-creates a private read-only conversation with copied historical evidence and
-requires the operator's own delegated sign-in before additional reads.
+compact reading list. Continue in Ask creates a private read-only conversation
+with an immutable copy of the selected incident run's evidence. Ask presents the
+source incident, run, timestamps and evidence range in a dedicated imported-context
+panel rather than manufacturing a PodPilot reply. A focused continuation question
+asks PodPilot to revalidate the current state, investigate remaining gaps and
+compare new observations with the historical snapshot. The question is submitted
+automatically when the operator's required delegated cluster session is active—on
+arrival when already signed in, or after a successful reconnect. The server claims
+the handoff once, so reloads and duplicate browser requests cannot queue duplicate
+runs. The submitted question then appears as the operator's user message, while
+imported and newly collected evidence retain distinct provenance.
 
 Collector footnotes are outcome-based. Configured safety ceilings remain silent when a
 collection completes within them. If Kubernetes pagination, evidence projection, retained
@@ -67,7 +75,7 @@ specialist model calls appear under model-reported uncertainty rather than colle
 ## Configuration
 
 Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
-`0024_incident_activity`. The default is false. Connectors configuration requires
+`0026_incident_ask_handoff`. The default is false. Connectors configuration requires
 configuration-administrator access as well as an SRE role.
 
 **Manage → Connectors** lists independent OpenShift cluster, Argo CD, and GitHub

@@ -26,8 +26,41 @@
       </div>
     </div>
 
-    {% if messages %}
+    {% if messages or incident_handoff %}
     <div class="chat-thread ask-thread" data-scroll-latest>
+      {% if incident_handoff %}
+      <section class="incident-handoff-context"
+        aria-labelledby="incident-handoff-title"
+        {% if incident_handoff_auto_start %}data-incident-handoff-start-url="/api/v1/adhoc-conversations/{{ conversation.id }}/incident-handoff/start"{% endif %}>
+        <div class="incident-handoff-heading">
+          <div>
+            <span class="eyebrow">Imported incident context</span>
+            <h3 id="incident-handoff-title">{{ incident_handoff.title }} · Investigation {{ incident_handoff.run_number }}</h3>
+          </div>
+          <a class="button secondary compact-button" href="{{ incident_handoff.report_url }}">Open original report</a>
+        </div>
+        <p>{{ incident_handoff.summary }}</p>
+        <dl class="incident-handoff-facts">
+          <div><dt>Snapshot completed</dt><dd>{{ incident_handoff.completed_at | est_time }}</dd></div>
+          <div><dt>Imported evidence</dt><dd>{{ incident_handoff.evidence_count }} item{% if incident_handoff.evidence_count != 1 %}s{% endif %}{% if incident_handoff.evidence_started_at %} · {{ incident_handoff.evidence_started_at | est_time }}{% if incident_handoff.evidence_ended_at and incident_handoff.evidence_ended_at != incident_handoff.evidence_started_at %}–{{ incident_handoff.evidence_ended_at | est_time }}{% endif %}{% endif %}</dd></div>
+          <div><dt>Source</dt><dd>Incident {{ incident_handoff.incident_id }}</dd></div>
+        </dl>
+        <div class="incident-handoff-status" role="status" data-incident-handoff-status>
+          {% if incident_handoff.status == 'submitted' %}
+          <strong>Continuation started.</strong> The question below uses this snapshot as historical context and rechecks the cluster's current state.
+          {% elif incident_handoff_auto_start %}
+          <span class="thinking-spinner" aria-hidden="true"></span><strong>Starting the follow-up investigation…</strong>
+          {% elif not delegated_session_active %}
+          <strong>Waiting for cluster sign-in.</strong> PodPilot will send the continuation question automatically after sign-in succeeds.
+          {% elif not model_ready %}
+          <strong>Waiting for a usable model profile.</strong> The imported snapshot is retained, but the continuation cannot start yet.
+          {% else %}
+          <strong>Continuation pending.</strong> Reload the page to retry starting the follow-up investigation.
+          {% endif %}
+        </div>
+        <small>Imported observations are an immutable historical snapshot. New cluster reads are recorded separately so changed conditions remain visible.</small>
+      </section>
+      {% endif %}
       {% if messages_truncated %}<div class="context-divider">Older messages remain in the bounded conversation context.</div>{% endif %}
       {% for message in messages %}
       <article class="chat-message chat-{{ message.role }}">

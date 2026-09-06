@@ -1785,6 +1785,28 @@ html[data-theme] .ask-thread {
   padding: 26px var(--conversation-gutter) 34px;
   background: var(--theme-canvas);
 }
+.incident-handoff-context {
+  width: min(100%, var(--conversation-content-width));
+  margin: 0 auto 18px;
+  padding: 19px 22px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 42%, var(--theme-border));
+  border-left: 4px solid var(--theme-accent);
+  border-radius: 12px;
+  color: var(--theme-text);
+  background: color-mix(in srgb, var(--theme-accent) 6%, var(--theme-surface));
+  box-shadow: 0 12px 30px -26px var(--theme-shadow);
+}
+.incident-handoff-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.incident-handoff-heading h3 { margin: 3px 0 0; font-size: 17px; line-height: 1.35; }
+.incident-handoff-context > p { max-width: 900px; margin: 14px 0; color: var(--theme-muted); line-height: 1.6; }
+.incident-handoff-context > small { display: block; margin-top: 12px; color: var(--theme-subtle); line-height: 1.5; }
+.incident-handoff-facts { display: flex; flex-wrap: wrap; gap: 10px 30px; margin: 0 0 13px; }
+.incident-handoff-facts div { min-width: 150px; }
+.incident-handoff-facts dt { margin-bottom: 2px; color: var(--theme-subtle); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.incident-handoff-facts dd { margin: 0; color: var(--theme-text); font-size: 12px; }
+.incident-handoff-status { display: flex; align-items: center; gap: 7px; padding-top: 12px; border-top: 1px solid var(--theme-border); color: var(--theme-muted); font-size: 12px; }
+.incident-handoff-status strong { color: var(--theme-text); }
+.incident-handoff-status .thinking-spinner { width: 13px; height: 13px; flex: 0 0 13px; }
 html[data-theme] .resource-result,
 html[data-theme] .metric-result {
   border-color: var(--theme-border);
@@ -1926,6 +1948,9 @@ html[data-theme] .ask-composer .chat-budget a { color: var(--theme-accent-strong
   .ask-session-heading-row h2 { font-size: 22px; }
   html[data-theme] .ask-thread { padding: 16px 12px 24px; }
   .ask-thread .chat-message { margin-bottom: 10px; padding: 17px 16px; border-radius: 10px; }
+  .incident-handoff-context { padding: 17px 16px; }
+  .incident-handoff-heading { display: grid; }
+  .incident-handoff-heading .button { justify-self: start; }
   html[data-theme] .ask-composer { padding: 0 12px 12px; }
 }
 

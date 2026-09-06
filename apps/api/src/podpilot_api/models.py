@@ -239,6 +239,8 @@ class AdHocConversation(Base):
     evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     context_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     summarized_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    handoff_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    handoff_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
 
 class AdHocMessage(Base):

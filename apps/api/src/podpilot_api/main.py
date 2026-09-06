@@ -707,6 +707,38 @@ def _profile_is_usable(profile: ModelProfile | None) -> bool:
     )
 
 
+def _incident_handoff_view(conversation: AdHocConversation) -> dict[str, object] | None:
+    """Return a bounded operator-facing view of durable incident handoff metadata."""
+
+    try:
+        value = json.loads(conversation.handoff_json or "{}")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(value, dict) or value.get("version") != 1 or not value.get("incident_id"):
+        return None
+    try:
+        run_number = max(1, int(value.get("run_number") or 1))
+        evidence_count = max(0, int(value.get("evidence_count") or 0))
+    except (TypeError, ValueError):
+        return None
+    evidence_started_at = str(value.get("evidence_started_at") or "")[:64]
+    evidence_ended_at = str(value.get("evidence_ended_at") or "")[:64]
+    return {
+        "incident_id": str(value.get("incident_id"))[:36],
+        "title": str(value.get("incident_title") or "Incident")[:253],
+        "run_id": str(value.get("run_id") or "")[:36],
+        "run_number": run_number,
+        "completed_at": str(value.get("completed_at") or "")[:64],
+        "evidence_count": evidence_count,
+        "evidence_started_at": evidence_started_at,
+        "evidence_ended_at": evidence_ended_at,
+        "report_url": f"/incidents/{str(value.get('incident_id'))[:36]}",
+        "summary": str(value.get("summary") or "")[:1200],
+        "status": "submitted" if conversation.handoff_run_id else "pending",
+        "run_started_id": conversation.handoff_run_id,
+    }
+
+
 async def _urlencoded(request: Request) -> dict[str, str]:
     content_type = request.headers.get("content-type", "").split(";", 1)[0]
     if content_type != "application/x-www-form-urlencoded":
@@ -12986,6 +13018,7 @@ def create_app(
         message_text: str,
         include_raw_response: bool = False,
         followup_action: dict[str, object] | None = None,
+        run_id: str | None = None,
     ) -> str:
         now = datetime.now(timezone.utc)
         _enforce_adhoc_rate_limit(
@@ -13009,7 +13042,7 @@ def create_app(
         reasoning_effort = _preferred_reasoning_effort(
             db_session, username, active_profile
         )
-        run_id = str(uuid4())
+        run_id = run_id or str(uuid4())
         events = [{
             "seq": 0,
             "phase": "queued",
@@ -13574,6 +13607,7 @@ def create_app(
                     (Cluster.is_enabled.is_(True)) | (Cluster.id.in_(conversation_cluster_ids))
                 ).order_by(Cluster.name)
             ))
+            handoff = _incident_handoff_view(conversation)
         messages = []
         for row in rows:
             reply_run = run_by_assistant_message_id.get(row.id)
@@ -13677,6 +13711,15 @@ def create_app(
                     and not item.is_system
                     and not item.tls_verify
                     for item in available_clusters
+                ),
+                "incident_handoff": handoff,
+                "incident_handoff_auto_start": bool(
+                    handoff
+                    and handoff["status"] == "pending"
+                    and delegated_session_active
+                    and active_run_row is None
+                    and _profile_is_usable(profile)
+                    and _can_ask(user)
                 ),
             },
         )
@@ -13841,6 +13884,97 @@ def create_app(
             db_session.commit()
         await _start_queued_run(request, run_id)
         return RedirectResponse(f"/ask/{conversation_id}", status_code=303)
+
+    @app.post("/api/v1/adhoc-conversations/{conversation_id}/incident-handoff/start")
+    async def start_incident_handoff(
+        conversation_id: str, request: Request, user: AuthContext = Depends(current_user)
+    ) -> JSONResponse:
+        """Idempotently submit the server-authored first question after delegated login."""
+
+        _verify_csrf(request)
+        if not _can_ask(user):
+            raise HTTPException(status_code=403, detail="Ask PodPilot requires an authorized role.")
+        run_id: str | None = None
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(status_code=404, detail="That PodPilot conversation does not exist.")
+            handoff = _incident_handoff_view(conversation)
+            if handoff is None:
+                raise HTTPException(status_code=409, detail="This conversation has no pending incident handoff.")
+            if conversation.handoff_run_id:
+                return JSONResponse({
+                    "status": "already_started", "run_id": conversation.handoff_run_id,
+                    "url": f"/ask/{conversation_id}",
+                })
+            profile = _active_profile(db_session)
+            if not _profile_is_usable(profile):
+                raise HTTPException(status_code=409, detail="The active model profile is not ready.")
+            session_id = _delegated_session_id(request)
+            connected_ids = {
+                item.cluster_id for item in request.app.state.delegated_vault.list_for(
+                    session_id=session_id, owner=user.username,
+                )
+            } if session_id else set()
+            required_ids = set(json.loads(conversation.cluster_ids_json or "[]"))
+            if not required_ids.issubset(connected_ids):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Reconnect the incident cluster before continuing this investigation.",
+                )
+            try:
+                handoff_data = json.loads(conversation.handoff_json or "{}")
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=409, detail="The incident handoff is unavailable.") from exc
+            prompt = redact_text(str(handoff_data.get("prompt") or "").strip())[:app_settings.chat_max_chars]
+            if not prompt:
+                raise HTTPException(status_code=409, detail="The incident continuation question is unavailable.")
+            run_id = str(uuid4())
+            claim = db_session.execute(
+                update(AdHocConversation).where(
+                    AdHocConversation.id == conversation_id,
+                    AdHocConversation.handoff_run_id.is_(None),
+                ).values(handoff_run_id=run_id, delegated_session_id=session_id)
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                db_session.rollback()
+                existing = db_session.get(AdHocConversation, conversation_id)
+                return JSONResponse({
+                    "status": "already_started",
+                    "run_id": existing.handoff_run_id if existing else None,
+                    "url": f"/ask/{conversation_id}",
+                })
+            conversation.handoff_run_id = run_id
+            conversation.delegated_session_id = session_id
+            _queue_adhoc_run(
+                db_session,
+                conversation=conversation,
+                username=user.username,
+                message_text=prompt,
+                run_id=run_id,
+            )
+            handoff_data.update({
+                "status": "submitted", "submitted_at": datetime.now(timezone.utc).isoformat(),
+                "ask_run_id": run_id,
+            })
+            conversation.handoff_json = json.dumps(handoff_data, sort_keys=True)
+            db_session.add(AuditEvent(
+                actor=user.username,
+                action="incident.handoff.started",
+                outcome="accepted",
+                details_json=json.dumps({
+                    "conversation_id": conversation.id,
+                    "incident_id": handoff["incident_id"],
+                    "incident_run_id": handoff["run_id"],
+                    "adhoc_run_id": run_id,
+                }, sort_keys=True),
+            ))
+            db_session.commit()
+        await _start_queued_run(request, run_id)
+        return JSONResponse({
+            "status": "started", "run_id": run_id, "url": f"/ask/{conversation_id}",
+        }, status_code=202)
 
     @app.post(
         "/api/v1/adhoc-conversations/{conversation_id}/messages/"

@@ -25,7 +25,9 @@ from podpilot_api.incidents import (
     _limitation_key,
     _project_evidence_item,
 )
-from podpilot_api.models import AdHocConversation, Base, Cluster
+from podpilot_api.models import (
+    AdHocConversation, AdHocMessage, AdHocRun, Base, Cluster, ModelProfile,
+)
 from podpilot_api.incident_models import IncidentConnection, FleetIncident, IncidentRun
 from podpilot_api.model_provider import AdHocLogAnalysis, ModelProfileConfig
 from podpilot_api.settings import Settings
@@ -961,13 +963,13 @@ def test_incident_component_preserves_proxy_args():
 
 
 def test_continue_handoff_is_owned_read_only_and_requires_delegation(client):
-    from podpilot_api.models import AdHocConversation
     sid=source(client); iid=send(client,sid,notification()).json()['incident_id']
     headers=admin_headers(client)
     assert client.post(f'/api/v1/incidents/{iid}/continue',headers=headers).status_code==409
     client.app.state.settings.delegated_access_enabled=True
     with Session(client.app.state.engine) as db:
         run=db.scalar(select(IncidentRun)); run.status='completed'
+        incident_run_id=run.id
         run.briefing_json=json.dumps({'summary':'Preliminary hypothesis'})
         run.evidence_json=json.dumps([{'id':'E1','observed_at':'2026-09-05T12:00:00Z','source':'operators','data':{'rows':[]}}])
         db.commit()
@@ -980,10 +982,63 @@ def test_continue_handoff_is_owned_read_only_and_requires_delegation(client):
         assert conversation.delegated_session_id
         assert conversation.created_by=='admin'
         assert 'private-cluster-token' not in conversation.evidence_json
+        assert json.loads(conversation.evidence_json)[0]['origin'] == {
+            'type': 'incident', 'incident_id': iid, 'run_id': incident_run_id, 'evidence_id': 'E1',
+        }
+        handoff=json.loads(conversation.handoff_json)
+        assert handoff['status']=='pending'
+        assert handoff['incident_id']==iid
+        assert handoff['run_number']==1
+        assert handoff['evidence_count']==1
+        assert db.scalar(select(func.count()).select_from(AdHocMessage).where(
+            AdHocMessage.conversation_id==cid))==0
     page=client.get(result.json()['url'],headers={'x-forwarded-user':'admin'})
     assert page.status_code==200
     assert 'Preliminary hypothesis' in page.text
+    assert 'Imported incident context' in page.text
+    assert 'Waiting for cluster sign-in.' in page.text
+    assert 'data-incident-handoff-start-url' not in page.text
+    assert 'Incident handoff:' not in page.text
     assert client.get(result.json()['url'],headers={'x-forwarded-user':'sre'}).status_code==404
+
+    with Session(client.app.state.engine) as db:
+        db.add(ModelProfile(
+            id=1, provider_label='Test model', base_url='https://model.example/v1',
+            chat_model='test-agent', api_type='responses', embedding_model=None,
+            timeout_seconds=30, max_output_tokens=1200, status='ready',
+            capabilities_json='{"tool_calls": true}', updated_by='admin',
+        ))
+        db.commit()
+    delegated_session_id=client.app.state.delegated_vault.new_session_id()
+    client.app.state.delegated_vault.put(
+        session_id=delegated_session_id, owner='admin', cluster_id=SYSTEM_CLUSTER_ID,
+        remote_username='admin', remote_uid='uid-admin', token='delegated-cluster-token',
+    )
+    client.cookies.set('podpilot_delegated_session',delegated_session_id)
+    ready=client.get(result.json()['url'],headers={'x-forwarded-user':'admin'})
+    assert 'data-incident-handoff-start-url=' in ready.text
+    # The fixture has no background worker; leave the claimed run queued for endpoint assertions.
+    client.app.state.settings.adhoc_job_worker_enabled=True
+    client.app.state.adhoc_wake=SimpleNamespace(set=lambda: None)
+    started=client.post(
+        f'/api/v1/adhoc-conversations/{cid}/incident-handoff/start', headers=admin_headers(client),
+    )
+    assert started.status_code==202,started.text
+    duplicate=client.post(
+        f'/api/v1/adhoc-conversations/{cid}/incident-handoff/start', headers=admin_headers(client),
+    )
+    assert duplicate.status_code==200
+    assert duplicate.json()['status']=='already_started'
+    with Session(client.app.state.engine) as db:
+        conversation=db.get(AdHocConversation,cid)
+        messages=list(db.scalars(select(AdHocMessage).where(AdHocMessage.conversation_id==cid)))
+        runs=list(db.scalars(select(AdHocRun).where(AdHocRun.conversation_id==cid)))
+        assert conversation.handoff_run_id==started.json()['run_id']
+        assert json.loads(conversation.handoff_json)['status']=='submitted'
+        assert len(messages)==1 and messages[0].role=='user' and messages[0].actor=='admin'
+        assert messages[0].content.startswith('Continue investigating incident')
+        assert len(runs)==1 and runs[0].id==conversation.handoff_run_id
+    client.app.state.delegated_vault.pop_session(session_id=delegated_session_id,owner='admin')
 
 
 def test_logs_only_become_available_for_observed_platform_containers():
@@ -1179,6 +1234,9 @@ def test_migration_upgrade_and_downgrade(tmp_path, monkeypatch):
         command.upgrade(config,'head')
         engine=create_engine(f'sqlite:///{tmp_path / "migration.db"}')
         assert {'fleet_incidents','incident_connections','incident_runs','connector_discoveries'} <= set(inspect(engine).get_table_names())
+        assert {'handoff_json','handoff_run_id'} <= {
+            column['name'] for column in inspect(engine).get_columns('adhoc_conversations')
+        }
         engine.dispose()
         command.downgrade(config,'0022_live_run_operations')
         engine=create_engine(f'sqlite:///{tmp_path / "migration.db"}')

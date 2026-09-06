@@ -264,6 +264,13 @@ actions.
   anthropomorphic agent language.
 - Preserve timestamps, cluster attribution, evidence identifiers, limitations,
   and uncertainty whenever they affect interpretation.
+- Incident-to-Ask handoffs appear as a provenance panel at the top of the
+  conversation, never as a PodPilot-authored chat reply. Keep the imported
+  incident run and immutable evidence snapshot identifiable, and distinguish
+  subsequent live observations from that historical context. The prepared
+  continuation question may submit automatically only after the required
+  delegated cluster session is active; the server-side claim must remain
+  idempotent so page reloads cannot create duplicate runs.
 
 ## 10. Reference Screens
 

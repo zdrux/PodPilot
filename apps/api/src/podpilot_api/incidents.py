@@ -19,7 +19,7 @@ from sqlalchemy import select, update, func
 from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role
-from podpilot_api.models import Cluster, AuditEvent, AdHocConversation, AdHocMessage
+from podpilot_api.models import Cluster, AuditEvent, AdHocConversation
 from podpilot_api.incident_models import ConnectorDiscovery, IncidentConnection, FleetIncident, IncidentRun
 from podpilot_diagnostics.incidents import DEFAULT_ALERTS, AlertWebhook, admitted
 from podpilot_openshift.incidents import IncidentReadError, IncidentReader, https_origin, clean_evidence
@@ -1753,20 +1753,54 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 IncidentRun.status.notin_(["queued", "running"])).order_by(IncidentRun.created_at.desc()).limit(1))
             if not run:
                 raise HTTPException(409, "Wait for an investigation to finish before continuing in Ask.")
+            cluster = db.get(Cluster, incident.cluster_id)
+            run_ids = list(db.scalars(select(IncidentRun.id).where(
+                IncidentRun.incident_id == incident_id,
+            ).order_by(IncidentRun.created_at, IncidentRun.id)))
+            run_number = run_ids.index(run.id) + 1
             cid = str(uuid4())
+            retained = json.loads(run.evidence_json)
             evidence = [{"id": f"incident-{run.id}-{e['id']}", "tool": "incident_snapshot",
                 "summary": e['source'], "source": f"Incident {incident_id} / run {run.id}",
                 "collected_at": e['observed_at'], "cluster_id": incident.cluster_id,
-                "data": e['data']} for e in json.loads(run.evidence_json)]
+                "origin": {"type": "incident", "incident_id": incident_id,
+                    "run_id": run.id, "evidence_id": e['id']},
+                "data": e['data']} for e in retained]
             briefing = json.loads(run.briefing_json)
-            content = f"Incident handoff: {incident.title}\n\n{briefing.get('summary', '')}\n\nThese are historical observations and preliminary hypotheses. Reconnect with your own cluster credentials to continue. Full incident: /incidents/{incident_id}"
+            completed_at = (run.completed_at or run.created_at).isoformat()
+            observed_at = [str(item.get("observed_at") or "") for item in retained if item.get("observed_at")]
+            prompt = (
+                f'Continue investigating incident "{incident.title}" using the imported historical evidence '
+                f"from Investigation {run_number}. Revalidate the current state on cluster "
+                f'"{cluster.name if cluster else incident.cluster_id}"; determine whether the reported condition '
+                "and suspected causes still exist; investigate unresolved evidence gaps and relevant adjacent "
+                "dependencies; and compare new observations with the imported timestamps. Clearly distinguish "
+                "historical evidence from current evidence, cite both, and do not make changes."
+            )
+            context = (
+                "Imported incident context (historical snapshot)\n"
+                f"Incident: {incident.title} ({incident.id})\n"
+                f"Investigation: {run_number} ({run.id})\n"
+                f"Completed: {completed_at}\n"
+                f"Assessment: {briefing.get('summary', '')}\n"
+                "Treat imported observations as historical evidence. Revalidate current state before asserting "
+                "that a condition persists."
+            )
+            handoff = {
+                "version": 1, "status": "pending", "incident_id": incident.id,
+                "incident_title": incident.title, "run_id": run.id, "run_number": run_number,
+                "completed_at": completed_at, "evidence_count": len(evidence),
+                "evidence_started_at": min(observed_at) if observed_at else None,
+                "evidence_ended_at": max(observed_at) if observed_at else None,
+                "report_url": f"/incidents/{incident_id}",
+                "summary": str(briefing.get("summary") or "")[:1200],
+                "prompt": prompt[:service.settings.chat_max_chars],
+            }
             db.add(AdHocConversation(id=cid, created_by=user.username, title=f"Incident: {incident.title}"[:253],
                 status="active", cluster_ids_json=json.dumps([incident.cluster_id]), execution_mode="read_only",
                 # A nonempty expired session marker invokes the existing reconnect flow. It grants no capability.
                 delegated_session_id=f"incident-{uuid4()}", evidence_json=json.dumps(evidence),
-                context_summary=content[:4000]))
-            db.add(AdHocMessage(id=str(uuid4()), conversation_id=cid, role="assistant", content=content,
-                actor="system:incident-handoff", answer_mode="insufficient_evidence"))
+                context_summary=context[:4000], handoff_json=json.dumps(handoff)))
             service.audit(db, user.username, "continue_in_ask", incident_id=incident_id, conversation_id=cid)
             db.commit()
         return {"url": f"/ask/{cid}"}

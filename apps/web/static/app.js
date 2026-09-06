@@ -559,6 +559,36 @@
     });
   }
   const adhocForm = document.querySelector(".adhoc-chat-form");
+  const incidentHandoff = document.querySelector("[data-incident-handoff-start-url]");
+  if (incidentHandoff?.dataset.incidentHandoffStartUrl && csrf) {
+    const handoffStatus = incidentHandoff.querySelector("[data-incident-handoff-status]");
+    const startIncidentHandoff = async () => {
+      if (incidentHandoff.dataset.startRequested === "true") return;
+      incidentHandoff.dataset.startRequested = "true";
+      try {
+        const response = await fetch(incidentHandoff.dataset.incidentHandoffStartUrl, {
+          method: "POST",
+          headers: {"X-PodPilot-CSRF": csrf},
+          credentials: "same-origin",
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || "PodPilot could not start the incident follow-up.");
+        }
+        window.location.assign(payload.url || window.location.pathname);
+      } catch (error) {
+        delete incidentHandoff.dataset.startRequested;
+        if (handoffStatus) {
+          handoffStatus.replaceChildren();
+          const label = document.createElement("strong");
+          label.textContent = "The follow-up did not start. ";
+          handoffStatus.append(label, document.createTextNode("Reload the page to retry."));
+        }
+        showToast(error.message);
+      }
+    };
+    void startIncidentHandoff();
+  }
   const starterButtons = Array.from(document.querySelectorAll("[data-starter-prompt]"));
   const starterActions = Array.from(document.querySelectorAll("[data-starter-available]"));
   const clusterPicker = document.querySelector("[data-cluster-picker]");
