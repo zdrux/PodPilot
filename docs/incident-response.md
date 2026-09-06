@@ -31,13 +31,13 @@ a bounded polling fallback is used when streaming is unavailable. The incident d
 groups identical source alerts into table rows with occurrence counts, and every
 immutable run has its own Investigation tab. Briefings, hypotheses and next steps
 render as sanitized narrative Markdown without table parsing, so pipe-delimited model
-output cannot distort the report layout. The preliminary briefing is presented as a
-bounded assessment card with its evidence basis, while a sticky quick-view rail lists
-retained evidence and exact object coordinates projected from that evidence. Valid E-ID
-citations in the briefing, hypotheses and next steps, along with evidence and object links
-in the rail, activate the owning run, expand the exact run-scoped evidence row and scroll
-it into view. Retained payloads remain collapsed until requested. Limitations use a compact
-reading list. Continue in Ask
+output cannot distort the report layout. The preliminary briefing presents distinct
+findings as a flat at-a-glance list with its evidence basis, while a sticky quick-view rail
+lists retained evidence and exact object coordinates projected from that evidence. Evidence
+and object entries in the rail open the run-scoped retained payload in the same modal pattern
+as Ask activity. Valid E-ID citations in briefing prose, hypotheses and next steps activate
+the owning run, expand the exact timeline row and scroll it into view. Limitations use a
+compact reading list. Continue in Ask
 creates a private read-only conversation with copied historical evidence and
 requires the operator's own delegated sign-in before additional reads.
 

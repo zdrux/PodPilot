@@ -31,6 +31,7 @@ class IncidentDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     collect: list[str] = Field(default_factory=list, max_length=3)
     summary: str = Field(default="", max_length=4000)
+    problems: list[str] = Field(default_factory=list, max_length=8)
     hypotheses: list[str] = Field(default_factory=list, max_length=5)
     evidence_ids: list[str] = Field(default_factory=list, max_length=30)
     next_steps: list[str] = Field(default_factory=list, max_length=6)

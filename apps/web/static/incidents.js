@@ -31,7 +31,31 @@
     });
   }
 
+  function bindEvidenceDialogs(root) {
+    root.querySelectorAll('[data-incident-evidence-open]:not([data-incident-evidence-bound])').forEach(button => {
+      button.dataset.incidentEvidenceBound = 'true';
+      button.addEventListener('click', () => {
+        const dialog = document.getElementById(button.dataset.incidentEvidenceOpen);
+        if (!dialog) return;
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+      });
+    });
+    root.querySelectorAll('[data-incident-evidence-dialog]:not([data-incident-evidence-bound])').forEach(dialog => {
+      dialog.dataset.incidentEvidenceBound = 'true';
+      dialog.querySelector('[data-incident-evidence-close]')?.addEventListener('click', () => dialog.close());
+      dialog.addEventListener('click', event => {
+        if (event.target !== dialog) return;
+        const bounds = dialog.getBoundingClientRect();
+        const inside = event.clientX >= bounds.left && event.clientX <= bounds.right &&
+          event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+        if (!inside) dialog.close();
+      });
+    });
+  }
+
   function bindTabs(tabsRoot, preferredPanelId = null) {
+    bindEvidenceDialogs(tabsRoot);
     const tabs = Array.from(tabsRoot.querySelectorAll('[data-incident-tab]'));
     const panels = Array.from(tabsRoot.querySelectorAll('[data-incident-tab-panel]'));
     function activate(panelId, updateHash = false) {
@@ -137,6 +161,7 @@
       refreshRunning = true;
       const selected = incidentDetail.querySelector('[data-incident-tab][aria-selected="true"]')?.dataset.incidentTab;
       const openEvidence = new Set(Array.from(incidentDetail.querySelectorAll('details[id][open]')).map(item => item.id));
+      const openEvidenceDialog = incidentDetail.querySelector('[data-incident-evidence-dialog][open]')?.id;
       try {
         const response = await fetch(window.location.href, {
           headers: {'X-PodPilot-Activity-Refresh': '1'}, cache: 'no-store'
@@ -152,6 +177,7 @@
             incidentDetail.querySelector('[data-incident-tab]:not([data-incident-tab="incident-panel-overview"])')?.dataset.incidentTab : null;
           bindTabs(incidentDetail, latest || selected);
           incidentDetail.querySelectorAll('details[id]').forEach(item => { item.open = openEvidence.has(item.id); });
+          if (openEvidenceDialog) document.getElementById(openEvidenceDialog)?.showModal();
           preferLatestRun = false;
         }
         setLiveState(incidentDetail, 'live', 'Live updates');

@@ -142,7 +142,10 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
         run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == iid))
         run.status = 'completed'
         run.briefing_json = json.dumps({
-            'summary': 'The **API server is healthy** based on Evidence E1.',
+            'summary': (
+                'The **API server is healthy** based on Evidence E1. '
+                'A dependent workload remains unavailable.'
+            ),
             'hypotheses': [
                 '1. **Synthetic signal** - verify the simulation label.\n\n'
                 '| Evidence | Observation |\n|---|---|\n'
@@ -169,6 +172,11 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert '<h2>Incident assessment</h2>' in page.text
     assert '<strong>API server is healthy</strong>' in page.text
     assert '**API server is healthy**' not in page.text
+    assert 'Problems found:' not in page.text
+    problems = re.search(
+        r'<div class="incident-row-content incident-problems">(.*?)</ul>', page.text, re.DOTALL,
+    ).group(1)
+    assert problems.count('<li>') == 2
     assert '<td>3</td>' in page.text
     alert_table = re.search(r'<table class="incident-detail-table">(.*?)</table>', page.text, re.DOTALL).group(1)
     assert alert_table.count('<strong>etcdNoLeader</strong>') == 1
@@ -178,6 +186,9 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert f'id="evidence-{run_id}-E1"' in page.text
     assert 'class="incident-evidence-rail"' in page.text
     assert 'class="incident-evidence-card"' in page.text
+    assert f'data-incident-evidence-open="evidence-dialog-{run_id}-E1"' in page.text
+    assert f'id="evidence-dialog-{run_id}-E1"' in page.text
+    assert 'Retained payload' in page.text
     assert 'Observed objects' in page.text
     assert 'kube-apiserver' in page.text
     assert 'class="incident-inline-citation"' in page.text
@@ -194,6 +205,7 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
 
     script = (Path(__file__).parents[2] / 'web/static/incidents.js').read_text(encoding='utf-8')
     assert "target.open = true" in script
+    assert "dialog.showModal()" in script
     styles = (Path(__file__).parents[2] / 'web/static/styles.css').read_text(encoding='utf-8')
     assert '.incident-next-steps > li {' in styles
     assert '.incident-next-steps li {' not in styles

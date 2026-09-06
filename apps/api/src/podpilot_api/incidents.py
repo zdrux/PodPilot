@@ -227,6 +227,27 @@ def _evidence_object_refs(item):
     return refs
 
 
+def _briefing_problems(briefing):
+    """Return structured briefing problems, with a bounded legacy-summary fallback."""
+
+    authored = briefing.get("problems") if isinstance(briefing, dict) else None
+    if isinstance(authored, list):
+        problems = [str(item).strip() for item in authored if str(item).strip()]
+        if problems:
+            return problems[:8]
+    summary = str(briefing.get("summary") or "").strip() if isinstance(briefing, dict) else ""
+    if not summary:
+        return []
+    paragraphs = [item.strip(" \t\r\n-*•") for item in re.split(r"\n+", summary) if item.strip()]
+    if len(paragraphs) > 1:
+        return paragraphs[:8]
+    return [
+        item.strip()
+        for item in re.split(r"(?<=[.!?])\s+(?=(?:[*_`]*[A-Z0-9]))", summary)
+        if item.strip()
+    ][:8]
+
+
 def _queued_activity():
     now = utcnow().isoformat()
     return json.dumps({
@@ -1552,6 +1573,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 "row": run,
                 "number": len(runs) - index,
                 "briefing": briefing,
+                "problems": _briefing_problems(briefing),
                 "evidence": evidence_cards,
                 "object_refs": object_refs[:24],
                 "valid_evidence_ids": sorted(
