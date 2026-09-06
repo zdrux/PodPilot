@@ -59,13 +59,18 @@ deep-history path also requires `cluster-logging-infrastructure-view` and a conv
 `openshift-logging/logging-loki` Route on registered remote clusters; absence or denial is
 reported as a limitation and does not fail the investigation.
 
-**Manage → Connectors** contains child links for **Configured instances** and
-**Webhook receivers**, and has a dedicated add control. The supporting shared cluster
-registry remains under **Cluster Management** for API identity and trust metadata. A divider separates this
+**Manage → Connectors** is the connector directory. Its nested **Clusters**,
+**GitHub**, and **Argo CD** groups link directly to each configured instance, and
+its dedicated add control opens the type chooser. Registered shared clusters remain
+listed when incident access is not yet configured, while **Cluster Management** owns
+their API identity and trust metadata. A divider separates this
 configuration-administrator-only section from the shared workspace navigation.
-The receiver panel displays each HTTPS endpoint, enabled state, last admitted
-delivery and incident count, with links to credential/policy editing and incidents.
-The receiver is a POST API; it is not an interactive browser page.
+Webhook credentials and the generated receiver path are configured on each cluster
+connector; there is no separate webhook-receivers page. The receiver is a POST API,
+not an interactive browser page. The cluster connector also shows its last accepted
+delivery, incident count, and a collapsible summary of deployment-level investigation
+limits. The former `/settings/webhooks` URL redirects to the connector directory after
+enforcing configuration-administrator access.
 
 Secrets are opaque keys in the pre-created `podpilot-incident-credentials` Secret.
 Override its namespace/name with `PODPILOT_INCIDENT_SECRET_NAMESPACE` and
@@ -189,8 +194,9 @@ the remainder becomes the effective input ceiling. With the SNO profile this is
 incident payloads use the same tokenizer-independent estimate as Ask. If needed,
 PodPilot structurally compacts coordinator evidence, retaining alerts, operator
 health and specialist reports first. It stops a request locally when even the fixed
-context cannot fit. The active setting and evidence ceilings are visible under
-**Webhook receivers → Investigation runtime policy**.
+context cannot fit. The active setting and evidence ceilings remain deployment-level
+runtime policy configured through the `PODPILOT_INCIDENT_*` settings and are summarized
+on cluster connector records.
 
 Large or separate evidence domains use isolated specialist calls. Argo CD and GitHub
 specialists each receive only one connector result and return a compact cited report.

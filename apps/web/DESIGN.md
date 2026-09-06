@@ -139,16 +139,18 @@ reference for tables and operational activity.
 Use the Connectors and Admin Config pattern:
 
 1. compact boundary or security notice when necessary;
-2. record directory on the left;
+2. a record directory in the page or persistent navigation, but never both;
 3. editor on the right;
 4. numbered sections that follow the operator’s mental model;
 5. inset, consistently framed controls and helper copy;
 6. a grounded footer for save, test, activate, disable, or delete actions;
 7. a separate observation panel for read-only probe or capability results.
 
-The Connectors directory groups OpenShift clusters, GitHub instances, and Argo CD
-instances as independent endpoint types. Its add action opens a type chooser before
-showing a type-specific form; do not render unrelated integration fields together.
+The Connectors directory lives in the persistent Manage navigation and groups
+OpenShift clusters, GitHub instances, and Argo CD instances as independent endpoint
+types. Do not duplicate that directory inside the Connectors page. Its add action
+opens a type chooser before showing a type-specific form; do not render unrelated
+integration fields together.
 Relationships between connector types are investigation evidence, not form nesting.
 Below the editor, use the observed-topology surface for bounded connector discovery:
 compact per-connector status cards followed by a horizontally contained Application
@@ -226,7 +228,8 @@ destinations to make an individual page feel cleaner.
 ## 8. Responsive Behavior
 
 - Desktop: preserve side-by-side record directories, editors, tables, and
-  observation panels when they remain readable.
+  observation panels when they remain readable. The Connectors page is the exception:
+  its directory stays in persistent navigation and its editor uses the main width.
 - Around `1180px`: reduce optional third columns and move observation panels
   below the editor.
 - Around `980px`: stack administration directories and editors.

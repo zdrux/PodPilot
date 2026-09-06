@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-discovery-37">
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-sidebar-38">
   <script src="{{ url_for('static', path='/app.js') }}?v=email-table-copy-20" defer></script>
 </head>
 <body class="saas-app {% block body_class %}{% endblock %}">
@@ -112,14 +112,34 @@
         {% if incidents_enabled %}
         <div class="nav-tree expanded">
           <div class="nav-connector-heading">
-            <a class="nav-link {% if request.url.path in ['/settings/connectors', '/settings/webhooks'] %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connectors</a>
+            <a class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connectors</a>
             <a class="nav-connector-add" href="/settings/connectors?new=1" aria-label="Add connector">+</a>
           </div>
-          <div class="nav-subtree" aria-label="Connectors">
-            <ul class="nav-session-list nav-settings-list">
-              <li class="{% if request.url.path == '/settings/connectors' %}active{% endif %}"><a class="nav-session-link" href="/settings/connectors"><strong>Configured instances</strong></a></li>
-              <li class="{% if request.url.path == '/settings/webhooks' %}active{% endif %}"><a class="nav-session-link" href="/settings/webhooks"><strong>Webhook receivers</strong></a></li>
-            </ul>
+          <div class="nav-subtree nav-connector-subtree" aria-label="Connector instances">
+            {% for kind, label in [('cluster','Clusters'),('github','GitHub'),('argocd','Argo CD')] %}
+            <section class="nav-connector-group" aria-labelledby="nav-connector-group-{{ kind }}">
+              <div class="nav-connector-group-heading">
+                <span id="nav-connector-group-{{ kind }}">{{ label }}</span>
+                <span aria-label="{{ sidebar_connector_groups[kind] | length }} {{ label }} instances">{{ sidebar_connector_groups[kind] | length }}</span>
+              </div>
+              <ul class="nav-session-list nav-connector-list">
+                {% for item in sidebar_connector_groups[kind] %}
+                {% set is_current = request.url.path == '/settings/connectors' and (request.query_params.get('edit') == item.id or (kind == 'cluster' and not item.configured and request.query_params.get('type') == 'cluster' and request.query_params.get('cluster_id') == item.cluster_id)) %}
+                <li class="{% if is_current %}active{% endif %}">
+                  <a class="nav-session-link nav-connector-link" href="{{ item.href }}" title="{{ item.name }}"{% if is_current %} aria-current="page"{% endif %}>
+                    <span class="nav-connector-status{% if item.enabled %} enabled{% elif not item.configured %} unconfigured{% endif %}" aria-hidden="true"></span>
+                    <span>
+                      <strong>{{ item.name }}</strong>
+                      <small>{{ 'Enabled' if item.enabled else ('Not configured' if not item.configured else 'Disabled') }}</small>
+                    </span>
+                  </a>
+                </li>
+                {% else %}
+                <li class="nav-session-empty">No instances configured.</li>
+                {% endfor %}
+              </ul>
+            </section>
+            {% endfor %}
           </div>
         </div>
         {% endif %}

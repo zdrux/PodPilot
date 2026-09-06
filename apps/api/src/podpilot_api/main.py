@@ -10306,7 +10306,7 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
-    from podpilot_api.incident_models import FleetIncident
+    from podpilot_api.incident_models import FleetIncident, IncidentConnection
     from podpilot_api.incidents import IncidentService, install_incidents
     def incident_model_context(engine):
         with Session(engine) as db_session:
@@ -10423,6 +10423,9 @@ def create_app(
                 "recent_conversations": [],
                 "recent_incidents": [],
                 "has_more_incidents": False,
+                "sidebar_connector_groups": {
+                    "cluster": [], "github": [], "argocd": [],
+                },
             }
         session_id = _delegated_session_id(request)
         connected_ids = {
@@ -10442,6 +10445,10 @@ def create_app(
                 .order_by(FleetIncident.updated_at.desc())
                 .limit(6)
             )) if app_settings.incidents_enabled else []
+            connection_rows = list(db_session.scalars(
+                select(IncidentConnection)
+                .order_by(IncidentConnection.kind, IncidentConnection.name)
+            )) if app_settings.incidents_enabled else []
         clusters: list[dict[str, object]] = []
         for row in rows:
             item = _cluster_summary(row)
@@ -10449,11 +10456,42 @@ def create_app(
                 row.id in connected_ids if app_settings.delegated_access_enabled else True
             )
             clusters.append(item)
+        shared_clusters = [row for row in rows if row.visibility == "shared"]
+        cluster_connections = {
+            row.cluster_id: row for row in connection_rows
+            if row.kind == "cluster" and row.cluster_id
+        }
+        sidebar_connector_groups: dict[str, list[dict[str, object]]] = {
+            "cluster": [], "github": [], "argocd": [],
+        }
+        for cluster in shared_clusters:
+            connection = cluster_connections.get(cluster.id)
+            sidebar_connector_groups["cluster"].append({
+                "id": connection.id if connection else f"cluster:{cluster.id}",
+                "cluster_id": cluster.id,
+                "name": cluster.name,
+                "enabled": bool(connection and connection.enabled),
+                "configured": connection is not None,
+                "href": (
+                    f"/settings/connectors?edit={connection.id}"
+                    if connection else
+                    f"/settings/connectors?new=1&type=cluster&cluster_id={cluster.id}"
+                ),
+            })
+        for kind in ("github", "argocd"):
+            sidebar_connector_groups[kind] = [{
+                "id": row.id,
+                "name": row.name,
+                "enabled": row.enabled,
+                "configured": True,
+                "href": f"/settings/connectors?edit={row.id}",
+            } for row in connection_rows if row.kind == kind]
         return {
             "workspace_clusters": clusters,
             "recent_conversations": recent_conversations,
             "recent_incidents": incident_rows[:5],
             "has_more_incidents": len(incident_rows) > 5,
+            "sidebar_connector_groups": sidebar_connector_groups,
         }
 
     templates = Jinja2Templates(

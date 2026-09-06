@@ -58,6 +58,12 @@ def _repository_identity(value):
     return host.casefold(), repository.casefold()
 
 
+def _github_repository_host(value):
+    """Map a GitHub REST API host to the corresponding Git repository host."""
+    host = str(value or "").casefold().rstrip(".")
+    return "github.com" if host == "api.github.com" else host
+
+
 def _connector_state_version(db):
     digest = hashlib.sha256()
     for row in db.scalars(select(IncidentConnection).order_by(IncidentConnection.id)):
@@ -87,7 +93,7 @@ def _connector_topology(connections, discoveries, clusters):
         if row.kind != "github" or not row.enabled:
             continue
         cfg = _json_object(row.config_json)
-        host = urlsplit(cfg.get("url", "")).hostname
+        host = _github_repository_host(urlsplit(cfg.get("url", "")).hostname)
         repositories = {str(item).casefold() for item in cfg.get("repositories", []) if isinstance(item, str)}
         if host:
             github_candidates.append((row, host.casefold(), repositories))
@@ -119,8 +125,11 @@ def _connector_topology(connections, discoveries, clusters):
             destination = application.get("destination") if isinstance(application.get("destination"), dict) else {}
             server = str(destination.get("server") or "").rstrip("/")
             name = destination.get("name")
-            cluster_matches = [cluster for cluster, servers, aliases in cluster_candidates
-                if (server and server in servers) or (isinstance(name, str) and name in aliases)]
+            if server == "https://kubernetes.default.svc" and hosting and row.cluster_id:
+                cluster_matches = [hosting]
+            else:
+                cluster_matches = [cluster for cluster, servers, aliases in cluster_candidates
+                    if (server and server in servers) or (isinstance(name, str) and name in aliases)]
             sources = application.get("sources") if isinstance(application.get("sources"), list) else []
             for source in sources or [{}]:
                 source = source if isinstance(source, dict) else {}
@@ -1149,7 +1158,8 @@ class IncidentService:
                         parsed = urlsplit(repo_url)
                         repo = parsed.path.strip('/').removesuffix('.git')
                         identity = (repo, change.get("revision"))
-                        if (parsed.hostname != urlsplit(cfg["url"]).hostname or repo not in cfg["repositories"]
+                        if (_github_repository_host(parsed.hostname) != _github_repository_host(
+                                urlsplit(cfg["url"]).hostname) or repo not in cfg["repositories"]
                                 or not re.fullmatch(r"[a-fA-F0-9]{40,64}", change.get("revision") or "")):
                             continue
                         candidates.setdefault(identity, []).append({
@@ -1591,46 +1601,44 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             clusters = list(db.scalars(select(Cluster).where(Cluster.visibility == "shared", Cluster.is_enabled.is_(True))))
             discoveries = list(db.scalars(select(ConnectorDiscovery).order_by(ConnectorDiscovery.updated_at.desc())))
         discovery_views, topology = _connector_topology(rows, discoveries, clusters)
-        discovery_by_id = {item["id"]: item for item in discovery_views}
         selected = next((r for r in rows if r.id == request.query_params.get("edit")), None)
         requested_kind = request.query_params.get("type")
         new_kind = requested_kind if requested_kind in {"cluster", "argocd", "github"} else None
         requested_cluster_id = request.query_params.get("cluster_id") if new_kind == "cluster" else None
         new_cluster = next((cluster for cluster in clusters if cluster.id == requested_cluster_id), None)
-        cluster_connections = {row.cluster_id: row for row in rows if row.kind == "cluster"}
-        cluster_names = {cluster.id: cluster.name for cluster in clusters}
-        argocd_items = []
-        for row in rows:
-            if row.kind != "argocd":
-                continue
-            row_config = json.loads(row.config_json or "{}")
-            mode = service.access_mode(row, row_config)
-            detail = "Argo CD API" if mode == "direct" else (
-                f"Kubernetes API · {cluster_names.get(row.cluster_id, 'hosting cluster unavailable')}")
-            argocd_items.append({"id": row.id, "name": row.name, "kind": row.kind,
-                "enabled": row.enabled, "href": f"/settings/connectors?edit={row.id}", "detail": detail,
-                "discovery_status": discovery_by_id.get(row.id, {}).get("status", "not_run")})
-        grouped = {
-            "cluster": [{"id": (connection.id if connection else f"cluster:{cluster.id}"),
-                "name": cluster.name, "kind": "cluster", "enabled": bool(connection and connection.enabled),
-                "href": (f"/settings/connectors?edit={connection.id}" if connection else
-                    f"/settings/connectors?new=1&type=cluster&cluster_id={cluster.id}"),
-                "detail": ("Incident response enabled" if connection and connection.enabled else
-                    "Incident response not configured"), "discovery_status":
-                    discovery_by_id.get(connection.id, {}).get("status", "not_run") if connection else "not_run"}
-                for cluster in clusters for connection in [cluster_connections.get(cluster.id)]],
-            "argocd": argocd_items,
-            "github": [{"id": row.id, "name": row.name, "kind": row.kind, "enabled": row.enabled,
-                "href": f"/settings/connectors?edit={row.id}", "detail": "GitHub API",
-                "discovery_status": discovery_by_id.get(row.id, {}).get("status", "not_run")}
-                for row in rows if row.kind == "github"],
-        }
+        receiver_status = None
+        if selected and selected.kind == "cluster":
+            with Session(app.state.engine) as db:
+                receiver_status = {
+                    "last_delivery": db.scalar(
+                        select(func.max(FleetIncident.updated_at))
+                        .where(FleetIncident.source_id == selected.id)
+                    ),
+                    "incident_count": db.scalar(
+                        select(func.count()).select_from(FleetIncident)
+                        .where(FleetIncident.source_id == selected.id)
+                    ),
+                }
         return page(request, user, "connectors.html", {"connections": rows, "clusters": clusters,
-            "connection_groups": grouped, "selected": selected, "new_kind": new_kind,
-            "connector_count": sum(len(items) for items in grouped.values()), "new_cluster": new_cluster,
+            "selected": selected, "new_kind": new_kind, "new_cluster": new_cluster,
             "choose_kind": request.query_params.get("new") == "1" and new_kind is None,
             "config": json.loads(selected.config_json) if selected else {}, "default_alerts": DEFAULT_ALERTS,
-            "discovery_views": discovery_views, "topology": topology})
+            "discovery_views": discovery_views, "topology": topology,
+            "receiver_status": receiver_status,
+            "incident_policy": {
+                "context_window_tokens": service.settings.incident_context_window_tokens,
+                "run_timeout_seconds": service.settings.incident_run_timeout_seconds,
+                "max_rounds": service.settings.incident_max_rounds,
+                "max_specialists": service.settings.incident_max_specialist_reports,
+                "worker_concurrency": service.settings.incident_worker_concurrency,
+                "evidence_bytes": service.settings.incident_max_evidence_bytes,
+                "coordinator_bytes": service.settings.incident_max_coordinator_bytes,
+                "log_tail_lines": service.settings.incident_log_tail_lines,
+                "log_bytes": service.settings.incident_log_max_bytes,
+                "log_range_seconds": service.settings.incident_log_range_seconds,
+                "loki_log_limit": service.settings.incident_loki_log_limit,
+                "loki_range_seconds": service.settings.incident_loki_range_seconds,
+            }})
 
     @app.get("/api/v1/incident-connections/events")
     async def connector_events(request: Request, user=Depends(current_user)):
@@ -1657,34 +1665,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
     @app.get("/settings/webhooks")
     async def webhook_settings(request: Request, user=Depends(current_user)):
         service.manage(user)
-        receivers = []
-        with Session(app.state.engine) as db:
-            for row in db.scalars(select(IncidentConnection).where(IncidentConnection.kind == 'cluster').order_by(IncidentConnection.name)):
-                cluster = db.get(Cluster, row.cluster_id)
-                latest = db.scalar(select(func.max(FleetIncident.updated_at)).where(FleetIncident.source_id == row.id))
-                count = db.scalar(select(func.count()).select_from(FleetIncident).where(FleetIncident.source_id == row.id))
-                # Deployment uses an edge-terminated Route; display HTTPS even behind its HTTP upstream.
-                origin = str(request.base_url).rstrip('/')
-                if service.settings.auth_mode == 'proxy':
-                    origin = 'https://' + request.url.netloc
-                receivers.append({'id':row.id,'name':row.name,'cluster_name':cluster.name if cluster else row.cluster_id,
-                    'cluster_id':row.cluster_id,'enabled':row.enabled,'last_delivery':latest,'incident_count':count,
-                    'url':f'{origin}/api/v1/incident-webhooks/{row.id}'})
-        return page(request, user, 'webhook_settings.html', {'receivers':receivers,
-            'incident_policy': {
-                'context_window_tokens': service.settings.incident_context_window_tokens,
-                'run_timeout_seconds': service.settings.incident_run_timeout_seconds,
-                'max_rounds': service.settings.incident_max_rounds,
-                'max_specialists': service.settings.incident_max_specialist_reports,
-                'worker_concurrency': service.settings.incident_worker_concurrency,
-                'evidence_bytes': service.settings.incident_max_evidence_bytes,
-                'coordinator_bytes': service.settings.incident_max_coordinator_bytes,
-                'log_tail_lines': service.settings.incident_log_tail_lines,
-                'log_bytes': service.settings.incident_log_max_bytes,
-                'log_range_seconds': service.settings.incident_log_range_seconds,
-                'loki_log_limit': service.settings.incident_loki_log_limit,
-                'loki_range_seconds': service.settings.incident_loki_range_seconds,
-            }})
+        return RedirectResponse("/settings/connectors", status_code=303)
 
     @app.post("/api/v1/incident-connections")
     async def save(request: Request, user=Depends(current_user)):

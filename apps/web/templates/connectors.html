@@ -10,26 +10,7 @@
     <a class="button connector-add-button" href="/settings/connectors?new=1" aria-label="Add connector"><span aria-hidden="true">+</span> Add connector</a>
   </header>
 
-  <div class="connector-layout">
-    <aside class="connector-directory" aria-label="Configured connectors">
-      <div class="connector-directory-header"><div><p class="eyebrow">Connector directory</p><h2>Configured instances</h2><p>Independent endpoints available to incident response.</p></div><span class="connector-count">{{ connector_count }}</span></div>
-      <div class="connector-directory-list">
-        {% for kind, label in [('cluster','Clusters'),('github','GitHub'),('argocd','Argo CD')] %}
-        <section class="connector-directory-group" aria-labelledby="connector-group-{{ kind }}">
-          <div class="connector-directory-group-heading"><h3 id="connector-group-{{ kind }}">{{ label }}</h3><span>{{ connection_groups[kind] | length }}</span></div>
-          {% for row in connection_groups[kind] %}
-          <a class="connector-directory-item{% if selected and selected.id == row.id %} is-selected{% endif %}" href="{{ row.href }}">
-            <span class="connector-directory-mark" aria-hidden="true"></span>
-            <span class="connector-directory-copy"><strong>{{ row.name }}</strong><small>{{ row.detail }}</small></span>
-            <span class="connector-state{% if row.enabled %} is-enabled{% endif %}">{{ 'Enabled' if row.enabled else 'Disabled' }}</span>
-          </a>
-          {% else %}<p class="connector-group-empty">No {{ label }} connectors</p>{% endfor %}
-        </section>
-        {% endfor %}
-      </div>
-      <div class="connector-directory-note"><strong>Independent configuration</strong><p>PodPilot discovers relationships from exact cluster destinations, repository origins, paths, and revisions.</p></div>
-    </aside>
-
+  <div class="connector-layout connector-layout-single">
     <section class="connector-editor" aria-labelledby="connector-editor-title">
       <div class="connector-editor-accent" aria-hidden="true"></div>
       {% if choose_kind %}
@@ -70,7 +51,7 @@
             <label class="connector-field connector-field-full"><span>Thanos/Prometheus HTTPS origin <em>Optional</em></span><span class="connector-control-frame"><input type="url" name="monitoring_url" value="{{ config.get('monitoring_url','') }}" placeholder="https://thanos-querier.example.com"></span></label>
             <label class="connector-field connector-field-full"><span>Alertmanager webhook bearer token <em>Secret</em></span><span class="connector-control-frame"><input type="password" name="webhook_token" minlength="32" autocomplete="new-password" placeholder="At least 32 random characters"></span><small>Configure the same value in this cluster's Alertmanager receiver.</small></label>
             <label class="connector-field connector-field-full"><span>Argo CD destination aliases <em>Optional</em></span><span class="connector-control-frame"><textarea name="cluster_aliases" rows="3" placeholder="One exact destination name per line">{{ config.get('cluster_aliases',[]) | join('\n') }}</textarea></span><small>Used only when an Application identifies this cluster by destination name instead of API URL.</small></label>
-            {% if selected %}<div class="connector-endpoint-note"><span>Webhook receiver path</span><code>/api/v1/incident-webhooks/{{ selected.id }}</code></div>{% endif %}
+            {% if selected %}<div class="connector-endpoint-note"><div><span>Webhook receiver path</span><small>Last accepted: {{ receiver_status.last_delivery | est_time if receiver_status and receiver_status.last_delivery else 'None yet' }} · {{ receiver_status.incident_count if receiver_status else 0 }} incidents recorded</small></div><code>/api/v1/incident-webhooks/{{ selected.id }}</code></div>{% endif %}
             {% elif active_kind == 'argocd' %}
             <label class="connector-field connector-field-full"><span>Allowed Argo CD projects</span><span class="connector-control-frame"><textarea name="projects" rows="4" placeholder="One project per line">{{ config.get('projects',[]) | join('\n') }}</textarea></span><small>Applications outside these projects are ignored. Cluster matches come from observed destinations.</small></label>
             {% else %}
@@ -87,6 +68,18 @@
         <section class="connector-form-section"><label class="connector-enable-card"><input type="checkbox" name="enabled" {% if selected and selected.enabled %}checked{% endif %}><span><strong>Enable this connector</strong><small>Allow PodPilot to use it for incident-response investigations.</small></span></label></section>
         <footer class="connector-form-footer"><div class="connector-form-assurance"><strong>Bounded discovery</strong><span>Enabled connectors are tested after save; discovered relationships remain evidence, not access grants.</span></div><div class="topbar-actions">{% if selected %}<button type="button" class="button" data-incident-post="/api/v1/incident-connections/{{ selected.id }}/test">Test &amp; discover</button>{% endif %}<button class="button primary" type="submit">{{ 'Save changes' if selected else 'Save connector' }}</button></div></footer>
       </form>
+      {% if active_kind == 'cluster' %}
+      <details class="connector-runtime-policy">
+        <summary>Investigation runtime policy</summary>
+        <div class="connector-runtime-policy-grid">
+          <p><strong>{{ incident_policy.context_window_tokens }} tokens</strong><span>Model context window</span></p>
+          <p><strong>{{ incident_policy.max_rounds }} turns · {{ (incident_policy.run_timeout_seconds / 60) | round(1) }} min</strong><span>Coordinator budget and safety deadline</span></p>
+          <p><strong>{{ (incident_policy.evidence_bytes / 1024) | round | int }} KiB · {{ (incident_policy.coordinator_bytes / 1024) | round | int }} KiB</strong><span>Retained and coordinator evidence</span></p>
+          <p><strong>{{ incident_policy.log_tail_lines }} / {{ incident_policy.loki_log_limit }} lines</strong><span>Kubernetes / Loki per-container limits · {{ (incident_policy.log_bytes / 1024) | round | int }} KiB</span></p>
+        </div>
+        <small>Deployment-level bounds are configured through <code>PODPILOT_INCIDENT_*</code> settings. Output and protocol space are reserved before the effective model input ceiling is calculated.</small>
+      </details>
+      {% endif %}
       <p id="incident-feedback" class="incident-feedback connector-feedback" role="status"></p>
       {% else %}
       <header class="connector-editor-header"><div><p class="eyebrow">Connector inventory</p><h2 id="connector-editor-title">Select an instance</h2><p>Choose a configured connector, or add an independent cluster, Argo CD, or GitHub endpoint.</p></div></header>

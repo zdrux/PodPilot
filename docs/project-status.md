@@ -75,9 +75,12 @@ The Incidents-selected SaaS visual system now applies through the shared applica
 so navigation width, Inter typography, page gutters, headings, buttons, metrics, forms, and
 bordered panels remain stable when moving among Ask, Clusters, Incidents, and management pages.
 The responsive shell keeps the full workspace navigation visible through the tablet breakpoint.
-The Connectors editor now follows the cluster sign-in screen's structured form language: a compact
-grouped directory, type chooser, type-specific configuration sections, framed controls with consistent
-helper text, scoped choice panels, and a dedicated save/test footer. Argo CD connectors choose a
+The Connectors workspace now places its grouped Clusters, GitHub, and Argo CD instance directory
+under the persistent Manage navigation and uses the main pane only for the selected editor and
+observed topology. Its add control opens the type chooser. Cluster records own their webhook path,
+delivery status, incident count, alert policy, and a collapsible runtime-policy summary; the former
+Webhook receivers page redirects to Connectors after authorization. Type-specific configuration
+sections retain framed controls, scoped choice panels, and a dedicated save/test footer. Argo CD connectors choose a
 direct HTTPS API origin/token or Kubernetes API access through a selected registered hosting cluster;
 the latter reuses the cluster credential without storing a duplicate token. Neither mode configures a
 target-cluster or GitHub dependency. Investigation-time matching
@@ -94,13 +97,13 @@ sticky observation panels where relevant, and grounded action footers. Their exi
 credential, search, tag, TLS, status, and destructive-action contracts are unchanged. The three routes
 passed a combined browser comparison against the Connections screen and the complete API application
 test suite.
-OpenShift application build `podpilot-135` and runner build `podpilot-oc-runner-16` completed
+OpenShift application build `podpilot-137` and runner build `podpilot-oc-runner-17` completed
 successfully, and
 the deployment rolled out with one ready application replica and no API-container restarts.
 The current SNO application image is
-`sha256:40b62c3c041c879bd18e8851fe71ccbcda7780a06381425a87ec0ebb00d0957e`
+`sha256:0342e88e8e8bdfd86c41b4bf84874184d071fad8cc0cf45e6ae6888cef29d572`
 with schema head `0025_connector_discovery`; the rebuilt runner image is
-`sha256:c41261fce1f0939a80203a82dd6f85dec4f6c86563a83c59f305ad522f124fd2`.
+`sha256:fdf59cfbb92fb5e91a1c49920b4c5ec83baa78a16c84d8495ff5489bd83f97fd`.
 The post-rollout OpenRouter profile probe completed ready. All three containers were ready with zero
 restarts, the API readiness check reported a healthy database, and the external connector route
 returned the expected OpenShift OAuth redirect.

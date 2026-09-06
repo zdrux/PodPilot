@@ -17,8 +17,12 @@ GitHub endpoints own separate credentials and allowlists. An Argo CD connector c
 for Kubernetes API access deliberately reuses the selected registered hosting cluster's
 read-only credential and TLS policy; it stores no second token, and this transport choice
 does not authorize access to Argo-managed destination clusters. Server code matches
-only exact Argo destination API origins/names and exact GitHub origin/repository identities;
-repository URLs, monorepo paths, revisions, managed-resource coordinates, Application
+only exact Argo destination API origins/names and exact GitHub origin/repository identities.
+The public `api.github.com` REST origin is normalized only to the corresponding
+`github.com` repository host. For Kubernetes-backed Argo CD, an in-cluster
+`https://kubernetes.default.svc` destination resolves to that connector's selected
+hosting-cluster object rather than PodPilot's own runtime cluster.
+Repository URLs, monorepo paths, revisions, managed-resource coordinates, Application
 content, and all other connector responses remain untrusted evidence. An observed match
 authorizes only the connector's bounded read and never expands the reused cluster credential
 beyond its original Kubernetes API endpoint.

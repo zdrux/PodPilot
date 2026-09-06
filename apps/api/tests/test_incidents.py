@@ -322,8 +322,11 @@ def test_connector_directory_groups_independent_types_and_uses_type_chooser(clie
         'kind':'github','name':'Corporate GitHub','enabled':True,'url':'https://github.example',
         'token':'github-read-token','repositories':['platform/config']}).status_code==200
     page=client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
-    assert all(f'id="connector-group-{kind}"' in page.text for kind in ('cluster','github','argocd'))
+    assert page.status_code == 200
+    assert 'aria-label="Connector instances"' in page.text
+    assert all(f'id="nav-connector-group-{kind}"' in page.text for kind in ('cluster','github','argocd'))
     assert 'Central GitOps' in page.text and 'Corporate GitHub' in page.text
+    assert 'aria-label="Configured connectors"' not in page.text
     chooser=client.get('/settings/connectors?new=1',headers={'x-forwarded-user':'admin'})
     assert 'Choose a connector type' in chooser.text
     assert '/settings/clusters?new=1&amp;connector=1' in chooser.text
@@ -884,23 +887,32 @@ def test_argocd_kubernetes_access_reuses_selected_cluster_credential(client):
 
 def test_connector_discovery_builds_exact_application_topology(client):
     source(client)
+    remote_id='11111111-1111-1111-1111-111111111111'
+    with Session(client.app.state.engine) as db:
+        db.add(Cluster(id=remote_id,name='Remote GitOps host',
+            api_url='https://api.remote.example:6443',environment='dev',visibility='shared',
+            is_enabled=True,is_system=False,status='ready',created_by='admin',updated_by='admin'))
+        db.commit()
+    cluster=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'cluster','name':'Remote incidents','cluster_id':remote_id,'enabled':True,
+        'token':'remote-cluster-reader','webhook_token':'r'*40})
     github=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
-        'kind':'github','name':'Corporate GitHub','enabled':True,'url':'https://github.example',
-        'token':'github-token','repositories':['platform/config']})
+        'kind':'github','name':'GitHub.com','enabled':True,'url':'https://api.github.com',
+        'api_prefix':'','token':'github-token','repositories':['platform/config']})
     argocd=client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
-        'kind':'argocd','name':'Central Argo','enabled':True,'url':'https://argocd.example',
-        'token':'argocd-token','projects':['platform']})
-    assert github.status_code==200 and argocd.status_code==200
+        'kind':'argocd','name':'Central Argo','enabled':True,'access_mode':'kubernetes',
+        'cluster_id':remote_id,'namespace':'openshift-gitops','projects':['platform']})
+    assert cluster.status_code==200 and github.status_code==200 and argocd.status_code==200
     service=client.app.state.incident_service
     class Reader:
         def __init__(self,origin): self.origin=origin
         def get(self,path,*args):
-            assert path=='/api/v3/repos/platform/config'
-            return {'full_name':'platform/config','default_branch':'main','html_url':'https://github.example/platform/config'}
+            assert path=='/repos/platform/config'
+            return {'full_name':'platform/config','default_branch':'main','html_url':'https://github.com/platform/config'}
         def argocd(self,*args,**kwargs):
             return {'applications':[{'application':'payments-dev','project':'platform',
                 'destination':{'server':'https://kubernetes.default.svc','name':None,'namespace':'payments'},
-                'sources':[{'repository':'https://github.example/platform/config.git','path':'clusters/dev',
+                'sources':[{'repository':'https://github.com/platform/config.git','path':'clusters/dev',
                     'target_revision':'main','deployed_revision':'a'*40}],
                 'managed_resources':[],'health':'Healthy','sync':'Synced'}],
                 'changes':[],'partial':False,'limitations':[]}
@@ -911,7 +923,8 @@ def test_connector_discovery_builds_exact_application_topology(client):
         service.discover_connection(client.app.state.engine,connection_id)
     page=client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
     assert 'payments-dev' in page.text and 'clusters/dev' in page.text
-    assert 'Corporate GitHub' in page.text and 'Central Argo' in page.text
+    assert 'GitHub.com' in page.text and 'Central Argo' in page.text
+    assert 'Remote GitOps host' in page.text
     assert 'Confirmed' in page.text and 'Live discovery' not in page.text
 
 
@@ -986,20 +999,20 @@ def test_webhook_rejects_naive_dates_and_oversized_payload(client):
     assert send(client,sid,body).status_code==413
 
 
-def test_webhook_settings_shows_receiver_and_delivery_without_secrets(client):
+def test_webhook_settings_redirects_to_cluster_connector_without_exposing_secrets(client):
     sid=source(client)
-    page=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'})
+    redirect=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'},follow_redirects=False)
+    assert redirect.status_code==303
+    assert redirect.headers['location']=='/settings/connectors'
+    page=client.get(f'/settings/connectors?edit={sid}',headers={'x-forwarded-user':'admin'})
     assert page.status_code==200
     assert f'/api/v1/incident-webhooks/{sid}' in page.text
+    assert f'href="/settings/connectors?edit={sid}"' in page.text
+    assert 'aria-current="page"' in page.text
+    assert 'None yet · 0 incidents recorded' in page.text
     assert '64000 tokens' in page.text
-    assert '1000 Kubernetes lines / 96 KiB over 2.0 hours' in page.text
-    assert 'Scoped Loki history: 2000 lines / 96 KiB over 6.0 hours' in page.text
-    assert 'None yet' in page.text
+    assert '10 turns · 45.0 min' in page.text
     assert 'private-cluster-token' not in page.text and 'w'*40 not in page.text
-    send(client,sid,notification())
-    page=client.get('/settings/webhooks',headers={'x-forwarded-user':'admin'})
-    assert '1 incidents recorded' in page.text
-    assert 'None yet' not in page.text
     assert client.get('/settings/webhooks',headers={'x-forwarded-user':'sre'}).status_code==403
 
 
@@ -1018,23 +1031,19 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
         db.commit()
 
     connectors = client.get('/settings/connectors', headers={'x-forwarded-user':'admin'})
-    webhooks = client.get('/settings/webhooks', headers={'x-forwarded-user':'admin'})
 
-    assert 'Primary budget: 10 coordinator turns' in webhooks.text
-    assert 'Hard safety deadline: 45.0 minutes' in webhooks.text
-
-    for page in (connectors, webhooks):
-        assert page.status_code == 200
-        assert 'Active platform investigation' in page.text
-        assert 'aria-label="Recent incidents"' in page.text
-        assert 'Incident 10' in page.text and 'Incident 06' in page.text
-        assert 'Incident 05' not in page.text
-        assert 'More incidents →' in page.text
-        assert 'aria-label="Connectors"' in page.text
-        assert 'Configured instances' in page.text
-        assert 'Webhook receivers' in page.text
-        assert 'Cluster registry' not in page.text
-        assert 'class="nav-label section-gap admin-section-label">Manage</p>' in page.text
+    assert connectors.status_code == 200
+    assert 'Active platform investigation' in connectors.text
+    assert 'aria-label="Recent incidents"' in connectors.text
+    assert 'Incident 10' in connectors.text and 'Incident 06' in connectors.text
+    assert 'Incident 05' not in connectors.text
+    assert 'More incidents →' in connectors.text
+    assert 'aria-label="Connector instances"' in connectors.text
+    assert all(f'id="nav-connector-group-{kind}"' in connectors.text for kind in ('cluster','github','argocd'))
+    assert 'SNO incidents' in connectors.text
+    assert 'Webhook receivers' not in connectors.text
+    assert 'Cluster registry' not in connectors.text
+    assert 'class="nav-label section-gap admin-section-label">Manage</p>' in connectors.text
 
     assert 'href="/incidents/00000000-0000-0000-0000-000000000010"' in connectors.text
     assert len(set(re.findall(r'href="/incidents/([0-9a-f-]{36})"', connectors.text))) == 5

@@ -44,6 +44,14 @@ secret are intentionally omitted. They do not belong in this repository.
   Prometheus operator, one Prometheus replica, and one Thanos Ruler replica.
 - The Community Strimzi operator `0.51.0` is installed cluster-wide from the `stable` channel in
   `openshift-operators`. Its Subscription uses automatic install-plan approval.
+- Red Hat OpenShift GitOps operator `1.21.4` is installed cluster-wide from the `latest` channel in
+  `openshift-operators`. Its automatically managed `openshift-gitops` Argo CD instance exposes the
+  re-encrypt Route `openshift-gitops-server-openshift-gitops.apps.sno.192-168-0-200.sslip.io`.
+  The private `zdrux/podpilot-gitops-sno` repository contains the lab's `apps/sno-demo` fixture;
+  its repository credential is stored only in the Argo CD namespace and never in this repository.
+  Application `openshift-gitops/podpilot-sno-demo` continuously syncs that path into the delegated
+  `podpilot-gitops-demo` namespace. Its test workload exposes the edge-terminated Route
+  `podpilot-gitops-demo-podpilot-gitops-demo.apps.sno.192-168-0-200.sslip.io`.
 - The `kafka-observability` namespace contains the lab-only
   `kafka-observability-cluster`: one Kafka `4.2.0` node with combined broker/controller roles,
   Strimzi JMX Prometheus Exporter rules, Kafka Exporter, and the
@@ -96,6 +104,10 @@ oc auth can-i --list --as=system:serviceaccount:ai-ops:ai-observer
 oc get storageclass podpilot-local
 oc -n ai-ops get pvc podpilot-data
 oc -n openshift-operators get subscription strimzi-kafka-operator
+oc -n openshift-operators get subscription openshift-gitops-operator
+oc -n openshift-gitops get argocd,pods,route
+oc -n openshift-gitops get application podpilot-sno-demo
+oc -n podpilot-gitops-demo get deployment,pod,service,route
 oc -n openshift-user-workload-monitoring get pods
 oc -n kafka-observability get kafka,kafkanodepool,kafkatopic,podmonitor,pvc
 oc get storageclass kafka-observability-local
