@@ -196,8 +196,12 @@ six-hour window anchored thirty minutes before alert onset. Missing Kubernetes o
 history remains an explicit limitation and does not stop other collection. Alerts without
 a valid Kubernetes `namespace` label begin with the cluster-wide exception survey rather
 than losing workload visibility. A run accepts no more than 20 initial alert namespaces and
-40 total namespaces after evidence-led expansion. Each cluster-wide resource list is capped
-at 60 objects and the combined unhealthy projection at 120 observations.
+40 total namespaces after evidence-led expansion. The cluster-wide survey follows Kubernetes
+continuation tokens until every page of Pods, Deployments, StatefulSets, DaemonSets, PVCs and
+warning Events has been evaluated. Healthy objects are discarded immediately; only compact
+unhealthy observations consume incident evidence. The survey retains at most 120 unhealthy
+observations but still finishes scanning subsequent pages, reports scanned/unhealthy/page
+counts for every resource type, and marks exact API or continuation failures as incomplete.
 Optional metric collection uses one fixed platform availability query over 30
 minutes at 60-second resolution, capped at 12 series.
 

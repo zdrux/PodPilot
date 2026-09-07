@@ -75,11 +75,11 @@ class IncidentReader:
 
         expanded = list(self.namespaces)
         for namespace in namespaces:
+            if len(expanded) >= 40:
+                break
             namespace = str(namespace or "").strip()
             if self._valid_namespace(namespace) and namespace not in expanded:
                 expanded.append(namespace)
-            if len(expanded) >= 40:
-                break
         self.namespaces = tuple(expanded)
 
     def get(self, path, params=None):
@@ -320,11 +320,13 @@ class IncidentReader:
                 "scope": key, "limitations": limitations}
 
     def _collect_cluster_health(self):
-        """Return a bounded cross-namespace exception survey, never full object specs."""
+        """Scan cluster health to completion while retaining only compact exceptions."""
 
         now = datetime.now(timezone.utc)
-        rows, limitations = [], []
+        rows, limitations, coverage = [], [], []
         partial = False
+        unhealthy_observations = 0
+        retained_limit = 120
         requests = (
             ("Pod", "/api/v1/pods"),
             ("Deployment", "/apis/apps/v1/deployments"),
@@ -334,101 +336,140 @@ class IncidentReader:
             ("Event", "/api/v1/events"),
         )
         for kind, path in requests:
-            params = {"limit": 60}
-            if kind == "Event":
-                params["fieldSelector"] = "type=Warning"
-            try:
-                payload = self.get(path, params)
-            except IncidentReadError as exc:
-                limitations.append(f"Cluster-wide {kind} health survey failed: {exc}")
-                partial = True
-                continue
-            except Exception:
-                limitations.append(
-                    f"Cluster-wide {kind} health survey failed: unexpected response-processing error."
-                )
-                partial = True
-                continue
-            items = payload.get("items", [])
-            if not isinstance(items, list):
-                limitations.append(
-                    f"Cluster-wide {kind} health survey failed: response did not contain an object list."
-                )
-                partial = True
-                continue
-            resource_partial = bool(payload.get("metadata", {}).get("continue")) or len(items) > 60
-            partial = partial or resource_partial
-            if resource_partial:
-                limitations.append(
-                    f"Cluster-wide {kind} health survey reached its pagination limit: inspected "
-                    f"the first {min(len(items), 60)} objects; additional objects were available."
-                )
-            for item in items[:60]:
-                meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
-                namespace = meta.get("namespace")
-                row = {"kind": kind, "namespace": namespace, "name": meta.get("name")}
-                unhealthy = False
-                if kind == "Pod":
-                    statuses = [*status.get("initContainerStatuses", []), *status.get("containerStatuses", [])]
-                    unhealthy = status.get("phase") not in ("Running", "Succeeded") or any(
-                        not container.get("ready", False) and container.get("state", {}).get("waiting")
-                        for container in statuses
+            continue_token = ""
+            seen_tokens = set()
+            scanned = kind_unhealthy = pages = 0
+            complete = True
+            while True:
+                params = {"limit": 60}
+                if kind == "Event":
+                    params["fieldSelector"] = "type=Warning"
+                if continue_token:
+                    params["continue"] = continue_token
+                try:
+                    payload = self.get(path, params)
+                except IncidentReadError as exc:
+                    limitations.append(f"Cluster-wide {kind} health survey failed: {exc}")
+                    complete = False
+                    break
+                except Exception:
+                    limitations.append(
+                        f"Cluster-wide {kind} health survey failed: unexpected response-processing error."
                     )
-                    if unhealthy:
-                        row.update(phase=status.get("phase"), containers=[{
-                            "name": container.get("name"), "ready": container.get("ready"),
-                            "restartCount": container.get("restartCount"),
-                            "waiting_reason": (container.get("state", {}).get("waiting") or {}).get("reason"),
-                            "last_reason": (container.get("lastState", {}).get("terminated") or {}).get("reason"),
-                        } for container in statuses[:12]],
-                            owner_references=[{field: owner.get(field) for field in (
-                                "apiVersion", "kind", "name", "uid", "controller"
-                            ) if owner.get(field) is not None} for owner in meta.get("ownerReferences", [])[:4]],
-                            persistent_volume_claims=[
-                                volume.get("persistentVolumeClaim", {}).get("claimName")
-                                for volume in spec.get("volumes", [])[:20]
-                                if volume.get("persistentVolumeClaim", {}).get("claimName")
-                            ])
-                elif kind in ("Deployment", "StatefulSet"):
-                    desired = int(spec.get("replicas") or 0)
-                    ready = int((status.get("availableReplicas") if kind == "Deployment" else status.get("readyReplicas")) or 0)
-                    unhealthy = desired > ready
-                    if unhealthy:
-                        row.update(desired=desired, ready=ready, generation=meta.get("generation"),
-                            observed_generation=status.get("observedGeneration"))
-                elif kind == "DaemonSet":
-                    desired = int(status.get("desiredNumberScheduled") or 0)
-                    ready = int(status.get("numberReady") or 0)
-                    unhealthy = desired > ready
-                    if unhealthy:
-                        row.update(desired=desired, ready=ready, unavailable=status.get("numberUnavailable"))
-                elif kind == "PersistentVolumeClaim":
-                    unhealthy = status.get("phase") != "Bound"
-                    if unhealthy:
-                        row.update(phase=status.get("phase"), storage_class=spec.get("storageClassName"),
-                            volume=spec.get("volumeName"))
-                else:
-                    stamp = item.get("lastTimestamp") or item.get("eventTime") or meta.get("creationTimestamp")
-                    try:
-                        recent = bool(stamp) and datetime.fromisoformat(stamp.replace("Z", "+00:00")) >= now - timedelta(hours=2)
-                    except (TypeError, ValueError):
-                        recent = False
-                    unhealthy = recent
-                    if unhealthy:
-                        row.update(reason=item.get("reason"), message=str(item.get("message") or "")[:1000],
-                            last_seen=stamp, involved_object=item.get("involvedObject"))
-                if unhealthy and self._valid_namespace(str(namespace or "")):
-                    rows.append(row)
-        if len(rows) > 120:
-            observed_rows = len(rows)
-            rows = rows[:120]
+                    complete = False
+                    break
+                items = payload.get("items", [])
+                if not isinstance(items, list):
+                    limitations.append(
+                        f"Cluster-wide {kind} health survey failed: response did not contain an object list."
+                    )
+                    complete = False
+                    break
+                pages += 1
+                scanned += len(items)
+                for item in items:
+                    meta = item.get("metadata", {})
+                    spec = item.get("spec", {})
+                    status = item.get("status", {})
+                    namespace = meta.get("namespace")
+                    row = {"kind": kind, "namespace": namespace, "name": meta.get("name")}
+                    unhealthy = False
+                    if kind == "Pod":
+                        statuses = [
+                            *status.get("initContainerStatuses", []),
+                            *status.get("containerStatuses", []),
+                        ]
+                        unhealthy = status.get("phase") not in ("Running", "Succeeded") or any(
+                            not container.get("ready", False)
+                            and container.get("state", {}).get("waiting")
+                            for container in statuses
+                        )
+                        if unhealthy:
+                            row.update(phase=status.get("phase"), containers=[{
+                                "name": container.get("name"), "ready": container.get("ready"),
+                                "restartCount": container.get("restartCount"),
+                                "waiting_reason": (container.get("state", {}).get("waiting") or {}).get("reason"),
+                                "last_reason": (container.get("lastState", {}).get("terminated") or {}).get("reason"),
+                            } for container in statuses[:12]],
+                                owner_references=[{field: owner.get(field) for field in (
+                                    "apiVersion", "kind", "name", "uid", "controller"
+                                ) if owner.get(field) is not None} for owner in meta.get("ownerReferences", [])[:4]],
+                                persistent_volume_claims=[
+                                    volume.get("persistentVolumeClaim", {}).get("claimName")
+                                    for volume in spec.get("volumes", [])[:20]
+                                    if volume.get("persistentVolumeClaim", {}).get("claimName")
+                                ])
+                    elif kind in ("Deployment", "StatefulSet"):
+                        desired = int(spec.get("replicas") or 0)
+                        ready = int((
+                            status.get("availableReplicas")
+                            if kind == "Deployment" else status.get("readyReplicas")
+                        ) or 0)
+                        unhealthy = desired > ready
+                        if unhealthy:
+                            row.update(desired=desired, ready=ready, generation=meta.get("generation"),
+                                observed_generation=status.get("observedGeneration"))
+                    elif kind == "DaemonSet":
+                        desired = int(status.get("desiredNumberScheduled") or 0)
+                        ready = int(status.get("numberReady") or 0)
+                        unhealthy = desired > ready
+                        if unhealthy:
+                            row.update(desired=desired, ready=ready,
+                                unavailable=status.get("numberUnavailable"))
+                    elif kind == "PersistentVolumeClaim":
+                        unhealthy = status.get("phase") != "Bound"
+                        if unhealthy:
+                            row.update(phase=status.get("phase"),
+                                storage_class=spec.get("storageClassName"),
+                                volume=spec.get("volumeName"))
+                    else:
+                        stamp = (
+                            item.get("lastTimestamp") or item.get("eventTime")
+                            or meta.get("creationTimestamp")
+                        )
+                        try:
+                            recent = bool(stamp) and datetime.fromisoformat(
+                                stamp.replace("Z", "+00:00")
+                            ) >= now - timedelta(hours=2)
+                        except (TypeError, ValueError):
+                            recent = False
+                        unhealthy = recent
+                        if unhealthy:
+                            row.update(reason=item.get("reason"),
+                                message=str(item.get("message") or "")[:1000],
+                                last_seen=stamp, involved_object=item.get("involvedObject"))
+                    if unhealthy and self._valid_namespace(str(namespace or "")):
+                        kind_unhealthy += 1
+                        unhealthy_observations += 1
+                        self._extend_namespaces([namespace])
+                        if len(rows) < retained_limit:
+                            rows.append(row)
+                next_token = str(payload.get("metadata", {}).get("continue") or "")
+                if not next_token:
+                    break
+                if next_token == continue_token or next_token in seen_tokens:
+                    limitations.append(
+                        f"Cluster-wide {kind} health survey stopped because the Kubernetes API "
+                        "repeated a continuation token."
+                    )
+                    complete = False
+                    break
+                seen_tokens.add(next_token)
+                continue_token = next_token
+            coverage.append({
+                "kind": kind, "pages": pages, "scanned": scanned,
+                "unhealthy": kind_unhealthy, "complete": complete,
+            })
+            partial = partial or not complete
+        if unhealthy_observations > retained_limit:
             partial = True
             limitations.append(
-                f"Cluster health survey found {observed_rows} unhealthy observations and retained the first 120."
+                f"Cluster health survey found {unhealthy_observations} unhealthy observations across the "
+                f"completed scans and retained the first {retained_limit}."
             )
-        self._extend_namespaces(row.get("namespace") for row in rows)
         return {"rows": rows, "partial": partial, "scope": "cluster-health",
-                "discovered_namespaces": list(self.namespaces), "limitations": limitations}
+                "coverage": coverage, "discovered_namespaces": list(self.namespaces),
+                "limitations": limitations}
 
     def _collect_kubernetes_logs(self, namespace, pod, container, *, previous):
         started = time.monotonic()

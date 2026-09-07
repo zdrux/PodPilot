@@ -861,10 +861,17 @@ def test_cluster_health_discovers_cross_namespace_workload_and_storage_scope():
 
 
 def test_cluster_health_reports_sanitized_failures_and_actual_pagination():
+    requests=[]
     def respond(request):
+        requests.append(request)
         if request.url.path == '/api/v1/pods':
             return httpx.Response(403, json={'message': 'credential detail must not be retained'})
         if request.url.path == '/apis/apps/v1/deployments':
+            if request.url.params.get('continue') == 'opaque-server-token':
+                return httpx.Response(200, json={'items': [{
+                    'metadata': {'name': 'unavailable-app', 'namespace': 'team-b'},
+                    'spec': {'replicas': 2}, 'status': {'availableReplicas': 1},
+                }]})
             return httpx.Response(200, json={
                 'metadata': {'continue': 'opaque-server-token'},
                 'items': [{'metadata': {'name': f'app-{index}', 'namespace': 'team-a'},
@@ -880,10 +887,56 @@ def test_cluster_health_reports_sanitized_failures_and_actual_pagination():
     assert result['partial'] is True
     assert result['limitations'] == [
         'Cluster-wide Pod health survey failed: Kubernetes API returned HTTP 403.',
-        'Cluster-wide Deployment health survey reached its pagination limit: inspected '
-        'the first 60 objects; additional objects were available.',
     ]
+    deployment_coverage=next(item for item in result['coverage'] if item['kind']=='Deployment')
+    assert deployment_coverage == {
+        'kind': 'Deployment', 'pages': 2, 'scanned': 61,
+        'unhealthy': 1, 'complete': True,
+    }
+    assert result['rows'] == [{
+        'kind': 'Deployment', 'namespace': 'team-b', 'name': 'unavailable-app',
+        'desired': 2, 'ready': 1, 'generation': None, 'observed_generation': None,
+    }]
+    second_page=next(request for request in requests
+        if request.url.path=='/apis/apps/v1/deployments'
+        and request.url.params.get('continue'))
+    assert second_page.url.params['continue']=='opaque-server-token'
     assert 'credential detail' not in json.dumps(result)
+    reader.close()
+
+
+def test_cluster_health_scans_all_pages_while_bounding_retained_exceptions():
+    def respond(request):
+        if request.url.path != '/api/v1/pods':
+            return httpx.Response(200,json={'items':[]})
+        token=request.url.params.get('continue')
+        start={'':0,'page-2':60,'page-3':120}[token or '']
+        count=10 if token=='page-3' else 60
+        next_token={'':'page-2','page-2':'page-3','page-3':''}[token or '']
+        return httpx.Response(200,json={
+            'metadata':{'continue':next_token},
+            'items':[{
+                'metadata':{'name':f'pending-{index}','namespace':f'team-{index}'},
+                'spec':{'containers':[]}, 'status':{'phase':'Pending'},
+            } for index in range(start,start+count)],
+        })
+
+    reader=IncidentReader('https://host','credential',transport=httpx.MockTransport(respond))
+    result=reader.collect('cluster-health')
+
+    pod_coverage=next(item for item in result['coverage'] if item['kind']=='Pod')
+    assert pod_coverage == {
+        'kind':'Pod','pages':3,'scanned':130,'unhealthy':130,'complete':True,
+    }
+    assert len(result['rows'])==120
+    assert result['rows'][0]['name']=='pending-0'
+    assert result['rows'][-1]['name']=='pending-119'
+    assert len(result['discovered_namespaces'])==40
+    assert result['partial'] is True
+    assert result['limitations']==[
+        'Cluster health survey found 130 unhealthy observations across the completed scans '
+        'and retained the first 120.'
+    ]
     reader.close()
 
 
