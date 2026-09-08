@@ -50,6 +50,19 @@ python -m alembic -c apps/api/alembic.ini upgrade head
 
 ## Local SNO Login
 
+On the current Windows lab workstation, the external bootstrap kubeconfig is
+`C:\Users\zdrux\Desktop\sno-agent\build-20260822-205029\auth\kubeconfig`.
+Its path is saved in the Windows user environment variable
+`PODPILOT_BOOTSTRAP_KUBECONFIG` (confirmed 2026-09-07). Only the path is recorded;
+keep the credential file outside this repository. Newly launched applications
+inherit the variable. For shells started by an already-running Codex app, load
+the persisted value before connecting:
+
+```powershell
+$env:PODPILOT_BOOTSTRAP_KUBECONFIG = [Environment]::GetEnvironmentVariable('PODPILOT_BOOTSTRAP_KUBECONFIG', 'User')
+. .\scripts\connect-sno.ps1
+```
+
 Use the checked-in helper to turn the existing external administrator kubeconfig
 into a short-lived PoC `ai-observer` kubeconfig with cluster-admin rights:
 

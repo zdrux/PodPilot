@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from podpilot_diagnostics.incident_policy import IncidentPolicy
+
 import asyncio
 import hashlib
 import json
@@ -598,6 +600,9 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         tls_mode=profile.tls_mode,
         custom_ca_pem=profile.custom_ca_pem,
         max_input_tokens=profile.max_input_tokens,
+        context_window_tokens=profile.context_window_tokens or 64000,
+        protocol_reserve_tokens=profile.protocol_reserve_tokens if profile.protocol_reserve_tokens is not None else 2048,
+        incident_policy=IncidentPolicy.model_validate_json(profile.incident_policy_json or "{}"),
         reasoning_effort=profile.reasoning_effort,
         temperature=profile.temperature,
         max_retries=profile.max_retries,
@@ -14760,6 +14765,9 @@ def create_app(
                     "base_url": row.base_url, "chat_model": row.chat_model,
                     "embedding_model": row.embedding_model or "", "api_type": row.api_type,
                     "tls_mode": row.tls_mode, "custom_ca_pem": row.custom_ca_pem or "",
+                    "context_window_tokens": row.context_window_tokens,
+                    "protocol_reserve_tokens": row.protocol_reserve_tokens,
+                    "incident_policy": IncidentPolicy.model_validate_json(row.incident_policy_json or "{}").model_dump(),
                     "max_input_tokens": row.max_input_tokens,
                     "max_output_tokens": row.max_output_tokens,
                     "temperature": row.temperature,
@@ -14794,6 +14802,8 @@ def create_app(
                 "recent_conversations": recent_conversations,
                 "token_configured": token_configured,
                 "credential_error": credential_error,
+                "incident_policy_fields": IncidentPolicy.model_json_schema()["properties"],
+                "incident_policy_defaults": IncidentPolicy().model_dump(),
                 "model_timeout_max_seconds": app_settings.model_timeout_max_seconds,
                 "reasoning_effort_choices": REASONING_EFFORTS,
                 "csrf_token": csrf_token,
@@ -14892,6 +14902,21 @@ def create_app(
             existing_profile = db_session.get(ModelProfile, profile_id) if profile_id else None
             if profile_id and existing_profile is None:
                 raise HTTPException(status_code=404, detail="Model profile not found.")
+            try:
+                context_window_tokens = int(form.get("context_window_tokens", existing_profile.context_window_tokens if existing_profile else 64000))
+                protocol_reserve_tokens = int(form.get("protocol_reserve_tokens", existing_profile.protocol_reserve_tokens if existing_profile else 2048))
+                saved_policy = IncidentPolicy.model_validate_json(existing_profile.incident_policy_json or "{}") if existing_profile else IncidentPolicy()
+                policy_values = saved_policy.model_dump()
+                for key in IncidentPolicy.model_fields:
+                    if f"incident_{key}" in form:
+                        policy_values[key] = int(form[f"incident_{key}"])
+                incident_policy = IncidentPolicy.model_validate(policy_values)
+                if not 8192 <= context_window_tokens <= 2_000_000 or not 0 <= protocol_reserve_tokens <= 32768:
+                    raise ValueError("Context window or protocol reserve is outside the allowed range.")
+                if context_window_tokens - max_output_tokens - protocol_reserve_tokens < 1024:
+                    raise ValueError("The context window must leave at least 1,024 input tokens after output and protocol reserves.")
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
             credential_key = (
                 existing_profile.credential_key if existing_profile else f"model_{uuid4().hex}"
             )
@@ -14924,6 +14949,9 @@ def create_app(
             profile.api_type = api_type
             profile.tls_mode = tls_mode
             profile.custom_ca_pem = custom_ca_pem if tls_mode == "custom_ca" else None
+            profile.context_window_tokens = context_window_tokens
+            profile.protocol_reserve_tokens = protocol_reserve_tokens
+            profile.incident_policy_json = incident_policy.model_dump_json()
             profile.max_input_tokens = max_input_tokens
             profile.temperature = temperature
             profile.reasoning_effort = reasoning_effort
@@ -14952,6 +14980,11 @@ def create_app(
                     "reasoning_efforts": reasoning_efforts,
                     "default_reasoning_effort": reasoning_effort or "provider_default",
                     "temperature": temperature if temperature is not None else "provider_default",
+                    "context_window_tokens": context_window_tokens,
+                    "protocol_reserve_tokens": protocol_reserve_tokens,
+                    "max_input_tokens": max_input_tokens,
+                    "max_output_tokens": max_output_tokens,
+                    "incident_policy": incident_policy.model_dump(),
                     "max_retries": max_retries,
                 }, sort_keys=True),
             ))

@@ -23,7 +23,6 @@ from podpilot_api.incidents import (
     _incident_state_version,
     _evidence_limitations,
     _limitation_key,
-    _project_evidence_item,
 )
 from podpilot_api.models import (
     AdHocConversation, AdHocMessage, AdHocRun, Base, Cluster, ModelProfile,
@@ -32,6 +31,7 @@ from podpilot_api.incident_models import IncidentConnection, FleetIncident, Inci
 from podpilot_api.model_provider import AdHocLogAnalysis, ModelProfileConfig
 from podpilot_api.settings import Settings
 from podpilot_diagnostics.incidents import IncidentDecision
+from podpilot_diagnostics.incident_policy import IncidentPolicy
 from podpilot_openshift.incidents import IncidentReader, clean_evidence
 
 
@@ -529,7 +529,7 @@ def test_worker_scopes_namespaced_collectors_from_admitted_alert_labels(client):
         def close(self):
             pass
 
-    def scoped_reader(_cluster, _token, namespaces=()):
+    def scoped_reader(_cluster, _token, namespaces=(), *policy_args):
         observed_scopes.append(tuple(namespaces))
         return Reader()
 
@@ -543,11 +543,53 @@ def test_worker_scopes_namespaced_collectors_from_admitted_alert_labels(client):
     assert observed_scopes == [('team-checkout',)]
 
 
+def test_worker_partitions_large_evidence_before_specialists(client):
+    sid = source(client)
+    iid = send(client, sid, notification()).json()['incident_id']
+    service = client.app.state.incident_service
+    rows = [{'name': f'operator-{i}', 'message': 'observed failure ' * 80} for i in range(150)]
+    received = []
+
+    class Reader:
+        def collect(self, key):
+            return {'rows': rows if key == 'operators' else []}
+
+        def catalog(self):
+            return {'operators': 'Operators'}
+
+        def close(self):
+            pass
+
+    class Provider:
+        def incident_step(self, config, _key, context):
+            assert config.max_input_tokens == 4000
+            assert config.max_output_tokens == 2000
+            if context.get('specialist') == 'Evidence':
+                received.extend(context['evidence'][0]['data']['rows'])
+            return IncidentDecision(summary='Observed failure',
+                evidence_ids=[item['id'] for item in context['evidence']])
+
+    service.cluster_reader = lambda *_args: Reader()
+    service.model_context = lambda _engine: (ModelProfileConfig(
+        provider_label='test', base_url='https://model.invalid', chat_model='test',
+        embedding_model=None, timeout_seconds=30, max_input_tokens=4000,
+        max_output_tokens=2000), 'model-secret')
+    service.provider = Provider()
+    with Session(client.app.state.engine) as db:
+        run_id = db.scalar(select(IncidentRun.id).where(IncidentRun.incident_id == iid))
+    service.investigate(client.app.state.engine, run_id)
+    assert received == rows
+    with Session(client.app.state.engine) as db:
+        run = db.get(IncidentRun, run_id)
+        retained = json.loads(run.evidence_json)
+        assert next(item for item in retained if item['source'] == 'operators')['data']['rows'] == rows
+        assert len([item for item in retained if item['source'] == 'Evidence specialist']) > 1
+
+
 def test_incident_uses_coordinator_turns_as_its_primary_budget(client):
     sid = source(client)
     iid = send(client, sid, notification()).json()['incident_id']
     service = client.app.state.incident_service
-    service.settings.incident_max_rounds = 2
 
     class Reader:
         def collect(self, key):
@@ -568,6 +610,7 @@ def test_incident_uses_coordinator_turns_as_its_primary_budget(client):
         ModelProfileConfig(
             provider_label='test', base_url='https://model.invalid', chat_model='test',
             embedding_model=None, timeout_seconds=30, max_output_tokens=2000,
+            incident_policy=IncidentPolicy(max_rounds=2),
         ),
         'model-secret',
     )
@@ -928,15 +971,12 @@ def test_cluster_health_scans_all_pages_while_bounding_retained_exceptions():
     assert pod_coverage == {
         'kind':'Pod','pages':3,'scanned':130,'unhealthy':130,'complete':True,
     }
-    assert len(result['rows'])==120
+    assert len(result['rows'])==130
     assert result['rows'][0]['name']=='pending-0'
-    assert result['rows'][-1]['name']=='pending-119'
-    assert len(result['discovered_namespaces'])==40
-    assert result['partial'] is True
-    assert result['limitations']==[
-        'Cluster health survey found 130 unhealthy observations across the completed scans '
-        'and retained the first 120.'
-    ]
+    assert result['rows'][-1]['name']=='pending-129'
+    assert len(result['discovered_namespaces'])==130
+    assert result['partial'] is False
+    assert result['limitations']==[]
     reader.close()
 
 
@@ -949,6 +989,7 @@ def test_namespaced_collection_reports_pagination_only_when_reached():
                 'spec': {'containers': []}, 'status': {'phase': 'Running'}}
                 for index in range(60)],
         }),
+        httpx.Response(200, json={"items": [{"metadata": {"name": "last-pod"}}]}),
     ))
     reader = IncidentReader('https://host', 'credential', namespaces=['team-a'],
         transport=httpx.MockTransport(lambda _request: next(responses)))
@@ -958,11 +999,10 @@ def test_namespaced_collection_reports_pagination_only_when_reached():
 
     assert complete['partial'] is False
     assert complete['limitations'] == []
-    assert partial['partial'] is True
-    assert partial['limitations'] == [
-        'Kubernetes pagination limit reached for pods:team-a: inspected the first 60 objects; '
-        'additional objects were available.'
-    ]
+    assert partial['partial'] is False
+    assert partial['limitations'] == []
+    assert len(partial['rows']) == 61
+    assert partial['rows'][-1]['name'] == 'last-pod'
     reader.close()
 
 
@@ -1185,25 +1225,14 @@ def test_event_projection_keeps_ranked_rows_instead_of_discarding_collection():
             'reason':'FailedMount' if index==59 else 'GenericWarning',
             'message':('important failure ' if index==59 else 'routine warning ')*180,
             'type':'Warning','lastTimestamp':now,'involvedObject':{'kind':'Pod','name':f'pod-{index}'}})
-    reader=IncidentReader('https://host','credential',event_projection_bytes=8192,
-        namespaces=['openshift-monitoring'],
+    reader=IncidentReader('https://host','credential',namespaces=['openshift-monitoring'],
         transport=httpx.MockTransport(lambda _request:httpx.Response(200,json={'items':items})))
     result=reader.collect('events:openshift-monitoring')
-    assert 0 < len(result['rows']) < len(items)
+    assert len(result['rows']) == len(items)
     assert any(row['reason']=='FailedMount' for row in result['rows'])
-    assert result['partial'] is True
-    assert 'found 60 rows and retained' in result['limitations'][-1]
+    assert result['partial'] is False
+    assert result['limitations'] == []
     reader.close()
-
-
-def test_generic_evidence_projection_retains_rows_progressively():
-    item={'id':'E1','source':'events:test','data':{'rows':[
-        {'name':f'event-{index}','message':'x'*1000} for index in range(20)
-    ]}}
-    projected, limitation=_project_evidence_item(item, 5000)
-    assert 0 < len(projected['data']['rows']) < 20
-    assert projected['data']['partial'] is True
-    assert 'retained' in limitation
 
 
 def test_system_projection_limit_suppresses_model_paraphrase():
@@ -1459,8 +1488,7 @@ def test_webhook_settings_redirects_to_cluster_connector_without_exposing_secret
     assert f'href="/settings/connectors?edit={sid}"' in page.text
     assert 'aria-current="page"' in page.text
     assert 'None yet · 0 incidents recorded' in page.text
-    assert '64000 tokens' in page.text
-    assert '10 turns · 45.0 min' in page.text
+    assert 'Configure Incident limits in Model settings' in page.text
     assert 'private-cluster-token' not in page.text and 'w'*40 not in page.text
     assert client.get('/settings/webhooks',headers={'x-forwarded-user':'sre'}).status_code==403
 
@@ -1535,6 +1563,6 @@ def test_platform_projection_preserves_failures_without_large_status_bodies():
     conditions=result['rows'][0]['conditions']
     assert conditions[0]=={'type':'Available','status':'True'}
     assert conditions[1]['reason']=='MemberFailure'
-    assert len(conditions[1]['message'])==200
-    assert len(json.dumps(result))<1000
+    assert len(conditions[1]['message'])==8000
+    assert len(json.dumps(result)) < reader.policy.max_collection_bytes
     reader.close()

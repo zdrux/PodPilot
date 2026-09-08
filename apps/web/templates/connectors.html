@@ -71,13 +71,8 @@
       {% if active_kind == 'cluster' %}
       <details class="connector-runtime-policy">
         <summary>Investigation runtime policy</summary>
-        <div class="connector-runtime-policy-grid">
-          <p><strong>{{ incident_policy.context_window_tokens }} tokens</strong><span>Model context window</span></p>
-          <p><strong>{{ incident_policy.max_rounds }} turns · {{ (incident_policy.run_timeout_seconds / 60) | round(1) }} min</strong><span>Coordinator budget and safety deadline</span></p>
-          <p><strong>{{ (incident_policy.evidence_bytes / 1024) | round | int }} KiB · {{ (incident_policy.coordinator_bytes / 1024) | round | int }} KiB</strong><span>Retained and coordinator evidence</span></p>
-          <p><strong>{{ incident_policy.log_tail_lines }} / {{ incident_policy.loki_log_limit }} lines</strong><span>Kubernetes / Loki per-container limits · {{ (incident_policy.log_bytes / 1024) | round | int }} KiB</span></p>
-        </div>
-        <small>Deployment-level bounds are configured through <code>PODPILOT_INCIDENT_*</code> settings. Output and protocol space are reserved before the effective model input ceiling is calculated.</small>
+        <p>The active model profile controls token budgets, collection sizes, log windows and investigation deadlines.</p>
+        <a href="/settings/model">Configure Incident limits in Model settings</a>
       </details>
       {% endif %}
       <p id="incident-feedback" class="incident-feedback connector-feedback" role="status"></p>

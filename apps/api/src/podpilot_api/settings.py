@@ -17,22 +17,8 @@ class Settings(BaseSettings):
     incidents_enabled: bool = False
     incident_worker_enabled: bool = True
     incident_connector_discovery_enabled: bool = True
-    incident_worker_concurrency: int = Field(default=3, ge=1, le=8)
     incident_secret_namespace: str = "ai-ops"
     incident_secret_name: str = "podpilot-incident-credentials"
-    incident_run_timeout_seconds: float = Field(default=2700.0, ge=120.0, le=3600.0)
-    incident_connector_timeout_seconds: float = Field(default=300.0, ge=30.0, le=900.0)
-    incident_model_timeout_seconds: float = Field(default=90.0, ge=30.0, le=240.0)
-    incident_context_window_tokens: int = Field(default=64_000, ge=8_192, le=2_000_000)
-    incident_max_rounds: int = Field(default=10, ge=2, le=15)
-    incident_max_evidence_bytes: int = Field(default=393_216, ge=96_000, le=1_048_576)
-    incident_max_coordinator_bytes: int = Field(default=131_072, ge=48_000, le=262_144)
-    incident_max_specialist_reports: int = Field(default=12, ge=1, le=30)
-    incident_log_tail_lines: int = Field(default=1000, ge=100, le=5000)
-    incident_log_max_bytes: int = Field(default=98_304, ge=16_384, le=262_144)
-    incident_log_range_seconds: int = Field(default=7200, ge=1800, le=86_400)
-    incident_loki_log_limit: int = Field(default=2000, ge=100, le=5000)
-    incident_loki_range_seconds: int = Field(default=21_600, ge=1800, le=86_400)
     cluster_name: str = "local"
     data_dir: Path = Path("/var/lib/podpilot")
     database_url: str = "sqlite:////var/lib/podpilot/podpilot.db"

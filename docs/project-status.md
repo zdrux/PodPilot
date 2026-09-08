@@ -5,6 +5,15 @@ Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
+## Pending deployment: global model budgets and Incident policy
+
+The working tree adds migration `0027_model_runtime_policy`. Model settings now
+owns the shared total window and input/output budgets plus tunable Incident collection,
+retention, batching, concurrency and deadlines. Fixed object-count truncation has
+been replaced by pagination and byte/time limits; large evidence is partitioned
+for specialists. See [model-runtime-policy.md](model-runtime-policy.md). These
+changes have not been deployed; the operational history below describes earlier builds.
+
 ## Resume Here
 
 Incident response PoC is implemented on `codex/incident-response-poc`, after

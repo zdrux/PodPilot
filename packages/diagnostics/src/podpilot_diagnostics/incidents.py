@@ -29,13 +29,13 @@ class AlertWebhook(BaseModel):
 class IncidentDecision(BaseModel):
     """Model selects server-owned collectors or returns a cited preliminary briefing."""
     model_config = ConfigDict(extra="forbid")
-    collect: list[str] = Field(default_factory=list, max_length=3)
-    summary: str = Field(default="", max_length=4000)
-    problems: list[str] = Field(default_factory=list, max_length=8)
-    hypotheses: list[str] = Field(default_factory=list, max_length=5)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=30)
-    next_steps: list[str] = Field(default_factory=list, max_length=6)
-    limitations: list[str] = Field(default_factory=list, max_length=10)
+    collect: list[str] = Field(default_factory=list)
+    summary: str = Field(default="")
+    problems: list[str] = Field(default_factory=list)
+    hypotheses: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
 
 
 def admitted(alert: WebhookAlert, allowed: list[str]) -> bool:

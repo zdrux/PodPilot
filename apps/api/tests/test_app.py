@@ -15414,3 +15414,45 @@ def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:
             "statuses": [{"name": "completed", "count": 1}],
         },
     ]
+
+
+def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -> None:
+    from podpilot_api.main import _profile_config
+    credentials = MemoryCredentialStore()
+    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER},
+        source=FakeAlertSource(), credential_store=credentials, model_provider=FakeModelProvider())
+    with TestClient(app) as client:
+        page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text).group(1)
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf}
+        form = {"provider_label": "On premise", "base_url": "https://model.test/v1",
+            "chat_model": "gpt-oss-120b", "api_token": "test-api-token",
+            "max_input_tokens": "60000", "max_output_tokens": "16000",
+            "context_window_tokens": "64000", "protocol_reserve_tokens": "2048",
+            "incident_page_size": "100", "incident_max_rounds": "15",
+            "incident_log_max_bytes": "262144", "incident_max_namespaces": "0"}
+        response = client.post("/api/v1/model-profile", headers=headers, data=form)
+        assert response.status_code == 200, response.text
+        profile_id = response.json()["profile_id"]
+        with Session(app.state.engine) as db:
+            config = _profile_config(db.get(ModelProfile, profile_id))
+            assert config.effective_input_tokens == 45952
+            assert config.max_output_tokens == 16000
+            assert config.incident_policy.page_size == 100
+            assert config.incident_policy.max_rounds == 15
+            assert config.incident_policy.log_max_bytes == 262144
+        page = client.get(f"/settings/model?edit={profile_id}", headers=headers)
+        assert 'name="incident_page_size"' in page.text
+        assert 'value="262144"' in page.text
+        for invalid in ({"max_output_tokens": "63000"}, {"incident_page_size": "0"}):
+            rejected = client.post("/api/v1/model-profile", headers=headers,
+                data={**form, "profile_id": str(profile_id), **invalid})
+            assert rejected.status_code == 422
+        # Rolling clients which omit new fields preserve the saved policy.
+        old_form = {key: value for key, value in form.items()
+                    if not key.startswith("incident_") and key not in {"context_window_tokens", "protocol_reserve_tokens"}}
+        saved = client.post("/api/v1/model-profile", headers=headers,
+            data={**old_form, "profile_id": str(profile_id)})
+        assert saved.status_code == 200
+        with Session(app.state.engine) as db:
+            assert _profile_config(db.get(ModelProfile, profile_id)).incident_policy.page_size == 100

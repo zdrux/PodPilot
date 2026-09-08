@@ -149,36 +149,14 @@ def test_adhoc_run_deadline_is_bounded() -> None:
         Settings(adhoc_finalization_reserve_seconds=301)
 
 
-def test_incident_autonomy_and_context_budgets_are_larger_and_bounded() -> None:
-    defaults = Settings(_env_file=None)
-    assert defaults.incident_worker_concurrency == 3
-    assert defaults.incident_run_timeout_seconds == 2700
-    assert defaults.incident_connector_timeout_seconds == 300
-    assert defaults.incident_model_timeout_seconds == 90
-    assert defaults.incident_context_window_tokens == 64_000
-    assert defaults.incident_max_rounds == 10
-    assert defaults.incident_max_evidence_bytes == 393_216
-    assert defaults.incident_max_coordinator_bytes == 131_072
-    assert defaults.incident_max_specialist_reports == 12
-    assert defaults.incident_log_tail_lines == 1000
-    assert defaults.incident_log_max_bytes == 98_304
-    assert defaults.incident_log_range_seconds == 7200
-    assert defaults.incident_loki_log_limit == 2000
-    assert defaults.incident_loki_range_seconds == 21_600
-    with pytest.raises(ValidationError):
-        Settings(incident_run_timeout_seconds=3601)
-    with pytest.raises(ValidationError):
-        Settings(incident_max_coordinator_bytes=47_999)
-    with pytest.raises(ValidationError):
-        Settings(incident_max_specialist_reports=31)
-    with pytest.raises(ValidationError):
-        Settings(incident_context_window_tokens=8_191)
-    with pytest.raises(ValidationError):
-        Settings(incident_worker_concurrency=9)
-    with pytest.raises(ValidationError):
-        Settings(incident_log_max_bytes=262_145)
-    with pytest.raises(ValidationError):
-        Settings(incident_loki_range_seconds=86_401)
+def test_incident_policy_is_editable_and_bounded() -> None:
+    from podpilot_diagnostics.incident_policy import IncidentPolicy
+    assert IncidentPolicy().coordinator_concurrency == 3
+    assert IncidentPolicy().max_namespaces == 0
+    assert IncidentPolicy().max_evidence_bytes == 16_777_216
+    for invalid in ({"max_rounds": 0}, {"max_collection_bytes": -1}, {"page_size": 501}, {"specialist_concurrency": 9}):
+        with pytest.raises(ValidationError):
+            IncidentPolicy(**invalid)
 
 
 def test_model_timeout_ceiling_is_bounded() -> None:

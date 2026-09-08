@@ -188,43 +188,12 @@ def test_inventory_ceiling_is_exposed_through_runtime_config() -> None:
     env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
 
     assert runtime["data"]["chat_max_chars"] == "4000"
-    assert runtime["data"]["incident_run_timeout_seconds"] == "2700"
-    assert runtime["data"]["incident_max_rounds"] == "10"
-    assert runtime["data"]["incident_log_tail_lines"] == "1000"
-    assert runtime["data"]["incident_log_max_bytes"] == "98304"
-    assert runtime["data"]["incident_log_range_seconds"] == "7200"
-    assert runtime["data"]["incident_loki_log_limit"] == "2000"
-    assert runtime["data"]["incident_loki_range_seconds"] == "21600"
     chat_limit = next(item for item in env if item["name"] == "PODPILOT_CHAT_MAX_CHARS")
     assert chat_limit["valueFrom"]["configMapKeyRef"] == {
         "name": "podpilot-runtime",
         "key": "chat_max_chars",
     }
-    incident_timeout = next(
-        item for item in env if item["name"] == "PODPILOT_INCIDENT_RUN_TIMEOUT_SECONDS"
-    )
-    assert incident_timeout["valueFrom"]["configMapKeyRef"] == {
-        "name": "podpilot-runtime",
-        "key": "incident_run_timeout_seconds",
-    }
-    incident_rounds = next(
-        item for item in env if item["name"] == "PODPILOT_INCIDENT_MAX_ROUNDS"
-    )
-    assert incident_rounds["valueFrom"]["configMapKeyRef"] == {
-        "name": "podpilot-runtime",
-        "key": "incident_max_rounds",
-    }
-    for env_name, key in (
-        ("PODPILOT_INCIDENT_LOG_TAIL_LINES", "incident_log_tail_lines"),
-        ("PODPILOT_INCIDENT_LOG_MAX_BYTES", "incident_log_max_bytes"),
-        ("PODPILOT_INCIDENT_LOG_RANGE_SECONDS", "incident_log_range_seconds"),
-        ("PODPILOT_INCIDENT_LOKI_LOG_LIMIT", "incident_loki_log_limit"),
-        ("PODPILOT_INCIDENT_LOKI_RANGE_SECONDS", "incident_loki_range_seconds"),
-    ):
-        configured_limit = next(item for item in env if item["name"] == env_name)
-        assert configured_limit["valueFrom"]["configMapKeyRef"] == {
-            "name": "podpilot-runtime", "key": key,
-        }
+    assert not any(item["name"].startswith("PODPILOT_INCIDENT_") for item in env)
     assert runtime["data"]["adhoc_inventory_max_objects"] == "500"
     assert runtime["data"]["adhoc_detail_fanout_max_objects"] == "10"
     assert runtime["data"]["adhoc_max_payload_bytes"] == "96000"

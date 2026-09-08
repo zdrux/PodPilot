@@ -31,8 +31,10 @@ must pass server-side dry-run. Confirm corporate Argo CD/GitHub connectivity and
 real model-backed run before enabling Alertmanager ingress in an environment.
 Incident log gates must verify expanded current-log bounds, restart-gated Kubernetes
 previous logs, exact-coordinate infrastructure-tenant Loki queries, bounded fallback
-failure, and specialist isolation from the coordinator. Event projection gates must
-retain ranked rows under pressure rather than replacing the entire collector result.
+failure, and specialist isolation from the coordinator. Incident policy gates must verify global window/output reservation on both provider APIs,
+saved policy round-trips, continuation-page coverage, explicit byte/deadline failures, and
+specialist partitioning which retains all source rows and citations. Migration 0027 must
+preserve existing profile budgets and populate the new window and policy columns.
 
 - Single API/web container with Alembic migrations and an OpenShift Deployment.
 - OAuth proxy sidecar, OpenShift Service/Route, and NetworkPolicy.

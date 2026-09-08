@@ -67,7 +67,7 @@ collection completes within them. If Kubernetes pagination, evidence projection,
 bytes, or a result-count ceiling is actually reached, the footnote identifies the collector,
 the applicable limit, and the observed/retained count when available. Failed Kubernetes reads
 retain a sanitized reason such as the HTTP status, connection failure, request timeout,
-15-second read deadline, invalid JSON response, or 512 KiB response limit; arbitrary exception
+configured read deadline, invalid JSON response, or configured response-byte limit; arbitrary exception
 text is never persisted. A successful cluster-health survey with no failed or partial resource
 reads therefore has no generic cap warning. Limitations authored by Argo CD, GitHub, and Pod-log
 specialist model calls appear under model-reported uncertainty rather than collection/policy limits.
@@ -75,7 +75,7 @@ specialist model calls appear under model-reported uncertainty rather than colle
 ## Configuration
 
 Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
-`0026_incident_ask_handoff`. The default is false. Connectors configuration requires
+`0027_model_runtime_policy`. The default is false. Connectors configuration requires
 configuration-administrator access as well as an SRE role.
 
 **Manage → Connectors** lists independent OpenShift cluster, Argo CD, and GitHub
@@ -179,52 +179,36 @@ automatic cross-group merging is intentionally absent.
 ## Execution and evidence boundaries
 
 The incident worker is separate from Ask and exposes no shell or mutation tool.
-It uses server-owned GET collectors for cluster operators, OpenShift versions and
-upgrade history, nodes, MachineConfigPools, and a bounded cluster-wide exception survey
-covering unhealthy Pods, Deployments, StatefulSets, DaemonSets, unbound PVCs, and recent
-warning events. Validated namespaces from firing alerts are prioritized. Unhealthy-resource
-observations and degraded ClusterOperator related objects can add exact namespaces for
-deeper Pod, Deployment, PVC, warning-event, and log collection. Pod environment variables,
-arbitrary annotations and full specs are excluded. Only exact observed incident
-Pod/container names can become bounded log capabilities. Current Kubernetes logs default
-to 1,000 lines / 96 KiB from the last two hours. A container with observed restart or
-last-termination state additionally exposes a bounded `previous=true` read. If Kubernetes
-no longer retains that previous stream, PodPilot attempts an exact namespace/Pod/container
-query against the Loki infrastructure tenant; the same scoped Loki collector remains
-available for deeper history when useful. Loki defaults to 2,000 lines / 96 KiB over a
-six-hour window anchored thirty minutes before alert onset. Missing Kubernetes or Loki
-history remains an explicit limitation and does not stop other collection. Alerts without
-a valid Kubernetes `namespace` label begin with the cluster-wide exception survey rather
-than losing workload visibility. A run accepts no more than 20 initial alert namespaces and
-40 total namespaces after evidence-led expansion. The cluster-wide survey follows Kubernetes
-continuation tokens until every page of Pods, Deployments, StatefulSets, DaemonSets, PVCs and
-warning Events has been evaluated. Healthy objects are discarded immediately; only compact
-unhealthy observations consume incident evidence. The survey retains at most 120 unhealthy
-observations but still finishes scanning subsequent pages, reports scanned/unhealthy/page
-counts for every resource type, and marks exact API or continuation failures as incomplete.
-Optional metric collection uses one fixed platform availability query over 30
-minutes at 60-second resolution, capped at 12 series.
+It uses server-owned GET collectors and allowlisted field projections; arbitrary
+annotations, Pod environment variables, credentials and full specs remain excluded.
+Normal Kubernetes collections follow all continuation pages. The cluster-health
+survey discards healthy objects and retains unhealthy observations within the
+configured collection byte budget, without a fixed object-count cutoff. Failures,
+repeated continuation tokens, byte ceilings and deadlines report incomplete coverage.
+Argo CD and GitHub collection also follows supported pagination without first-N
+application, revision or PR cutoffs. Exact destination and repository allowlists
+remain mandatory.
 
-An initial operator snapshot and configured change enrichment seed a model-guided
-coordinator. The model chooses only available collector IDs, or finalizes with cited
-evidence, hypotheses and next steps. A normal incident is primarily bounded by ten
-coordinator turns, with a 45-minute outer safety deadline and up to three reads per turn.
-The coordinator can finish early when the evidence is sufficient; productive collection is
-not stopped merely because a shorter elapsed-time target was crossed. Retained evidence is capped at
-384 KiB while the coordinator context has a separate 128 KiB ceiling. These defaults
-are configurable with the `PODPILOT_INCIDENT_*` settings defined in `settings.py`;
-schema bounds prevent unbounded autonomy. Synthetic smoke tests retain their shorter
-four-minute/six-round path. Missing or
-invalid citations label the briefing unverified. Model failures preserve collected
-evidence. Without a configured usable model, deterministic cluster snapshots are retained
-with partial status and an explicit limitation. Every run uses the currently active
-model profile behind the existing API provider boundary.
+**Model settings** owns the active profile's Incident policy: collection and response
+bytes, page size, namespace ceiling (0 means no count ceiling), log/history windows,
+metric range and series, coordinator turns, collectors per turn, specialist calls,
+concurrency and deadlines. Policy is snapshotted at the beginning of each run.
+Worker concurrency changes affect new claims; existing investigations finish under
+their captured policy. No Pod restart is needed. Without a usable model, the
+validated default policy bounds deterministic collection.
 
-Oversized row-based evidence is projected progressively instead of being replaced by
-an empty limitation marker. Recent warning Events are ranked toward failure/error signals,
-then retained within a 32 KiB projection with an explicit retained-row count. Incident
-reports display trusted collection/policy limits separately from distinct model-reported
-uncertainty and suppress equivalent model paraphrases of a system limit.
+Source evidence is retained independently of model input budgets. Large evidence
+is partitioned for specialists with the original evidence ID retained in every
+partition. The coordinator receives cited reports. Accumulated coordinator evidence
+is summarized when it exceeds the configured evidence share of the input budget;
+structural input compaction remains a final safeguard. Reaching a specialist-call,
+retention or time budget is explicit and does not imply complete coverage. Summary
+and report schemas no longer impose arbitrary character or finding-count caps;
+the model output allowance bounds generated content.
+
+Synthetic connectivity tests keep a dedicated four-minute/six-turn harness.
+Incident runtime tuning controls is described in
+[model-runtime-policy.md](model-runtime-policy.md).
 
 Every coordinator and specialist model call inherits the active model profile's transient
 retry allowance, which defaults to three retries for timeouts, disconnects, rate limits and
@@ -232,50 +216,13 @@ transient server failures. The timeout applies per attempt. As the outer inciden
 deadline approaches, PodPilot shortens the per-attempt timeout so retry opportunities remain
 available without discarding the hard deadline.
 
-`PODPILOT_INCIDENT_CONTEXT_WINDOW_TOKENS` models the provider's complete context
-window and defaults to 64,000. Incident mode reserves the smaller of the profile's
-output allowance and one quarter of that window, plus a 2,048-token protocol margin;
-the remainder becomes the effective input ceiling. With the SNO profile this is
-45,952 input tokens plus 16,000 output tokens and the reserve. Provider-bound
-incident payloads use the same tokenizer-independent estimate as Ask. If needed,
-PodPilot structurally compacts coordinator evidence, retaining alerts, operator
-health and specialist reports first. It stops a request locally when even the fixed
-context cannot fit. The active setting and evidence ceilings remain deployment-level
-runtime policy configured through the `PODPILOT_INCIDENT_*` settings and are summarized
-on cluster connector records.
-
-Large or separate evidence domains use isolated specialist calls. Argo CD and GitHub
-specialists each receive only one connector result and return a compact cited report.
-The coordinator receives that report; the bounded source result remains in the
-operator evidence timeline. When the coordinator discovers and selects an exact
-platform-container log capability, the existing structured Pod-log analyzer receives
-only that one redacted excerpt. Its compact issue report enters coordinator context,
-while the raw bounded log remains available in retained evidence. At most 12 specialist
-reports are admitted per run. A failed or uncited specialist is recorded as a
-limitation and cannot silently establish a conclusion.
-
-Up to three Pod-log specialists selected in one coordinator round execute concurrently.
-The single Pod also runs three incident-worker slots, allowing separate coordinators
-to progress concurrently. Queue claims remain process-local and serialized. A durable
-multi-replica queue, per-specialist lifecycle records, cancellation and join policy
-remain production work. Each provider call receives only the time remaining in its
-run, so a late specialist call cannot overrun the outer deadline by its full timeout.
-
-Credentials are kept out of model context; projected observations, webhook data,
-Git metadata and model output are redacted before durable evidence/display.
-All external content remains untrusted. Evidence carries IDs, source, cluster and
-observation time. Connector save/test, webhook acceptance, rerun, handoff and run
-completion write metadata-only audit events. Connector HTTP requests use HTTPS,
-bounded GETs and no redirects. Existing explicitly accepted per-cluster TLS bypass
-is honored and displayed; GitHub/model TLS is not bypassed by this feature.
-
-Each run also retains a bounded activity journal with at most 24 coordinator/specialist
-tasks and 12 recent transitions. Entries contain server-authored task labels, state,
-timestamps, bounded work descriptions, evidence IDs and short redacted results. Raw
-logs, connector payloads, prompts, credentials and model reasoning remain in their
-existing evidence or provider boundaries and are not copied into activity telemetry.
-Only the current workstream animates running tasks. Historical journal transitions use
-a static started marker so an earlier start event cannot appear to still be active.
+The total model window, input/output allowances and protocol reserve now come from
+Model settings for both Ask and Incidents. The former Incident-only window override,
+quarter-window output cap, fixed coordinator byte ceiling and short specialist
+output caps have been removed. The effective input ceiling is the smaller of the
+configured maximum input and total window minus maximum output minus protocol reserve.
+Provider-bound guards cover both Responses and Chat Completions, including retries.
+The count remains an estimate rather than the endpoint's exact tokenizer.
 
 ## Packaging, operations and limits
 
