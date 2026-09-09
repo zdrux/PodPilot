@@ -83,8 +83,13 @@ use a single flat section, with one empty-state instruction and no nested cards.
 Existing navigation and permission conditions remain
 intact. Ask uses the shared edge-to-edge conversation and composer layout, with
 line separators and no enclosing rounded card or outer gutter.
-The composer inherits the shared centered, narrower desktop width and conversation
-gutters; on small screens it expands to the available width.
+The composer uses the available conversation width with a 1400px maximum and
+automatic side margins. As the panel narrows it moves left with its gutters,
+without reserving an author column. Container-based rules stack the toolbar when
+needed. Reasoning and raw-response controls live in the Response options pull-up.
+Evidence has a persistent 44px folded right rail with an icon-only toggle; the
+expanded rail shows the labeled toggle and evidence. On narrow screens the open
+rail overlays the conversation. New sessions are started from sidebar navigation.
 The other themes retain their existing geometry. No frontend framework is required.
 
 Orange configuration pages use a flat directory/editor layout with a divider,
@@ -377,3 +382,10 @@ compiler output and diagnostic references in a closed Technical details
  disclosure with wrapped, bounded text. A blocked tool attempt is not a cluster
 health finding; do not imply that a later operation recovered unless its own
 record establishes that result. Unknown diagnostics retain a neutral summary.
+
+### Lists in answer-table cells
+
+Balanced, attribute-free `ul`, `ol` and `li` tags in model-authored table cells
+render as lists, including nested lists and Markdown emphasis/code in items.
+Literal code spans/blocks remain escaped. Malformed lists and tags with
+attributes remain text; this does not enable arbitrary model-authored HTML.

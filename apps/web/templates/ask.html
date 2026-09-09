@@ -14,17 +14,7 @@
           <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>{{ 'ACTION MODE · Development approval bypass' if approval_bypass else 'ACTION MODE · Approval required for writes' }}</span>
         </div>
       </div>
-      <div class="panel-header-actions">
-        {% if is_delegated_mode %}
-        {% if conversation %}<a class="button secondary compact-button" href="/ask?new=1">New conversation</a>{% endif %}
-        {% endif %}
-        <button class="button secondary compact-button activity-sidebar-toggle" type="button"
-          data-activity-sidebar-toggle aria-controls="investigation-activity-sidebar" aria-expanded="true"
-          title="Hide evidence panel">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
-          <span data-activity-sidebar-toggle-label>Hide evidence</span>
-        </button>
-      </div>
+
     </div>
 
     {% if messages or incident_handoff %}
@@ -544,6 +534,9 @@
             {% elif conversation and is_delegated_mode %}
             <span class="boundary-pill execution-mode-badge {{ 'execution-mode-read-write' if conversation.execution_mode == 'action' else 'execution-mode-read-only' }}"><strong>{{ 'Action' if conversation.execution_mode == 'action' else 'Investigate · read-only' }}</strong></span>
             {% endif %}
+            <details class="composer-options">
+              <summary aria-label="Response options" title="Response options"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg></summary>
+              <div class="composer-options-menu"><strong>Response options</strong>
             <label class="reasoning-effort-picker" for="reasoning-effort">Reasoning
               <select id="reasoning-effort" name="reasoning_effort" {% if active_run %}disabled{% endif %}>
                 <option value="provider_default" {% if not selected_reasoning_effort %}selected{% endif %}>Provider default</option>
@@ -555,6 +548,8 @@
               <span aria-hidden="true"></span>
               <strong>Show raw model response</strong>
             </label>
+              </div>
+            </details>
               {% if active_run %}
               <button class="button primary" type="button" data-ask-submit data-run-cancel data-cancel-url="/api/v1/adhoc-runs/{{ active_run.id }}/cancel" aria-label="Cancel current request">Cancel</button>
               {% else %}
@@ -569,6 +564,14 @@
   </section>
 
   <aside class="activity-sidebar" id="investigation-activity-sidebar" aria-label="Investigation activity">
+    <div class="activity-rail-toggle">
+        <button class="button secondary compact-button activity-sidebar-toggle" type="button"
+          data-activity-sidebar-toggle aria-controls="investigation-activity-sidebar" aria-expanded="true"
+          title="Hide evidence panel">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></svg>
+          <span data-activity-sidebar-toggle-label>Hide evidence</span>
+        </button>
+    </div>
     {% set activity_summary = namespace(operation_count=0, diagnostic_count=0) %}
     {% for message in messages %}
       {% if message.activity and message.activity.evidence_ledger %}{% set activity_summary.operation_count = activity_summary.operation_count + (message.activity.evidence_ledger | length) %}{% endif %}

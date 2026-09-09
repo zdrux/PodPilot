@@ -178,13 +178,52 @@ def _normalize_table_cell(value: str) -> str:
     return value.strip()
 
 
+def _repair_table_lists(rendered: str) -> str:
+    """Recover balanced, attribute-free list tags outside literal code only."""
+    parts = re.split(r"(<[^>]+>)", rendered)
+    stack: list[str] = []
+    protected = 0
+    changed = False
+    invalid = False
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal changed, invalid
+        closing, tag = match.group(1), match.group(2).lower()
+        if closing:
+            if not stack or stack[-1] != tag:
+                invalid = True
+                return match.group(0)
+            stack.pop()
+        else:
+            if (tag == "li" and (not stack or stack[-1] not in {"ul", "ol"})) or (
+                tag in {"ul", "ol"} and stack and stack[-1] != "li"
+            ):
+                invalid = True
+                return match.group(0)
+            stack.append(tag)
+        changed = True
+        return f"<{closing}{tag}>"
+
+    for index, part in enumerate(parts):
+        if part.startswith("<"):
+            tag = re.match(r"</?(code|pre|a)\b", part)
+            if tag:
+                protected += -1 if part.startswith("</") else 1
+        elif not protected:
+            parts[index] = re.sub(r"&lt;(/?)(ul|ol|li)&gt;", replace, part, flags=re.IGNORECASE)
+    if invalid or stack or not changed:
+        return rendered
+    # A list is block content: div wrappers remain valid around mixed cell prose.
+    return re.sub(r"<(\/?)p>", r"<\1div>", "".join(parts))
+
+
 def render_safe_table_markdown(value: object) -> Markup:
     """Render a table cell while repairing model-authored encoded break tags."""
 
     rendered = str(render_safe_markdown(_normalize_table_cell(str(value or ""))))
     rendered = _CODE_ONLY_ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
     rendered = _ESCAPED_HTML_BREAK.sub("<br>\n", rendered)
-    return Markup(rendered)
+    return Markup(_repair_table_lists(rendered))
 
 
 def split_markdown_tables(

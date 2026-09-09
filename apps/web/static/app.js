@@ -626,9 +626,11 @@
   const activitySidebarPreferenceKey = "podpilot-evidence-panel-open";
   const setActivitySidebarVisibility = (open, {persist = false} = {}) => {
     if (!askLayout || !activitySidebar || !activitySidebarToggle) return;
-    activitySidebar.hidden = !open;
+    activitySidebar.hidden = false;
+    activitySidebar.querySelectorAll(":scope > :not(.activity-rail-toggle)").forEach((section) => { section.hidden = !open; });
     askLayout.classList.toggle("activity-sidebar-collapsed", !open);
     activitySidebarToggle.setAttribute("aria-expanded", String(open));
+    activitySidebarToggle.setAttribute("aria-label", open ? "Hide evidence panel" : "Show evidence panel");
     activitySidebarToggle.title = open ? "Hide evidence panel" : "Show evidence panel";
     if (activitySidebarToggleLabel) activitySidebarToggleLabel.textContent = open ? "Hide evidence" : "Show evidence";
     if (persist) {
@@ -640,7 +642,7 @@
     try { activitySidebarOpen = window.localStorage.getItem(activitySidebarPreferenceKey) !== "false"; } catch (_error) { /* Use the default. */ }
     setActivitySidebarVisibility(activitySidebarOpen);
     activitySidebarToggle.addEventListener("click", () => {
-      setActivitySidebarVisibility(activitySidebar.hidden, {persist: true});
+      setActivitySidebarVisibility(askLayout.classList.contains("activity-sidebar-collapsed"), {persist: true});
     });
   }
   const actionModeNotice = document.querySelector("[data-action-mode-notice]");
@@ -1649,4 +1651,19 @@
   document.addEventListener("scroll", (event) => {
     if (event.target !== tooltip) hide();
   }, true);
+})();
+
+(() => {
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll(".composer-options[open]").forEach((menu) => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    document.querySelectorAll(".composer-options[open]").forEach((menu) => {
+      menu.open = false;
+      menu.querySelector("summary").focus();
+    });
+  });
 })();

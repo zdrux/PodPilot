@@ -219,3 +219,33 @@ def test_table_cell_keeps_unknown_when_it_is_the_only_value() -> None:
     rendered = str(render_safe_table_markdown('"unknown"'))
 
     assert rendered == '<p>unknown</p>\n'
+
+
+def test_table_cells_recover_nested_lists_and_preserve_inline_markdown() -> None:
+    rendered = str(render_safe_table_markdown(
+        '**Attributes:** <ul><li>`email` → `mail`</li>'
+        '<li>Names<ol><li>**Common name**</li></ol></li></ul>'
+    ))
+    assert '<ul><li><code>email</code>' in rendered
+    assert '<ol><li><strong>Common name</strong></li></ol>' in rendered
+    assert '&lt;li&gt;' not in rendered
+    assert '<p>' not in rendered
+
+
+def test_table_list_repair_preserves_code_and_rejects_attributes_and_malformed_lists() -> None:
+    for source in [
+        '`<ul><li>literal</li></ul>`',
+        '```html\n<ul><li>literal</li></ul>\n```',
+        '<ul onclick="alert(1)"><li>unsafe</li></ul>',
+        '<ul><li>unclosed</ul>',
+        '<li>orphan</li>',
+    ]:
+        rendered = str(render_safe_table_markdown(source))
+        assert '<ul' not in rendered
+        assert '<li>' not in rendered
+    rendered = str(render_safe_table_markdown(
+        '<ul><li><img src=x onerror=alert(1)><script>alert(1)</script></li></ul>'
+    ))
+    assert '<ul><li>' in rendered
+    assert '<img' not in rendered and '<script>' not in rendered
+    assert '&lt;script&gt;' in rendered
