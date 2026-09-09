@@ -410,3 +410,30 @@ stripping, rendered findings/draft prefill, saved-token precedence and repositor
 admission have regression tests. A read-only SNO probe found one Argo CD custom
 resource, one Application, two Services and a Route. Corporate discovery still
 requires deployment and adequate scope on the supplied reader token.
+
+
+### Explicit incident-cluster enrollment
+
+Connectors is a directory of OpenShift, GitHub and Argo CD instances. Each instance
+owns its expandable discovery details and bounded deployment relationships. Argo CD
+installations observed through cluster discovery appear as observed entries with
+hosting cluster and namespace counts, not as automatically credentialed connectors.
+Namespace counts do not prove controller ownership.
+
+Configuration administrators enroll enabled shared registry clusters through the
+OpenShift Add multi-select dialog, or the Incident response setting on the selected
+Cluster Management page. Personal/private clusters cannot be enrolled into this
+shared incident workflow. `POST /api/v1/incident-clusters/enrollment` accepts
+`cluster_ids` (1–100 entries) and `enabled`; it requires configuration privileges
+and CSRF protection, validates the complete selection before committing, and audits
+each affected cluster. Repeating enrollment reuses existing connector rows.
+
+The explicit enrollment flag is stored as `incident_response_enabled` in the
+cluster connector configuration. Existing explicitly configured cluster connectors
+remain enrolled when this key is absent; merely registering a cluster no longer
+creates an Incident Clusters sidebar placeholder. Enrollment creates a disabled
+connector draft without accessing or creating credential Secrets. Runtime enablement
+still requires the existing reader credential and webhook setup. Removing enrollment
+hides the instance and disables its connector, retains credentials/history, and
+blocks Test & discover until reenrolled. Reenrollment does not silently reactivate
+a disabled runtime connector. No database migration is required.

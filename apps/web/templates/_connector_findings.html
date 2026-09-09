@@ -1,0 +1,31 @@
+    <details class="connector-discovery-findings" data-discovery-open-id="{{ item.id }}">
+      <summary>Discovery details</summary>
+      {% if item.status in ['stale', 'running', 'queued', 'error'] %}<p>Last collected findings; the current status is {{ item.status }}.</p>{% endif %}
+      {% if item.association_note %}<p>{{ item.association_note }}</p>{% endif %}
+      {% for limitation in item.limitations %}<p class="answer-limitations">{{ limitation }}</p>{% endfor %}
+      {% if item.instances %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-instances" open><summary>Installations <span>{{ item.instances | length }}</span></summary><table><thead><tr><th>Installation</th><th>Namespace</th><th>Evidence</th><th>Connector</th></tr></thead><tbody>
+      {% for instance in item.instances %}<tr><td>{{ instance.name }}</td><td>{{ instance.namespace }}</td><td>{{ instance.evidence }}<br><small>UID {{ instance.uid }}</small></td><td><a href="/settings/connectors?new=1&amp;type=argocd&amp;cluster_id={{ item.cluster_id | urlencode }}&amp;namespace={{ instance.namespace | urlencode }}">Configure Argo CD</a></td></tr>{% endfor %}
+      </tbody></table></details>{% endif %}
+      {% if item.endpoints %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-endpoints"><summary>Observed endpoints <span>{{ item.endpoints | length }}</span></summary><ul>{% for endpoint in item.endpoints %}<li>{{ endpoint.kind }} · {{ endpoint.namespace }}/{{ endpoint.name }} · <code>{{ endpoint.address }}</code></li>{% endfor %}</ul></details>{% endif %}
+      {% if item.kind != 'github' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-apps"><summary>Applications <span>{{ item.application_count }}</span></summary>
+      {% for namespace, applications in item.applications | groupby('namespace', default='Unspecified namespace') %}
+        <details class="discovery-group" data-discovery-open-id="{{ item.id }}-apps-{{ namespace }}"><summary>{{ namespace }} <span>{{ applications | length }}</span></summary>
+        {% for project, entries in applications | groupby('project', default='default') %}
+          <details class="discovery-group" data-discovery-open-id="{{ item.id }}-apps-{{ namespace }}-{{ project }}"><summary>{{ project }} <span>{{ entries | length }}</span></summary>
+          {% for application in entries %}<details class="discovery-entry" data-discovery-open-id="{{ item.id }}-app-{{ namespace }}-{{ application.application }}"><summary>{{ application.application }} <small>{{ application.health or 'Unknown' }} / {{ application.sync or 'Unknown' }}</small></summary>
+          <div class="discovery-content">{% for source in application.sources %}<p><code>{{ source.repository }}</code><br>Path: {{ source.path or '/' }} · Revision: {{ source.revision or 'Unspecified' }}</p>{% endfor %}</div></details>{% endfor %}
+          </details>
+        {% endfor %}</details>
+      {% else %}<p class="discovery-content">No Applications recorded. Check coverage below.</p>{% endfor %}
+      </details>
+      {% endif %}{% if item.kind == 'cluster' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-sets"><summary>ApplicationSets <span>{{ item.application_sets | length }}</span></summary>
+      {% for namespace, sets in item.application_sets | groupby('namespace', default='Unspecified namespace') %}<details class="discovery-group" data-discovery-open-id="{{ item.id }}-sets-{{ namespace }}"><summary>{{ namespace }} <span>{{ sets | length }}</span></summary>
+      {% for set in sets %}<div class="discovery-content"><strong>{{ set.name }}</strong><p>Project template: {{ set.project }} · Generators: {{ set.generators | join(', ') }}<br><small>UID {{ set.uid }}</small></p></div>{% endfor %}</details>
+      {% else %}<p class="discovery-content">No ApplicationSets recorded. Older discovery results need a rerun; check API coverage below.</p>{% endfor %}</details>
+      {% endif %}{% if item.kind == 'github' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-repos"><summary>Repositories <span>{{ item.repository_count }}</span></summary><ul>{% for repo in item.repositories %}<li>{{ repo.repository }}</li>{% else %}<li>No repositories recorded.</li>{% endfor %}</ul></details>{% else %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-repos"><summary>Repository admission <span>{{ item.repositories | length }}</span></summary>
+      {% for state, repos in item.repositories | groupby('admission', default='not evaluated') %}<details class="discovery-group" data-discovery-open-id="{{ item.id }}-repos-{{ state }}"><summary>{{ state | replace('_', ' ') | title }} <span>{{ repos | length }}</span></summary><ul>{% for url, references in repos | groupby('url', default='Unspecified') %}<li><code>{{ url }}</code>{% if references | length > 1 %} · {{ references | length }} references{% endif %}</li>{% endfor %}</ul></details>
+      {% else %}<p class="discovery-content">No repository admission results recorded.</p>{% endfor %}</details>
+      {% endif %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-coverage"><summary>Checks and discovery coverage <span>{{ (item.coverage | length) + (item.checks | length) }}</span></summary><ul>{% for check in item.checks %}<li>{{ check }}</li>{% endfor %}{% for check in item.coverage %}<li><code>{{ check.resource }}</code> · {{ check.status }} · {{ check.count }} objects</li>{% endfor %}</ul></details>
+      {% set relationships = topology | selectattr('connector_id', 'equalto', item.id) | list %}
+      {% if relationships %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-relationships"><summary>Deployment relationships <span>{{ relationships | length }} shown</span></summary><p class="discovery-content">Bounded to the first 60 Application records for this connector. Each source can produce a relationship.</p><ul>{% for relation in relationships %}<li><strong>{{ relation.application }}</strong> → {{ relation.cluster }}<br><code>{{ relation.repository }}</code> · {{ relation.status }}</li>{% endfor %}</ul></details>{% endif %}
+    </details>

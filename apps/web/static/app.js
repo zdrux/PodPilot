@@ -1,3 +1,4 @@
+window.PodPilotPage.register("app.js", (page) => {
 (() => {
   const themePreferenceKey = "podpilot-color-theme";
   const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red", "orange"]);
@@ -21,7 +22,7 @@
     disclosureTheme = theme;
   };
   syncConfigDisclosures(activeTheme);
-  document.addEventListener('invalid', (event) => {
+  page.on(document, 'invalid', (event) => {
     if (document.documentElement.dataset.theme !== 'orange' || !(event.target instanceof Element)) return;
     let parent = event.target.parentElement;
     while (parent) {
@@ -77,7 +78,7 @@
     toast.classList.toggle("warning", tone === "warning");
     toast.hidden = false;
     if (timeout > 0) {
-      toastTimeoutId = window.setTimeout(() => {
+      toastTimeoutId = page.timeout(() => {
         toast.hidden = true;
         toastTimeoutId = null;
       }, timeout);
@@ -111,7 +112,7 @@
       button.disabled = true;
       button.textContent = "Analyzing…";
       try {
-        const response = await fetch(button.dataset.analyzeUrl, {
+        const response = await page.fetch(button.dataset.analyzeUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -137,7 +138,7 @@
   const sendSettingsRequest = async (url, body) => {
     let response;
     try {
-      response = await fetch(url, {
+      response = await page.fetch(url, {
         method: "POST",
         headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
         credentials: "same-origin",
@@ -492,7 +493,7 @@
       button.disabled = true;
       button.textContent = button.dataset.actionUrl.endsWith("/execute") ? "Executing and verifying…" : "Saving approval…";
       try {
-        const response = await fetch(button.dataset.actionUrl, {
+        const response = await page.fetch(button.dataset.actionUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -515,7 +516,7 @@
       button.disabled = true;
       button.textContent = "Cancelling…";
       try {
-        const response = await fetch(button.dataset.actionUrl, {
+        const response = await page.fetch(button.dataset.actionUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -538,7 +539,7 @@
       button.disabled = true;
       button.textContent = "Investigating…";
       try {
-        const response = await fetch(button.dataset.actionUrl, {
+        const response = await page.fetch(button.dataset.actionUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -563,7 +564,7 @@
       const submit = chatForm.querySelector('button[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = "Thinking…"; }
       try {
-        const response = await fetch(chatForm.dataset.chatUrl, {
+        const response = await page.fetch(chatForm.dataset.chatUrl, {
           method: "POST",
           headers: {
             "X-PodPilot-CSRF": csrf,
@@ -591,7 +592,7 @@
       if (incidentHandoff.dataset.startRequested === "true") return;
       incidentHandoff.dataset.startRequested = "true";
       try {
-        const response = await fetch(incidentHandoff.dataset.incidentHandoffStartUrl, {
+        const response = await page.fetch(incidentHandoff.dataset.incidentHandoffStartUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -713,7 +714,7 @@
     const filterTabs = Array.from(clusterPicker.querySelectorAll("[data-cluster-filter]"));
     let clusterFilter = filterTabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.dataset.clusterFilter || "all";
     const maxSelected = Number.parseInt(clusterPicker.dataset.maxSelected || "10", 10);
-    document.addEventListener("pointerdown", (event) => {
+    page.on(document, "pointerdown", (event) => {
       if (clusterPicker.open && !clusterPicker.contains(event.target)) {
         clusterPicker.open = false;
       }
@@ -863,7 +864,7 @@
       const submit = delegatedConnectForm.querySelector('button[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = "Connecting…"; }
       try {
-        const response = await fetch(delegatedConnectForm.dataset.connectUrl, {
+        const response = await page.fetch(delegatedConnectForm.dataset.connectUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
           credentials: "same-origin",
@@ -910,7 +911,7 @@
       button.disabled = true;
       button.textContent = "Removing…";
       try {
-        const response = await fetch(button.dataset.delegatedRemoveUrl, {
+        const response = await page.fetch(button.dataset.delegatedRemoveUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -935,7 +936,7 @@
     button.disabled = true;
     button.textContent = "Removing…";
     try {
-      const response = await fetch(button.dataset.delegatedDisconnectUrl, {
+      const response = await page.fetch(button.dataset.delegatedDisconnectUrl, {
         method: "POST",
         headers: {"X-PodPilot-CSRF": csrf},
         credentials: "same-origin",
@@ -1016,7 +1017,7 @@
       const optimistic = appendOptimisticTurn(`Run suggested check: ${label}`);
       if (button) { button.disabled = true; button.textContent = "Starting…"; }
       try {
-        const response = await fetch(form.action, {
+        const response = await page.fetch(form.action, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -1164,6 +1165,7 @@
         dialog.dataset.liveOperationDialog = "";
         dialog.dataset.operationKey = key;
         document.body.append(dialog);
+        page.cleanup(() => dialog.remove());
       }
       dialog.id = dialogId;
       dialog.setAttribute("aria-labelledby", `${dialogId}-title`);
@@ -1319,6 +1321,7 @@
     let source = null;
     let poll = null;
     let progressStopped = false;
+    page.cleanup(() => { progressStopped = true; });
     const cancelRun = askSubmit?.matches("[data-run-cancel]") ? askSubmit : null;
     cancelRun?.addEventListener("click", async () => {
       if (!csrf || !cancelRun.dataset.cancelUrl) return;
@@ -1329,7 +1332,7 @@
       cancelRun.textContent = "Cancelling…";
       if (current) current.textContent = "Requesting best-effort cancellation…";
       try {
-        const response = await fetch(cancelRun.dataset.cancelUrl, {
+        const response = await page.fetch(cancelRun.dataset.cancelUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf},
           credentials: "same-origin",
@@ -1351,7 +1354,7 @@
     const reconcileStatus = async () => {
       if (progressStopped || !pendingRun.dataset.statusUrl) return false;
       try {
-        const response = await fetch(pendingRun.dataset.statusUrl, {credentials: "same-origin"});
+        const response = await page.fetch(pendingRun.dataset.statusUrl, {credentials: "same-origin"});
         if (!response.ok) return false;
         const payload = await response.json();
         payload.events?.forEach(addProgress);
@@ -1367,7 +1370,7 @@
         return false;
       }
     };
-    const progressWatchdog = window.setTimeout(async () => {
+    const progressWatchdog = page.timeout(async () => {
       if (await reconcileStatus()) return;
       progressStopped = true;
       source?.close();
@@ -1376,7 +1379,7 @@
       if (current) current.textContent = "The investigation exceeded its progress deadline. Reload to check its final status.";
     }, (Number.isFinite(configuredTimeout) ? configuredTimeout : 180000) + 15000);
     if (window.EventSource && pendingRun.dataset.eventsUrl) {
-      source = new EventSource(pendingRun.dataset.eventsUrl);
+      source = page.events(pendingRun.dataset.eventsUrl);
       source.addEventListener("progress", (event) => {
         try { addProgress(JSON.parse(event.data)); } catch (_error) { /* reconnect safely */ }
       });
@@ -1395,7 +1398,7 @@
         void reconcileStatus();
       };
     }
-    poll = window.setInterval(() => { void reconcileStatus(); }, 1500);
+    poll = page.interval(() => { void reconcileStatus(); }, 1500);
   }
 
   if (adhocForm?.dataset.chatUrl) {
@@ -1431,7 +1434,7 @@
       if (reasoningSelect) reasoningSelect.disabled = true;
       if (submit) { submit.disabled = true; submit.textContent = "Submitting…"; }
       try {
-        const response = await fetch(adhocForm.dataset.chatUrl, {
+        const response = await page.fetch(adhocForm.dataset.chatUrl, {
           method: "POST",
           headers: {"X-PodPilot-CSRF": csrf, "Content-Type": "application/x-www-form-urlencoded"},
           credentials: "same-origin",
@@ -1562,7 +1565,7 @@
       document.body.append(link);
       link.click();
       link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      page.timeout(() => URL.revokeObjectURL(url), 0);
     });
   });
   document.querySelectorAll(".delete-chat-form").forEach((form) => {
@@ -1573,7 +1576,7 @@
       const button = form.querySelector('button[type="submit"]');
       if (button) { button.disabled = true; button.classList.add("is-busy"); button.setAttribute("aria-busy", "true"); }
       try {
-        const response = await fetch(form.dataset.deleteUrl, {
+        const response = await page.fetch(form.dataset.deleteUrl, {
           method: "POST", headers: {"X-PodPilot-CSRF": csrf}, credentials: "same-origin",
         });
         if (!response.ok) {
@@ -1597,6 +1600,7 @@
   tooltip.setAttribute("role", "tooltip");
   tooltip.hidden = true;
   document.body.append(tooltip);
+  page.cleanup(() => tooltip.remove());
   let active = null;
   const markerFor = (target) => target instanceof Element ? target.closest("[data-metric-marker]") : null;
   const hide = () => {
@@ -1616,30 +1620,30 @@
     tooltip.style.left = `${Math.max(12, Math.min(box.right + 12, window.innerWidth - width - 12))}px`;
     tooltip.style.top = `${Math.max(12, Math.min(box.top, window.innerHeight - height - 12))}px`;
   };
-  document.addEventListener("pointerover", (event) => {
+  page.on(document, "pointerover", (event) => {
     const marker = markerFor(event.target);
     if (marker) show(marker);
   });
-  document.addEventListener("pointerout", (event) => {
+  page.on(document, "pointerout", (event) => {
     const marker = markerFor(event.target);
     if (marker && !marker.contains(event.relatedTarget) && !tooltip.contains(event.relatedTarget) && document.activeElement !== marker) hide();
   });
   tooltip.addEventListener("pointerleave", () => {
     if (active && document.activeElement !== active) hide();
   });
-  document.addEventListener("focusin", (event) => {
+  page.on(document, "focusin", (event) => {
     const marker = markerFor(event.target);
     if (marker) show(marker);
   });
-  document.addEventListener("focusout", (event) => {
+  page.on(document, "focusout", (event) => {
     if (markerFor(event.target)) hide();
   });
-  document.addEventListener("click", (event) => {
+  page.on(document, "click", (event) => {
     const marker = markerFor(event.target);
     if (marker) show(marker);
     else if (!tooltip.contains(event.target)) hide();
   });
-  document.addEventListener("keydown", (event) => {
+  page.on(document, "keydown", (event) => {
     if (event.key === "Escape") hide();
     const marker = markerFor(event.target);
     if (marker && (event.key === "Enter" || event.key === " ")) {
@@ -1647,19 +1651,19 @@
       show(marker);
     }
   });
-  window.addEventListener("resize", hide);
-  document.addEventListener("scroll", (event) => {
+  page.on(window, "resize", hide);
+  page.on(document, "scroll", (event) => {
     if (event.target !== tooltip) hide();
   }, true);
 })();
 
 (() => {
-  document.addEventListener("click", (event) => {
+  page.on(document, "click", (event) => {
     document.querySelectorAll(".composer-options[open]").forEach((menu) => {
       if (!menu.contains(event.target)) menu.open = false;
     });
   });
-  document.addEventListener("keydown", (event) => {
+  page.on(document, "keydown", (event) => {
     if (event.key !== "Escape") return;
     document.querySelectorAll(".composer-options[open]").forEach((menu) => {
       menu.open = false;
@@ -1667,3 +1671,5 @@
     });
   });
 })();
+
+});

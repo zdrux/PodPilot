@@ -1,6 +1,7 @@
+window.PodPilotPage.register("incidents.js", (page) => {
 (() => {
   async function post(url, payload) {
-    const response = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json',
+    const response = await page.fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json',
       'X-PodPilot-CSRF': document.querySelector('meta[name="podpilot-csrf"]')?.content || ''},
       body: JSON.stringify(payload || {})});
     const result = await response.json();
@@ -99,7 +100,7 @@
       requestAnimationFrame(() => {
         target.scrollIntoView({behavior: 'smooth', block: 'center'});
         target.classList.add('evidence-highlight');
-        window.setTimeout(() => target.classList.remove('evidence-highlight'), 1800);
+        page.timeout(() => target.classList.remove('evidence-highlight'), 1800);
         const dialog = document.getElementById(target.dataset.incidentEvidenceOpen);
         if (dialog && !dialog.open) {
           if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -142,14 +143,14 @@
     const fallback = () => {
       if (stopped) return;
       window.clearTimeout(fallbackTimer);
-      fallbackTimer = window.setTimeout(async () => {
+      fallbackTimer = page.timeout(async () => {
         if (stopped) return;
         await refresh();
         fallback();
       }, 4000);
     };
     if (window.EventSource) {
-      source = new EventSource(eventsUrl);
+      source = page.events(eventsUrl);
       source.addEventListener('open', () => {
         if (stopped) return;
         setLiveState(getRoot(), 'live', 'Live updates');
@@ -171,7 +172,7 @@
       source?.close();
       window.clearTimeout(fallbackTimer);
     };
-    window.addEventListener('pagehide', stop, {once: true});
+    page.on(window, 'pagehide', stop, {once: true});
     return stop;
   }
 
@@ -186,7 +187,7 @@
       if (refreshRunning) { refreshPending = true; return; }
       refreshRunning = true;
       try {
-        const response = await fetch(window.location.href, {
+        const response = await page.fetch(window.location.href, {
           headers: {'X-PodPilot-Activity-Refresh': '1'}, cache: 'no-store'
         });
         if (!response.ok) throw new Error('Incident refresh failed.');
@@ -225,13 +226,13 @@
     let refreshRunning = false;
     let refreshPending = false;
     let interactionUntil = 0;
-    document.addEventListener('pointerdown', event => {
+    page.on(document, 'pointerdown', event => {
       if (event.target.closest?.('[data-incident-dashboard]')) interactionUntil = Date.now() + 1500;
     }, true);
     async function refreshActivity() {
       if (document.hidden) return;
       if (Date.now() < interactionUntil) {
-        window.setTimeout(refreshActivity, interactionUntil - Date.now() + 50);
+        page.timeout(refreshActivity, interactionUntil - Date.now() + 50);
         return;
       }
       if (refreshRunning) { refreshPending = true; return; }
@@ -239,7 +240,7 @@
       const expandedIncidents = openIds(incidentBoard, 'data-incident-activity-id');
       const expandedSpecialists = openIds(incidentBoard, 'data-specialist-activity-id');
       try {
-        const response = await fetch(window.location.href, {
+        const response = await page.fetch(window.location.href, {
           headers: {'X-PodPilot-Activity-Refresh': '1'}, cache: 'no-store'
         });
         if (!response.ok) throw new Error('Incident activity refresh failed.');
@@ -294,7 +295,7 @@
       if (refreshRunning) { refreshPending = true; return; }
       refreshRunning = true;
       try {
-        const response = await fetch(window.location.href, {cache: 'no-store'});
+        const response = await page.fetch(window.location.href, {cache: 'no-store'});
         if (!response.ok) throw new Error('Connector discovery refresh failed.');
         const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
         const replacement = documentCopy.querySelector('[data-connector-topology]');
@@ -315,12 +316,49 @@
         if (refreshPending) { refreshPending = false; refreshConnectorTopology(); }
       }
     }
-    document.addEventListener('podpilot-discovery-started', () => {
+    page.on(document, 'podpilot-discovery-started', () => {
       startDiscoveryLive();
       refreshConnectorTopology();
     });
     syncDiscoveryLive();
   }
+
+  const picker = document.getElementById('incident-cluster-picker');
+  page.on(document, 'click', event => {
+    if (event.target.closest?.('[data-incident-cluster-picker]')) picker?.showModal();
+    if (event.target.closest?.('[data-incident-picker-close]')) picker?.close();
+  });
+  picker?.addEventListener('close', () => {
+    const enrollment = picker.querySelector('form');
+    enrollment.reset();
+    delete enrollment.dataset.navigationDirty;
+    picker.querySelectorAll('[data-incident-cluster-option]').forEach(option => { option.hidden = false; });
+  });
+  picker?.querySelector('[data-incident-cluster-search]')?.addEventListener('input', event => {
+    const query = event.target.value.toLocaleLowerCase();
+    picker.querySelectorAll('[data-incident-cluster-option]').forEach(option => {
+      option.hidden = !option.textContent.toLocaleLowerCase().includes(query);
+    });
+  });
+  document.querySelectorAll('[data-incident-enrollment-form], [data-incident-enrollment-toggle]').forEach(enrollment => {
+    enrollment.addEventListener('submit', async event => {
+      event.preventDefault();
+      const data = new FormData(enrollment);
+      const toggle = enrollment.hasAttribute('data-incident-enrollment-toggle');
+      const clusterIds = toggle ? [data.get('cluster_id')] : data.getAll('cluster_ids');
+      const feedback = enrollment.querySelector('[data-enrollment-feedback]');
+      if (!clusterIds.length) { feedback.textContent = 'Select at least one cluster to add.'; return; }
+      const button = enrollment.querySelector('[type="submit"]');
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      feedback.textContent = 'Saving incident cluster enrollment…';
+      try {
+        await post('/api/v1/incident-clusters/enrollment', {cluster_ids: clusterIds, enabled: toggle ? data.has('incident_response_enabled') : true});
+        delete enrollment.dataset.navigationDirty;
+        await window.PodPilotPage.navigate(window.location.href);
+      } catch (error) { feedback.textContent = error.message; }
+      finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    });
+  });
 
   const form = document.getElementById('incident-connection-form');
   if (!form) return;
@@ -364,3 +402,5 @@
     } finally { button.disabled = false; }
   });
 })();
+
+});

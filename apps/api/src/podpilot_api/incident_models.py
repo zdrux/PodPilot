@@ -62,3 +62,9 @@ class IncidentRun(Base):
     activity_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def incident_enrolled(connection):
+    """Existing explicitly configured cluster connectors stay enrolled by default."""
+    import json
+    return connection.kind == "cluster" and json.loads(connection.config_json or "{}").get("incident_response_enabled", True) is True

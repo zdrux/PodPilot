@@ -53,6 +53,13 @@ shadows sparingly. Rounded containers should feel subtly softened, not pillowy.
 All routes inherit the same navigation width, typography, page gutters, button
 geometry, and theme tokens through `base.html` and `.saas-app`. A route may add a
 body class for its workflow, but must not redefine the shared shell.
+Sidebar links fetch the destination and replace the main workspace while preserving
+the sidebar navigation element and its scroll offset. Server-rendered navigation
+entries still refresh to reflect permissions and current selections. Returning to
+a visited URL restores its scroll offsets and expanded sections. Page initialization
+uses `PodPilotPage` scopes so navigation cancels old requests, timers, streams and
+global listeners before binding the destination. Authentication, external links and
+modified clicks retain normal browser navigation.
 
 ### Security is visible
 
@@ -78,7 +85,12 @@ Connector categories use folder icons and branch lines down to individual instan
 the add action shares the Connectors row outline while remaining a separate link.
 Secondary navigation uses a quiet vertical guide rather than enclosing cards.
 The shared connector overview uses the Orange layout as its baseline and offers three flat setup rows with configured counts
-and direct add links. Individual instances remain in the sidebar. Discovery results
+and direct add actions. Configured instances appear as children with subtle tree
+branches, concise metadata, and Configure/Manage actions. Discovery details and
+deployment relationships are nested under their own instance, avoiding duplicate
+status strips or global findings blocks. OpenShift Add opens a searchable
+multi-select dialog of registered shared clusters; existing enrollments are marked
+and disabled. Cluster Management exposes the same enrollment setting. Discovery results
 use matching expandable sections for installations, endpoints, Applications,
 ApplicationSets, repository admission, and coverage. Applications expand by
 namespace, project, then individual source details; repository URLs are grouped
@@ -394,3 +406,11 @@ Balanced, attribute-free `ul`, `ol` and `li` tags in model-authored table cells
 render as lists, including nested lists and Markdown emphasis/code in items.
 Literal code spans/blocks remain escaped. Malformed lists and tags with
 attributes remain text; this does not enable arbitrary model-authored HTML.
+
+### Navigation regression check
+
+With Node, Playwright and Chrome available, set `PODPILOT_BROWSER_TESTS=1`
+(and `NODE_PATH` if Playwright is installed outside the project) and run
+`pytest apps/api/tests/test_incidents.py -k sidebar_partial_navigation`.
+This uses rendered application fixtures without cluster or model access and checks
+persistent sidebar navigation, history/scroll restoration and stream cleanup.

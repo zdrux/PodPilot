@@ -8,7 +8,9 @@
   <title>{% block title %}PodPilot{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-sidebar-38">
   <link rel="stylesheet" href="{{ url_for('static', path='/orange.css') }}?v=orange-chat-contrast-4">
-  <script src="{{ url_for('static', path='/app.js') }}?v=orange-theme-22" defer></script>
+  <script src="{{ url_for('static', path='/navigation.js') }}?v=partial-navigation-1" defer></script>
+  <script src="{{ url_for('static', path='/app.js') }}?v=partial-navigation-1" defer></script>
+  <script src="{{ url_for('static', path='/incidents.js') }}?v=partial-navigation-1" defer></script>
 </head>
 <body class="saas-app {% block body_class %}{% endblock %}">
   <div class="shell">

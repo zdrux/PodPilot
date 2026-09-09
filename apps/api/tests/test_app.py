@@ -13366,13 +13366,13 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'clusterPicker?.querySelector("[data-cluster-checkbox]:checked")' in script
     assert 'showToast("Select at least one cluster before starting an investigation.")' in script
     assert 'requestBody.set("cluster_ids", JSON.stringify(selectedClusters.map((item) => item.value)))' in script
-    assert "toastTimeoutId = window.setTimeout" in script
+    assert "toastTimeoutId = page.timeout" in script
     assert ".toast { position: fixed; z-index: 50; top: 72px; right: 24px;" in styles
     assert 'data-cluster-filter="connected">Signed-In</button>' in template
     assert 'data-cluster-filter="all">All</button>' in template
     assert 'let clusterFilter = filterTabs.find' in script
     assert 'const matchesStatus = clusterFilter === "all" || checkbox?.dataset.connected === "true"' in script
-    assert 'document.addEventListener("pointerdown"' in script
+    assert 'page.on(document, "pointerdown"' in script
     assert "clusterPicker.open && !clusterPicker.contains(event.target)" in script
     assert "clusterPicker.open = false" in script
     assert ".cluster-filter-tabs > button[aria-selected=\"true\"]" in styles
@@ -13395,7 +13395,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert 'pickerLabel.replaceChildren()' in script
     assert ".delegated-connect-panel .cluster-picker-menu { top: calc(100% + 7px); bottom: auto; }" in styles
     assert 'textarea.value = ""' in script
-    assert "new EventSource" in script
+    assert "page.events(" in script
     assert "thinking-spinner" in template
     assert "data-run-timeout-ms" in template
     assert "progressWatchdog" in script

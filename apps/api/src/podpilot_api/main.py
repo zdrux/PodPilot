@@ -10400,7 +10400,7 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
-    from podpilot_api.incident_models import FleetIncident, IncidentConnection
+    from podpilot_api.incident_models import FleetIncident, IncidentConnection, incident_enrolled
     from podpilot_api.incidents import IncidentService, install_incidents
     def incident_model_context(engine):
         with Session(engine) as db_session:
@@ -10560,6 +10560,8 @@ def create_app(
         }
         for cluster in shared_clusters:
             connection = cluster_connections.get(cluster.id)
+            if not connection or not incident_enrolled(connection):
+                continue
             sidebar_connector_groups["cluster"].append({
                 "id": connection.id if connection else f"cluster:{cluster.id}",
                 "cluster_id": cluster.id,
@@ -14452,8 +14454,12 @@ def create_app(
             rows = list(db_session.scalars(
                 select(Cluster).order_by(Cluster.environment, Cluster.name)
             ))
+            incident_connections = list(db_session.scalars(select(IncidentConnection).where(IncidentConnection.kind == "cluster"))) if app_settings.incidents_enabled else []
             recent_conversations = recent_conversations_for(db_session, user.username)
         clusters_view = [_cluster_summary(item) for item in rows]
+        enrolled_ids = {item.cluster_id for item in incident_connections if incident_enrolled(item)}
+        for item in clusters_view:
+            item["incident_response_enabled"] = item["id"] in enrolled_ids
         selected = next((item for item in clusters_view if item["id"] == edit_id), None)
         response = templates.TemplateResponse(
             request=request,

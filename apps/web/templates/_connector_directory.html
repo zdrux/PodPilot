@@ -1,0 +1,44 @@
+<section class="connector-directory" data-connector-topology data-events-url="/api/v1/incident-connections/events" aria-label="Connector instances">
+  <div class="connector-directory-status"><span data-live-status data-live-state="idle">Discovery idle</span></div>
+  {% set observed = namespace(count=0) %}{% for cluster in discovery_views if cluster.kind == 'cluster' %}{% set observed.count = observed.count + cluster.instances | length %}{% endfor %}
+  {% for kind, label, description in [('cluster', 'OpenShift', 'Clusters enrolled for incident response.'), ('github', 'GitHub', 'Repository access for investigation evidence.'), ('argocd', 'Argo CD', 'Application deployments and their source repositories.')] %}
+  <section class="connector-family" aria-labelledby="connector-family-{{ kind }}">
+    <header class="connector-setup-row">
+      <span class="connector-tool-icon" aria-hidden="true"><svg viewBox="0 0 24 24">{% if kind == 'cluster' %}<path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/>{% elif kind == 'github' %}<path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/>{% else %}<path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6M4 17a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/>{% endif %}</svg></span>
+      <div class="connector-setup-copy"><h2 id="connector-family-{{ kind }}">{{ label }}</h2><p>{{ description }}</p></div>
+      <span class="connector-setup-count">{{ discovery_views | selectattr('kind', 'equalto', kind) | list | length }} configured{% if kind == 'argocd' and observed.count %} · {{ observed.count }} observed{% endif %}</span>
+      {% if kind == 'cluster' %}<button class="button" type="button" data-incident-cluster-picker>Add</button>{% else %}<a class="button" href="/settings/connectors?new=1&amp;type={{ kind }}">Add</a>{% endif %}
+    </header>
+    <ul class="connector-instance-tree">
+    {% for item in discovery_views if item.kind == kind %}
+      <li>
+        <div class="connector-instance-row">
+          <div><a class="connector-instance-name" href="/settings/connectors?edit={{ item.id }}">{{ item.name }}</a><p>{% if kind == 'cluster' and item.status == 'not_run' %}Discovery has not run{% elif kind == 'cluster' %}{{ item.instances | length }} Argo CD installation records · {{ item.application_count }} Apps{% elif kind == 'argocd' %}Hosted: {{ item.hosting_cluster }} · {{ item.application_count }} Apps · {{ item.application_sets | length if item.sets_collected else 'Not collected' }} AppSets{% else %}{{ item.endpoint }} · {{ item.configured_repositories }} allowed repositories · {{ item.repository_count }} observed{% endif %}</p></div>
+          <span class="connector-discovery-state is-{{ item.status | replace('_', '-') }}">{{ item.status | replace('_', ' ') | title }}</span>
+          <a class="button" href="/settings/connectors?edit={{ item.id }}">{{ 'Configure' if not item.enabled else 'Manage' }}</a>
+        </div>
+        {% if not item.enabled %}<p class="connector-instance-note">{{ 'Enrolled · connector not enabled. Configure credentials and ingress before use.' if kind == 'cluster' else 'Connector not enabled.' }}</p>{% endif %}
+        {% if item.status != 'not_run' %}{% include "_connector_findings.html" %}{% endif %}
+      </li>
+    {% else %}{% if kind != 'argocd' or not observed.count %}<li class="connector-instance-empty">No configured {{ label }} instances.</li>{% endif %}{% endfor %}
+    {% if kind == 'argocd' %}
+      {% for cluster in discovery_views if cluster.kind == 'cluster' %}
+      {% for instance in cluster.instances %}
+        <li><div class="connector-instance-row"><div><strong>{{ instance.name }}</strong><p>Observed on {{ cluster.hosting_cluster }} · {{ instance.namespace }}</p><p>{{ cluster.applications | selectattr('namespace', 'equalto', instance.namespace) | list | length }} Apps · {{ cluster.application_sets | selectattr('namespace', 'equalto', instance.namespace) | list | length if cluster.sets_collected else 'Not collected' }} AppSets in this namespace</p></div><span class="connector-discovery-state">Observed</span><a class="button" href="/settings/connectors?new=1&amp;type=argocd&amp;cluster_id={{ cluster.cluster_id | urlencode }}&amp;namespace={{ instance.namespace | urlencode }}">Configure</a></div><p class="connector-instance-note">Namespace inventory; controller ownership and endpoint access have not been verified.</p></li>
+      {% endfor %}{% endfor %}
+    {% endif %}
+    </ul>
+  </section>
+  {% endfor %}
+</section>
+<dialog class="incident-cluster-dialog" id="incident-cluster-picker" aria-labelledby="incident-cluster-picker-title">
+  <header><div><h2 id="incident-cluster-picker-title">Add incident clusters</h2><p>Select registered shared clusters. Credentials are configured separately.</p></div><button type="button" class="button" data-incident-picker-close aria-label="Close cluster picker">×</button></header>
+  <form data-incident-enrollment-form>
+    <input type="search" data-incident-cluster-search placeholder="Filter clusters…" aria-label="Filter clusters">
+    <div class="incident-cluster-options">
+    {% for cluster in clusters %}<label data-incident-cluster-option><input type="checkbox" name="cluster_ids" value="{{ cluster.id }}" {% if cluster.id in enrolled_cluster_ids %}disabled checked{% endif %}><span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment }}{% if cluster.id in enrolled_cluster_ids %} · Already enrolled{% endif %}</small></span></label>{% else %}<p>No enabled shared clusters. Add one in Cluster Management first.</p>{% endfor %}
+    </div>
+    <p data-enrollment-feedback role="status"></p>
+    <footer><a href="/settings/clusters?new=1">Register a new cluster</a><button class="button primary" type="submit">Add selected clusters</button></footer>
+  </form>
+</dialog>

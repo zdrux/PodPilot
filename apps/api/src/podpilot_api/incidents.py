@@ -1,4 +1,5 @@
 """Single-process PoC fleet incident ingestion, configuration and bounded worker."""
+from podpilot_api.incident_models import incident_enrolled
 import asyncio
 import hashlib
 import hmac
@@ -124,7 +125,11 @@ def _connector_topology(connections, discoveries, clusters):
             "cluster_id": row.cluster_id, "repositories": result.get("repositories", []), "instances": result.get("argocd_instances", []),
             "applications": result.get("applications", []), "application_sets": result.get("application_sets", []), "endpoints": result.get("endpoints", []),
             "coverage": result.get("coverage", []), "limitations": result.get("limitations", []),
-            "association_note": result.get("association_note")})
+            "association_note": result.get("association_note"),
+            "enabled": row.enabled, "hosting_cluster": cluster_by_id[row.cluster_id].name if row.cluster_id in cluster_by_id else "Direct API",
+            "configured_repositories": len(_json_object(row.config_json).get("repositories", [])),
+            "endpoint": _json_object(row.config_json).get("url", ""),
+            "sets_collected": "application_sets" in result})
         if row.kind not in {"argocd", "cluster"} or not discovery or discovery.status not in {"completed", "partial"}:
             continue
         hosting = cluster_by_id.get(row.cluster_id)
@@ -147,7 +152,7 @@ def _connector_topology(connections, discoveries, clusters):
                     if repo_host == host and repository in allowed]
                 ambiguous = len(cluster_matches) > 1 or len(github_matches) > 1
                 confirmed = len(cluster_matches) == 1 and len(github_matches) == 1
-                matrix.append({"application": application.get("application") or "Unnamed Application",
+                matrix.append({"connector_id": row.id, "application": application.get("application") or "Unnamed Application",
                     "project": application.get("project") or "default", "argocd": row.name,
                     "hosting_cluster": hosting.name if hosting else ("Direct API" if not row.cluster_id else "Unavailable"),
                     "destination": server or name or "Not reported",
@@ -762,6 +767,8 @@ class IncidentService:
                 if not value.repositories or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r) or any(x in (".", "..") for x in r.split('/')) for r in value.repositories):
                     raise HTTPException(422, "Specify allowed GitHub repositories as owner/repository.")
             config = value.model_dump(exclude={"id", "kind", "name", "cluster_id", "enabled", "token", "webhook_token"})
+            if value.kind == "cluster":
+                config["incident_response_enabled"] = value.enabled or not row or incident_enrolled(row)
             connection_id = row.id if row else str(uuid4())
             credential_key = f"connection-{connection_id}"
             webhook_key = f"webhook-{connection_id}" if value.kind == "cluster" else None
@@ -801,6 +808,8 @@ class IncidentService:
             row = db.get(IncidentConnection, connection_id)
             if not row:
                 raise HTTPException(404, "Connection not found.")
+            if row.kind == "cluster" and not incident_enrolled(row):
+                raise HTTPException(409, "Enable incident response for this cluster first.")
             discovery = db.get(ConnectorDiscovery, connection_id)
             if discovery and discovery.status in {"queued", "running"}:
                 return {"id": connection_id, "discovery_status": discovery.status, "queued": False}
@@ -827,6 +836,8 @@ class IncidentService:
                 discovery = db.get(ConnectorDiscovery, connection_id)
                 if not row or not discovery:
                     return
+                if row.kind == "cluster" and not incident_enrolled(row):
+                    raise ValueError("incident cluster enrollment disabled")
                 discovery.status = "running"
                 discovery.started_at = discovery.updated_at = utcnow()
                 discovery.error = None
@@ -1842,6 +1853,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             rows = list(db.scalars(select(IncidentConnection).order_by(IncidentConnection.kind, IncidentConnection.name)))
             clusters = list(db.scalars(select(Cluster).where(Cluster.visibility == "shared", Cluster.is_enabled.is_(True))))
             discoveries = list(db.scalars(select(ConnectorDiscovery).order_by(ConnectorDiscovery.updated_at.desc())))
+        rows = [row for row in rows if row.kind != "cluster" or incident_enrolled(row)]
         discovery_views, topology = _connector_topology(rows, discoveries, clusters)
         selected = next((r for r in rows if r.id == request.query_params.get("edit")), None)
         requested_kind = request.query_params.get("type")
@@ -1868,8 +1880,51 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 {"access_mode": "kubernetes", "namespace": request.query_params.get("namespace", "openshift-gitops")}
                 if new_kind == "argocd" and new_cluster else {}), "default_alerts": DEFAULT_ALERTS,
             "discovery_views": discovery_views, "topology": topology,
+            "enrolled_cluster_ids": {row.cluster_id for row in rows if row.kind == "cluster"},
             "receiver_status": receiver_status,
             })
+
+    @app.post("/api/v1/incident-clusters/enrollment")
+    async def enroll_incident_clusters(request: Request, user=Depends(current_user)):
+        service.manage(user)
+        verify_csrf(request)
+        class Enrollment(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            cluster_ids: list[str] = Field(min_length=1, max_length=100)
+            enabled: bool
+        try:
+            value = Enrollment.model_validate(await request.json())
+        except (ValueError, TypeError):
+            raise HTTPException(422, "Select up to 100 registered shared clusters.")
+        ids = list(dict.fromkeys(value.cluster_ids))
+        with Session(app.state.engine) as db:
+            clusters = list(db.scalars(select(Cluster).where(Cluster.id.in_(ids))))
+            if len(clusters) != len(ids) or any(c.visibility != "shared" or (value.enabled and not c.is_enabled) for c in clusters):
+                raise HTTPException(422, "Select enabled shared clusters from Cluster Management.")
+            rows = list(db.scalars(select(IncidentConnection).where(IncidentConnection.kind == "cluster", IncidentConnection.cluster_id.in_(ids))))
+            by_cluster = {row.cluster_id: row for row in rows}
+            for cluster in clusters:
+                row = by_cluster.get(cluster.id)
+                if not row and not value.enabled:
+                    continue
+                if row and incident_enrolled(row) == value.enabled:
+                    continue
+                if not row:
+                    cid = str(uuid4())
+                    row = IncidentConnection(id=cid, kind="cluster", name=cluster.name,
+                        cluster_id=cluster.id, enabled=False, credential_key=f"connection-{cid}",
+                        webhook_key=f"webhook-{cid}", config_json=json.dumps({"allowed_alerts": DEFAULT_ALERTS}))
+                    db.add(row)
+                config = _json_object(row.config_json)
+                config["incident_response_enabled"] = value.enabled
+                row.config_json = json.dumps(config)
+                if not value.enabled:
+                    row.enabled = False
+                row.updated_at = utcnow()
+                service.audit(db, user.username, "cluster_enrollment_changed", cluster_id=cluster.id,
+                    connection_id=row.id, incident_response_enabled=value.enabled)
+            db.commit()
+        return {"cluster_ids": ids, "incident_response_enabled": value.enabled}
 
     @app.get("/api/v1/incident-connections/events")
     async def connector_events(request: Request, user=Depends(current_user)):

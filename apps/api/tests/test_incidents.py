@@ -281,7 +281,7 @@ def test_incident_detail_groups_alerts_formats_briefing_and_links_evidence(clien
     assert '.incident-run-task > summary { display: grid;' in styles
     assert '\n.incident-activity-columns, .incident-activity-row { display: grid;' not in styles
     assert "target.scrollIntoView" in script
-    assert "new EventSource" in script
+    assert "page.events(" in script
     assert f'data-events-url="/api/v1/incidents/{iid}/events"' in page.text
     assert 'Progress will appear here automatically.' not in page.text
 
@@ -430,7 +430,8 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert 'incident-row-live-pulse' in page.text
     assert page.text.count('Open full investigation') == 2
     assert page.text.count('class="incident-row-open-case"') == 2
-    assert 'incident-list-findings-1' in page.text
+    assert '/static/navigation.js?v=partial-navigation-1' in page.text
+    assert '/static/incidents.js?v=partial-navigation-1' in page.text
     assert 'data-events-url="/api/v1/incidents/events"' in page.text
     assert 'class="incident-board-table-header" role="row"' in page.text
 
@@ -465,7 +466,8 @@ def test_connector_directory_groups_independent_types_and_uses_type_chooser(clie
     assert 'aria-label="Configured connectors"' not in page.text
     chooser=client.get('/settings/connectors?new=1',headers={'x-forwarded-user':'admin'})
     assert 'Choose a connector type' in chooser.text
-    assert '/settings/clusters?new=1&amp;connector=1' in chooser.text
+    assert 'data-incident-cluster-picker' in chooser.text
+    assert 'Select registered clusters for incident response.' in chooser.text
     assert '/settings/connectors?new=1&amp;type=argocd' in chooser.text
     assert '/settings/connectors?new=1&amp;type=github' in chooser.text
     cluster_setup=client.get('/settings/clusters?new=1&connector=1',headers={'x-forwarded-user':'admin'})
@@ -1746,3 +1748,64 @@ def test_argocd_inventory_marks_result_cap_incomplete():
     result=reader.discover_argocd(); reader.close()
     assert len(result['applications']) == 500 and result['partial']
     assert any('capped at 500' in item for item in result['limitations'])
+
+
+def test_sidebar_partial_navigation_in_browser(client, tmp_path):
+    """Optional real-browser regression; requires Node, Playwright and Chrome."""
+    import os
+    import subprocess
+    if os.environ.get("PODPILOT_BROWSER_TESTS") != "1":
+        pytest.skip("Set PODPILOT_BROWSER_TESTS=1 and make Playwright available to Node")
+    test_cluster_discovery_inventory_paginates_and_renders_findings(client)
+    pages = {}
+    for path in ("/settings/connectors", "/memory", "/settings/model", "/incidents", "/ask?new=1"):
+        response = client.get(path, headers={"x-forwarded-user": "admin"})
+        assert response.status_code == 200
+        pages[path] = response.text
+    fixture = tmp_path / "navigation-pages.json"
+    fixture.write_text(json.dumps(pages), encoding="utf-8")
+    root = Path(__file__).resolve().parents[3]
+    result = subprocess.run(["node", str(root / "apps/web/tests/navigation.cjs"), str(fixture)],
+                            cwd=root, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_incident_cluster_enrollment_is_explicit_atomic_and_reversible(client):
+    from podpilot_api.incident_models import incident_enrolled
+    from podpilot_api.models import AuditEvent
+    with Session(client.app.state.engine) as db:
+        for cid, visibility in (("enroll-a", "shared"), ("enroll-b", "shared"), ("private-a", "private")):
+            db.add(Cluster(id=cid, name=cid, api_url=f"https://{cid}.example:6443",
+                visibility=visibility, owner="admin" if visibility == "private" else None,
+                created_by="admin", updated_by="admin"))
+        db.commit()
+    headers = admin_headers(client)
+    endpoint = '/api/v1/incident-clusters/enrollment'
+    def enrolled_rows():
+        with Session(client.app.state.engine) as db:
+            return list(db.scalars(select(IncidentConnection).where(IncidentConnection.cluster_id.in_(['enroll-a','enroll-b']))))
+    def sidebar():
+        text = client.get('/settings/connectors', headers={'x-forwarded-user':'admin'}).text
+        return text.split('id="nav-connector-group-cluster"')[1].split('id="nav-connector-group-github"')[0]
+    assert 'enroll-a' not in sidebar()
+    assert client.post(endpoint, headers={'x-forwarded-user':'admin'}, json={'cluster_ids':['enroll-a'],'enabled':True}).status_code == 403
+    assert client.post(endpoint, headers={**headers,'x-forwarded-user':'sre'}, json={'cluster_ids':['enroll-a'],'enabled':True}).status_code == 403
+    assert client.post(endpoint, headers=headers, json={'cluster_ids':['enroll-a','private-a'],'enabled':True}).status_code == 422
+    assert not enrolled_rows()
+    result = client.post(endpoint, headers=headers, json={'cluster_ids':['enroll-a','enroll-b'],'enabled':True})
+    assert result.status_code == 200
+    rows = enrolled_rows()
+    assert len(rows) == 2 and all(incident_enrolled(row) and not row.enabled for row in rows)
+    assert 'enroll-a' in sidebar() and 'enroll-b' in sidebar()
+    assert client.post(endpoint, headers=headers, json={'cluster_ids':['enroll-a','enroll-b'],'enabled':True}).status_code == 200
+    assert len(enrolled_rows()) == 2
+    page = client.get('/settings/clusters?edit=enroll-a',headers={'x-forwarded-user':'admin'})
+    assert 'name="incident_response_enabled" checked' in page.text
+    assert client.post(endpoint, headers=headers, json={'cluster_ids':['enroll-a'],'enabled':False}).status_code == 200
+    assert 'enroll-a' not in sidebar() and 'enroll-b' in sidebar()
+    row = next(row for row in enrolled_rows() if row.cluster_id == 'enroll-a')
+    assert not incident_enrolled(row) and not row.enabled
+    assert client.post(f'/api/v1/incident-connections/{row.id}/test',headers=headers,json={}).status_code == 409
+    with Session(client.app.state.engine) as db:
+        audit = db.scalars(select(AuditEvent).where(AuditEvent.action=='incident.cluster_enrollment_changed')).all()
+        assert audit and all(item.actor == 'admin' for item in audit)

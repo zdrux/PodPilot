@@ -6,17 +6,18 @@
 {% set argocd_access_mode = config.get('access_mode', ('direct' if config.get('url') else 'kubernetes')) if selected or new_cluster else 'direct' %}
 <div class="connector-page-frame">
   <header class="topbar connector-page-header">
-    <div><p class="eyebrow">Administration · Incident response</p><h1>Connectors</h1><p class="subtitle">Configure independent cluster, deployment, and source-control evidence endpoints.</p></div>
+    <div><p class="eyebrow">Administration · Incident response</p><h1>Connectors</h1><p class="subtitle">Connect clusters, deployment tools, and repositories to incident investigations.</p></div>
     <a class="button connector-add-button" href="/settings/connectors?new=1" aria-label="Add connector"><span aria-hidden="true">+</span> Add connector</a>
   </header>
 
+  {% if choose_kind or active_kind %}
   <div class="connector-layout connector-layout-single">
     <section class="connector-editor{% if not choose_kind and not active_kind %} connector-overview{% endif %}" aria-labelledby="connector-editor-title">
       <div class="connector-editor-accent" aria-hidden="true"></div>
       {% if choose_kind %}
       <header class="connector-editor-header"><div><p class="eyebrow">New connector</p><h2 id="connector-editor-title">Choose a connector type</h2><p>Each endpoint owns its credential and investigation boundary.</p></div></header>
       <div class="connector-kind-chooser">
-        <a href="/settings/clusters?new=1&amp;connector=1"><strong>OpenShift cluster</strong><span>Register its Kubernetes endpoint, then configure telemetry, logs, and Alertmanager ingress.</span></a>
+        <button type="button" class="button" data-incident-cluster-picker><strong>OpenShift clusters</strong><span>Select registered clusters for incident response.</span></button>
         <a href="/settings/connectors?new=1&amp;type=argocd"><strong>Argo CD instance</strong><span>Application destinations, managed resources, repository paths, and revisions.</span></a>
         <a href="/settings/connectors?new=1&amp;type=github"><strong>GitHub instance</strong><span>Allowed repository commit and pull-request metadata.</span></a>
       </div>
@@ -76,80 +77,11 @@
       </details>
       {% endif %}
       <p id="incident-feedback" class="incident-feedback connector-feedback" role="status"></p>
-      {% else %}
-      <header class="connector-editor-header"><div><p class="eyebrow">Connector inventory</p><h2 id="connector-editor-title">Connect your tools</h2><p>Choose a configured connector, or add an independent cluster, Argo CD, or GitHub endpoint.</p></div></header>
-      <div class="connector-setup-list">
-        {% for kind, label, description, href in [
-          ('cluster', 'OpenShift', 'Cluster health, metrics, and incoming alerts.', '/settings/clusters?new=1&connector=1'),
-          ('github', 'GitHub', 'Commits and pull requests from allowed repositories.', '/settings/connectors?new=1&type=github'),
-          ('argocd', 'Argo CD', 'Deployed applications, destinations, and revisions.', '/settings/connectors?new=1&type=argocd')
-        ] %}
-        <div class="connector-setup-row">
-          <span class="connector-tool-icon" aria-hidden="true">{% if kind == 'cluster' %}<svg viewBox="0 0 24 24"><path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/></svg>{% elif kind == 'github' %}<svg viewBox="0 0 24 24"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg>{% else %}<svg viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6M4 17a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/></svg>{% endif %}</span>
-          <div class="connector-setup-copy"><h3>{{ label }}</h3><p>{{ description }}</p></div>
-          <span class="connector-setup-count">{{ sidebar_connector_groups[kind] | selectattr('configured') | list | length }} configured</span>
-          <a class="button" href="{{ href }}" aria-label="Add {{ label }} connector">Add <span aria-hidden="true">↗</span></a>
-        </div>
-        {% endfor %}
-        <p class="connector-setup-hint">Select an instance in the sidebar to edit or test its connection.</p>
-      </div>
       {% endif %}
     </section>
   </div>
+  {% endif %}
 
-  <section class="connector-topology" data-connector-topology data-events-url="/api/v1/incident-connections/events" aria-labelledby="connector-topology-title">
-    <header class="connector-topology-header"><div><p class="eyebrow">Observed topology</p><h2 id="connector-topology-title">Application relationships</h2><p>Exact Argo CD destinations and allowlisted repository origins connect these otherwise independent objects.</p></div><span class="incident-live-status" data-live-status data-live-state="connecting">Connecting…</span></header>
-    <div class="connector-discovery-strip" aria-label="Connector discovery status">
-      {% for item in discovery_views %}
-      <article class="connector-discovery-card"><div><strong>{{ item.name }}</strong><span>{{ item.kind | upper }}</span></div><span class="connector-discovery-state is-{{ item.status | replace('_','-') }}">{{ item.status | replace('_',' ') | title }}</span><small>{% if item.status == 'running' %}Testing saved credentials and reading endpoint capabilities…{% elif item.status == 'queued' %}Waiting for discovery to start…{% elif item.error %}{{ item.error }}{% elif item.kind == 'cluster' %}{{ item.instances | length }} installation records · {{ item.application_count }} Applications{% elif item.kind == 'argocd' %}{{ item.application_count }} Applications{% elif item.kind == 'github' %}{{ item.repository_count }} repositories{% elif item.checks %}{{ item.checks | length }} capability checks{% else %}Run discovery to verify this connector.{% endif %}{% if item.updated_at %} · <time datetime="{{ item.updated_at.isoformat() }}">{{ item.updated_at | est_time('%b %d · %H:%M') }}</time>{% endif %}</small></article>
-      {% else %}<p class="connector-topology-empty">Add and enable a connector to begin bounded discovery.</p>{% endfor %}
-    </div>
-    {% for item in discovery_views %}
-    <details class="connector-discovery-findings" data-discovery-open-id="{{ item.id }}" open>
-      <summary>{{ item.name }}{% if item.kind == 'github' %} · {{ item.repository_count }} repositories{% else %} · {{ item.instances | length }} installation records · {{ item.application_count }} Applications{% endif %}</summary>
-      {% if item.status in ['stale', 'running', 'queued', 'error'] %}<p>Last collected findings; the current status is {{ item.status }}.</p>{% endif %}
-      {% if item.association_note %}<p>{{ item.association_note }}</p>{% endif %}
-      {% for limitation in item.limitations %}<p class="answer-limitations">{{ limitation }}</p>{% endfor %}
-      {% if item.instances %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-instances" open><summary>Installations <span>{{ item.instances | length }}</span></summary><table><thead><tr><th>Installation</th><th>Namespace</th><th>Evidence</th><th>Connector</th></tr></thead><tbody>
-      {% for instance in item.instances %}<tr><td>{{ instance.name }}</td><td>{{ instance.namespace }}</td><td>{{ instance.evidence }}<br><small>UID {{ instance.uid }}</small></td><td><a href="/settings/connectors?new=1&amp;type=argocd&amp;cluster_id={{ item.cluster_id | urlencode }}&amp;namespace={{ instance.namespace | urlencode }}">Configure Argo CD</a></td></tr>{% endfor %}
-      </tbody></table></details>{% endif %}
-      {% if item.endpoints %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-endpoints"><summary>Observed endpoints <span>{{ item.endpoints | length }}</span></summary><ul>{% for endpoint in item.endpoints %}<li>{{ endpoint.kind }} · {{ endpoint.namespace }}/{{ endpoint.name }} · <code>{{ endpoint.address }}</code></li>{% endfor %}</ul></details>{% endif %}
-      {% if item.kind != 'github' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-apps"><summary>Applications <span>{{ item.application_count }}</span></summary>
-      {% for namespace, applications in item.applications | groupby('namespace', default='Unspecified namespace') %}
-        <details class="discovery-group" data-discovery-open-id="{{ item.id }}-apps-{{ namespace }}"><summary>{{ namespace }} <span>{{ applications | length }}</span></summary>
-        {% for project, entries in applications | groupby('project', default='default') %}
-          <details class="discovery-group" data-discovery-open-id="{{ item.id }}-apps-{{ namespace }}-{{ project }}"><summary>{{ project }} <span>{{ entries | length }}</span></summary>
-          {% for application in entries %}<details class="discovery-entry" data-discovery-open-id="{{ item.id }}-app-{{ namespace }}-{{ application.application }}"><summary>{{ application.application }} <small>{{ application.health or 'Unknown' }} / {{ application.sync or 'Unknown' }}</small></summary>
-          <div class="discovery-content">{% for source in application.sources %}<p><code>{{ source.repository }}</code><br>Path: {{ source.path or '/' }} · Revision: {{ source.revision or 'Unspecified' }}</p>{% endfor %}</div></details>{% endfor %}
-          </details>
-        {% endfor %}</details>
-      {% else %}<p class="discovery-content">No Applications recorded. Check coverage below.</p>{% endfor %}
-      </details>
-      {% endif %}{% if item.kind == 'cluster' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-sets"><summary>ApplicationSets <span>{{ item.application_sets | length }}</span></summary>
-      {% for namespace, sets in item.application_sets | groupby('namespace', default='Unspecified namespace') %}<details class="discovery-group" data-discovery-open-id="{{ item.id }}-sets-{{ namespace }}"><summary>{{ namespace }} <span>{{ sets | length }}</span></summary>
-      {% for set in sets %}<div class="discovery-content"><strong>{{ set.name }}</strong><p>Project template: {{ set.project }} · Generators: {{ set.generators | join(', ') }}<br><small>UID {{ set.uid }}</small></p></div>{% endfor %}</details>
-      {% else %}<p class="discovery-content">No ApplicationSets recorded. Older discovery results need a rerun; check API coverage below.</p>{% endfor %}</details>
-      {% endif %}{% if item.kind == 'github' %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-repos"><summary>Repositories <span>{{ item.repository_count }}</span></summary><ul>{% for repo in item.repositories %}<li>{{ repo.repository }}</li>{% else %}<li>No repositories recorded.</li>{% endfor %}</ul></details>{% else %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-repos"><summary>Repository admission <span>{{ item.repositories | length }}</span></summary>
-      {% for state, repos in item.repositories | groupby('admission', default='not evaluated') %}<details class="discovery-group" data-discovery-open-id="{{ item.id }}-repos-{{ state }}"><summary>{{ state | replace('_', ' ') | title }} <span>{{ repos | length }}</span></summary><ul>{% for url, references in repos | groupby('url', default='Unspecified') %}<li><code>{{ url }}</code>{% if references | length > 1 %} · {{ references | length }} references{% endif %}</li>{% endfor %}</ul></details>
-      {% else %}<p class="discovery-content">No repository admission results recorded.</p>{% endfor %}</details>
-      {% endif %}<details class="discovery-section" data-discovery-open-id="{{ item.id }}-coverage"><summary>Checks and discovery coverage <span>{{ (item.coverage | length) + (item.checks | length) }}</span></summary><ul>{% for check in item.checks %}<li>{{ check }}</li>{% endfor %}{% for check in item.coverage %}<li><code>{{ check.resource }}</code> · {{ check.status }} · {{ check.count }} objects</li>{% endfor %}</ul></details>
-    </details>
-    {% endfor %}
-    {% if topology %}
-    <details class="discovery-section" data-discovery-open-id="relationships"><summary>Application relationships <span>{{ topology | length }}</span></summary><div class="connector-topology-table" role="table" aria-label="Discovered application relationships">
-      <div class="connector-topology-row connector-topology-table-header" role="row"><span>Application</span><span>Argo CD</span><span>Destination cluster</span><span>GitHub repository</span><span>Status</span></div>
-      {% for item in topology %}
-      <div class="connector-topology-row" role="row">
-        <span><strong>{{ item.application }}</strong><small>{{ item.project }} · {{ item.path }}</small></span>
-        <span><strong>{{ item.argocd }}</strong><small>via {{ item.hosting_cluster }}</small></span>
-        <span><strong>{{ item.cluster }}</strong><small>{{ item.destination }}</small></span>
-        <span><strong>{{ item.github }}</strong><small>{{ item.repository }}</small></span>
-        <span><span class="connector-discovery-state is-{{ item.status | lower }}">{{ item.status }}</span></span>
-      </div>
-      {% endfor %}
-    </div>
-    </details>{% else %}<div class="connector-topology-empty"><div class="connector-results-empty"><span class="connector-results-symbol" aria-hidden="true">↳</span><div><strong>No relationships discovered yet</strong><p>Save an enabled Argo CD connector, then use Test &amp; discover to find its applications.</p></div></div></div>{% endif %}
-  </section>
+  {% include "_connector_directory.html" %}
 </div>
-<script src="{{ url_for('static', path='/incidents.js') }}?v=connector-discovery-1" defer></script>
 {% endblock %}

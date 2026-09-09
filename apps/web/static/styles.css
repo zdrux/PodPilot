@@ -3035,3 +3035,34 @@ html[data-theme] .connector-step-heading .cluster-signin-step-number, html[data-
 .discovery-group > ul { padding: 0 16px 12px; overflow-wrap: anywhere; }
 .discovery-group > ul li { padding: 8px 0; }
 .discovery-section summary { overflow-wrap: anywhere; }
+
+/* Connector families share one tree layout in every theme. */
+.connector-directory-status { display: flex; justify-content: flex-end; color: var(--theme-muted); font-size: 12px; }
+.connector-family { margin-bottom: 24px; }
+.connector-setup-copy h2 { margin: 0; font-size: 18px; }
+.connector-instance-tree { list-style: none; margin: 0 0 0 21px; padding: 0 0 0 30px; }
+.connector-instance-tree > li { position: relative; padding: 14px 0 18px; border-left: 1px solid var(--theme-border); margin-left: -30px; padding-left: 30px; }
+.connector-instance-tree > li::before { content: ''; position: absolute; width: 20px; left: 0; top: 28px; border-top: 1px solid var(--theme-border); }
+.connector-instance-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 16px; }
+.connector-instance-name { color: var(--theme-text); font-weight: 650; }
+.connector-instance-row p, .connector-instance-note { margin: 5px 0 0; color: var(--theme-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.connector-instance-empty { color: var(--theme-muted); font-size: 13px; }
+.connector-directory .connector-discovery-findings { margin: 12px 0 0; padding: 10px 0 0; }
+.connector-directory .connector-discovery-findings > summary { font-size: 12px; color: var(--theme-muted); }
+.incident-cluster-dialog { width: min(620px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; border: 1px solid var(--theme-border); border-radius: 12px; padding: 24px; color: var(--theme-text); background: var(--theme-surface); }
+.incident-cluster-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.incident-cluster-dialog header, .incident-cluster-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.incident-cluster-dialog h2 { margin: 0; font-size: 20px; }
+.incident-cluster-dialog p, .cluster-incident-enrollment p { color: var(--theme-muted); font-size: 12px; line-height: 1.5; }
+.incident-cluster-dialog input[type=search] { width: 100%; margin: 16px 0; padding: 10px 12px; border: 1px solid var(--theme-border); border-radius: 6px; background: var(--theme-surface-inset); color: var(--theme-text); font: inherit; }
+.incident-cluster-options { max-height: 45vh; overflow: auto; }
+.incident-cluster-options label { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--theme-border); }
+.incident-cluster-options label[hidden] { display: none; }
+.incident-cluster-options small { display: block; margin-top: 4px; color: var(--theme-muted); }
+.cluster-incident-enrollment { border-top: 1px solid var(--theme-border); margin-top: 24px; padding-top: 20px; }
+@media (max-width: 720px) {
+  .connector-instance-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .connector-instance-row > div { grid-column: 1 / -1; }
+  html[data-theme] .connector-family .connector-setup-row { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 12px; }
+  .connector-family .connector-setup-count { display: none; }
+}
