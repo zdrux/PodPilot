@@ -339,3 +339,24 @@ The specialist-orchestration deployment was revalidated with synthetic incident
 `7822cbdd-2885-48ad-9a18-7d4944293c35`: one run completed with four cited platform
 observations, repeat deliveries did not create another run, and the resolved
 notification preserved its investigation history.
+
+### Connector credential-save troubleshooting
+
+Connector saves persist credentials through the API's hosting-cluster service
+account to the named `podpilot-incident-credentials` Secret. They do not use the
+submitted reader token or oc-runner to store credentials, even for the hosting
+cluster itself. Enabling the incident flag alone does not provision that Secret,
+its get/patch Role, its RoleBinding, or incident webhook proxy routing.
+
+Save failures now include a diagnostic reference and emit a credential-free API
+log (`podpilot.incident.connector_save_failed`) and attributed failure audit.
+HTTP 403/404/401 from the credential store are distinguished. Unexpected internal
+failures are not labeled as Secret failures; discovery queue failures after a
+successful save explicitly say the connector was saved. Raw exception messages,
+request bodies, tokens and Kubernetes response bodies are not logged.
+
+For a deployment in `ai-ops`, inspect only Secret metadata and check the actual
+Deployment service account's get/patch access to that named Secret. Do not dump
+Secret data. A new enabled incident cluster also requires a separate webhook
+bearer token (at least 32 characters); leaving it blank retains an existing token
+but cannot initialize a new enabled connector.

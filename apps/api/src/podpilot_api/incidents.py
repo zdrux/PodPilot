@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -26,7 +27,9 @@ from podpilot_api.incident_models import ConnectorDiscovery, IncidentConnection,
 from podpilot_diagnostics.incidents import DEFAULT_ALERTS, AlertWebhook, admitted
 from podpilot_openshift.incidents import IncidentReadError, IncidentReader, https_origin, clean_evidence
 from podpilot_openshift.log_metrics import LokiQueryClient
-from podpilot_openshift.credentials import KubernetesSecretCredentialStore
+from podpilot_openshift.credentials import KubernetesSecretCredentialStore, CredentialStoreError
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 def utcnow():
@@ -1873,10 +1876,16 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         body = await request.body()
         if len(body) > 65536:
             raise HTTPException(413, "Configuration exceeds 64 KiB.")
+        stage = "save"
+        saved_id = None
         try:
             value = ConnectionInput.model_validate_json(body)
             async with service.lock:
                 result = await asyncio.to_thread(service.save, app.state.engine, value, user)
+                saved_id = result["id"]
+                LOGGER.info("podpilot.incident.connector_saved actor=%s connection_id=%s kind=%s enabled=%s",
+                    user.username, saved_id, value.kind, value.enabled)
+                stage = "discovery_queue"
                 if value.enabled and service.settings.incident_connector_discovery_enabled:
                     queued = await asyncio.to_thread(service.queue_discovery,
                         app.state.engine, result["id"], user.username)
@@ -1888,8 +1897,38 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             raise HTTPException(422, "Invalid connector configuration; check field formats.")
         except HTTPException:
             raise
-        except Exception:
-            raise HTTPException(503, "Credential Secret unavailable. Verify the incident Secret and scoped RBAC.")
+        except Exception as exc:
+            reference = uuid4().hex[:12]
+            status = getattr(exc.__cause__, "status", None)
+            status = status if isinstance(status, int) else None
+            category = "credential_store" if isinstance(exc, CredentialStoreError) else "internal"
+            details = dict(diagnostic_ref=reference, stage=stage, category=category,
+                http_status=status, connection_id=saved_id)
+            # Exception text/tracebacks may include Secret bodies or request values.
+            LOGGER.error("podpilot.incident.connector_save_failed actor=%s ref=%s stage=%s category=%s http_status=%s exception_type=%s",
+                user.username, reference, stage, category, status, type(exc).__name__)
+            try:
+                with Session(app.state.engine) as db:
+                    service.audit(db, user.username, "connection_save_failed", "failure", **details)
+                    db.commit()
+            except Exception as audit_exc:
+                LOGGER.error("podpilot.incident.connector_failure_audit_failed ref=%s exception_type=%s",
+                    reference, type(audit_exc).__name__)
+            if saved_id:
+                message = "Connector saved, but automatic discovery could not be queued. Use Test & discover to retry."
+            elif category == "credential_store":
+                identity = f"{service.settings.incident_secret_namespace}/{service.settings.incident_secret_name}"
+                if status == 404:
+                    message = f"Credential Secret {identity} does not exist. Apply the incident-response credential Secret and scoped RBAC in PodPilot's hosting namespace."
+                elif status == 403:
+                    message = f"PodPilot's runtime service account cannot access credential Secret {identity}. Grant get and patch on this named Secret using the incident-response Role and RoleBinding. This is not a rejection of the pasted cluster-reader token."
+                elif status == 401:
+                    message = "PodPilot's runtime service account could not authenticate to its hosting Kubernetes API. Check its projected service-account credential."
+                else:
+                    message = f"PodPilot could not access credential Secret {identity}. Check hosting API connectivity, TLS and credential-store configuration."
+            else:
+                message = "Connector save failed inside PodPilot. Check the API log using the diagnostic reference."
+            raise HTTPException(503, f"{message} Diagnostic reference: {reference}.") from None
 
     @app.post("/api/v1/incident-connections/{connection_id}/test")
     async def test(connection_id: str, request: Request, user=Depends(current_user)):

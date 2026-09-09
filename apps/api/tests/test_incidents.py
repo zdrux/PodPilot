@@ -1566,3 +1566,44 @@ def test_platform_projection_preserves_failures_without_large_status_bodies():
     assert len(conditions[1]['message'])==8000
     assert len(json.dumps(result)) < reader.policy.max_collection_bytes
     reader.close()
+
+
+@pytest.mark.parametrize('status,expected', [(403, 'runtime service account'), (404, 'does not exist'), (401, 'could not authenticate')])
+def test_connector_save_reports_safe_credential_failure(client, caplog, status, expected):
+    from kubernetes.client.exceptions import ApiException
+    from podpilot_openshift.credentials import CredentialStoreError
+    from podpilot_api.models import AuditEvent
+    class BrokenStore(Store):
+        def get(self, key=None):
+            raise CredentialStoreError('private-cluster-token') from ApiException(status=status, reason='private-cluster-token')
+    client.app.state.incident_service.store = BrokenStore()
+    response = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'kind':'cluster', 'name':'SNO incidents', 'cluster_id':SYSTEM_CLUSTER_ID,
+        'enabled':True, 'token':'private-cluster-token'})
+    assert response.status_code == 503
+    assert expected in response.json()['detail']
+    assert 'Diagnostic reference:' in response.text
+    assert 'private-cluster-token' not in response.text + caplog.text
+    assert 'podpilot.incident.connector_save_failed' in caplog.text
+    with Session(client.app.state.engine) as db:
+        assert db.scalar(select(func.count(IncidentConnection.id))) == 0
+        audit = db.scalar(select(AuditEvent).where(AuditEvent.action == 'incident.connection_save_failed'))
+        assert json.loads(audit.details_json)['http_status'] == status
+        assert 'private-cluster-token' not in audit.details_json
+
+
+def test_connector_queue_error_reports_saved_state_without_blame_on_secret(client, monkeypatch, caplog):
+    service = client.app.state.incident_service
+    service.settings.incident_connector_discovery_enabled = True
+    def broken(*args):
+        raise RuntimeError('private-cluster-token')
+    monkeypatch.setattr(service, 'queue_discovery', broken)
+    response = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'kind':'cluster', 'name':'SNO incidents', 'cluster_id':SYSTEM_CLUSTER_ID,
+        'enabled':True, 'token':'private-cluster-token', 'webhook_token':'w'*40})
+    assert response.status_code == 503
+    assert 'Connector saved, but automatic discovery' in response.text
+    assert 'Credential Secret unavailable' not in response.text
+    assert 'private-cluster-token' not in response.text + caplog.text
+    with Session(client.app.state.engine) as db:
+        assert db.scalar(select(func.count(IncidentConnection.id))) == 1
