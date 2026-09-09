@@ -148,6 +148,79 @@ class IncidentReader:
                 limitations.append(str(exc))
                 return
 
+    def discover_argocd(self):
+        """Inventory installations and applications without fetching discovered URLs."""
+        limitations, coverage = [], []
+
+        def listing(path, **params):
+            errors, rows = [], []
+            for item in self._items(path, {"limit": self.policy.page_size, **params}, errors):
+                if len(rows) >= 500:
+                    errors.append("Inventory capped at 500 objects for this resource.")
+                    break
+                if isinstance(item, dict):
+                    rows.append(item)
+            unavailable = bool(errors)
+            # An absent optional API is not a permission failure or an empty success.
+            absent = bool(errors) and all("HTTP 404" in error for error in errors)
+            coverage.append({"resource": path, "status": "not_installed" if absent else
+                ("partial" if unavailable else "read"), "count": len(rows)})
+            limitations.extend(f"{path}: {error}" for error in errors if not absent)
+            return rows
+
+        instances = []
+        custom_resources = listing("/apis/argoproj.io/v1beta1/argocds")
+        if coverage[-1]["status"] == "not_installed":
+            custom_resources = listing("/apis/argoproj.io/v1alpha1/argocds")
+        for item in custom_resources:
+            meta = item.get("metadata", {})
+            instances.append({"name": meta.get("name"), "namespace": meta.get("namespace"),
+                "uid": meta.get("uid"), "evidence": "ArgoCD custom resource"})
+        for item in listing("/apis/apps/v1/deployments", labelSelector="app.kubernetes.io/component=server,app.kubernetes.io/part-of=argocd"):
+            meta = item.get("metadata", {})
+            owners = meta.get("ownerReferences", [])
+            if any(owner.get("uid") == instance["uid"] for owner in owners for instance in instances):
+                continue
+            instances.append({"name": meta.get("name"), "namespace": meta.get("namespace"),
+                "uid": meta.get("uid"), "evidence": "Argo CD server Deployment (candidate)"})
+        applications = []
+        for item in listing("/apis/argoproj.io/v1alpha1/applications"):
+            meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
+            sources = []
+            for source in ([spec["source"]] if isinstance(spec.get("source"), dict) else []) + (spec.get("sources") or []):
+                repository = str(source.get("repoURL", ""))
+                parsed = urlsplit(repository)
+                if parsed.scheme in {"http", "https", "ssh"}:
+                    repository = parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1], query="", fragment="").geturl()
+                sources.append({"repository": repository, "path": source.get("path"),
+                    "revision": source.get("targetRevision")})
+            applications.append({"application": meta.get("name"), "namespace": meta.get("namespace"),
+                "uid": meta.get("uid"), "project": spec.get("project", "default"),
+                "destination": spec.get("destination", {}), "sources": sources,
+                "health": status.get("health", {}).get("status"), "sync": status.get("sync", {}).get("status")})
+        namespaces = sorted({row["namespace"] for row in instances + applications if row.get("namespace")})
+        endpoints = []
+        for namespace in namespaces[:50]:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", namespace):
+                continue
+            services = listing(f"/api/v1/namespaces/{namespace}/services", labelSelector="app.kubernetes.io/component=server,app.kubernetes.io/part-of=argocd")
+            service_names = {item.get("metadata", {}).get("name") for item in services}
+            for item in services:
+                name = item.get("metadata", {}).get("name")
+                endpoints.append({"namespace": namespace, "name": name, "kind": "Service",
+                    "address": f"{name}.{namespace}.svc", "ports": item.get("spec", {}).get("ports", [])})
+            for item in listing(f"/apis/route.openshift.io/v1/namespaces/{namespace}/routes"):
+                spec = item.get("spec", {})
+                if spec.get("to", {}).get("name") in service_names:
+                    endpoints.append({"namespace": namespace, "name": item.get("metadata", {}).get("name"),
+                        "kind": "Route", "address": spec.get("host"), "ports": []})
+        if len(namespaces) > 50:
+            limitations.append("Endpoint discovery capped at 50 namespaces.")
+        return {"argocd_instances": instances, "applications": applications, "endpoints": endpoints,
+            "coverage": coverage, "limitations": limitations, "partial": bool(limitations),
+            "checks": [f"{len(instances)} installation records, {len(applications)} Applications, {len(endpoints)} endpoint records."],
+            "association_note": "Namespace co-location does not prove controller ownership. Endpoint addresses are observed, not connection-tested."}
+
     def catalog(self):
         return {
             "operators": "Cluster operator availability and degraded conditions",

@@ -370,3 +370,34 @@ Credential loading is inside the terminal-state handler. HTTP 401 on protected
 Kubernetes reads fails discovery; public version reads alone do not validate a
 token. Missing capability reads produce partial coverage. Previously stranded
 running records from older builds are not automatically reset by this change.
+
+### Incident-cluster Argo CD inventory
+
+Test & discover now uses the incident cluster's saved reader token to enumerate
+ArgoCD custom resources (v1beta1, falling back to v1alpha1 when absent), server
+Deployments labeled component=server/part-of=argocd, and paginated Applications.
+Operator-owned Deployments are deduplicated against observed owner UIDs. It reads
+server Services and Routes targeting those Services in discovered namespaces.
+It does not contact the discovered endpoint addresses. Nonstandard unlabeled
+installations may not be recognized; Applications can still appear independently.
+
+The results show installation evidence and UIDs, namespaces, health/sync,
+repository paths/revisions, endpoints, checks and resource coverage. Missing or
+denied APIs and deadline/size limits remain explicit. Collection is bounded to
+500 objects per resource query and endpoints in 50 namespaces, within the reader
+budget. Namespace co-location does not establish an Application's controller.
+Cluster-level Application observations also populate the existing exact
+repository/destination correlation table.
+
+Configure Argo CD opens a draft using the registered host and observed namespace;
+it does not create credentials or enable a connector. Operators still select
+project scope. An enabled incident-cluster credential takes precedence for hosted
+Argo CD access, including the system cluster, with no fallback to runtime identity
+when that explicitly configured credential is missing. Referenced repositories
+use existing matching GitHub admission rules and attributed audit records.
+
+Validation: paginated inventory, denied APIs, bounds, source URL credential
+stripping, rendered findings/draft prefill, saved-token precedence and repository
+admission have regression tests. A read-only SNO probe found one Argo CD custom
+resource, one Application, two Services and a Route. Corporate discovery still
+requires deployment and adequate scope on the supplied reader token.

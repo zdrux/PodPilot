@@ -1644,3 +1644,100 @@ def test_discovery_public_version_does_not_validate_bad_token(client, caplog):
         state = db.get(ConnectorDiscovery, sid)
         assert state.status == 'error'
         assert 'HTTP 401' in state.error
+
+
+def test_cluster_discovery_inventory_paginates_and_renders_findings(client):
+    from podpilot_api.incident_models import ConnectorDiscovery
+    paths = []
+    def respond(request):
+        path = request.url.path; paths.append(path)
+        if path.endswith('/argocds'):
+            return httpx.Response(200, json={'items':[{'metadata':{'name':'team-gitops','namespace':'gitops-a','uid':'argo-uid'}}]})
+        if path.endswith('/deployments'):
+            return httpx.Response(200, json={'items':[{'metadata':{'name':'team-gitops-server','namespace':'gitops-a','uid':'deploy-uid','ownerReferences':[{'uid':'argo-uid'}]}}]})
+        if path.endswith('/applications'):
+            second = bool(request.url.params.get('continue'))
+            return httpx.Response(200, json={'metadata':{} if second else {'continue':'page2'},'items':[{'metadata':{'name':'second' if second else 'first','namespace':'gitops-a','uid':'app2' if second else 'app1'},'spec':{'project':'platform','destination':{'server':'https://kubernetes.default.svc'},'source':{'repoURL':'https://user:private-password@github.com/team/config?token=hidden','path':'apps','targetRevision':'main'}}}]})
+        if path.endswith('/services'):
+            return httpx.Response(200, json={'items':[{'metadata':{'name':'argocd-server'},'spec':{'ports':[{'port':443}]}}]})
+        if path.endswith('/routes'):
+            return httpx.Response(200, json={'items':[{'metadata':{'name':'argo'},'spec':{'to':{'name':'argocd-server'},'host':'argo.example'}}]})
+        raise AssertionError(path)
+    reader = IncidentReader('https://host','test-reader',transport=httpx.MockTransport(respond))
+    result = reader.discover_argocd(); reader.close()
+    assert len(result['argocd_instances']) == 1
+    assert len(result['applications']) == 2 and len(result['endpoints']) == 2
+    assert not result['partial']
+    assert paths.count('/apis/argoproj.io/v1alpha1/applications') == 2
+    assert 'private-password' not in json.dumps(result) and 'token=hidden' not in json.dumps(result)
+    sid = source(client)
+    with Session(client.app.state.engine) as db:
+        db.add(ConnectorDiscovery(connector_id=sid,status='completed',requested_by='admin',result_json=json.dumps(result),updated_at=datetime.now(timezone.utc)))
+        db.commit()
+    page = client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
+    assert page.status_code == 200
+    assert 'team-gitops' in page.text and 'argo.example' in page.text and 'Configure Argo CD' in page.text
+    assert 'gitops-a/second' in page.text
+    draft = client.get('/settings/connectors?new=1&type=argocd&cluster_id='+SYSTEM_CLUSTER_ID+'&namespace=gitops-a',headers={'x-forwarded-user':'admin'})
+    assert 'value="kubernetes" selected' in draft.text and 'value="gitops-a"' in draft.text
+
+
+def test_cluster_discovery_denied_is_not_empty_success():
+    def respond(request):
+        return httpx.Response(404 if request.url.path.endswith('/argocds') else 403)
+    reader = IncidentReader('https://host','test',transport=httpx.MockTransport(respond))
+    result = reader.discover_argocd(); reader.close()
+    assert result['partial'] and not result['argocd_instances']
+    assert any('HTTP 403' in item for item in result['limitations'])
+    assert result['coverage'][0]['status'] == 'not_installed'
+
+
+def test_hosted_argocd_prefers_explicit_incident_reader_over_runtime(client):
+    sid = source(client)
+    service = client.app.state.incident_service
+    with Session(client.app.state.engine) as db:
+        cluster = db.get(Cluster,SYSTEM_CLUSTER_ID)
+        assert service.hosting_cluster_token(cluster,db) == 'private-cluster-token'
+        row = db.get(IncidentConnection,sid)
+        service.store.delete(row.credential_key)
+        assert service.hosting_cluster_token(cluster,db) is None
+
+
+def test_cluster_discovery_persists_inventory_and_admits_referenced_repository(client):
+    sid = source(client)
+    github = client.post('/api/v1/incident-connections',headers=admin_headers(client),json={
+        'kind':'github','name':'GitHub','enabled':True,'url':'https://api.github.com',
+        'token':'github-token','repositories':['team/existing'],'api_prefix':''})
+    assert github.status_code == 200
+    service = client.app.state.incident_service
+    class Reader:
+        def collect(self,key): return {'ok':True}
+        def discover_argocd(self): return {'argocd_instances':[], 'applications':[{
+            'application':'app','namespace':'gitops-a','uid':'app-uid',
+            'sources':[{'repository':'https://github.com/team/discovered'}]}],
+            'endpoints':[], 'coverage':[], 'limitations':[], 'partial':False, 'checks':['Found one Application.']}
+        def close(self): pass
+    received = []
+    def reader(cluster, token):
+        received.append(token)
+        return Reader()
+    service.cluster_reader = reader
+    service.queue_discovery(client.app.state.engine,sid,'admin')
+    service.discover_connection(client.app.state.engine,sid)
+    from podpilot_api.incident_models import ConnectorDiscovery
+    with Session(client.app.state.engine) as db:
+        result = json.loads(db.get(ConnectorDiscovery,sid).result_json)
+        assert result['repositories'][0]['admission'] == 'admitted'
+        assert 'team/discovered' in json.loads(db.get(IncidentConnection,github.json()['id']).config_json)['repositories']
+        assert received == ['private-cluster-token']
+
+
+def test_argocd_inventory_marks_result_cap_incomplete():
+    def respond(request):
+        if request.url.path.endswith('/applications'):
+            return httpx.Response(200,json={'items':[{'metadata':{'name':str(i)}} for i in range(501)]})
+        return httpx.Response(200,json={'items':[]})
+    reader = IncidentReader('https://host','test',transport=httpx.MockTransport(respond))
+    result=reader.discover_argocd(); reader.close()
+    assert len(result['applications']) == 500 and result['partial']
+    assert any('capped at 500' in item for item in result['limitations'])

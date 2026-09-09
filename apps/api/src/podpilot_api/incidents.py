@@ -120,8 +120,12 @@ def _connector_topology(connections, discoveries, clusters):
             "updated_at": discovery.updated_at if discovery else None,
             "checks": result.get("checks", [])[:8],
             "application_count": len(result.get("applications", [])),
-            "repository_count": len(result.get("repositories", []))})
-        if row.kind != "argocd" or not discovery or discovery.status not in {"completed", "partial"}:
+            "repository_count": len(result.get("repositories", [])),
+            "cluster_id": row.cluster_id, "repositories": result.get("repositories", []), "instances": result.get("argocd_instances", []),
+            "applications": result.get("applications", []), "endpoints": result.get("endpoints", []),
+            "coverage": result.get("coverage", []), "limitations": result.get("limitations", []),
+            "association_note": result.get("association_note")})
+        if row.kind not in {"argocd", "cluster"} or not discovery or discovery.status not in {"completed", "partial"}:
             continue
         hosting = cluster_by_id.get(row.cluster_id)
         for application in result.get("applications", [])[:60]:
@@ -558,6 +562,13 @@ class IncidentService:
         return config.get("access_mode") or ("direct" if config.get("url") else "kubernetes")
 
     def hosting_cluster_token(self, cluster, db):
+        host_connection = db.scalar(select(IncidentConnection).where(
+            IncidentConnection.kind == "cluster", IncidentConnection.cluster_id == cluster.id,
+            IncidentConnection.enabled.is_(True)))
+        if host_connection:
+            # An explicitly configured incident reader must not silently fall back
+            # to the hosting runtime's potentially broader service account.
+            return self.credentials().get(host_connection.credential_key)
         if cluster.credential_key and self.cluster_store:
             token = self.cluster_store.get(cluster.credential_key)
             if token:
@@ -883,22 +894,27 @@ class IncidentService:
                             raise
                         capabilities[key] = False
                         checks.append(f"{key}: unavailable")
-                try:
-                    reader.get("/apis/argoproj.io/v1alpha1/applications", {"limit": 1})
-                    capabilities["argocd_applications"] = True
-                    checks.append("Argo CD Application resources: discoverable")
-                except Exception:
-                    capabilities["argocd_applications"] = False
-                    checks.append("Argo CD Application resources: unavailable")
-                result = {"checks": checks, "cluster": {"id": snapshot["cluster"].id,
-                    "name": snapshot["cluster"].name, "api_url": snapshot["cluster"].api_url,
-                    "version": version}, "capabilities": capabilities, "partial": not all(capabilities.values())}
+                inventory = reader.discover_argocd()
+                result = {**inventory, "checks": checks + inventory["checks"],
+                    "cluster": {"id": snapshot["cluster"].id, "name": snapshot["cluster"].name,
+                        "api_url": snapshot["cluster"].api_url, "version": version},
+                    "capabilities": capabilities,
+                    "partial": inventory["partial"] or not all(capabilities.values())}
             result = clean_evidence(result, [snapshot["token"]])
             status = "partial" if result.get("partial") else "completed"
             with Session(engine) as db:
                 discovery = db.get(ConnectorDiscovery, connection_id)
                 if discovery:
                     discovery.status = status
+                    if snapshot["kind"] == "cluster":
+                        from podpilot_api.repository_admission import admit_repositories
+                        result["repositories"] = [{"url": source["repository"], "references": [{
+                            "kind": "Application", "name": application["application"],
+                            "namespace": application.get("namespace"), "uid": application.get("uid")}]}
+                            for application in result.get("applications", [])
+                            for source in application.get("sources", []) if source.get("repository")]
+                        admit_repositories(db, result, actor=discovery.requested_by,
+                            cluster_id=snapshot["cluster_id"], can_manage=True)
                     discovery.result_json = json.dumps(result)
                     discovery.error = None
                     discovery.completed_at = discovery.updated_at = utcnow()
@@ -1830,7 +1846,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         selected = next((r for r in rows if r.id == request.query_params.get("edit")), None)
         requested_kind = request.query_params.get("type")
         new_kind = requested_kind if requested_kind in {"cluster", "argocd", "github"} else None
-        requested_cluster_id = request.query_params.get("cluster_id") if new_kind == "cluster" else None
+        requested_cluster_id = request.query_params.get("cluster_id") if new_kind in {"cluster", "argocd"} else None
         new_cluster = next((cluster for cluster in clusters if cluster.id == requested_cluster_id), None)
         receiver_status = None
         if selected and selected.kind == "cluster":
@@ -1848,7 +1864,9 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         return page(request, user, "connectors.html", {"connections": rows, "clusters": clusters,
             "selected": selected, "new_kind": new_kind, "new_cluster": new_cluster,
             "choose_kind": request.query_params.get("new") == "1" and new_kind is None,
-            "config": json.loads(selected.config_json) if selected else {}, "default_alerts": DEFAULT_ALERTS,
+            "config": json.loads(selected.config_json) if selected else (
+                {"access_mode": "kubernetes", "namespace": request.query_params.get("namespace", "openshift-gitops")}
+                if new_kind == "argocd" and new_cluster else {}), "default_alerts": DEFAULT_ALERTS,
             "discovery_views": discovery_views, "topology": topology,
             "receiver_status": receiver_status,
             })
