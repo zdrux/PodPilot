@@ -1,7 +1,7 @@
 /* Optional DemandKit-inspired presentation. Existing theme geometry is retained. */
 .sidebar-theme-options { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .orange-nav-icon { display: none; }
-.orange-folder-icon, .connector-orange-only { display: none; }
+.orange-folder-icon { display: none; }
 .config-disclosure > summary { display: none; }
 .config-disclosure, .config-disclosure-body { display: contents; }
 .config-disclosure-body > * + * { margin-top: 16px; }
@@ -106,38 +106,6 @@ html[data-theme="orange"] .prompt-starters button:disabled { background: var(--t
 html[data-theme="orange"] :is(a, button, summary):focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 3px; }
 
 /* Connector landing: actionable rows and a single results area, not nested cards. */
-html[data-theme="orange"] .connector-orange-only { display: block; }
-html[data-theme="orange"] .connector-classic-copy { display: none; }
-html[data-theme="orange"] .connector-page-frame { max-width: 1180px; }
-html[data-theme="orange"] .connector-page-header .subtitle { max-width: 640px; }
-html[data-theme="orange"] .saas-app .connector-overview { border: 0; background: transparent; box-shadow: none; }
-html[data-theme="orange"] .connector-overview .connector-editor-accent { display: none; }
-html[data-theme="orange"] .connector-overview .connector-editor-header { padding: 12px 0 20px; border: 0; background: transparent; }
-html[data-theme="orange"] .connector-overview .connector-editor-header :is(.eyebrow, p:not(.eyebrow)) { display: none; }
-html[data-theme="orange"] .connector-overview .connector-editor-header h2 { font-size: 20px; }
-html[data-theme="orange"] .connector-setup-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; align-items: center; gap: 20px; padding: 24px 0; border-top: 1px solid var(--theme-border); }
-html[data-theme="orange"] .connector-tool-icon { display: grid; place-items: center; width: 42px; height: 42px; color: var(--theme-accent); background: var(--theme-accent-soft); border-radius: 10px; }
-html[data-theme="orange"] .connector-tool-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
-html[data-theme="orange"] .connector-setup-copy h3 { margin: 0 0 5px; font-size: 15px; font-weight: 650; }
-html[data-theme="orange"] .connector-setup-copy p { margin: 0; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
-html[data-theme="orange"] .connector-setup-count { color: var(--theme-subtle); font-size: 12px; white-space: nowrap; }
-html[data-theme="orange"] .connector-setup-row .button { min-width: 80px; justify-content: space-between; }
-html[data-theme="orange"] .connector-setup-hint { margin: 0; padding: 15px 0; border-top: 1px solid var(--theme-border); color: var(--theme-subtle); font-size: 12px; }
-html[data-theme="orange"] .connector-topology { margin-top: 36px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-html[data-theme="orange"] .connector-topology-header { padding: 0 0 18px; border-bottom: 1px solid var(--theme-border); background: transparent; }
-html[data-theme="orange"] .connector-topology-header :is(.eyebrow, p:not(.eyebrow)) { display: none; }
-html[data-theme="orange"] .connector-topology-header h2 { font-size: 20px; }
-html[data-theme="orange"] .connector-discovery-strip { display: block; padding: 0; background: transparent; }
-html[data-theme="orange"] .connector-discovery-strip:not(:has(.connector-discovery-card)) { display: none; }
-html[data-theme="orange"] .connector-discovery-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; padding: 16px 0; border: 0; border-bottom: 1px solid var(--theme-border); border-radius: 0; background: transparent; }
-html[data-theme="orange"] .connector-discovery-card small { grid-column: 1 / -1; }
-html[data-theme="orange"] .connector-topology-empty { padding: 28px 0; background: transparent; }
-html[data-theme="orange"] .connector-results-empty { display: flex; align-items: flex-start; gap: 16px; }
-html[data-theme="orange"] .connector-results-symbol { color: var(--theme-subtle); font-size: 26px; }
-html[data-theme="orange"] .connector-results-empty strong { font-size: 14px; font-weight: 550; }
-html[data-theme="orange"] .connector-results-empty p { max-width: 580px; margin: 7px 0 0; font-size: 13px; line-height: 1.6; }
-html[data-theme="orange"] .connector-kind-chooser { gap: 0; }
-html[data-theme="orange"] .connector-kind-chooser a { padding: 22px 0; border: 0; border-bottom: 1px solid var(--theme-border); border-radius: 0; background: transparent; }
 
 /* Flat configuration workspace: a directory, an editor, and observed results. */
 html[data-theme="orange"] .admin-config-frame { max-width: 1240px; }
@@ -158,8 +126,8 @@ html[data-theme="orange"] .admin-config-page .side-empty { padding: 18px 0; }
 html[data-theme="orange"] .settings-form.admin-config-form { padding: 0 0 24px; }
 html[data-theme="orange"] .admin-form-step { margin: 0 0 18px !important; padding: 24px 0 0; }
 html[data-theme="orange"] .admin-form-step.admin-form-divider { margin-top: 28px !important; }
-html[data-theme="orange"] :is(.admin-form-step, .connector-step-heading) .cluster-signin-step-number { display: none; }
-html[data-theme="orange"] :is(.admin-form-step, .connector-step-heading) :is(small, p) { display: none; }
+html[data-theme="orange"] .admin-form-step .cluster-signin-step-number { display: none; }
+html[data-theme="orange"] .admin-form-step :is(small, p) { display: none; }
 html[data-theme="orange"] .admin-form-step strong { font-size: 15px; }
 html[data-theme="orange"] .settings-form.admin-config-form label { font-size: 12px; color: var(--theme-text); }
 html[data-theme="orange"] .settings-form.admin-config-form label > small { font-size: 11px; line-height: 1.6; }
@@ -190,15 +158,6 @@ html[data-theme="orange"] .admin-config-search .memory-search :is(input, select)
 html[data-theme="orange"] .admin-config-page .memory-results { padding: 18px 0; }
 html[data-theme="orange"] .admin-config-page .memory-results li { padding: 18px 0; border: 0; border-bottom: 1px solid var(--theme-border); border-radius: 0; background: transparent; }
 html[data-theme="orange"] .memory-config-page textarea[name="content"] { min-height: 280px; }
-html[data-theme="orange"] .connector-editor:not(.connector-overview) { border: 0; border-radius: 0; background: transparent; }
-html[data-theme="orange"] .connector-editor-accent { display: none; }
-html[data-theme="orange"] .connector-editor-header { padding: 14px 0 20px; background: transparent; }
-html[data-theme="orange"] .connector-editor-header > div > p:not(.eyebrow) { display: none; }
-html[data-theme="orange"] .connector-form { padding: 0; }
-html[data-theme="orange"] .connector-form-section { padding: 24px 0; }
-html[data-theme="orange"] .connector-control-frame { background: var(--theme-surface); box-shadow: none; }
-html[data-theme="orange"] .connector-form-footer { margin: 0; padding: 20px 0; background: transparent; }
-html[data-theme="orange"] .connector-enable-card { border: 0; border-radius: 0; padding: 0; background: transparent; }
 
 /* Use the shared edge-to-edge conversation layout and section dividers. */
 html[data-theme="orange"] .saas-app.ask-page .main { padding: 0; }

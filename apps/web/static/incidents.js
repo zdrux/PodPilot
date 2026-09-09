@@ -29,6 +29,7 @@
           const result = await post(button.dataset.incidentPost);
           if (result.url) { window.location.assign(result.url); return; }
           if (button.hasAttribute('data-incident-rerun')) { window.location.reload(); return; }
+          if (isDiscovery) document.dispatchEvent(new Event('podpilot-discovery-started'));
           const feedback = document.getElementById('incident-feedback');
           if (feedback) feedback.textContent = result.checks ? result.checks.join(' · ') :
             result.discovery_status ? `Discovery ${result.discovery_status}. Testing saved credentials; results update below.` :
@@ -265,6 +266,30 @@
   if (connectorTopology) {
     let refreshRunning = false;
     let refreshPending = false;
+    let stopDiscoveryLive = null;
+    function resultSnapshot(root) {
+      const copy = root.cloneNode(true);
+      copy.querySelectorAll('details[open]').forEach(item => item.removeAttribute('open'));
+      copy.querySelector('[data-live-status]')?.remove();
+      return copy.innerHTML;
+    }
+    let lastResults = resultSnapshot(connectorTopology);
+    function discoveryActive() {
+      return !!connectorTopology.querySelector('.connector-discovery-state:is(.is-queued, .is-running)');
+    }
+    function startDiscoveryLive() {
+      if (!stopDiscoveryLive) stopDiscoveryLive = connectLive(() => connectorTopology, refreshConnectorTopology);
+    }
+    function syncDiscoveryLive() {
+      if (discoveryActive()) {
+        startDiscoveryLive();
+        setLiveState(connectorTopology, 'live', 'Discovery in progress');
+      } else {
+        stopDiscoveryLive?.();
+        stopDiscoveryLive = null;
+        setLiveState(connectorTopology, 'idle', 'Discovery idle');
+      }
+    }
     async function refreshConnectorTopology() {
       if (refreshRunning) { refreshPending = true; return; }
       refreshRunning = true;
@@ -273,11 +298,16 @@
         if (!response.ok) throw new Error('Connector discovery refresh failed.');
         const documentCopy = new DOMParser().parseFromString(await response.text(), 'text/html');
         const replacement = documentCopy.querySelector('[data-connector-topology]');
-        if (replacement && replacement.innerHTML !== connectorTopology.innerHTML) {
+        if (!replacement) throw new Error('Connector discovery results unavailable.');
+        const nextResults = resultSnapshot(replacement);
+        if (nextResults !== lastResults) {
+          const expanded = openIds(connectorTopology, 'data-discovery-open-id');
+          restoreOpen(replacement, 'data-discovery-open-id', expanded);
           connectorTopology.replaceWith(replacement);
           connectorTopology = replacement;
+          lastResults = nextResults;
         }
-        setLiveState(connectorTopology, 'live', 'Live discovery');
+        syncDiscoveryLive();
       } catch (_error) {
         setLiveState(connectorTopology, 'reconnecting', 'Reconnecting…');
       } finally {
@@ -285,7 +315,11 @@
         if (refreshPending) { refreshPending = false; refreshConnectorTopology(); }
       }
     }
-    connectLive(() => connectorTopology, refreshConnectorTopology);
+    document.addEventListener('podpilot-discovery-started', () => {
+      startDiscoveryLive();
+      refreshConnectorTopology();
+    });
+    syncDiscoveryLive();
   }
 
   const form = document.getElementById('incident-connection-form');

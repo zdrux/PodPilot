@@ -77,9 +77,14 @@ and 224px below 840px, with 48px primary navigation rows and outline icons.
 Connector categories use folder icons and branch lines down to individual instances;
 the add action shares the Connectors row outline while remaining a separate link.
 Secondary navigation uses a quiet vertical guide rather than enclosing cards.
-The Orange connector overview offers three flat setup rows with configured counts
+The shared connector overview uses the Orange layout as its baseline and offers three flat setup rows with configured counts
 and direct add links. Individual instances remain in the sidebar. Discovery results
-use a single flat section, with one empty-state instruction and no nested cards.
+use matching expandable sections for installations, endpoints, Applications,
+ApplicationSets, repository admission, and coverage. Applications expand by
+namespace, project, then individual source details; repository URLs are grouped
+by admission status and deduplicated. Long lists start collapsed and retain their
+expansion state through live refreshes. All six themes use this same HTML and
+layout CSS; only theme tokens change the connector colors.
 Existing navigation and permission conditions remain
 intact. Ask uses the shared edge-to-edge conversation and composer layout, with
 line separators and no enclosing rounded card or outer gutter.
@@ -90,7 +95,7 @@ needed. Reasoning and raw-response controls live in the Response options pull-up
 Evidence has a persistent 44px folded right rail with an icon-only toggle; the
 expanded rail shows the labeled toggle and evidence. On narrow screens the open
 rail overlays the conversation. New sessions are started from sidebar navigation.
-The other themes retain their existing geometry. No frontend framework is required.
+Other pages retain their existing theme geometry. No frontend framework is required.
 
 Orange configuration pages use a flat directory/editor layout with a divider,
 plain section headings, and unboxed option groups. Search stays prominent in

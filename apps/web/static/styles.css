@@ -2978,3 +2978,60 @@ html[data-theme] .ask-page .ask-session-title { max-width: 100%; }
 .connector-discovery-findings table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 12px 0; }
 .connector-discovery-findings th, .connector-discovery-findings td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--theme-border); overflow-wrap: anywhere; }
 .connector-discovery-findings p, .connector-discovery-findings li { font-size: 12px; line-height: 1.5; }
+
+/* Shared connector layout; themes supply colors only. */
+html[data-theme] .connector-page-frame { max-width: 1180px; }
+html[data-theme] .connector-page-header .subtitle { max-width: 640px; }
+html[data-theme] .saas-app .connector-overview { border: 0; background: transparent; box-shadow: none; }
+html[data-theme] .connector-overview .connector-editor-accent { display: none; }
+html[data-theme] .connector-overview .connector-editor-header { padding: 12px 0 20px; border: 0; background: transparent; }
+html[data-theme] .connector-overview .connector-editor-header :is(.eyebrow, p:not(.eyebrow)) { display: none; }
+html[data-theme] .connector-overview .connector-editor-header h2 { font-size: 20px; }
+html[data-theme] .connector-setup-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto auto; align-items: center; gap: 20px; padding: 24px 0; border-top: 1px solid var(--theme-border); }
+html[data-theme] .connector-tool-icon { display: grid; place-items: center; width: 42px; height: 42px; color: var(--theme-accent); background: var(--theme-accent-soft); border-radius: 10px; }
+html[data-theme] .connector-tool-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+html[data-theme] .connector-setup-copy h3 { margin: 0 0 5px; font-size: 15px; font-weight: 650; }
+html[data-theme] .connector-setup-copy p { margin: 0; color: var(--theme-muted); font-size: 13px; line-height: 1.5; }
+html[data-theme] .connector-setup-count { color: var(--theme-subtle); font-size: 12px; white-space: nowrap; }
+html[data-theme] .connector-setup-row .button { min-width: 80px; justify-content: space-between; }
+html[data-theme] .connector-setup-hint { margin: 0; padding: 15px 0; border-top: 1px solid var(--theme-border); color: var(--theme-subtle); font-size: 12px; }
+html[data-theme] .connector-topology { margin-top: 36px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+html[data-theme] .connector-topology-header { padding: 0 0 18px; border-bottom: 1px solid var(--theme-border); background: transparent; }
+html[data-theme] .connector-topology-header :is(.eyebrow, p:not(.eyebrow)) { display: none; }
+html[data-theme] .connector-topology-header h2 { font-size: 20px; }
+html[data-theme] .connector-discovery-strip { display: block; padding: 0; background: transparent; }
+html[data-theme] .connector-discovery-strip:not(:has(.connector-discovery-card)) { display: none; }
+html[data-theme] .connector-discovery-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; padding: 16px 0; border: 0; border-bottom: 1px solid var(--theme-border); border-radius: 0; background: transparent; }
+html[data-theme] .connector-discovery-card small { grid-column: 1 / -1; }
+html[data-theme] .connector-topology-empty { padding: 28px 0; background: transparent; }
+html[data-theme] .connector-results-empty { display: flex; align-items: flex-start; gap: 16px; }
+html[data-theme] .connector-results-symbol { color: var(--theme-subtle); font-size: 26px; }
+html[data-theme] .connector-results-empty strong { font-size: 14px; font-weight: 550; }
+html[data-theme] .connector-results-empty p { max-width: 580px; margin: 7px 0 0; font-size: 13px; line-height: 1.6; }
+html[data-theme] .connector-kind-chooser { gap: 0; }
+html[data-theme] .connector-kind-chooser a { padding: 22px 0; border: 0; border-bottom: 1px solid var(--theme-border); border-radius: 0; background: transparent; }
+html[data-theme] .connector-editor:not(.connector-overview) { border: 0; border-radius: 0; background: transparent; }
+html[data-theme] .connector-editor-accent { display: none; }
+html[data-theme] .connector-editor-header { padding: 14px 0 20px; background: transparent; }
+html[data-theme] .connector-editor-header > div > p:not(.eyebrow) { display: none; }
+html[data-theme] .connector-form { padding: 0; }
+html[data-theme] .connector-form-section { padding: 24px 0; }
+html[data-theme] .connector-control-frame { background: var(--theme-surface); box-shadow: none; }
+html[data-theme] .connector-form-footer { margin: 0; padding: 20px 0; background: transparent; }
+html[data-theme] .connector-enable-card { border: 0; border-radius: 0; padding: 0; background: transparent; }
+
+.discovery-section { margin: 12px 0; border: 1px solid var(--theme-border); border-radius: 8px; overflow: hidden; background: var(--theme-surface); }
+.discovery-section > summary { padding: 14px 16px; background: var(--theme-surface-inset); }
+.discovery-section summary { cursor: pointer; font-size: 13px; line-height: 1.5; }
+.discovery-section summary span, .discovery-section summary small { margin-left: 12px; color: var(--theme-muted); font-size: 11px; font-weight: 500; }
+.discovery-group { margin: 0 16px; border-top: 1px solid var(--theme-border); }
+.discovery-group > summary, .discovery-entry > summary { padding: 12px 0; }
+.discovery-entry { margin-left: 16px; border-top: 1px solid var(--theme-border); }
+.discovery-content { padding: 10px 16px; overflow-wrap: anywhere; }
+.discovery-section > ul { padding: 0 32px 12px; overflow-wrap: anywhere; }
+.discovery-section > ul li { padding: 8px 0; border-bottom: 1px solid var(--theme-border); }
+
+html[data-theme] .connector-step-heading .cluster-signin-step-number, html[data-theme] .connector-step-heading :is(small, p) { display: none; }
+.discovery-group > ul { padding: 0 16px 12px; overflow-wrap: anywhere; }
+.discovery-group > ul li { padding: 8px 0; }
+.discovery-section summary { overflow-wrap: anywhere; }

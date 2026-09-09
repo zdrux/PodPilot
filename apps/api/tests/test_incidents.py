@@ -1655,6 +1655,8 @@ def test_cluster_discovery_inventory_paginates_and_renders_findings(client):
             return httpx.Response(200, json={'items':[{'metadata':{'name':'team-gitops','namespace':'gitops-a','uid':'argo-uid'}}]})
         if path.endswith('/deployments'):
             return httpx.Response(200, json={'items':[{'metadata':{'name':'team-gitops-server','namespace':'gitops-a','uid':'deploy-uid','ownerReferences':[{'uid':'argo-uid'}]}}]})
+        if path.endswith('/applicationsets'):
+            return httpx.Response(200,json={'items':[{'metadata':{'name':'fleet','namespace':'gitops-a','uid':'set-uid'},'spec':{'generators':[{'git':{'secret':'must-not-retain'}}],'template':{'spec':{'project':'platform'}}}}]})
         if path.endswith('/applications'):
             second = bool(request.url.params.get('continue'))
             return httpx.Response(200, json={'metadata':{} if second else {'continue':'page2'},'items':[{'metadata':{'name':'second' if second else 'first','namespace':'gitops-a','uid':'app2' if second else 'app1'},'spec':{'project':'platform','destination':{'server':'https://kubernetes.default.svc'},'source':{'repoURL':'https://user:private-password@github.com/team/config?token=hidden','path':'apps','targetRevision':'main'}}}]})
@@ -1677,7 +1679,10 @@ def test_cluster_discovery_inventory_paginates_and_renders_findings(client):
     page = client.get('/settings/connectors',headers={'x-forwarded-user':'admin'})
     assert page.status_code == 200
     assert 'team-gitops' in page.text and 'argo.example' in page.text and 'Configure Argo CD' in page.text
-    assert 'gitops-a/second' in page.text
+    assert 'gitops-a' in page.text and 'second' in page.text
+    assert 'ApplicationSets' in page.text and 'fleet' in page.text
+    assert 'must-not-retain' not in json.dumps(result)
+    assert 'data-discovery-open-id=' in page.text
     draft = client.get('/settings/connectors?new=1&type=argocd&cluster_id='+SYSTEM_CLUSTER_ID+'&namespace=gitops-a',headers={'x-forwarded-user':'admin'})
     assert 'value="kubernetes" selected' in draft.text and 'value="gitops-a"' in draft.text
 

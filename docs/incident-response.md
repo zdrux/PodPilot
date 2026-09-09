@@ -364,7 +364,10 @@ but cannot initialize a new enabled connector.
 Discovery UI and failure handling: Test & discover uses persisted credentials;
 unsaved form edits now block that action with an instruction to save first.
 Queued/running statuses display progress indicators, and polling continues every
-four seconds even when a proxy buffers SSE without disconnecting. The API logs
+four seconds while discovery is queued or running, even when a proxy buffers SSE
+without disconnecting. Connector polling and streaming stop once discovery is idle
+and restart after Test & discover. Unchanged results never replace the content;
+expanded lists and live-status labels are excluded from change detection. The API logs
 safe discovery start/completion/failure identifiers without tokens or raw errors.
 Credential loading is inside the terminal-state handler. HTTP 401 on protected
 Kubernetes reads fails discovery; public version reads alone do not validate a
@@ -375,7 +378,10 @@ running records from older builds are not automatically reset by this change.
 
 Test & discover now uses the incident cluster's saved reader token to enumerate
 ArgoCD custom resources (v1beta1, falling back to v1alpha1 when absent), server
-Deployments labeled component=server/part-of=argocd, and paginated Applications.
+Deployments labeled component=server/part-of=argocd, and paginated Applications and ApplicationSets. ApplicationSet inventory retains
+identity, project template and generator type names, without generator bodies or
+credentials. Generated Applications are included in the Application inventory.
+Previously saved results require a discovery rerun to populate ApplicationSets.
 Operator-owned Deployments are deduplicated against observed owner UIDs. It reads
 server Services and Routes targeting those Services in discovered namespaces.
 It does not contact the discovered endpoint addresses. Nonstandard unlabeled
@@ -386,6 +392,9 @@ repository paths/revisions, endpoints, checks and resource coverage. Missing or
 denied APIs and deadline/size limits remain explicit. Collection is bounded to
 500 objects per resource query and endpoints in 50 namespaces, within the reader
 budget. Namespace co-location does not establish an Application's controller.
+The shared connector layout groups Applications by namespace and project behind
+collapsed disclosures. ApplicationSets, repository admission and coverage have
+separate matching sections across all themes; open sections survive refreshes.
 Cluster-level Application observations also populate the existing exact
 repository/destination correlation table.
 

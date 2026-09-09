@@ -122,7 +122,7 @@ def _connector_topology(connections, discoveries, clusters):
             "application_count": len(result.get("applications", [])),
             "repository_count": len(result.get("repositories", [])),
             "cluster_id": row.cluster_id, "repositories": result.get("repositories", []), "instances": result.get("argocd_instances", []),
-            "applications": result.get("applications", []), "endpoints": result.get("endpoints", []),
+            "applications": result.get("applications", []), "application_sets": result.get("application_sets", []), "endpoints": result.get("endpoints", []),
             "coverage": result.get("coverage", []), "limitations": result.get("limitations", []),
             "association_note": result.get("association_note")})
         if row.kind not in {"argocd", "cluster"} or not discovery or discovery.status not in {"completed", "partial"}:

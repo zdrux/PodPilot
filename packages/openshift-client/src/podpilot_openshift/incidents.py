@@ -198,7 +198,15 @@ class IncidentReader:
                 "uid": meta.get("uid"), "project": spec.get("project", "default"),
                 "destination": spec.get("destination", {}), "sources": sources,
                 "health": status.get("health", {}).get("status"), "sync": status.get("sync", {}).get("status")})
-        namespaces = sorted({row["namespace"] for row in instances + applications if row.get("namespace")})
+        application_sets = []
+        for item in listing("/apis/argoproj.io/v1alpha1/applicationsets"):
+            meta, spec = item.get("metadata", {}), item.get("spec", {})
+            application_sets.append({"name": meta.get("name"), "namespace": meta.get("namespace"),
+                "uid": meta.get("uid"),
+                "generators": sorted({key for generator in spec.get("generators", [])
+                    if isinstance(generator, dict) for key in generator if key != "template"}),
+                "project": spec.get("template", {}).get("spec", {}).get("project", "default")})
+        namespaces = sorted({row["namespace"] for row in instances + applications + application_sets if row.get("namespace")})
         endpoints = []
         for namespace in namespaces[:50]:
             if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", namespace):
@@ -216,7 +224,7 @@ class IncidentReader:
                         "kind": "Route", "address": spec.get("host"), "ports": []})
         if len(namespaces) > 50:
             limitations.append("Endpoint discovery capped at 50 namespaces.")
-        return {"argocd_instances": instances, "applications": applications, "endpoints": endpoints,
+        return {"argocd_instances": instances, "applications": applications, "application_sets": application_sets, "endpoints": endpoints,
             "coverage": coverage, "limitations": limitations, "partial": bool(limitations),
             "checks": [f"{len(instances)} installation records, {len(applications)} Applications, {len(endpoints)} endpoint records."],
             "association_note": "Namespace co-location does not prove controller ownership. Endpoint addresses are observed, not connection-tested."}
