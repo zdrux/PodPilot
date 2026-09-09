@@ -1,6 +1,6 @@
 # PodPilot Codebase Map
 
-Last reviewed: 2026-09-05
+Last reviewed: 2026-09-08
 Update when: top-level structure, core tooling, or verification commands change.
 
 ## Workspaces
@@ -9,6 +9,7 @@ Update when: top-level structure, core tooling, or verification commands change.
 | --- | --- | --- |
 | `apps/api/` | AI orchestration and HTTP API | Milestone 10 alert and standalone evidence-cited investigation flow |
 | `apps/web/` | operator investigation UI | alert queue, evidence-cited chat, executable safe-check plan, approval, and cancellation |
+| `marketing/` | standalone public-facing marketing website | React/Vite prototype with interactive examples; separate from the operator UI |
 | `packages/openshift-client/` | Kubernetes, Thanos, LokiStack, and Alertmanager adapters | bounded monitoring/evidence checks, typed actions, and read-only validation clients |
 | `packages/diagnostics/` | deterministic tools, evidence, and runbooks | evidence, diagnostic plan, interpretation, and remediation contracts |
 | `deploy/openshift/` | OpenShift runtime identity, RBAC, workload, portable remote overlay, build, and lab storage | Remote reader deployment plus separate lab-only paths |
@@ -16,6 +17,37 @@ Update when: top-level structure, core tooling, or verification commands change.
 | `scripts/` | local development and cluster bootstrap helpers | SNO connection helper present |
 
 Each workspace has a local `AGENTS.md` describing its intended boundary.
+
+## Marketing Website
+
+The website code lives in [`marketing/`](../marketing/), at
+`C:\Users\zdrux\Desktop\projects\PodPilot\marketing` in the current Windows checkout.
+This is the marketing landing page, separate from the authenticated operator
+application in `apps/web/`.
+The `marketing/` folder is intentionally untracked; these links refer to the local
+checkout and are not available in a fresh clone.
+
+- [`marketing/src/App.jsx`](../marketing/src/App.jsx): page sections, animated
+  investigation examples, evidence dialogs, and demo brief form.
+- [`marketing/src/styles.css`](../marketing/src/styles.css): visual styling and
+  responsive layouts.
+- [`marketing/public/assets/`](../marketing/public/assets/): illustrations,
+  photography, and optimized WebP assets.
+- [`marketing/README.md`](../marketing/README.md): setup, build commands, and
+  prototype limitations.
+- [`marketing/AGENTS.md`](../marketing/AGENTS.md): approved positioning and design
+  guidance for future changes.
+- [`marketing/design-qa.md`](../marketing/design-qa.md): visual verification report;
+  `marketing/qa/` contains the approved mockup and browser captures.
+
+Run commands from `marketing/`: `npm install`, then `npm run dev`.
+To serve the review URL `http://127.0.0.1:4173/` on Windows, run
+`node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 4173 --strictPort`.
+`npm run build` writes the client site to `marketing/dist/client/`.
+
+The site is a local frontend prototype and has not been deployed. Its examples
+use fictional cluster data; the demo form prepares a local brief without sending
+requests, booking meetings, or connecting to a cluster.
 
 ## Tooling
 
