@@ -365,6 +365,18 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["response_format"]["json_schema"]["strict"] is True
     schema = request["response_format"]["json_schema"]["schema"]
     assert set(schema["properties"]) == {"answer_mode", "answer", "citations"}
+    def assert_strict_objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                assert node["additionalProperties"] is False
+                assert set(node["required"]) == set(node["properties"])
+            for child in node.values():
+                assert_strict_objects(child)
+        elif isinstance(node, list):
+            for child in node:
+                assert_strict_objects(child)
+
+    assert_strict_objects(schema)
     assert "PodPilot handles checks separately" in request["messages"][0]["content"]
     assert "structured citations array" in request["messages"][0]["content"]
     assert request["max_tokens"] == 1000
@@ -408,7 +420,7 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call() -> Non
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
         "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
-        "query_audit_events", "query_metrics", "finish_investigation",
+        "query_audit_events", "pod_logs", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]

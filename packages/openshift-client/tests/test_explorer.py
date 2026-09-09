@@ -30,6 +30,62 @@ class FakeObject:
         return self._payload
 
 
+def test_memory_timeline_collects_only_exact_pod_and_uid_filtered_events():
+    calls = []
+    pod = {"metadata": {"namespace": "payments", "name": "worker", "uid": "pod-uid"},
+           "spec": {"containers": [{"env": [{"name": "PASSWORD", "value": "not-retained"}]}]},
+           "status": {"containerStatuses": [{"name": "app", "lastState": {"terminated": {
+               "reason": "OOMKilled", "finishedAt": "2026-09-09T00:10:00Z"}}}]}}
+    def resource(**kwargs):
+        kind = kwargs["kind"]
+        def get(**kwargs):
+            calls.append((kind, kwargs))
+            return FakeObject(payload=pod if kind == "Pod" else {"items": [], "metadata": {}})
+        return SimpleNamespace(get=get)
+    observation = AdHocObservation(id="metrics", tool="query_metrics", summary="Memory samples", source="thanos", collected_at=datetime.now(timezone.utc),
+        data={"namespace": "payments", "name": "worker", "start": "2026-09-09T00:00:00Z", "end": "2026-09-09T01:00:00Z"})
+    explorer = KubernetesReadOnlyExplorer(dynamic_client=SimpleNamespace(resources=SimpleNamespace(get=resource)), core_api=object(),
+        metric_reader=SimpleNamespace(execute=lambda intent: ReadResult((observation,))))
+    result = explorer.execute(ReadIntent(tool="query_metrics", metric="memory_working_set", metric_scope="pod",
+        kind="Pod", namespace="payments", name="worker", include_timeline=True))
+    assert calls == [("Pod", {"namespace": "payments", "name": "worker", "_request_timeout": 5}),
+                     ("Event", {"namespace": "payments", "field_selector": "involvedObject.uid=pod-uid", "limit": 50, "_request_timeout": 5})]
+    assert result.observations[0].data["timeline"]["markers"][0]["reason"] == "OOMKilled"
+    assert "not-retained" not in str(result)
+
+
+@pytest.mark.parametrize("replaced", [False, True])
+def test_memory_log_markers_are_bounded_redacted_and_discarded_on_uid_change(replaced):
+    reads = []
+    def resource(**kwargs):
+        kind = kwargs["kind"]
+        def get(**kwargs):
+            if kind == "Event":
+                return FakeObject(payload={"items": []})
+            reads.append(kind)
+            return FakeObject(payload={"metadata": {"namespace": "payments", "name": "worker", "uid": "new" if replaced and len(reads) > 1 else "old"}})
+        return SimpleNamespace(get=get)
+    def logs(*args, **kwargs):
+        from io import BytesIO
+        from urllib3.response import HTTPResponse
+        assert kwargs["limit_bytes"] == 8192 and kwargs["tail_lines"] == 30
+        assert kwargs["_request_timeout"] == 5 and kwargs["timestamps"]
+        assert kwargs["_preload_content"] is False
+        return HTTPResponse(body=BytesIO(b"2026-09-09T00:10:00.123456789Z ERROR token=must-not-retain\n"), preload_content=False)
+    observation = AdHocObservation(id="metric", tool="query_metrics", summary="Memory", source="thanos", collected_at=datetime.now(timezone.utc),
+        data={"namespace": "payments", "name": "worker", "start": "2026-09-09T00:00:00Z", "end": "2026-09-09T01:00:00Z"})
+    explorer = KubernetesReadOnlyExplorer(dynamic_client=SimpleNamespace(resources=SimpleNamespace(get=resource)),
+        core_api=SimpleNamespace(read_namespaced_pod_log=logs), metric_reader=SimpleNamespace(execute=lambda _: ReadResult((observation,))))
+    result = explorer.execute(ReadIntent(tool="query_metrics", metric="memory_working_set", metric_scope="pod",
+        kind="Pod", namespace="payments", name="worker", container="app", include_timeline=True))
+    markers = result.observations[0].data["timeline"]["markers"]
+    assert len(markers) == (0 if replaced else 1)
+    assert "must-not-retain" not in str(result)
+    if not replaced:
+        assert markers[0]["timestamp"] == "2026-09-09T00:10:00.123456+00:00"
+        assert "[REDACTED]" in markers[0]["message"]
+
+
 @pytest.mark.parametrize(("status", "expected"), [
     (401, "rejected the configured bearer token"),
     (403, "denied read-only API discovery"),

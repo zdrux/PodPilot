@@ -1,0 +1,147 @@
+{
+  "scenario_id": "loki-retention-gap",
+  "started_at": "2026-09-09T12:28:18.194228+00:00",
+  "namespace": "podpilot-eval-d298a35da43c",
+  "namespace_uid": "e6b5e9de-925d-4483-a482-6dce902a1548",
+  "application_image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T12:28:20.583300+00:00",
+    "namespace": "podpilot-eval-d298a35da43c",
+    "current_pod": {
+      "name": "subject-67568b6bfc-hzt7p",
+      "uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+      "created_at": "2026-09-09T12:28:17+00:00",
+      "phase": "Running",
+      "containers": [
+        {
+          "allocatedResources": {
+            "cpu": "25m",
+            "memory": "32Mi"
+          },
+          "containerID": "cri-o://30db68aebf4c1ceb74b4777946e90a9df04e3b6ec911613560dcdad1fbfc6258",
+          "image": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "imageID": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "lastState": {
+            "terminated": {
+              "containerID": "cri-o://30db68aebf4c1ceb74b4777946e90a9df04e3b6ec911613560dcdad1fbfc6258",
+              "exitCode": 17,
+              "finishedAt": "2026-09-09T12:28:18+00:00",
+              "reason": "Error",
+              "startedAt": "2026-09-09T12:28:18+00:00"
+            }
+          },
+          "name": "app",
+          "ready": false,
+          "resources": {
+            "limits": {
+              "cpu": "250m",
+              "memory": "128Mi"
+            },
+            "requests": {
+              "cpu": "25m",
+              "memory": "32Mi"
+            }
+          },
+          "restartCount": 1,
+          "started": false,
+          "state": {
+            "waiting": {
+              "message": "back-off 10s restarting failed container=app pod=subject-67568b6bfc-hzt7p_podpilot-eval-d298a35da43c(b16b97c9-d11a-44c4-81e5-1998d7b08c6b)",
+              "reason": "CrashLoopBackOff"
+            }
+          },
+          "user": {
+            "linux": {
+              "gid": 0,
+              "supplementalGroups": [
+                0,
+                1001360000
+              ],
+              "uid": 1001360000
+            }
+          },
+          "volumeMounts": [
+            {
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+              "name": "kube-api-access-7d7kq",
+              "readOnly": true,
+              "recursiveReadOnly": "Disabled"
+            }
+          ]
+        }
+      ],
+      "command": [
+        "python",
+        "-u",
+        "-c",
+        "import sys; print('Application startup failed: invalid worker configuration'); sys.exit(17)"
+      ]
+    },
+    "current_events": [
+      {
+        "reason": "Scheduled",
+        "message": "Successfully assigned podpilot-eval-d298a35da43c/subject-67568b6bfc-hzt7p to sno1",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:17+00:00",
+        "last": "2026-09-09T12:28:17+00:00"
+      },
+      {
+        "reason": "AddedInterface",
+        "message": "Add eth0 [10.128.0.201/23] from ovn-kubernetes",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:17+00:00",
+        "last": "2026-09-09T12:28:17+00:00"
+      },
+      {
+        "reason": "Pulled",
+        "message": "Container image \"registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355\" already present on machine and can be accessed by the pod",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:17+00:00",
+        "last": "2026-09-09T12:28:18+00:00"
+      },
+      {
+        "reason": "Created",
+        "message": "Container created",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:17+00:00",
+        "last": "2026-09-09T12:28:18+00:00"
+      },
+      {
+        "reason": "Started",
+        "message": "Container started",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:17+00:00",
+        "last": "2026-09-09T12:28:18+00:00"
+      },
+      {
+        "reason": "BackOff",
+        "message": "Back-off restarting failed container app in pod subject-67568b6bfc-hzt7p_podpilot-eval-d298a35da43c(b16b97c9-d11a-44c4-81e5-1998d7b08c6b)",
+        "pod_uid": "b16b97c9-d11a-44c4-81e5-1998d7b08c6b",
+        "first": "2026-09-09T12:28:19+00:00",
+        "last": "2026-09-09T12:28:20+00:00"
+      }
+    ],
+    "query_status": "success",
+    "entries": [],
+    "complete": true,
+    "start": "2026-09-07T11:28:20.583300+00:00",
+    "end": "2026-09-07T12:28:20.583300+00:00",
+    "backend": "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application",
+    "configured_retention_days": 1,
+    "limitation": "The requested window predates this fixture. This does not demonstrate deletion of previously ingested entries."
+  },
+  "model": "openai/gpt-5.6-sol",
+  "answer": "## Assessment\n\n**There is clear evidence of workload/container failure, but no evidence that the cluster needs modification.**\n\n### Supported conclusions\n\n- The pod was scheduled, networked, its image was available, and the container was created and started successfully. This indicates the basic scheduler, node runtime, networking, and image access paths worked.\n- The `app` container then exited with **code 17** and reason `Error`.\n- Its configured command explicitly prints:\n  > `Application startup failed: invalid worker configuration`\n  \n  and then executes `sys.exit(17)`.\n- At collection time, the container was:\n  - `ready: false`\n  - `started: false`\n  - waiting in `CrashLoopBackOff`\n  - at `restartCount: 1`\n\nAlthough the pod phase is `Running`, the workload is not healthy because its only reported application container is not running or ready.\n\nThis supports a **workload command/configuration issue**, possibly deliberate fixture behavior. It does not support a resource shortage, scheduling failure, image-pull failure, network setup failure, or cluster-wide fault.\n\n### Timeline bounds\n\n- Pod created and scheduled: **2026-09-09 12:28:17 UTC**\n- Container started and terminated: **2026-09-09 12:28:18 UTC**\n- Backoff observed: **12:28:19\u201312:28:20 UTC**\n- Evidence collected: **12:28:20.583 UTC**\n\nThus, the evidence covers only the first few seconds of this pod\u2019s life and one recorded restart.\n\n### Log limitation\n\nThe log query covered **2026-09-07 11:28\u201312:28 UTC**, while this pod was not created until **2026-09-09**. Therefore, the empty result cannot provide evidence about this failure. The configured one-day retention and fixture limitation also do not prove that previously ingested logs were deleted.\n\n### Recommended next step\n\nDo **not** change the cluster based on this evidence. Review and correct the workload specification that supplies the container command or worker configuration.\n\nBefore changing it:\n\n1. Confirm whether the exit-17 command is intentional, such as a test workload.\n2. Capture the owning Deployment/ReplicaSet and its intended command, arguments, environment, ConfigMaps, and Secrets.\n3. Determine the expected worker configuration.\n\nIf it is unintended, update only the workload configuration.\n\n- **Rollback:** retain the prior workload manifest/revision and roll back if the corrected version fails.\n- **Verification:** confirm a new pod remains running, the container becomes ready, restart count stops increasing, and application logs/readiness checks show successful startup.\n\nNo cluster-level remediation is justified by the collected evidence.",
+  "scores": {
+    "review_type": "independent qualitative live-adapter/evidence-only model review",
+    "evidence": "pass",
+    "diagnosis": "pass",
+    "timeline": "pass",
+    "uncertainty": "pass",
+    "action_plan": "partial",
+    "note": "Correct current failure and telemetry uncertainty; generic replay prompt left lifecycle/rollback verification underspecified. Superseded by final replay using deployed remediation policy."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T12:28:48.545376+00:00"
+}

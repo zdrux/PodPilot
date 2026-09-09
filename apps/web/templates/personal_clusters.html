@@ -40,6 +40,7 @@
       {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}
       {% if selected and selected.last_tested_at %}<p class="muted-copy">Last tested {{ selected.last_tested_at | est_time('%Y-%m-%d %H:%M:%S') }}.</p>{% endif %}
     </form>
+    {% include "_cluster_inventory.html" %}
   </section>
 </div>
 <div class="toast" id="action-toast" role="status" aria-live="polite" hidden></div>

@@ -1,0 +1,18 @@
+{
+  "scenario_id": "pod-name-reuse",
+  "fixture_run_id": "7e182a36e4ed",
+  "namespace": "podpilot-eval-7e182a36e4ed",
+  "namespace_uid": "9e22b521-e5ff-49ef-b8dc-8665dee5ea61",
+  "started_at": "2026-09-09T11:53:47.788839+00:00",
+  "scores": {
+    "result": "not_scored",
+    "reason": "Fixture setup failed before a valid investigation; cleanup recorded. See review.md."
+  },
+  "cleanup": "confirmed_deleted",
+  "application_image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:c266b8e3202c5a28f8e706ed129ded4e57ec799f2250158c177c3021dad0be1a",
+  "model": [
+    "openai/gpt-5.6-sol"
+  ],
+  "ended_at": "2026-09-09T11:53:54.378608+00:00",
+  "evaluation_status": "fixture_setup_failed"
+}

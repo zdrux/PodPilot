@@ -1,0 +1,21 @@
+{% macro tool_diagnostic(item) -%}
+{% set text = item | string %}
+{% set normalized = text | lower %}
+<div class="tool-diagnostic">
+  {% if normalized.startswith('execute_shell: jq filter parse error') %}
+  <p><strong>Command syntax error</strong><br>The command's JSON filter could not be parsed. The intended command was not executed.</p>
+  {% elif normalized.startswith('execute_shell: jq filter preflight could not run') %}
+  <p><strong>Command validation unavailable</strong><br>PodPilot could not run the preliminary filter check.</p>
+  {% elif normalized.startswith('execute_shell: jq filter preflight failed') %}
+  <p><strong>Command validation failed</strong><br>The JSON filter did not pass its preliminary check.</p>
+  {% elif 'the tool call arguments were invalid:' in normalized %}
+  <p><strong>Invalid tool inputs</strong><br>The requested operation could not start because its inputs were malformed.</p>
+  {% else %}
+  <p><strong>Tool attempt could not proceed</strong><br>Review the technical details for the recorded reason.</p>
+  {% endif %}
+  <details class="tool-diagnostic-details">
+    <summary>Technical details</summary>
+    <pre>{{ text }}</pre>
+  </details>
+</div>
+{%- endmacro %}

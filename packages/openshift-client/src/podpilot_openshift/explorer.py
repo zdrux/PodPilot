@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from urllib3.exceptions import InsecureRequestWarning
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
 from podpilot_diagnostics.redaction import redact_text
+from podpilot_diagnostics.timeline import memory_timeline
 from podpilot_openshift.audit_logs import AuditQueryError, BoundedAuditEventReader
 from podpilot_openshift.discovery import ResourceCatalog, ResourceCatalogError
 from podpilot_openshift.http_probe import BoundedHttpProbe
@@ -81,7 +83,7 @@ def _remote_discovery_error(exc: ApiException) -> str:
     if exc.status == 403:
         return (
             "The remote Kubernetes API denied read-only API discovery (HTTP 403). "
-            "Grant the token identity Kubernetes discovery and cluster-reader access, then retry."
+            "Check the identity's API-discovery permission and grant only the missing read scope needed for this investigation, then retry."
         )
     status = f" (HTTP {exc.status})" if exc.status else ""
     return f"The remote Kubernetes API could not complete read-only discovery{status}."
@@ -1019,6 +1021,12 @@ class KubernetesReadOnlyExplorer:
             **kwargs,
         )
 
+    def technology_inventory(self) -> dict:
+        from podpilot_openshift.technology_discovery import discover_technologies
+
+        self._ensure_clients()
+        return discover_technologies(self._dynamic)
+
     def _ensure_clients(self) -> None:
         if self._dynamic is not None and self._core is not None:
             return
@@ -1079,7 +1087,8 @@ class KubernetesReadOnlyExplorer:
                         primary_error="The authenticated monitoring adapter is unavailable.",
                     )
                 try:
-                    return self._metric_reader.execute(intent)
+                    result = self._metric_reader.execute(intent)
+                    return self._with_memory_timeline(intent, result) if intent.include_timeline else result
                 except MetricTrendError as exc:
                     try:
                         return self._current_metrics_fallback(intent, primary_error=str(exc))
@@ -1087,6 +1096,10 @@ class KubernetesReadOnlyExplorer:
                         raise ReadOnlyExplorerError(
                             f"{exc} Kubernetes Metrics API fallback also failed: {fallback_exc}"
                         ) from fallback_exc
+            if intent.tool == "pod_logs" and intent.log_backend == "loki":
+                if self._log_metric_reader is None:
+                    raise ReadOnlyExplorerError("No retained logging backend is configured for this cluster.")
+                return self._log_metric_reader.container_logs(intent)
             self._ensure_clients()
             if intent.tool == "pod_health_summary":
                 return self._pod_health_summary(intent)
@@ -1154,6 +1167,54 @@ class KubernetesReadOnlyExplorer:
                 "The requested cluster evidence could not be collected because the Kubernetes API "
                 f"client failed ({type(exc).__name__})."
             ) from exc
+
+    def _with_memory_timeline(self, intent: ReadIntent, result: ReadResult) -> ReadResult:
+        pod, events, logs, limitations = {}, [], [], list(result.limitations)
+        try:
+            self._ensure_clients()
+            resource = self._dynamic.resources.get(api_version="v1", kind="Pod")
+            response = resource.get(namespace=intent.namespace, name=intent.name, _request_timeout=5)
+            pod = response.to_dict()
+            uid = (pod.get("metadata") or {}).get("uid")
+            if uid:
+                event_resource = self._dynamic.resources.get(api_version="v1", kind="Event")
+                response = event_resource.get(namespace=intent.namespace,
+                    field_selector=f"involvedObject.uid={uid}", limit=50, _request_timeout=5)
+                event_list = response.to_dict()
+                events = event_list.get("items", [])[:50]
+                if (event_list.get("metadata") or {}).get("continue"):
+                    limitations.append("Pod Event collection reached its 50-event ceiling.")
+                # Fetch bounded excerpts only for an explicitly selected container.
+                # Recheck UID afterwards: the Pod log endpoint has no UID precondition.
+                if intent.container and self._core is not None:
+                    states = (pod.get("status") or {}).get("containerStatuses", [])
+                    selected = next((s for s in states if s.get("name") == intent.container), {})
+                    for previous in ([False, True] if selected.get("restartCount", 0) else [False]):
+                        try:
+                            text = self._read_pod_log(name=intent.name, namespace=intent.namespace,
+                                container=intent.container, previous=previous, since_seconds=None,
+                                tail_lines=30, max_bytes=8192, timeout_seconds=5)
+                            decoded = text.decode("utf-8", "replace") if isinstance(text, bytes) else str(text)
+                            for line in redact_text(decoded)[-8192:].splitlines()[-3:]:
+                                at, _, message = line.partition(" ")
+                                logs.append({"timestamp": at, "message": message[:240], "pod_uid": uid,
+                                    "container": intent.container, "previous": previous,
+                                    "source": f"kubernetes:Pod/log:{intent.namespace}/{intent.name}:{uid}:{'previous' if previous else 'current'}"})
+                        except Exception as exc:
+                            limitations.append(f"{'Previous' if previous else 'Current'} timeline logs unavailable ({type(exc).__name__}).")
+                    after = resource.get(namespace=intent.namespace, name=intent.name, _request_timeout=5).to_dict()
+                    if (after.get("metadata") or {}).get("uid") != uid:
+                        logs = []
+                        limitations.append("Pod identity changed during log collection; log markers were discarded.")
+                    else:
+                        limitations.append("Log markers show at most three recent lines per current/previous container; history is incomplete.")
+        except Exception as exc:
+            logs = []
+            limitations.append(f"Memory timeline Kubernetes evidence is partial or unavailable ({type(exc).__name__}).")
+        observations = tuple(replace(observation, data={
+            **observation.data, "timeline": memory_timeline(observation.data, pod, events, logs),
+        }) for observation in result.observations)
+        return ReadResult(observations, tuple(limitations))
 
     def _access_review_summary(self) -> ReadResult:
         """Review the delegated identity's cluster-wide workload permissions."""
@@ -2137,20 +2198,34 @@ class KubernetesReadOnlyExplorer:
 
     def _read_pod_log(
         self, *, name: str, namespace: str, container: str | None, previous: bool,
-        since_seconds: int | None,
+        since_seconds: int | None, tail_lines: int | None = None,
+        max_bytes: int | None = None, timeout_seconds: int = 8,
     ) -> str | bytes:
         assert self._core is not None
+        byte_limit = max_bytes or self._max_log_bytes
         kwargs: dict[str, object] = {
             "container": container,
             "previous": previous,
-            "tail_lines": self._log_tail_lines,
+            "tail_lines": tail_lines or self._log_tail_lines,
+            "limit_bytes": byte_limit,
             "timestamps": True,
-            "_request_timeout": 8,
+            "_request_timeout": timeout_seconds,
+            # The generated SDK may stringify text/plain bytes as "b'...\\n'".
+            # Decode the bounded raw response ourselves so log timestamps and
+            # newlines retain their meaning, including for timeline markers.
+            "_preload_content": False,
         }
         if since_seconds is not None:
             kwargs["since_seconds"] = since_seconds
-        return self._core.read_namespaced_pod_log(
+        response = self._core.read_namespaced_pod_log(
             name,
             namespace,
             **kwargs,
         )
+        if isinstance(response, (str, bytes)):
+            return response
+        try:
+            return response.read(byte_limit)
+        finally:
+            response.close()
+            response.release_conn()

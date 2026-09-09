@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/component: configuration
 data:
   environment: openshift-poc
+  development_approval_bypass: "false"
   cluster_name: configure-cluster-name
   chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"

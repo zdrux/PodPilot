@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_tool_diagnostics.html" import tool_diagnostic %}
 {% block title %}Ask PodPilot{% endblock %}
 {% block body_class %}ask-page{% endblock %}
 {% block content %}
@@ -10,7 +11,7 @@
         <p class="eyebrow">Investigations <span aria-hidden="true">/</span> Cluster conversation</p>
         <div class="ask-session-heading-row">
           <h2>{% if conversation %}{{ conversation.title }}{% else %}New investigation{% endif %}</h2>
-          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE - Cluster WRITES Permitted</span>
+          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>{{ 'ACTION MODE · Development approval bypass' if approval_bypass else 'ACTION MODE · Approval required for writes' }}</span>
         </div>
       </div>
       <div class="panel-header-actions">
@@ -235,8 +236,8 @@
         {% if message.role == 'assistant' and message.citations %}
           {% for id in message.citations %}
             {% set cited = evidence_by_id.get(id) %}
-            {% if cited and (cited.metric_ranking or cited.kafka_topic_storage) %}
-            {% set metric_presentation = cited.kafka_topic_storage or cited.metric_ranking %}
+            {% if cited and (cited.metric_ranking or cited.kafka_topic_storage or cited.metric_trend) %}
+            {% set metric_presentation = cited.kafka_topic_storage or cited.metric_ranking or {'title': cited.data.metric | replace('_', ' ') | capitalize, 'description': 'Observed samples and correlated events', 'complete': cited.data.complete} %}
             <section class="metric-result" aria-labelledby="metric-result-{{ message.id }}-{{ id }}">
               <div class="metric-result-heading">
                 <div>
@@ -244,7 +245,7 @@
                   <h3 id="metric-result-{{ message.id }}-{{ id }}">{% if cited.cluster_name %}{{ cited.cluster_name }} · {% endif %}{{ metric_presentation.title }}</h3>
                   <p>{{ metric_presentation.description }}</p>
                 </div>
-                {% if not cited.kafka_topic_storage %}
+                {% if cited.metric_ranking and not cited.kafka_topic_storage %}
                 <button class="button secondary compact-button" type="button"
                   data-csv-table="metric-table-{{ message.id }}-{{ id }}"
                   data-csv-filename="podpilot-{{ cited.data.metric if cited.data else 'metrics' }}.csv">Download CSV</button>
@@ -252,8 +253,7 @@
               </div>
               {% if cited.metric_trend %}
               <figure class="metric-trend" aria-label="{{ metric_presentation.title }} over time">
-                <svg viewBox="0 0 1000 232" role="img" aria-labelledby="metric-trend-title-{{ message.id }}-{{ id }} metric-trend-desc-{{ message.id }}-{{ id }}">
-                  <title id="metric-trend-title-{{ message.id }}-{{ id }}">{{ metric_presentation.title }} over time</title>
+                <svg viewBox="0 0 1000 232" role="group" aria-label="{{ metric_presentation.title }} over time" aria-describedby="metric-trend-desc-{{ message.id }}-{{ id }}">
                   <desc id="metric-trend-desc-{{ message.id }}-{{ id }}">Bounded metric samples from {{ cited.metric_trend.start }} through {{ cited.metric_trend.end }}. Peak {{ cited.metric_trend.peak }} at {{ cited.metric_trend.peak_at }}.</desc>
                   <g class="metric-trend-grid" aria-hidden="true">
                     <line x1="42" y1="30" x2="958" y2="30"></line>
@@ -261,22 +261,40 @@
                     <line x1="42" y1="144" x2="958" y2="144"></line>
                     <line x1="42" y1="202" x2="958" y2="202"></line>
                   </g>
+                  <text class="metric-trend-axis" x="42" y="22">{{ cited.metric_trend.maximum }}</text>
+                  <text class="metric-trend-axis" x="42" y="218">{{ cited.metric_trend.minimum }}</text>
                   {% for series in cited.metric_trend.series %}
-                  <polyline class="metric-trend-line metric-trend-line-{{ series.class_index }}" points="{{ series.polyline }}"></polyline>
+                  {% for segment in series.segments %}<polyline class="metric-trend-line metric-trend-line-{{ series.class_index }}" points="{{ segment }}"></polyline>{% endfor %}
                   <circle class="metric-trend-peak metric-trend-line-{{ series.class_index }}" cx="{{ series.peak_x }}" cy="{{ series.peak_y }}" r="4"></circle>
                   {% endfor %}
+                  {% for marker in cited.metric_trend.markers %}{% if marker.x %}
+                  <g class="metric-trend-marker" tabindex="0" role="button" aria-label="{{ marker.reason }} · {{ marker.timestamp }}" data-metric-marker="{{ marker.reason }}{% if marker.container %} · {{ marker.container }}{% endif %}&#10;{{ marker.timestamp }}&#10;{{ marker.timing }}{% if marker.message %}&#10;{{ marker.message }}{% endif %}&#10;{{ marker.source }}">
+                    <line class="metric-trend-event" x1="{{ marker.x }}" x2="{{ marker.x }}" y1="30" y2="202" aria-hidden="true"></line>
+                    <line class="metric-trend-event-hit" x1="{{ marker.x }}" x2="{{ marker.x }}" y1="30" y2="202" aria-hidden="true"></line>
+                  </g>
+                  {% endif %}{% endfor %}
                 </svg>
                 <figcaption>
                   <span>{{ cited.metric_trend.start }}</span>
                   <strong>Peak {{ cited.metric_trend.peak }} · {{ cited.metric_trend.peak_at }}</strong>
                   <span>{{ cited.metric_trend.end }}</span>
                 </figcaption>
+                {% if cited.metric_trend.markers %}<p class="metric-marker-help">Dotted lines mark timeline observations. Hover, focus or tap a line for details.</p>{% endif %}
+                {% if cited.metric_trend.series | selectattr('gap_count') | list %}<p class="muted-copy">Gaps indicate missing samples; lines do not interpolate across them.</p>{% endif %}
                 {% if cited.metric_trend.series | length > 1 %}
                 <ul class="metric-trend-legend">
                   {% for series in cited.metric_trend.series %}<li class="metric-trend-key-{{ series.class_index }}"><span aria-hidden="true"></span>{{ series.identity }}</li>{% endfor %}
                 </ul>
                 {% endif %}
               </figure>
+              {% if cited.metric_trend.markers %}
+              <details open><summary>Observed timeline</summary>
+                <table class="metric-timeline-table" aria-label="Observed workload timeline"><thead><tr><th>Time (UTC)</th><th>Observation</th><th>Evidence source</th></tr></thead>
+                  <tbody>{% for marker in cited.metric_trend.markers %}<tr><td title="{{ marker.timestamp }}">{{ marker.display_time }}</td><td>{{ marker.reason }}{% if marker.container %} · {{ marker.container }}{% endif %}<br><small>{{ marker.timing }}</small>{% if marker.message %}<br><code>{{ marker.message }}</code>{% endif %}</td><td><code>{{ marker.source }}</code></td></tr>{% endfor %}</tbody>
+                </table>
+                {% for limitation in cited.metric_trend.timeline_limitations %}<p class="muted-copy">{{ limitation }}</p>{% endfor %}
+              </details>
+              {% endif %}
               {% endif %}
               {% if cited.kafka_topic_storage %}
               <div class="kafka-topic-storage-list">
@@ -309,7 +327,7 @@
                 {% endfor %}
               </div>
               <p class="metric-result-note">{{ cited.kafka_topic_storage.capacity_note }}</p>
-              {% else %}
+              {% elif cited.metric_ranking %}
               <div class="metric-table-wrap">
                 <table id="metric-table-{{ message.id }}-{{ id }}" class="metric-ranking-table">
                   <thead><tr><th>Rank</th>{% for column in cited.metric_ranking.columns %}<th>{{ column.label }}</th>{% endfor %}<th>{{ cited.metric_ranking.average_label }}</th><th>{{ cited.metric_ranking.current_label }}</th>{% if cited.metric_ranking.show_maximum %}<th>Peak</th>{% endif %}</tr></thead>
@@ -356,9 +374,9 @@
         {% endif %}
         {% if message.activity and message.activity.diagnostics %}
         <details class="answer-diagnostics">
-          <summary>Tool-call diagnostics <small>{{ message.activity.diagnostics | length }} rejected attempt{% if message.activity.diagnostics | length != 1 %}s{% endif %}</small></summary>
-          <p>PodPilot rejected these malformed agent calls before execution and returned correction guidance to the model.</p>
-          <ul>{% for item in message.activity.diagnostics %}<li>{{ item }}</li>{% endfor %}</ul>
+          <summary>Tool-call issues <small>{{ message.activity.diagnostics | length }} attempt{% if message.activity.diagnostics | length != 1 %}s{% endif %} could not proceed</small></summary>
+          <p>These are tool-attempt diagnostics, not findings about cluster health. Later operations are listed separately.</p>
+          {% for item in message.activity.diagnostics %}{{ tool_diagnostic(item) }}{% endfor %}
         </details>
         {% endif %}
         {% if message.activity and message.activity.evidence_ledger %}
@@ -464,6 +482,8 @@
     {% endif %}
 
     <div class="ask-composer">
+      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after a configuration administrator saves and tests a model profile with the required connection and tool-calling capabilities.</p></div>{% endif %}
+      {% if not can_ask %}<div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>{% endif %}
       {% if is_delegated_mode and not delegated_session_active %}
       <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}&amp;retry={{ missing_delegated_cluster_ids | join(',') }}{% endif %}">Reconnect the missing clusters</a> to continue this conversation, or <a href="/ask?new=1">start a new conversation</a> with the clusters that are still connected.</p></div>
       {% endif %}
@@ -544,10 +564,7 @@
           </div>
         </div>
       </form>
-      {% else %}
-      <div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>
       {% endif %}
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after a configuration administrator saves and tests a model profile with the required connection and tool-calling capabilities.</p></div>{% endif %}
     </div>
   </section>
 
@@ -566,9 +583,9 @@
     <section class="activity-tab-panel activity-timeline-panel" id="activity-timeline-panel" aria-label="Investigation timeline">
       {% if activity_summary.diagnostic_count %}
       <div class="activity-group activity-group-warning">
-        <div class="activity-group-heading"><span>Tool-call diagnostics</span><strong>{{ activity_summary.diagnostic_count }} rejected</strong></div>
+        <div class="activity-group-heading"><span>Tool-call issues</span><strong>{{ activity_summary.diagnostic_count }} blocked attempt{% if activity_summary.diagnostic_count != 1 %}s{% endif %}</strong></div>
         {% for message in messages if message.activity and message.activity.diagnostics %}
-          {% for diagnostic in message.activity.diagnostics %}<p>{{ diagnostic }}</p>{% endfor %}
+          {% for diagnostic in message.activity.diagnostics %}{{ tool_diagnostic(diagnostic) }}{% endfor %}
         {% endfor %}
       </div>
       {% endif %}

@@ -1,0 +1,19 @@
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: logging-loki
+  namespace: openshift-logging
+  labels: {app.kubernetes.io/part-of: podpilot-enterprise-eval}
+spec:
+  size: 1x.demo
+  storageClassName: lvms-enterprise-eval
+  storage:
+    schemas:
+      - {version: v13, effectiveDate: '2026-09-01'}
+    secret: {name: podpilot-eval-loki-s3, type: s3}
+    tls: {caName: podpilot-eval-service-ca, caKey: service-ca.crt}
+  tenants:
+    mode: openshift-logging
+  limits:
+    global:
+      retention: {days: 1}

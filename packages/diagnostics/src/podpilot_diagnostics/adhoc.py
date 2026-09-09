@@ -174,6 +174,7 @@ class ReadIntent(BaseModel):
     connect_host: str | None = Field(default=None, max_length=253)
     method: Literal["HEAD", "GET"] = "HEAD"
     tls_verify: bool = True
+    include_timeline: bool = False
     metric: Literal[
         "cpu_usage", "cpu_requests", "cpu_limits", "cpu_throttling",
         "memory_working_set", "memory_requests", "memory_limits",
@@ -221,6 +222,7 @@ class ReadIntent(BaseModel):
     range_seconds: int = Field(default=3600, ge=300, le=7_776_000)
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
+    log_backend: Literal["kubernetes", "loki"] = "kubernetes"
     since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
@@ -268,6 +270,11 @@ class ReadIntent(BaseModel):
 
     @model_validator(mode="after")
     def validate_candidate_usage(self) -> "ReadIntent":
+        if self.include_timeline and (
+            self.tool != "query_metrics" or self.metric_scope != "pod" or not self.namespace or not self.name
+            or self.metric not in {"memory_working_set", "memory_limits", "container_restarts"}
+        ):
+            raise ValueError("include_timeline requires an exact namespace/Pod and a memory or restart metric")
         if self.candidate_id and self.tool != "pod_logs":
             raise ValueError("candidate_id is valid only for pod_logs")
         if self.tool == "http_probe":
@@ -491,6 +498,13 @@ class ReadIntent(BaseModel):
             raise ValueError("watch_seconds is valid only for watch_resources")
         if self.tool != "pod_logs" and self.since_seconds is not None:
             raise ValueError("since_seconds is valid only for pod_logs")
+        if self.log_backend == "loki":
+            if self.tool != "pod_logs" or not all((self.namespace, self.name, self.container)):
+                raise ValueError("Loki logs require pod_logs and exact namespace, Pod and container")
+            if self.previous:
+                raise ValueError("Loki uses a retained time window, not Kubernetes previous-container selection")
+            if self.range_seconds > 86400:
+                raise ValueError("Loki container logs are bounded to 24 hours")
         return self
 
 

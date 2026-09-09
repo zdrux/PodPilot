@@ -1,0 +1,149 @@
+{
+  "scenario_id": "loki-retention-gap",
+  "started_at": "2026-09-09T12:31:05.499497+00:00",
+  "namespace": "podpilot-eval-5255038c31fd",
+  "namespace_uid": "aee13c24-e931-4da2-8baa-047059f0fd4f",
+  "application_image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T12:31:07.953114+00:00",
+    "namespace": "podpilot-eval-5255038c31fd",
+    "current_pod": {
+      "name": "subject-76976d67c5-fs2rs",
+      "uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+      "created_at": "2026-09-09T12:31:04+00:00",
+      "phase": "Running",
+      "containers": [
+        {
+          "allocatedResources": {
+            "cpu": "25m",
+            "memory": "32Mi"
+          },
+          "containerID": "cri-o://298f6c2021a3118fee44711d23207b953d18e3fd96bcb07177e5c8598d6e54ba",
+          "image": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "imageID": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "lastState": {
+            "terminated": {
+              "containerID": "cri-o://298f6c2021a3118fee44711d23207b953d18e3fd96bcb07177e5c8598d6e54ba",
+              "exitCode": 17,
+              "finishedAt": "2026-09-09T12:31:05+00:00",
+              "reason": "Error",
+              "startedAt": "2026-09-09T12:31:05+00:00"
+            }
+          },
+          "name": "app",
+          "ready": false,
+          "resources": {
+            "limits": {
+              "cpu": "250m",
+              "memory": "128Mi"
+            },
+            "requests": {
+              "cpu": "25m",
+              "memory": "32Mi"
+            }
+          },
+          "restartCount": 1,
+          "started": false,
+          "state": {
+            "waiting": {
+              "message": "back-off 10s restarting failed container=app pod=subject-76976d67c5-fs2rs_podpilot-eval-5255038c31fd(86e1766b-d6ec-489c-a731-3649e9c88efc)",
+              "reason": "CrashLoopBackOff"
+            }
+          },
+          "user": {
+            "linux": {
+              "gid": 0,
+              "supplementalGroups": [
+                0,
+                1001380000
+              ],
+              "uid": 1001380000
+            }
+          },
+          "volumeMounts": [
+            {
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+              "name": "kube-api-access-dm8jw",
+              "readOnly": true,
+              "recursiveReadOnly": "Disabled"
+            }
+          ]
+        }
+      ],
+      "command": [
+        "python",
+        "-u",
+        "-c",
+        "import sys; print('Application startup failed: invalid worker configuration'); sys.exit(17)"
+      ]
+    },
+    "current_events": [
+      {
+        "reason": "Scheduled",
+        "message": "Successfully assigned podpilot-eval-5255038c31fd/subject-76976d67c5-fs2rs to sno1",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:04+00:00",
+        "last": "2026-09-09T12:31:04+00:00"
+      },
+      {
+        "reason": "AddedInterface",
+        "message": "Add eth0 [10.128.0.204/23] from ovn-kubernetes",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:05+00:00",
+        "last": "2026-09-09T12:31:05+00:00"
+      },
+      {
+        "reason": "Pulled",
+        "message": "Container image \"registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355\" already present on machine and can be accessed by the pod",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:05+00:00",
+        "last": "2026-09-09T12:31:05+00:00"
+      },
+      {
+        "reason": "Created",
+        "message": "Container created",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:05+00:00",
+        "last": "2026-09-09T12:31:05+00:00"
+      },
+      {
+        "reason": "Started",
+        "message": "Container started",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:05+00:00",
+        "last": "2026-09-09T12:31:05+00:00"
+      },
+      {
+        "reason": "BackOff",
+        "message": "Back-off restarting failed container app in pod subject-76976d67c5-fs2rs_podpilot-eval-5255038c31fd(86e1766b-d6ec-489c-a731-3649e9c88efc)",
+        "pod_uid": "86e1766b-d6ec-489c-a731-3649e9c88efc",
+        "first": "2026-09-09T12:31:06+00:00",
+        "last": "2026-09-09T12:31:07+00:00"
+      }
+    ],
+    "query_status": "success",
+    "entries": [],
+    "complete": true,
+    "start": "2026-09-07T11:31:07.953114+00:00",
+    "end": "2026-09-07T12:31:07.953114+00:00",
+    "query_pod": "subject-76976d67c5-fs2rs",
+    "backend": "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application",
+    "configured_retention_days": 1,
+    "limitation": "The requested window predates this fixture. This does not demonstrate deletion of previously ingested entries."
+  },
+  "deployed_remediation_policy_sha256": "076046dbfa74973296f5440f0f2803b083e4e0ae1957c195f8649bec2446f1c0",
+  "model": "openai/gpt-5.6-sol",
+  "answer": "## Assessment\n\n**Yes\u2014there is direct evidence that the workload container is failing.** There is **no evidence of a cluster-level infrastructure failure**, and the evidence is insufficient to define a safe configuration change.\n\n### Supported findings\n\n- Pod `subject-76976d67c5-fs2rs` (UID `86e1766b-d6ec-489c-a731-3649e9c88efc`) was created at `12:31:04Z`.\n- Its `app` container started and terminated at `12:31:05Z` with **exit code 17 / reason `Error`**.\n- At collection time, `12:31:07.953Z`, the container was:\n  - `ready: false`\n  - `started: false`\n  - waiting in `CrashLoopBackOff`\n  - at restart count 1\n- The configured command explicitly prints:\n  `Application startup failed: invalid worker configuration`\n  and then executes `sys.exit(17)`.\n- Events for this exact Pod UID show successful scheduling, networking, image access, container creation, and startup, followed by restart backoff. This points to an application/desired-state startup failure, not scheduling, networking, image-pull, or obvious resource-capacity failure.\n\nThe Pod\u2019s top-level `phase: Running` does not mean the application is healthy; its sole reported container is not ready and is crash-looping.\n\n### Timeline and logging limitation\n\nThe Loki query covered **2026-09-07 11:31:07Z\u201312:31:07Z**, while this Pod was not created until **2026-09-09 12:31:04Z**. Therefore, the empty result says nothing about this failure. It proves neither absence of errors nor retention deletion.\n\n### Is a change needed?\n\nIf this is intended to be a continuously running workload, its desired configuration likely needs correction. However, **no safe change can be specified from this collection** because these are unresolved prerequisites:\n\n- selected cluster identity\n- owning API object and owner UID\u2014Deployment/ReplicaSet/Job ownership was not collected\n- current `resourceVersion` and generation\n- desired workload lifecycle and intent\n- valid worker configuration or known-good source revision\n- GitOps/Helm or other desired-state owner\n- application logs from the actual failure window\n- functional success criterion\n\nDo not edit or replace the Pod directly; a controller-owned Pod would be recreated from unchanged desired state.\n\n### Scoped next steps\n\n1. Read the Pod\u2019s `ownerReferences`, then follow the chain to the current desired-state owner.\n2. Capture the owner UID, `resourceVersion`, generation, Pod template command/args/config references, and field manager/GitOps ownership.\n3. Retrieve current and previous container logs for this exact Pod UID around `2026-09-09 12:31:05Z`.\n4. Compare the owning template/source revision with a verified known-good revision and establish the intended worker configuration.\n5. Only then plan a guarded, source-of-truth correction. Recovery must be verified by reconciled generation, intended template, ready serving Pods, stable restart counts, and an application-level functional check.\n\n**Conclusion:** confirmed workload failure; no demonstrated need for cluster-wide remediation, and no evidence-supported safe mutation is currently available.",
+  "scores": {
+    "review_type": "independent qualitative live-adapter/evidence-only model review",
+    "evidence": "pass",
+    "diagnosis": "pass",
+    "timeline": "pass",
+    "uncertainty": "pass",
+    "action_plan": "pass_with_prerequisites",
+    "note": "Current exit-17 failure and UID Events diagnosed despite unavailable telemetry; no invented safe change. Ownership, intent and known-good revision remain prerequisites. Not a full chat tool-selection test."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T12:31:44.835142+00:00"
+}

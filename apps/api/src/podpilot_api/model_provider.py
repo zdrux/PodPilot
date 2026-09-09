@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 from openai import OpenAI
+from openai.lib._pydantic import to_strict_json_schema
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 from podpilot_diagnostics.adhoc import (
@@ -2633,17 +2634,28 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ),
             ("audit_operation_scope", "audit_outcome"),
         )
+        logs_tool = collector_tool(
+            "pod_logs",
+            "Read exact namespace/Pod/container logs. log_backend=kubernetes supports previous=true and "
+            "since_seconds. log_backend=loki queries retained application logs for range_seconds (maximum "
+            "24 hours), previous must be false. Empty or unavailable logs do not prove absence of failure.",
+            ("namespace", "name", "container", "log_backend", "previous", "since_seconds", "range_seconds", "limit"),
+            ("namespace", "name", "container", "log_backend"),
+        )
         metric_tool = collector_tool(
             "query_metrics",
             "Query bounded registered Thanos or Loki metrics: CPU, memory, application-log volume, "
             "Kafka consumer lag, or Kafka topic disk utilization. Kafka requires kafka_cluster scope "
             "with kind=Kafka; namespace and name identify the owning Kafka custom resource, never a "
             "KafkaTopic. Put a requested exact topic name in topic. Use rank for rankings, show for "
-            "totals; default period is 300 seconds.",
+            "totals; default period is 300 seconds. For exact Pod memory or restart investigations, "
+            "include_timeline=true also collects bounded UID-matched Pod termination and Event markers. "
+            "Use metric_operation=trend to display samples and the observed timeline.",
             (
                 "metric", "metric_scope", "kind", "namespace", "name", "topic",
                 "container", "metric_operation", "metric_statistic", "metric_group_by",
                 "threshold_operator", "threshold_value", "range_seconds", "step_seconds",
+                "include_timeline",
                 "limit",
             ),
             ("metric", "metric_scope"),
@@ -2688,6 +2700,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             pod_health_tool,
             http_probe_tool,
             audit_tool,
+            logs_tool,
             metric_tool,
             finish_tool,
         ]
@@ -2836,7 +2849,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "json_schema": {
                 "name": schema.__name__.lower(),
                 "strict": True,
-                "schema": schema.model_json_schema(),
+                "schema": to_strict_json_schema(schema),
             },
         }
         messages = [

@@ -1,0 +1,15 @@
+# Disposable SNO evaluation dependency. Never included in production kustomizations.
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: podpilot-eval-service-mesh
+  namespace: openshift-operators
+  labels:
+    app.kubernetes.io/part-of: podpilot-enterprise-eval
+spec:
+  channel: stable-3.4
+  installPlanApproval: Manual
+  name: servicemeshoperator3
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  startingCSV: servicemeshoperator3.v3.4.2

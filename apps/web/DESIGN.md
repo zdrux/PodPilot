@@ -64,8 +64,43 @@ Never reduce a security warning to color alone.
 
 Always consume `--theme-*` variables. Do not hard-code a dark-theme color into a
 new component. The default dark palette below documents the intended roles; the
-Classic, Light, Medium Light, and CIBC Red themes provide equivalent values in
+Classic, Light, Medium Light, CIBC Red, and Orange themes provide equivalent values in
 `styles.css`.
+
+Orange is an optional DemandKit-inspired comparison theme defined in `static/orange.css`.
+Select it from Appearance in the sidebar; the existing browser preference persists
+the choice across routes and reloads. Classic remains the default. Orange uses a
+neutral light canvas, white bordered panels, orange selection fills, and a darker
+orange for readable links and primary actions. Green, amber, and red retain their
+operational meanings. Its shared sidebar is 292px on desktop, 252px below 1180px,
+and 224px below 840px, with 48px primary navigation rows and outline icons.
+Connector categories use folder icons and branch lines down to individual instances;
+the add action shares the Connectors row outline while remaining a separate link.
+Secondary navigation uses a quiet vertical guide rather than enclosing cards.
+The Orange connector overview offers three flat setup rows with configured counts
+and direct add links. Individual instances remain in the sidebar. Discovery results
+use a single flat section, with one empty-state instruction and no nested cards.
+Existing navigation and permission conditions remain
+intact. Ask uses the shared edge-to-edge conversation and composer layout, with
+line separators and no enclosing rounded card or outer gutter.
+The composer inherits the shared centered, narrower desktop width and conversation
+gutters; on small screens it expands to the available width.
+The other themes retain their existing geometry. No frontend framework is required.
+
+Orange configuration pages use a flat directory/editor layout with a divider,
+plain section headings, and unboxed option groups. Search stays prominent in
+Cluster memory. Model capability results sit below the editor rather than forming
+a third narrow column. Model runtime and collection limits start collapsed in
+Orange; switching themes restores the expanded layout, and validation reveals
+invalid fields inside disclosures. Transport security, credential notices, scope,
+provenance, and save/test actions remain visible. Connector forms use the same
+flat section treatment without removing field help or security boundaries.
+
+Orange chat uses a soft neutral reading canvas, 16px body text at 1.8 line height,
+and a 100-character maximum prose width. Inline code and code blocks use dark slate
+text on a pale neutral fill with a visible border, rather than dark cyan highlights.
+Links and citations retain orange action emphasis; semantic operational states keep
+their existing meaning. Selection uses a pale peach fill with dark text.
 
 | Role | Default dark value | Visual use |
 | --- | --- | --- |
@@ -183,6 +218,8 @@ describe collection work only and must not imply that a recommendation ran.
 Ask is the intentional full-height exception. It retains the shared sidebar but
 uses its own conversation canvas, composer, and activity rail. Do not copy Ask’s
 route-specific density or full-height positioning into ordinary pages.
+Readiness, role, and cluster-reconnection notices precede the chat input in the
+composer so operators see blocking conditions before typing.
 
 ## 7. Components
 
@@ -289,8 +326,8 @@ Use rendered application routes as the primary visual references:
 Before merging a new or substantially redesigned screen:
 
 1. Start from the closest reference route and existing component classes.
-2. Use semantic theme tokens; verify Dark, Classic, Light, Medium Light, and CIBC
-   Red themes when the change affects shared surfaces.
+2. Use semantic theme tokens; verify Dark, Classic, Light, Medium Light, CIBC
+   Red, and Orange themes when the change affects shared surfaces.
 3. Confirm shell width, page title scale, gutters, card geometry, and control
    heights match neighboring routes.
 4. Verify empty, loading, selected, error, disabled, and success states relevant
@@ -304,6 +341,15 @@ Before merging a new or substantially redesigned screen:
 
 ## 12. Anti-Patterns
 
+Memory trends can include occurrence markers and a compact, source-attributed
+timeline table. Use semantic surface/text colors in every theme, dotted event
+markers distinct from metric samples, visible units, and broken lines for known
+sampling gaps. Charts must also render when no ranking table accompanies them.
+Discovery details use a flat section with an Auto-detect action and disclosures
+for endpoints, repository admission states, and collection limitations.
+Development approval bypass must be visible in Action mode; approving a typed
+proposal and executing it are separate controls when the bypass is disabled.
+
 Do not introduce:
 
 - route-specific fonts, title scales, or sidebar geometry;
@@ -316,3 +362,18 @@ Do not introduce:
 - unreviewed hard-coded colors where a semantic token exists;
 - model output styled as authoritative evidence;
 - security exceptions presented as harmless preferences.
+
+### Metric timeline markers
+
+Timeline markers use explicit text-only tooltips with observation, timestamp,
+message and provenance. Provide a wider transparent pointer target, keyboard
+focus/Enter support, tap support and Escape dismissal. Keep the timeline table
+as the persistent alternative. Do not rely on native SVG title hover behavior.
+
+### Tool-attempt diagnostics
+
+Use a plain-language cause in both the answer and activity sidebar. Keep raw
+compiler output and diagnostic references in a closed Technical details
+ disclosure with wrapped, bounded text. A blocked tool attempt is not a cluster
+health finding; do not imply that a later operation recovered unless its own
+record establishes that result. Unknown diagnostics retain a neutral summary.

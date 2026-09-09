@@ -1,5 +1,35 @@
 # PodPilot Operations
 
+Enterprise development work is tracked in [the implementation plan](enterprise-development-plan.md).
+Migration 0028 adds cluster inventory snapshots. After signing in to a cluster in
+Ask PodPilot, use **Auto-detect** in that cluster's details to refresh bounded
+technology and endpoint candidates. Inspect partial/denied checks before treating
+the inventory as complete. Configured metrics/logging adapters are checked with
+bounded delegated queries and displayed with their resolved URLs. Other observed
+Service/Route URLs remain unverified candidates and are not automatically selected
+as credential-bearing telemetry backends.
+
+The portable deployment defaults `development_approval_bypass` to false. Only
+the disposable SNO overlay enables it. Its value maps to
+`PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` for the API and migration container;
+changing it requires restarting the workload. Never enable it in production.
+
+For portable audit ingestion, an authenticated Approver may GET
+`/api/v1/audit-events?after=0&limit=100`. Keep the returned `through` value fixed
+while fetching subsequent `next_after` pages until `has_more` is false. Then
+advance the durable consumer cursor and start a new snapshot. Deduplicate by
+deployment identity and `event_id`. `event_category=audit` is the classification;
+no special application log severity is required. Push delivery and retention
+policies remain planned work.
+
+Chat Completions structured-output requests use the pinned OpenAI SDK's strict
+schema normalization, including required defaulted fields and nested object
+boundaries. This is required by GPT-5.6 Sol through OpenRouter. Keep schema
+compatibility tests when upgrading the SDK, since normalization uses its internal
+`openai.lib._pydantic.to_strict_json_schema` helper. New model profiles must pass
+the capability probe before use; adding an alternative need not change the active
+default. API credentials remain in the model credential Secret.
+
 The opt-in incident-response feature, connector credentials, Alertmanager setup,
 single-process worker limits and SNO component packaging are documented in
 [Incident response](incident-response.md). It requires migrations through `0024_incident_activity`
@@ -1807,3 +1837,45 @@ git diff --cached --name-only
 If a credential was committed or pasted into a task, remove it from the working
 tree and rotate it at the provider. Deleting a file or message does not make an
 exposed credential safe again.
+# Enterprise discovery and retained logs
+
+`PODPILOT_CLUSTER_AUTO_DETECT_ON_CONNECT` defaults to true. The first successful
+delegated sign-in starts discovery after the login response for editable clusters
+without an inventory timestamp. A failed discovery does not invalidate login;
+retry using Auto-detect in cluster details. Discovery is not a persistent job and
+can be interrupted by restart; an empty inventory retries on the next sign-in.
+An existing snapshot is refreshed only by the explicit button.
+
+Inventory stores recognized technology metadata, CI/CD references, endpoint
+candidates, and separately verified configured telemetry adapters. Verification
+uses bounded queries with the initiating delegated identity; candidate URLs are
+never automatically authorized credential destinations. A verified query does
+not establish historical retention or complete namespace access.
+
+The agent's `pod_logs` tool accepts `log_backend=kubernetes` for current/previous
+Pod logs, or `log_backend=loki` for an exact namespace/Pod/container over at most
+24 hours. Loki reads retain at most 200 lines and 32 KiB of redacted message text.
+They cannot prove Pod UID across replacements unless the source supplies it;
+absence of retained logs is not evidence of no failure. Memory timelines with
+an explicit container include up to three current and three previous log lines,
+with a post-read Pod UID check. Events, metrics and log sources remain distinct.
+
+Disposable dependency setup and capacity constraints are documented in
+`deploy/openshift/lab-enterprise/README.md`. Live benchmark results and unresolved
+quality findings are in `evals/results/enterprise/review.md`.
+
+
+### Enterprise lab validation limits (2026-09-09)
+
+The delegated broker records actual request methods and scoped resource paths;
+shell read/write labels are a display heuristic. Build 161 handles multiline
+commands and leaves ambiguous shell substitutions out of optional jq preflight.
+Action readiness repair was verified through a scoped Deployment PATCH and HTTP
+probe. Exec upgrade requests returned HTTP 400 in that test; do not assume the
+current delegated transport supports interactive/streaming exec.
+
+The new Loki collector forwards only evaluation application logs. It does not
+provide historical platform audit attribution. PodPilot's own attributed audit
+stream and Kubernetes audit forwarding are distinct sources. The public
+`argoproj/argocd-example-apps` repository was automatically admitted during the
+CI/CD discovery test; its existing GitHub connector credentials were unchanged.

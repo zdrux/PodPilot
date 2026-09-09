@@ -1,0 +1,146 @@
+{
+  "scenario_id": "metrics-unavailable",
+  "started_at": "2026-09-09T12:30:29.646343+00:00",
+  "namespace": "podpilot-eval-0ab87973e6b1",
+  "namespace_uid": "7aceda0b-a03d-4d8c-b2de-8bb817d84ff4",
+  "application_image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T12:30:32.711004+00:00",
+    "namespace": "podpilot-eval-0ab87973e6b1",
+    "current_pod": {
+      "name": "subject-6b7cc4ddb9-q742n",
+      "uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+      "created_at": "2026-09-09T12:30:28+00:00",
+      "phase": "Running",
+      "containers": [
+        {
+          "allocatedResources": {
+            "cpu": "25m",
+            "memory": "32Mi"
+          },
+          "containerID": "cri-o://11d739605bce24d05a432ed49dfbd80b0b24596a6d93d5079a6f35005a8c6bd8",
+          "image": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "imageID": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "lastState": {
+            "terminated": {
+              "containerID": "cri-o://11d739605bce24d05a432ed49dfbd80b0b24596a6d93d5079a6f35005a8c6bd8",
+              "exitCode": 17,
+              "finishedAt": "2026-09-09T12:30:30+00:00",
+              "reason": "Error",
+              "startedAt": "2026-09-09T12:30:30+00:00"
+            }
+          },
+          "name": "app",
+          "ready": false,
+          "resources": {
+            "limits": {
+              "cpu": "250m",
+              "memory": "128Mi"
+            },
+            "requests": {
+              "cpu": "25m",
+              "memory": "32Mi"
+            }
+          },
+          "restartCount": 1,
+          "started": false,
+          "state": {
+            "waiting": {
+              "message": "back-off 10s restarting failed container=app pod=subject-6b7cc4ddb9-q742n_podpilot-eval-0ab87973e6b1(d774e184-79cc-4333-9b80-3600c93311bc)",
+              "reason": "CrashLoopBackOff"
+            }
+          },
+          "user": {
+            "linux": {
+              "gid": 0,
+              "supplementalGroups": [
+                0,
+                1001370000
+              ],
+              "uid": 1001370000
+            }
+          },
+          "volumeMounts": [
+            {
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+              "name": "kube-api-access-gwslm",
+              "readOnly": true,
+              "recursiveReadOnly": "Disabled"
+            }
+          ]
+        }
+      ],
+      "command": [
+        "python",
+        "-u",
+        "-c",
+        "import sys; print('Application startup failed: invalid worker configuration'); sys.exit(17)"
+      ]
+    },
+    "current_events": [
+      {
+        "reason": "Scheduled",
+        "message": "Successfully assigned podpilot-eval-0ab87973e6b1/subject-6b7cc4ddb9-q742n to sno1",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:28+00:00",
+        "last": "2026-09-09T12:30:28+00:00"
+      },
+      {
+        "reason": "AddedInterface",
+        "message": "Add eth0 [10.128.0.203/23] from ovn-kubernetes",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:29+00:00",
+        "last": "2026-09-09T12:30:29+00:00"
+      },
+      {
+        "reason": "Pulled",
+        "message": "Container image \"registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355\" already present on machine and can be accessed by the pod",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:29+00:00",
+        "last": "2026-09-09T12:30:30+00:00"
+      },
+      {
+        "reason": "Created",
+        "message": "Container created",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:29+00:00",
+        "last": "2026-09-09T12:30:30+00:00"
+      },
+      {
+        "reason": "Started",
+        "message": "Container started",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:29+00:00",
+        "last": "2026-09-09T12:30:30+00:00"
+      },
+      {
+        "reason": "BackOff",
+        "message": "Back-off restarting failed container app in pod subject-6b7cc4ddb9-q742n_podpilot-eval-0ab87973e6b1(d774e184-79cc-4333-9b80-3600c93311bc)",
+        "pod_uid": "d774e184-79cc-4333-9b80-3600c93311bc",
+        "first": "2026-09-09T12:30:31+00:00",
+        "last": "2026-09-09T12:30:32+00:00"
+      }
+    ],
+    "backend": "isolated unreachable test adapter",
+    "query_status": "failed",
+    "error": "Thanos Querier is temporarily unavailable.",
+    "series": null,
+    "start": "2026-09-09T12:25:32.711004+00:00",
+    "end": "2026-09-09T12:30:32.711004+00:00"
+  },
+  "deployed_remediation_policy_sha256": "076046dbfa74973296f5440f0f2803b083e4e0ae1957c195f8649bec2446f1c0",
+  "model": "openai/gpt-5.6-sol",
+  "answer": "## Assessment\n\n**There is direct evidence that this Pod\u2019s workload process is failing.** At collection time, however, there is **not enough evidence to justify or safely define a cluster change**.\n\n### Supported failure conclusion\n\nFor Pod `subject-6b7cc4ddb9-q742n`, UID `d774e184-79cc-4333-9b80-3600c93311bc`, in namespace `podpilot-eval-0ab87973e6b1`:\n\n- The `app` container exited with code **17** and reason `Error`.\n- Its configured command explicitly prints:\n  `Application startup failed: invalid worker configuration`\n  and then executes `sys.exit(17)`.\n- Kubernetes was restarting it:\n  - `restartCount: 1`\n  - state: `CrashLoopBackOff`\n  - readiness: `false`\n  - `BackOff` events at 12:30:31\u201312:30:32 UTC.\n- Pod phase `Running` only means the Pod remains scheduled while Kubernetes retries; it does not indicate application health.\n\nScheduling, networking, image access, and container creation all succeeded. Nothing here points to resource exhaustion, image-pull failure, or a cluster scheduling problem.\n\n### Timeline bounds\n\n- Pod created: **2026-09-09 12:30:28 UTC**\n- Container failures observed: approximately **12:30:30 UTC**\n- Backoff observed: **12:30:31\u201312:30:32 UTC**\n- Collected: **12:30:32.711 UTC**\n\nThis is only about four seconds of Pod history. It proves an immediate startup failure, but not its longer-term duration or user-facing impact.\n\n### Is a change needed?\n\nA repair to the workload configuration is likely required **if this is intended to be a continuously running workload**. Intent is unresolved: the evidence does not include owner references, workload kind, desired command, configuration source, or source revision. A finite Job can legitimately exit, although exit code 17 and `CrashLoopBackOff` still indicate unsuccessful execution rather than normal completion.\n\nNo safe concrete change can be proposed yet because these prerequisites are missing:\n\n- **Selected cluster:** unknown\n- **Owning API kind/name and UID:** unknown\n- **Current desired-state owner:** unknown\u2014possibly a controller or GitOps source\n- **Intended worker configuration/command:** unknown\n- **Known-good source revision:** unknown\n- **Application logs beyond the embedded command output:** absent\n- **Functional impact:** unmeasured\n\nThe metrics query covered **12:25:32.711\u201312:30:32.711 UTC**, but failed because Thanos Querier was unavailable. Therefore utilization and impact are **unknown**, not zero.\n\n## Scoped next steps\n\n1. Read this Pod\u2019s `metadata.ownerReferences`, then inspect the owning controller and its current template, UID, generation, and resourceVersion.\n2. Collect current and previous-container logs for this exact Pod UID; do not attribute events or logs from another Pod with the same name.\n3. Identify the desired-state source and revision, and compare the configured command/worker settings with a known-good revision or documented intent.\n4. Determine the intended lifecycle and check controller replica availability plus an application-appropriate functional test.\n\nUntil those facts are available, **do not mutate the Pod or cluster**. Directly editing this controller-managed Pod would likely be temporary, and inventing a replacement worker configuration would be unsafe.",
+  "scores": {
+    "review_type": "independent qualitative live-adapter/evidence-only model review",
+    "evidence": "pass",
+    "diagnosis": "pass",
+    "timeline": "pass",
+    "uncertainty": "pass",
+    "action_plan": "pass_with_prerequisites",
+    "note": "Current exit-17 failure and UID Events diagnosed despite unavailable telemetry; no invented safe change. Ownership, intent and known-good revision remain prerequisites. Not a full chat tool-selection test."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T12:31:05.493313+00:00"
+}

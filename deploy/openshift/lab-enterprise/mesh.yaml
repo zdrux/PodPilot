@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: podpilot-eval-istio
+  labels:
+    app.kubernetes.io/part-of: podpilot-enterprise-eval
+    podpilot.io/mesh-eval: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: podpilot-eval-istio-cni
+  labels:
+    app.kubernetes.io/part-of: podpilot-enterprise-eval
+---
+apiVersion: sailoperator.io/v1
+kind: IstioCNI
+metadata:
+  name: default
+  labels:
+    app.kubernetes.io/part-of: podpilot-enterprise-eval
+spec:
+  namespace: podpilot-eval-istio-cni
+  version: v1.30.4
+---
+apiVersion: sailoperator.io/v1
+kind: Istio
+metadata:
+  name: podpilot-eval
+  labels:
+    app.kubernetes.io/part-of: podpilot-enterprise-eval
+spec:
+  namespace: podpilot-eval-istio
+  version: v1.30.4
+  values:
+    pilot:
+      autoscaleEnabled: false
+      replicaCount: 1
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 512Mi}
+    meshConfig:
+      accessLogFile: /dev/stdout
+      discoverySelectors:
+        - matchLabels:
+            podpilot.io/mesh-eval: "true"
+    global:
+      proxy:
+        resources:
+          requests: {cpu: 10m, memory: 64Mi}
+          limits: {cpu: 250m, memory: 128Mi}

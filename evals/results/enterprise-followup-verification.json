@@ -1,0 +1,131 @@
+{
+  "verified_at": "2026-09-09T12:34:40.284374+00:00",
+  "image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9",
+  "available_replicas": 1,
+  "route": "https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/ask",
+  "audit_export": {
+    "schema_version": 1,
+    "bounded_pagination_verified": true,
+    "event_category": "audit"
+  },
+  "application": {
+    "migration": "0028_cluster_inventory",
+    "approval_bypass": true,
+    "delegated_access": true,
+    "auto_detect_on_connect": true,
+    "inventory_status": "partial",
+    "technologies": [
+      "Loki",
+      "Argo CD",
+      "Istio / OpenShift Service Mesh",
+      "Kafka / Strimzi",
+      "LVM Storage",
+      "Prometheus",
+      "Thanos",
+      "SeaweedFS"
+    ],
+    "telemetry": [
+      {
+        "checked_at": "2026-09-09T12:34:41.587964+00:00",
+        "kind": "metrics",
+        "status": "query_available",
+        "url": "https://thanos-querier.openshift-monitoring.svc:9091",
+        "verified": true
+      },
+      {
+        "checked_at": "2026-09-09T12:34:41.595645+00:00",
+        "kind": "logging",
+        "status": "query_available",
+        "url": "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application",
+        "verified": true
+      }
+    ],
+    "repositories": [
+      {
+        "admission": "already_admitted",
+        "connector_id": "a15e3fa5-cf08-4704-bc6c-3bd1da65b090",
+        "references": [
+          {
+            "kind": "Application",
+            "name": "podpilot-sno-demo",
+            "namespace": "openshift-gitops",
+            "uid": "f89868e3-7685-4551-89a0-910a4cc9c528"
+          }
+        ],
+        "url": "https://github.com/zdrux/podpilot-gitops-sno"
+      }
+    ],
+    "profiles": [
+      {
+        "id": 1,
+        "model": "gpt-5.6-terra",
+        "active": false,
+        "status": "ready"
+      },
+      {
+        "id": 2,
+        "model": "openai/gpt-oss-120b",
+        "active": true,
+        "status": "ready"
+      },
+      {
+        "id": 3,
+        "model": "openai/gpt-5.6-sol",
+        "active": false,
+        "status": "ready"
+      }
+    ]
+  },
+  "loki": {
+    "conditions": [
+      {
+        "type": "Warning",
+        "status": "True"
+      },
+      {
+        "type": "Ready",
+        "status": "True"
+      },
+      {
+        "type": "Pending",
+        "status": "False"
+      }
+    ]
+  },
+  "collector": {
+    "conditions": [
+      {
+        "type": "observability.openshift.io/Authorized",
+        "status": "True"
+      },
+      {
+        "type": "observability.openshift.io/Valid",
+        "status": "True"
+      },
+      {
+        "type": "Ready",
+        "status": "True"
+      }
+    ]
+  },
+  "istio": {
+    "conditions": [
+      {
+        "type": "Reconciled",
+        "status": "True"
+      },
+      {
+        "type": "Ready",
+        "status": "True"
+      },
+      {
+        "type": "DependenciesHealthy",
+        "status": "True"
+      }
+    ]
+  },
+  "remaining_namespaces": 0,
+  "remaining_argo_applications": 0,
+  "remaining_argo_projects": 0,
+  "node_usage": "NAME   CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%   \nsno1   838m         7%     21662Mi         69%"
+}

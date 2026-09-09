@@ -8,6 +8,18 @@ import pytest
 from podpilot_openshift.metrics import MonitoringQueryError, ThanosQueryClient
 
 
+def test_endpoint_probe_verifies_query_shape_and_withholds_errors(tmp_path: Path) -> None:
+    def handler(request):
+        assert request.url.params["query"] == "vector(1)"
+        return httpx.Response(200, json={"status": "success", "data": {"resultType": "vector", "result": []}})
+    assert client(tmp_path, handler).endpoint_status()["verified"] is True
+    def unavailable(request):
+        raise RuntimeError("token=must-not-leak")
+    result = client(tmp_path, unavailable).endpoint_status()
+    assert result["verified"] is False
+    assert "must-not-leak" not in str(result)
+
+
 def client(tmp_path: Path, handler, **overrides) -> ThanosQueryClient:
     token = tmp_path / "token"
     token.write_text("fixture-token", encoding="utf-8")

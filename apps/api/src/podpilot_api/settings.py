@@ -68,6 +68,7 @@ class Settings(BaseSettings):
         "/api/logs/v1/application"
     )
     loki_route_name: str = "logging-loki"
+    cluster_auto_detect_on_connect: bool = True
     loki_timeout_seconds: float = Field(default=90.0, ge=1.0, le=120.0)
     loki_max_series: int = Field(default=50, ge=1, le=100)
     workload_max_events: int = Field(default=30, ge=1, le=100)
@@ -120,6 +121,7 @@ class Settings(BaseSettings):
     cluster_secret_namespace: str = "ai-ops"
     cluster_secret_name: str = "podpilot-cluster-credentials"
     poc_mode: bool = False
+    development_approval_bypass: bool = False
 
     @field_validator(
         "role_investigator_groups",
@@ -141,6 +143,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_role_group_mapping(self) -> "Settings":
+        if self.development_approval_bypass and (
+            not self.poc_mode or self.environment not in {"development", "test", "sno-lab", "openshift-poc"}
+        ):
+            raise ValueError("Development approval bypass requires an explicit development or SNO PoC environment and poc_mode")
         role_groups = (
             self.role_investigator_groups,
             self.role_read_write_groups,

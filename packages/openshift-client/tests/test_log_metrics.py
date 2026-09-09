@@ -11,10 +11,41 @@ from podpilot_openshift.log_metrics import (
     LogVolumeSample,
     LogVolumeSnapshot,
     LokiQueryClient,
+    ContainerLogSnapshot, ContainerLogEntry,
 )
 
 
 NOW = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
+
+
+def test_retained_log_tool_preserves_times_redacts_and_rejects_unbounded_scope():
+    from types import SimpleNamespace
+    def logs(**kwargs):
+        assert kwargs["namespace"] == "payments" and kwargs["container"] == "app"
+        assert kwargs["limit"] == 200
+        assert (kwargs["end"] - kwargs["start"]).total_seconds() == 3600
+        return ContainerLogSnapshot(entries=(ContainerLogEntry(timestamp_ns=str(int(NOW.timestamp() * 1e9)),
+            line='{"message":"ERROR token=do-not-keep", "password":"also-secret"}'),), collected_at=NOW, is_complete=True)
+    reader = BoundedLogVolumeReader(SimpleNamespace(query_container_logs=logs), clock=lambda: NOW)
+    result = reader.container_logs(ReadIntent(tool="pod_logs", namespace="payments", name="worker", container="app", log_backend="loki", limit=1000))
+    assert result.observations[0].data["entries"][0]["timestamp"] == NOW.isoformat()
+    assert "do-not-keep" not in str(result) and "also-secret" not in str(result)
+    assert "without UID" in " ".join(result.limitations)
+    with pytest.raises(ValueError):
+        ReadIntent(tool="pod_logs", namespace="payments", log_backend="loki")
+    with pytest.raises(ValueError):
+        ReadIntent(tool="pod_logs", namespace="payments", name="worker", container="app", log_backend="loki", range_seconds=86401)
+
+
+def test_loki_endpoint_probe_is_bounded_and_checks_protocol() -> None:
+    def handler(request):
+        assert request.url.path.endswith("/loki/api/v1/labels")
+        assert int(request.url.params["end"]) - int(request.url.params["start"]) <= 61 * 10**9
+        return httpx.Response(200, json={"status": "success", "data": []})
+    source = LokiQueryClient(base_url="https://loki.example.test", token="fixture", transport=httpx.MockTransport(handler))
+    assert source.endpoint_status()["verified"] is True
+    source = LokiQueryClient(base_url="https://loki.example.test", token="fixture", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": []})))
+    assert source.endpoint_status()["verified"] is False
 
 
 class FakeLogSource:

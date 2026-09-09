@@ -399,8 +399,9 @@ browser submits only an opaque action ID; it cannot provide a target, patch, or
 command. Each proposal persists its target UID and resourceVersion, fixed API
 operation, risk, expiry, server dry-run, verification query, and recovery note.
 
-Approver-or-higher users must reveal a second confirmation control and press
-**Approve and run** before execution. The API atomically claims the preview once,
+Approver-or-higher users approve the immutable proposal without executing it.
+The requesting operator may execute it once within one hour of approval through
+the separate `/execute` endpoint. The API atomically claims the approved action,
 re-reads resource identity, executes through the OpenShift adapter, polls bounded
 postconditions, and stores before/API/verification/after results. Pod verification
 requires a new Ready UID owned by the same direct controller and explicitly
@@ -415,7 +416,7 @@ read-only executor validation for the exact target UID/resourceVersion and close
 missing or stale previews without issuing a dry-run or mutation. Approval fetches
 Alertmanager again and fails closed if the alert cannot be proven active.
 Investigation creators and Approvers may explicitly cancel previews; only
-Approvers retain execution permission. Closure reason, actor, time, and detail
+the requesting operator retains execution permission. Closure reason, actor, time, and detail
 are persisted in the action result and audit stream.
 
 Milestone 7 adds persisted `DiagnosticCheck` records and a server-owned tool

@@ -677,8 +677,9 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
 
 
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
+@pytest.mark.parametrize("approval_bypass", [False, True])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, approval_bypass: bool,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
     constructor_threads: list[int] = []
@@ -857,7 +858,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         credential_store=MemoryCredentialStore("model-token"),
         model_provider=provider,
         agent_runner=runner,
-        settings_overrides={"delegated_access_enabled": True},
+        settings_overrides={"delegated_access_enabled": True, "development_approval_bypass": approval_bypass},
     )
 
     @app.middleware("http")
@@ -986,13 +987,16 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     if execution_mode == "read_only":
         assert "delegated read-only investigation mode" in system_prompt
         assert "broker will reject Kubernetes writes" in system_prompt
-    else:
+    elif approval_bypass:
         assert "delegated Action mode" in system_prompt
         assert "Cluster writes and privileged operations are enabled" in system_prompt
         assert "execute requested remediation without asking for another approval" in system_prompt
         assert "Never claim that this session blocks writes unless an actual tool call" in system_prompt
         assert "cluster write or privileged operation" in system_prompt
         assert "identify successful writes accurately" not in system_prompt
+    else:
+        assert "Action mode with approvals enforced" in system_prompt
+        assert "Unreviewed writes and privileged operations are blocked" in system_prompt
     assert "same investigation tools" in system_prompt
     assert "When presenting a list of comparable items" in system_prompt
     assert "otherwise choose the clearest format" in system_prompt
@@ -2893,6 +2897,9 @@ def test_agent_command_operation_kind_classifies_write_commands() -> None:
     assert _agent_command_operation_kind("oc -n apps scale deployment web --replicas=2") == "write"
     assert _agent_command_operation_kind("oc auth can-i patch deployments -n apps") == "read"
     assert _agent_command_operation_kind("oc get deployments -n apps") == "read"
+    assert _agent_command_operation_kind("set -euo pipefail\nns='apps'\n# Repair the exact field.\noc -n \"$ns\" patch deployment web --type=json -p '[]'") == "write"
+    assert _agent_command_operation_kind("set -e\n  oc -n apps exec web -c app -- curl http://localhost/") == "write"
+    assert _agent_command_operation_kind("set -e\n# Inspect only.\noc -n apps rollout status deployment/web\noc get pods -n apps") == "read"
 
 
 @pytest.mark.parametrize("command,cluster_name,running,completed,failed", [
@@ -5199,6 +5206,25 @@ def test_metric_trend_view_renders_bounded_points_and_peak_timestamp() -> None:
     assert str(view["series"][0]["polyline"]).count(" ") == 2
 
 
+def test_metric_chart_sorts_samples_ignores_nonfinite_and_preserves_gaps():
+    view = _metric_trend_view({
+        "operation": "trend", "unit": "bytes", "stepSeconds": 60,
+        "series": [{"labels": {"pod": "worker", "container": "app", "uid": "pod-uid"}, "points": [
+            {"timestamp": "2026-09-09T00:05:00Z", "value": 200},
+            {"timestamp": "2026-09-09T00:00:00Z", "value": 100},
+            {"timestamp": "2026-09-09T00:01:00Z", "value": float("nan")},
+            {"timestamp": "2026-09-09T00:01:00Z", "value": 120},
+            {"timestamp": "2026-09-09T00:02:00Z", "value": float("inf")},
+        ]}],
+    })
+    series = view["series"][0]
+    assert series["identity"] == "worker / app / pod-uid"
+    assert series["gap_count"] == 1
+    assert len(series["segments"]) == 2
+    assert series["segments"][0].startswith("42.00,")
+    assert "nan" not in series["polyline"] and "inf" not in series["polyline"]
+
+
 def test_ingress_bandwidth_semantics_compile_both_directions() -> None:
     compiled = _semantic_metric_read_plan(InquirySemantics(
         mode="metrics", operation="metrics", resource_query="Cluster",
@@ -5393,6 +5419,26 @@ def test_ask_prefers_metric_card_and_keeps_markdown_as_render_fallback(
         assert fallback_text in fallback.text
         assert duplicate_row in fallback.text
         assert 'class="answer-table-result"' in fallback.text
+
+        # Multi-tool answers also contain non-metric tables. A chart must not
+        # silently remove the investigator's causal timeline or dependency map.
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            evidence[0]["data"]["ranking"] = [{"labels": {"namespace": "payments"}, "current": 1048576}]
+            conversation.evidence_json = json.dumps(evidence)
+            message = db_session.get(AdHocMessage, "00000000-0000-0000-0000-000000000182")
+            message.content = answer + "\n\n| Time | Observation |\n|---|---|\n| 06:52:17 UTC | Recorded OOM termination |"
+            message.tool_activity_json = json.dumps({
+                "preferred_evidence_view": "metric_ranking",
+                "evidence_ledger": [{"tool": "query_metrics", "sequence": 1}],
+            })
+            db_session.commit()
+        engine.dispose()
+        investigated = client.get(f"/ask/{conversation_id}", headers={"x-forwarded-user": "ivy"})
+        assert "Observed metric" in investigated.text
+        assert "Recorded OOM termination" in investigated.text
+        assert "06:52:17 UTC" in investigated.text
 
 
 def test_ask_renders_grouped_resource_presentation_without_parsing_prose(
@@ -9356,7 +9402,7 @@ def make_app(
     settings_overrides: dict[str, object] | None = None,
     configuration_admins: set[str] | None = None,
 ):
-    test_settings = {"adhoc_job_worker_enabled": False}
+    test_settings = {"adhoc_job_worker_enabled": False, "cluster_auto_detect_on_connect": False}
     test_settings.update(settings_overrides or {})
     settings = Settings(
         environment="test",
@@ -9393,6 +9439,140 @@ def make_app(
         ),
         settings,
     )
+
+
+def test_audit_export_is_authorized_bounded_and_snapshot_paginated(tmp_path: Path) -> None:
+    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+                      source=FakeAlertSource(()))
+    with TestClient(app) as client:
+        with Session(app.state.engine) as db:
+            for index in range(3):
+                db.add(AuditEvent(actor="ivy", action="test.action", outcome="read",
+                                  details_json=json.dumps({"sequence": index, "password": "never-export"})))
+            db.commit()
+        headers = {"x-forwarded-user": "ada"}
+        assert client.get("/api/v1/audit-events").status_code == 401
+        assert client.get("/api/v1/audit-events", headers={"x-forwarded-user": "ivy"}).status_code == 403
+        assert client.get("/api/v1/audit-events?limit=501", headers=headers).status_code == 422
+        first = client.get("/api/v1/audit-events?limit=1", headers=headers).json()
+        assert first["has_more"]
+        second = client.get("/api/v1/audit-events", headers=headers, params={
+            "after": first["next_after"], "through": first["through"],
+        }).json()
+        assert not second["has_more"]
+        assert all(row["event_id"] <= first["through"] for row in second["events"])
+        assert "never-export" not in json.dumps([first, second])
+        assert not any(row["action"] == "audit.export" for row in second["events"])
+
+
+def test_proxy_durably_audits_delegated_identity_without_body_or_query(tmp_path: Path, monkeypatch) -> None:
+    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()))
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"kind": "Pod"})),
+        **kwargs,
+    ))
+    with TestClient(app) as client:
+        with Session(app.state.engine) as db:
+            cluster = db.scalar(select(Cluster))
+            cluster_id = cluster.id
+            cluster.is_system = False
+            db.commit()
+        connection = app.state.delegated_vault.put(
+            session_id="test-session", owner="ada", cluster_id=cluster_id,
+            remote_username="delegated-ada", remote_uid="remote-uid", token="private-bearer",
+        )
+        response = client.get(
+            f"/internal/delegated-proxy/{connection.read_only_proxy_capability}/api/v1/pods?labelSelector=private-query",
+        )
+        assert response.status_code == 200
+        denied = client.post(
+            f"/internal/delegated-proxy/{connection.read_only_proxy_capability}/api/v1/pods",
+            json={"private-body": "never-store"},
+        )
+        assert denied.status_code == 403
+        with Session(app.state.engine) as db:
+            rows = list(db.scalars(select(AuditEvent).where(AuditEvent.action == "cluster.request").order_by(AuditEvent.id)))
+            assert [row.outcome for row in rows] == ["attempted", "accepted", "denied"]
+            details = [json.loads(row.details_json) for row in rows]
+            assert details[0]["request_id"] == details[1]["request_id"]
+            assert all(item["delegated_username"] == "delegated-ada" for item in details)
+            assert all(row.actor == "ada" for row in rows)
+            serialized = json.dumps(details)
+            assert all(value not in serialized for value in ("private-bearer", "private-query", "never-store", connection.read_only_proxy_capability))
+        app.state.delegated_vault.pop_all()
+
+
+def test_cluster_detection_requires_own_delegated_session_and_persists_inventory(tmp_path: Path, monkeypatch) -> None:
+    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+                      source=FakeAlertSource(()))
+    calls = []
+    def telemetry(**kwargs):
+        assert kwargs["token_provider"]() == "do-not-pass-directly"
+        return {key: SimpleNamespace(endpoint_status=lambda kind=kind: {"kind": kind, "url": "https://telemetry.example.test", "verified": True})
+                for key, kind in (("metric_reader", "metrics"), ("log_metric_reader", "logging"))}
+    monkeypatch.setattr("podpilot_api.main._remote_observability_adapters", telemetry)
+    def reader(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(technology_inventory=lambda: {
+            "schema_version": 1, "status": "partial", "observed_at": datetime.now(timezone.utc).isoformat(),
+            "technologies": [{"id": "thanos", "name": "Thanos"}], "endpoints": [],
+            "repositories": [], "checks": [{"kind": "Deployment", "status": "denied"}], "limitations": [],
+        })
+    monkeypatch.setattr(KubernetesReadOnlyExplorer, "for_remote_cluster", reader)
+    with TestClient(app) as client:
+        page = client.get("/", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text).group(1)
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf}
+        with Session(app.state.engine) as db:
+            cluster_id = db.scalar(select(Cluster.id))
+        url = f"/api/v1/clusters/{cluster_id}/detect"
+        assert client.post(url, headers={"x-forwarded-user": "ada"}).status_code == 403
+        assert client.post(url, headers=headers).status_code == 409
+        session_id = "s" * 40
+        connection = app.state.delegated_vault.put(session_id=session_id, owner="ada", cluster_id=cluster_id,
+            remote_username="remote-ada", remote_uid="uid", token="do-not-pass-directly")
+        client.cookies.set("podpilot_delegated_session", session_id)
+        assert client.post(url, headers={**headers, "x-forwarded-user": "ivy"}).status_code == 403
+        assert not calls
+        assert client.post(url, headers=headers).status_code == 200
+        assert calls[0]["api_url"].endswith(connection.read_only_proxy_capability)
+        assert calls[0]["token"] == "broker-injected"
+        with Session(app.state.engine) as db:
+            inventory = json.loads(db.get(Cluster, cluster_id).inventory_json)
+            assert inventory["delegated_username"] == "remote-ada"
+            assert inventory["checks"][0]["status"] == "denied"
+        rendered = client.get(f"/settings/clusters?edit={cluster_id}", headers=headers)
+        assert "Auto-detect" in rendered.text and "Thanos" in rendered.text
+        app.state.delegated_vault.pop_all()
+
+
+def test_first_delegated_login_detects_inventory_once(tmp_path: Path, monkeypatch):
+    from podpilot_openshift.delegated import DelegatedIdentity
+    scans = []
+    monkeypatch.setattr("podpilot_api.main.OpenShiftDelegatedLoginClient", lambda **_: SimpleNamespace(
+        login=lambda *_, **__: DelegatedIdentity(username="remote-ada", uid="uid", token="fixture-token"), revoke=lambda _: True))
+    def inventory():
+        scans.append(True)
+        return {"observed_at": datetime.now(timezone.utc).isoformat(), "status": "partial", "technologies": [], "endpoints": [], "repositories": [], "checks": []}
+    monkeypatch.setattr(KubernetesReadOnlyExplorer, "for_remote_cluster", lambda **_: SimpleNamespace(technology_inventory=inventory))
+    monkeypatch.setattr("podpilot_api.main._remote_observability_adapters", lambda **_: {
+        key: SimpleNamespace(endpoint_status=lambda: {"verified": False}) for key in ("metric_reader", "log_metric_reader")})
+    ca = tmp_path / "fixture-ca.crt"
+    ca.write_text("fixture-ca", encoding="utf-8")
+    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()),
+        settings_overrides={"delegated_access_enabled": True, "cluster_auto_detect_on_connect": True,
+                            "service_account_ca_path": ca, "service_ca_path": ca})
+    with TestClient(app) as client:
+        page = client.get("/delegated/connect", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text).group(1)
+        for _ in range(2):
+            response = client.post("/api/v1/delegated-sessions/connect", headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf},
+                data={"cluster_ids": json.dumps([SYSTEM_CLUSTER_ID]), "username": "ada", "password": "fixture", "consent": "on"})
+            assert response.status_code == 200
+        assert len(scans) == 1
+        with Session(app.state.engine) as db:
+            assert json.loads(db.get(Cluster, SYSTEM_CLUSTER_ID).inventory_json)["delegated_username"] == "remote-ada"
 
 
 def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
@@ -9798,7 +9978,9 @@ def test_agent_rejects_malformed_calls_with_retry_guidance_and_collapsed_diagnos
         )
 
     assert '<details class="answer-diagnostics">' in rendered.text
-    assert "2 rejected attempts" in rendered.text
+    assert "2 attempts could not proceed" in rendered.text
+    assert "Invalid tool inputs" in rendered.text
+    assert '<details class="tool-diagnostic-details">' in rendered.text
     assert '<ul class="answer-limitations">' not in rendered.text
     assert "Cluster unknown" not in rendered.text
     search_feedback = json.loads(str(provider.agent_messages[1][-1]["content"]))
@@ -11216,8 +11398,8 @@ def test_jq_preflight_extracts_inline_filters_without_cluster_input() -> None:
         'destinationCA: (.spec.tls.destinationCACertificate // "<none>")})'
     ]
     assert _jq_preflight_command(command) == (
-        "jq -n '.items[:5] | map({name: .metadata.name, "
-        "destinationCA: (.spec.tls.destinationCACertificate // \"<none>\")})' >/dev/null"
+        "jq -n 'empty | (.items[:5] | map({name: .metadata.name, "
+        "destinationCA: (.spec.tls.destinationCACertificate // \"<none>\")}))' >/dev/null"
     )
 
 
@@ -11228,6 +11410,24 @@ def test_jq_failure_is_classified_as_a_filter_parse_error() -> None:
     )
 
     assert _command_failure_category(stderr) == "jq_filter_parse_error"
+
+
+def test_jq_preflight_leaves_shell_substitutions_to_the_shell() -> None:
+    # A closing shell parenthesis is not part of the quoted jq filter.
+    assert _jq_preflight_command("selector=$(oc get deploy subject -o json | jq -r '.spec.selector.matchLabels | keys | join(\",\")')") is None
+    assert _jq_preflight_command("selector=`oc get deploy subject -o json | jq '.spec.selector'`") is None
+    # Simple inline programs still receive the compile check, even if invalid.
+    assert _jq_preflight_command("oc get pods -o json | jq '{name:name}'") == "jq -n 'empty | ({name:name})' >/dev/null"
+
+
+def test_jq_preflight_accounts_for_bound_variables_without_reading_values_or_files():
+    command = "oc get pods -o json | jq --arg ns \"$NS\" --argjson n 5 --slurpfile other /private/file '.items[] | select(.metadata.namespace == $ns) | .name'\necho done"
+    assert _jq_filters_from_shell_command(command) == [".items[] | select(.metadata.namespace == $ns) | .name"]
+    preflight = _jq_preflight_command(command)
+    assert "--arg ns '' --arg n '' --arg other ''" in preflight
+    assert "/private/file" not in preflight and "$NS" not in preflight
+    assert "echo" not in preflight
+    assert _jq_preflight_command("jq -f /private/program") is None
 
 
 def test_agent_command_failures_are_grouped_without_response_bodies() -> None:
@@ -12902,7 +13102,7 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert 'class="ask-layout action-session"' in action_page.text
         assert "execution-mode-read-write" in action_page.text
         assert "execution-mode-read-only" not in action_page.text
-        assert "ACTION MODE - Cluster WRITES Permitted" in action_page.text
+        assert "ACTION MODE · Approval required for writes" in action_page.text
         assert "Session cautions" not in action_page.text
         assert "change selected clusters using your OpenShift identity" not in action_page.text
         assert "action-caution-pill" not in action_page.text
@@ -13104,7 +13304,7 @@ def test_adhoc_rate_limit_is_per_user_not_per_conversation(tmp_path: Path) -> No
 
 
 def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
-    template = (ROOT / "apps" / "web" / "templates" / "ask.html").read_text()
+    template = (ROOT / "apps" / "web" / "templates" / "ask.html").read_text(encoding="utf-8")
     base_template = (ROOT / "apps" / "web" / "templates" / "base.html").read_text(
         encoding="utf-8"
     )
@@ -13127,7 +13327,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "Session cautions" not in template
     assert "data-action-mode-notice" in template
     assert 'class="ask-session-heading-row"' in template
-    assert "ACTION MODE - Cluster WRITES Permitted" in template
+    assert "ACTION MODE · Development approval bypass" in template
     assert ".action-mode-notice[hidden]" in styles
     assert "execution-mode-read-write" in template
     assert "execution-mode-read-only" in template
@@ -14019,7 +14219,8 @@ def test_target_down_check_failures_remain_visible_and_model_free(tmp_path: Path
     engine.dispose()
 
 
-def test_typed_actions_require_approver_and_execute_once(tmp_path: Path) -> None:
+@pytest.mark.parametrize("elapsed_minutes", [0, 59, 61])
+def test_typed_actions_require_approver_and_execute_once(tmp_path: Path, elapsed_minutes: int) -> None:
     workload_source = FakeWorkloadSource(crashloop_evidence())
     remediation = FakeRemediationExecutor()
     app, settings = make_app(
@@ -14073,6 +14274,29 @@ def test_typed_actions_require_approver_and_execute_once(tmp_path: Path) -> None
             follow_redirects=False,
         )
         assert approved.status_code == 303
+        assert len(remediation.executions) == 0
+        with Session(engine) as db_session:
+            approved_record = db_session.get(RemediationAction, action_id)
+            assert approved_record.status == "approved"
+            assert approved_record.expires_at - approved_record.approved_at == timedelta(hours=1)
+            approved_record.approved_at -= timedelta(minutes=elapsed_minutes)
+            approved_record.expires_at -= timedelta(minutes=elapsed_minutes)
+            db_session.commit()
+        wrong_operator = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/execute",
+            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
+        )
+        assert wrong_operator.status_code == 403
+        executed = client.post(
+            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/execute",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            follow_redirects=False,
+        )
+        if elapsed_minutes >= 60:
+            assert executed.status_code == 409
+            assert not remediation.executions
+            return
+        assert executed.status_code == 303
         result_page = client.get(approved.headers["location"], headers={"x-forwarded-user": "ada"})
         assert "Synthetic verification completed" in result_page.text
         assert "replacement_ready" in result_page.text

@@ -1,0 +1,23 @@
+{
+  "verification": "passed",
+  "observed_at": "2026-09-09T07:21:58.197458+00:00",
+  "actor": "podpilot-breakglass",
+  "delegated_username": "podpilot-breakglass",
+  "reference": {
+    "admission": "admitted",
+    "connector_id": "a15e3fa5-cf08-4704-bc6c-3bd1da65b090",
+    "references": [
+      {
+        "kind": "Application",
+        "name": "podpilot-eval-5fb9f239b567",
+        "namespace": "openshift-gitops",
+        "uid": "5d63eec8-64b7-4476-86f0-b33818dc97c9"
+      }
+    ],
+    "url": "https://github.com/argoproj/argocd-example-apps"
+  },
+  "connection_host_unchanged": true,
+  "existing_repositories_preserved": true,
+  "audit_event_id": 9381,
+  "note": "Public lab example repository remains admitted to the existing connector; discovery does not automatically revoke previously admitted repositories."
+}

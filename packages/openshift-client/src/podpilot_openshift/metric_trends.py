@@ -844,6 +844,9 @@ class BoundedMetricTrendReader:
         self._max_points_per_series = max_points_per_series
         self._clock = clock
 
+    def endpoint_status(self) -> dict:
+        return self._source.endpoint_status()
+
     def execute(self, intent: ReadIntent) -> ReadResult:
         if intent.tool != "query_metrics" or not intent.metric:
             raise ValueError("BoundedMetricTrendReader requires a query_metrics intent.")

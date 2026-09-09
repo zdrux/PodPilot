@@ -8,6 +8,14 @@ def test_chat_message_limit_defaults_to_supported_maximum() -> None:
     assert Settings(_env_file=None).chat_max_chars == 4000
 
 
+def test_development_approval_bypass_is_explicit_and_lab_only():
+    assert not Settings(_env_file=None).development_approval_bypass
+    assert Settings(environment="sno-lab", poc_mode=True, development_approval_bypass=True).development_approval_bypass
+    for environment, poc in [("production", True), ("remote-poc", True), ("development", False)]:
+        with pytest.raises(ValidationError, match="approval bypass"):
+            Settings(environment=environment, poc_mode=poc, development_approval_bypass=True)
+
+
 def test_role_groups_are_loaded_from_json_environment_lists(monkeypatch) -> None:
     monkeypatch.setenv(
         "PODPILOT_ROLE_INVESTIGATOR_GROUPS",

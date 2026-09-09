@@ -1,6 +1,6 @@
 (() => {
   const themePreferenceKey = "podpilot-color-theme";
-  const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red"]);
+  const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red", "orange"]);
   let activeTheme = "classic";
   try {
     const savedTheme = window.localStorage.getItem(themePreferenceKey);
@@ -8,10 +8,33 @@
   } catch (_error) { /* Preference storage is optional. */ }
   document.documentElement.dataset.theme = activeTheme;
 
+  // Orange folds advanced settings; other themes retain their expanded layout.
+  const configDisclosures = Array.from(document.querySelectorAll('[data-orange-disclosure]'));
+  let disclosureTheme = null;
+  const orangeDisclosureState = new WeakMap();
+  const syncConfigDisclosures = (theme) => {
+    if (theme === disclosureTheme) return;
+    configDisclosures.forEach((details) => {
+      if (disclosureTheme === 'orange') orangeDisclosureState.set(details, details.open);
+      details.open = theme === 'orange' ? (orangeDisclosureState.get(details) ?? false) : true;
+    });
+    disclosureTheme = theme;
+  };
+  syncConfigDisclosures(activeTheme);
+  document.addEventListener('invalid', (event) => {
+    if (document.documentElement.dataset.theme !== 'orange' || !(event.target instanceof Element)) return;
+    let parent = event.target.parentElement;
+    while (parent) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+      parent = parent.parentElement;
+    }
+  }, true);
+
   const themeOptions = Array.from(document.querySelectorAll("[data-theme-option]"));
   const applyTheme = (nextTheme) => {
     const resolvedTheme = supportedThemes.has(nextTheme) ? nextTheme : "classic";
     document.documentElement.dataset.theme = resolvedTheme;
+    syncConfigDisclosures(resolvedTheme);
     themeOptions.forEach((option) => {
       option.setAttribute("aria-pressed", String(option.dataset.themeOption === resolvedTheme));
     });
@@ -427,6 +450,7 @@
       const prior = button.textContent;
       button.textContent = button.dataset.actionKind === "test"
         ? "Testing…"
+        : button.dataset.actionKind === "detect" ? "Detecting…"
         : button.dataset.actionKind === "delete" ? "Deleting…" : "Disabling…";
       try {
         const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
@@ -464,8 +488,9 @@
   document.querySelectorAll(".approve-action").forEach((button) => {
     button.addEventListener("click", async () => {
       if (!csrf || !button.dataset.actionUrl) return;
+      const prior = button.textContent;
       button.disabled = true;
-      button.textContent = "Executing and verifying…";
+      button.textContent = button.dataset.actionUrl.endsWith("/execute") ? "Executing and verifying…" : "Saving approval…";
       try {
         const response = await fetch(button.dataset.actionUrl, {
           method: "POST",
@@ -480,7 +505,7 @@
       } catch (error) {
         if (toast) { toast.textContent = error.message; toast.hidden = false; }
         button.disabled = false;
-        button.textContent = "Approve and run";
+        button.textContent = prior;
       }
     });
   });
@@ -1560,4 +1585,68 @@
       }
     });
   });
+})();
+
+// Delegation also covers charts inserted by live conversation updates.
+(() => {
+  const tooltip = document.createElement("div");
+  tooltip.className = "metric-marker-tooltip";
+  tooltip.id = "metric-marker-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  document.body.append(tooltip);
+  let active = null;
+  const markerFor = (target) => target instanceof Element ? target.closest("[data-metric-marker]") : null;
+  const hide = () => {
+    if (active) active.removeAttribute("aria-describedby");
+    active = null;
+    tooltip.hidden = true;
+  };
+  const show = (marker) => {
+    if (active && active !== marker) active.removeAttribute("aria-describedby");
+    active = marker;
+    tooltip.textContent = marker.dataset.metricMarker;
+    marker.setAttribute("aria-describedby", tooltip.id);
+    tooltip.hidden = false;
+    const box = marker.getBoundingClientRect();
+    const width = tooltip.offsetWidth;
+    const height = tooltip.offsetHeight;
+    tooltip.style.left = `${Math.max(12, Math.min(box.right + 12, window.innerWidth - width - 12))}px`;
+    tooltip.style.top = `${Math.max(12, Math.min(box.top, window.innerHeight - height - 12))}px`;
+  };
+  document.addEventListener("pointerover", (event) => {
+    const marker = markerFor(event.target);
+    if (marker) show(marker);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const marker = markerFor(event.target);
+    if (marker && !marker.contains(event.relatedTarget) && !tooltip.contains(event.relatedTarget) && document.activeElement !== marker) hide();
+  });
+  tooltip.addEventListener("pointerleave", () => {
+    if (active && document.activeElement !== active) hide();
+  });
+  document.addEventListener("focusin", (event) => {
+    const marker = markerFor(event.target);
+    if (marker) show(marker);
+  });
+  document.addEventListener("focusout", (event) => {
+    if (markerFor(event.target)) hide();
+  });
+  document.addEventListener("click", (event) => {
+    const marker = markerFor(event.target);
+    if (marker) show(marker);
+    else if (!tooltip.contains(event.target)) hide();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hide();
+    const marker = markerFor(event.target);
+    if (marker && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      show(marker);
+    }
+  });
+  window.addEventListener("resize", hide);
+  document.addEventListener("scroll", (event) => {
+    if (event.target !== tooltip) hide();
+  }, true);
 })();

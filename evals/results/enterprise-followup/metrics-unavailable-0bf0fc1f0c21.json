@@ -1,0 +1,29 @@
+{
+  "scenario_id": "metrics-unavailable",
+  "started_at": "2026-09-09T11:55:02.843699+00:00",
+  "namespace": "podpilot-eval-0bf0fc1f0c21",
+  "namespace_uid": "19cfa6c7-f333-4094-8325-2a397f9e7727",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T11:55:02.974576+00:00",
+    "namespace": "podpilot-eval-0bf0fc1f0c21",
+    "backend": "isolated unreachable test adapter",
+    "query_status": "failed",
+    "error": "Thanos Querier is temporarily unavailable.",
+    "series": null,
+    "start": "2026-09-09T11:50:02.974576+00:00",
+    "end": "2026-09-09T11:55:02.974576+00:00"
+  },
+  "model": "openai/gpt-5.6-sol",
+  "answer": "## Assessment\n\nThere is **no evidence here of workload failure**, and this result does **not justify changing the workload or cluster**.\n\n- The metrics query failed because the configured backend reported: **\u201cThanos Querier is temporarily unavailable.\u201d**\n- `series: null` means no metric series were retrieved; it does **not** mean the workload had zero activity or was healthy/unhealthy.\n- The attempted observation window was **2026-09-09 11:50:02\u201311:55:02 UTC**, collected at **11:55:02 UTC**.\n- The evidence does not establish whether the issue was in Thanos, connectivity, the isolated test adapter, authentication, or another dependency.\n\n## Missing evidence\n\nWorkload metrics, pod status/events, application logs, and backend health/connectivity evidence are absent. Therefore, workload health cannot be assessed from this result.\n\n## Recommended next step\n\nDo not make cluster changes based on this collection.\n\n1. Confirm the metrics adapter can reach and authenticate to the Thanos Querier.\n2. Check Thanos Querier health and dependency status.\n3. Retry the same five-minute query window, then a broader window if historical data should be retained.\n4. Corroborate with pod status, events, and workload logs.\n\nIf remediation to the observability stack is later indicated, first establish the specific fault and required permissions/change window. Use a reversible change, retain the prior configuration for rollback, and verify recovery by successfully querying known metrics.",
+  "scores": {
+    "review_type": "independent qualitative adapter/model-replay review",
+    "evidence": "pass",
+    "uncertainty": "pass",
+    "action_plan": "pass",
+    "note": "Distinguishes missing observation from workload health and recommends evidence collection before change. This is not an autonomous chat-tool-selection test."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T11:55:20.611145+00:00",
+  "evaluation_status": "completed"
+}

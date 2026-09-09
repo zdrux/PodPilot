@@ -22,6 +22,20 @@ the same result shape across repeated runs.
 
 ## Release Surfaces
 
+The enterprise development increment additionally requires secure-default approval
+bypass validation (PoC-only opt-in), separate approval and original-operator
+execution within one hour, expiry/drift/one-shot tests, durable attributed broker
+attempt/result events and authorized bounded audit export. Verify read-only mode
+still denies mutation and Secret reads even when development bypass is enabled.
+Inventory must use the current delegated session, show denied/partial scope,
+distinguish endpoint candidates from successful telemetry queries, and admit CI/CD
+repository references only within an existing validated provider connection.
+Timeline checks require exact Pod identity, occurrence timestamps, explicit sample
+gaps and redacted bounded log markers. Live evaluation completion is not a quality
+pass; retain independent diagnosis, uncertainty, action-plan and safety review in
+`evals/results/enterprise/review.md`. General delegated review UI, Teams delivery,
+reliable push audit emission and immutable external retention remain release work.
+
 The optional incident-response component additionally requires webhook authentication,
 repeat/out-of-order notification and recurrence tests, platform-scope denial tests,
 Secret isolation, independent connector endpoint validation, exact Argo destination
@@ -573,3 +587,22 @@ ImageStreamTag in `newTag`; do not overwrite promoted tags. The SNO binary build
 continues to publish `:latest` for iteration. In every case, wait for
 `deployment/podpilot` to become available. Alembic migrations must be
 backward-compatible until a separate, tested database rollback procedure exists.
+
+
+### Reliability follow-up gates
+
+- A same-name replacement Pod must retain distinct UID provenance; old Events
+  cannot become current-Pod timeline markers. Missing old termination status is
+  uncertainty, not permission to invent an exit reason.
+- Real GitOps image/drift fixtures must record a successful healthy source sync
+  before injecting the change, and isolate all destinations and Git source data.
+- Discovery reports API version, list operation, scope and HTTP failure status
+  when available. A deadline before the first list is incomplete coverage, never
+  an empty successful scan. Do not recommend blanket cluster-reader grants.
+- For remediation reviews, distinguish a valid rendered rollback source from a
+  broken revision/path, and require current identity, scoped inverse/preconditions
+  and actual post-change verification. Prompt instructions do not constitute a
+  generalized machine-enforced action-plan engine.
+- Report full live chat investigations separately from live adapter probes and
+  evidence-only model replays. An empty pre-fixture Loki window does not validate
+  deletion of previously ingested records by retention.

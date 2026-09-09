@@ -1,0 +1,13 @@
+{
+  "scenario_id": "discovery-denied",
+  "started_at": "2026-09-09T11:54:14.902043+00:00",
+  "namespace": "podpilot-eval-ce505edbb499",
+  "namespace_uid": "f3933c71-5d94-4d1d-9cee-f09b1659b5fa",
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T11:54:21.196199+00:00",
+  "evaluation_status": "fixture_setup_failed",
+  "scores": {
+    "result": "not_scored",
+    "reason": "Fixture setup failed before a valid investigation; cleanup recorded. See review.md."
+  }
+}

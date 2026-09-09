@@ -1,6 +1,7 @@
 import re
 
 REDACTION_PATTERNS = (
+    re.compile(r'(?i)("[^"\\]*(?:token|password|passwd|secret|api[_-]?key)[^"\\]*"\s*:\s*)"(?:\\.|[^"\\])*"'),
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[A-Za-z0-9._~+/=-]+"),
     # Shell commands commonly pass credentials as CLI option values rather than
     # key=value pairs. Commands are operator-visible diagnostics, so cover both

@@ -1,0 +1,31 @@
+{
+  "scenario_id": "loki-retention-gap",
+  "started_at": "2026-09-09T11:55:20.617144+00:00",
+  "namespace": "podpilot-eval-e759aef712f4",
+  "namespace_uid": "d24ee1d9-bd83-4e79-b9b1-1880ffbfa4eb",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T11:55:20.920844+00:00",
+    "namespace": "podpilot-eval-e759aef712f4",
+    "query_status": "success",
+    "entries": [],
+    "complete": true,
+    "start": "2026-09-07T10:55:20.920844+00:00",
+    "end": "2026-09-07T11:55:20.920844+00:00",
+    "backend": "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application",
+    "configured_retention_days": 1,
+    "limitation": "The requested window predates this fixture. This does not demonstrate deletion of previously ingested entries."
+  },
+  "model": "openai/gpt-5.6-sol",
+  "answer": "### Assessment\n\n- **No evidence of workload failure was returned**, because the query contained zero entries.\n- **This is not evidence that the workload was healthy.** The requested window was **2026-09-07 10:55\u201311:55 UTC**, while collection occurred about **48\u201349 hours later**, on **2026-09-09 11:55 UTC**.\n- The backend reports **1-day configured retention**, and the result explicitly states that the window predates the fixture. Therefore, the empty result cannot establish whether logs never existed, expired, were deleted, or were otherwise unavailable.\n- `query_status: success` and `complete: true` indicate the query completed successfully; they do not make the historical evidence complete.\n\n### Cluster-change decision\n\n**No cluster change is justified by this result alone.** In particular, there is no evidence here supporting a restart, rollout, scaling change, or logging configuration change.\n\n### Missing evidence / next steps\n\nTo determine whether a failure occurred, collect or correlate:\n\n1. Pod/container status, restart counts, termination reasons, and Kubernetes events from the incident period.\n2. Metrics, alerts, audit records, application traces, or external request/error monitoring that still covers the requested hour.\n3. Logs from downstream systems or clients that may retain data longer.\n4. Current logs only to assess present health\u2014not to infer health during the missing historical window.\n\nIf longer forensic history is an operational requirement, evaluate increasing retention separately. Preconditions should include storage-capacity, cost, compliance, and logging-backend health review. Rollback would restore the prior one-day policy, and verification should confirm that known test entries remain queryable across the newly configured retention interval.",
+  "scores": {
+    "review_type": "independent qualitative adapter/model-replay review",
+    "evidence": "pass",
+    "uncertainty": "pass",
+    "action_plan": "pass",
+    "note": "Distinguishes missing observation from workload health and recommends evidence collection before change. This is not an autonomous chat-tool-selection test."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T11:55:43.610650+00:00",
+  "evaluation_status": "completed"
+}

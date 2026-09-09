@@ -7,7 +7,8 @@
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-sidebar-38">
-  <script src="{{ url_for('static', path='/app.js') }}?v=email-table-copy-20" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/orange.css') }}?v=orange-chat-contrast-4">
+  <script src="{{ url_for('static', path='/app.js') }}?v=orange-theme-22" defer></script>
 </head>
 <body class="saas-app {% block body_class %}{% endblock %}">
   <div class="shell">
@@ -24,13 +25,13 @@
         <p class="nav-label">Workspace</p>
         {% if not ask_first %}
         <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
-          <span class="nav-icon" aria-hidden="true">⌁</span>
+          <span class="nav-icon" aria-hidden="true">⌁</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
           Cluster health
         </a>
         {% endif %}
         <div class="nav-tree {% if recent_conversations is defined and recent_conversations %}expanded{% endif %}">
           <a class="nav-link {% if request.url.path.startswith('/ask') %}active{% endif %}" href="/ask?new=1">
-            <span class="nav-icon" aria-hidden="true">✦</span>
+            <span class="nav-icon" aria-hidden="true">✦</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9H13a8.5 8.5 0 0 1 8 8v.5Z"/></svg>
             Ask PodPilot
           </a>
           {% if recent_conversations is defined and recent_conversations %}
@@ -60,7 +61,7 @@
         {% if ask_first and user is defined %}
         <div class="nav-tree cluster-nav-tree {% if workspace_clusters %}expanded{% endif %}">
           <a class="nav-link {% if request.url.path.startswith('/clusters/') or request.url.path == '/delegated/connect' %}active{% endif %}" href="/delegated/connect">
-            <span class="nav-icon" aria-hidden="true">⌘</span>
+            <span class="nav-icon" aria-hidden="true">⌘</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/></svg>
             Clusters
           </a>
           <div class="nav-subtree" aria-label="Available clusters">
@@ -85,7 +86,7 @@
         {% endif %}
         {% if incidents_enabled and user is defined and user.role.value >= 20 %}
         <div class="nav-tree {% if recent_incidents is defined and recent_incidents %}expanded{% endif %}">
-          <a class="nav-link {% if request.url.path.startswith('/incidents') %}active{% endif %}" href="/incidents"><span class="nav-icon" aria-hidden="true">⚑</span>Incidents</a>
+          <a class="nav-link {% if request.url.path.startswith('/incidents') %}active{% endif %}" href="/incidents"><span class="nav-icon" aria-hidden="true">⚑</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4m0 0c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></svg>Incidents</a>
           {% if recent_incidents is defined and recent_incidents %}
           <div class="nav-subtree" aria-label="Recent incidents">
             <div class="nav-subtree-heading">
@@ -112,13 +113,14 @@
         {% if incidents_enabled %}
         <div class="nav-tree expanded">
           <div class="nav-connector-heading">
-            <a class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span>Connectors</a>
+            <a class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" href="/settings/connectors"><span class="nav-icon" aria-hidden="true">⇄</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg>Connectors</a>
             <a class="nav-connector-add" href="/settings/connectors?new=1" aria-label="Add connector">+</a>
           </div>
           <div class="nav-subtree nav-connector-subtree" aria-label="Connector instances">
-            {% for kind, label in [('cluster','Clusters'),('github','GitHub'),('argocd','Argo CD')] %}
+            {% for kind, label in [('cluster','Incident Clusters'),('github','GitHub'),('argocd','Argo CD')] %}
             <section class="nav-connector-group" aria-labelledby="nav-connector-group-{{ kind }}">
               <div class="nav-connector-group-heading">
+                <svg class="orange-folder-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
                 <span id="nav-connector-group-{{ kind }}">{{ label }}</span>
                 <span aria-label="{{ sidebar_connector_groups[kind] | length }} {{ label }} instances">{{ sidebar_connector_groups[kind] | length }}</span>
               </div>
@@ -144,15 +146,15 @@
         </div>
         {% endif %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
-          <span class="nav-icon" aria-hidden="true">⌘</span>
+          <span class="nav-icon" aria-hidden="true">⌘</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/></svg>
           Cluster Management
         </a>
         <a class="nav-link {% if request.url.path == '/memory' %}active{% endif %}" href="/memory">
-          <span class="nav-icon" aria-hidden="true">◇</span>
+          <span class="nav-icon" aria-hidden="true">◇</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-3H4zM13 7a3 3 0 0 1 3-3h5v14h-4a4 4 0 0 0-4 3"/></svg>
           Cluster memory
         </a>
         <a class="nav-link {% if request.url.path == '/settings/model' %}active{% endif %}" href="/settings/model">
-          <span class="nav-icon" aria-hidden="true">⚙</span>
+          <span class="nav-icon" aria-hidden="true">⚙</span><svg class="orange-nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>
           Model settings
         </a>
         {% endif %}
@@ -175,6 +177,9 @@
           </button>
           <button type="button" data-theme-option="cibc-red" aria-label="Use CIBC Red theme" aria-pressed="false" title="CIBC Red">
             <img src="{{ url_for('static', path='/icons/cibc-diamond.svg') }}" alt="" aria-hidden="true">
+          </button>
+          <button type="button" data-theme-option="orange" aria-label="Use Orange theme" aria-pressed="false" title="Orange · DemandKit layout">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"></rect><path d="M9 3v18M13 8h4M13 12h4M13 16h4"></path></svg>
           </button>
         </div>
       </div>

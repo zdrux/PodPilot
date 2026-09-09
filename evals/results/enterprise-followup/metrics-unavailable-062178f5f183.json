@@ -1,0 +1,145 @@
+{
+  "scenario_id": "metrics-unavailable",
+  "started_at": "2026-09-09T12:27:42.947147+00:00",
+  "namespace": "podpilot-eval-062178f5f183",
+  "namespace_uid": "2eeb8f18-d8ca-45b3-ac4e-ccdaf1597595",
+  "application_image": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9",
+  "evaluation_kind": "live_adapter_probe_with_evidence_only_model_replay",
+  "evidence": {
+    "collected_at": "2026-09-09T12:27:46.166304+00:00",
+    "namespace": "podpilot-eval-062178f5f183",
+    "current_pod": {
+      "name": "subject-58f8c79649-6v2zp",
+      "uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+      "created_at": "2026-09-09T12:27:41+00:00",
+      "phase": "Running",
+      "containers": [
+        {
+          "allocatedResources": {
+            "cpu": "25m",
+            "memory": "32Mi"
+          },
+          "containerID": "cri-o://513002b940dc072f08ed83817119f9a3a31c910f5b0def639786d86d6b27ca53",
+          "image": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "imageID": "registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355",
+          "lastState": {
+            "terminated": {
+              "containerID": "cri-o://513002b940dc072f08ed83817119f9a3a31c910f5b0def639786d86d6b27ca53",
+              "exitCode": 17,
+              "finishedAt": "2026-09-09T12:27:43+00:00",
+              "reason": "Error",
+              "startedAt": "2026-09-09T12:27:43+00:00"
+            }
+          },
+          "name": "app",
+          "ready": false,
+          "resources": {
+            "limits": {
+              "cpu": "250m",
+              "memory": "128Mi"
+            },
+            "requests": {
+              "cpu": "25m",
+              "memory": "32Mi"
+            }
+          },
+          "restartCount": 1,
+          "started": false,
+          "state": {
+            "waiting": {
+              "message": "back-off 10s restarting failed container=app pod=subject-58f8c79649-6v2zp_podpilot-eval-062178f5f183(9a5af777-ad52-4d38-acb5-94f8c0bfaf99)",
+              "reason": "CrashLoopBackOff"
+            }
+          },
+          "user": {
+            "linux": {
+              "gid": 0,
+              "supplementalGroups": [
+                0,
+                1001340000
+              ],
+              "uid": 1001340000
+            }
+          },
+          "volumeMounts": [
+            {
+              "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount",
+              "name": "kube-api-access-t4jrs",
+              "readOnly": true,
+              "recursiveReadOnly": "Disabled"
+            }
+          ]
+        }
+      ],
+      "command": [
+        "python",
+        "-u",
+        "-c",
+        "import sys; print('Application startup failed: invalid worker configuration'); sys.exit(17)"
+      ]
+    },
+    "current_events": [
+      {
+        "reason": "Scheduled",
+        "message": "Successfully assigned podpilot-eval-062178f5f183/subject-58f8c79649-6v2zp to sno1",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:41+00:00",
+        "last": "2026-09-09T12:27:41+00:00"
+      },
+      {
+        "reason": "AddedInterface",
+        "message": "Add eth0 [10.128.0.199/23] from ovn-kubernetes",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:42+00:00",
+        "last": "2026-09-09T12:27:42+00:00"
+      },
+      {
+        "reason": "Pulled",
+        "message": "Container image \"registry.access.redhat.com/ubi9/python-312@sha256:f3959363d949bb0b7495ffb1c7e3caa36bdbbd665a602fcfee946c46c21f3355\" already present on machine and can be accessed by the pod",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:42+00:00",
+        "last": "2026-09-09T12:27:43+00:00"
+      },
+      {
+        "reason": "Created",
+        "message": "Container created",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:42+00:00",
+        "last": "2026-09-09T12:27:43+00:00"
+      },
+      {
+        "reason": "Started",
+        "message": "Container started",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:42+00:00",
+        "last": "2026-09-09T12:27:43+00:00"
+      },
+      {
+        "reason": "BackOff",
+        "message": "Back-off restarting failed container app in pod subject-58f8c79649-6v2zp_podpilot-eval-062178f5f183(9a5af777-ad52-4d38-acb5-94f8c0bfaf99)",
+        "pod_uid": "9a5af777-ad52-4d38-acb5-94f8c0bfaf99",
+        "first": "2026-09-09T12:27:44+00:00",
+        "last": "2026-09-09T12:27:45+00:00"
+      }
+    ],
+    "backend": "isolated unreachable test adapter",
+    "query_status": "failed",
+    "error": "Thanos Querier is temporarily unavailable.",
+    "series": null,
+    "start": "2026-09-09T12:22:46.166304+00:00",
+    "end": "2026-09-09T12:27:46.166304+00:00"
+  },
+  "model": "openai/gpt-5.6-sol",
+  "answer": "## Assessment\n\n**There is direct evidence of workload failure, but no evidence that the cluster needs changing.**\n\n### Supported conclusions\n\n- Pod `subject-58f8c79649-6v2zp` was scheduled successfully, received networking, accessed its image, and started its container.\n- The `app` container then exited with **code 17 / reason `Error`**.\n- Its configured command explicitly prints:\n  `Application startup failed: invalid worker configuration`\n  and calls `sys.exit(17)`.\n- At collection time the container was not started or ready, had restarted once, and was in `CrashLoopBackOff`.\n\nThis strongly localizes the observed failure to the **workload command or application configuration**, rather than scheduling, image access, or basic pod networking.\n\n### Timeline bounds\n\n- Pod created: **12:27:41 UTC**\n- Container started: **12:27:42\u201312:27:43**\n- Recorded termination: **12:27:43**, exit 17\n- Restart backoff observed: **12:27:44\u201312:27:45**\n- Evidence collected: **12:27:46**\n\nThe evidence covers only the pod\u2019s first few seconds and does not establish longer-term behavior or namespace/cluster-wide health.\n\n### Missing evidence\n\n- Application logs were not included, although the configured command itself explains the exit.\n- The owning Deployment/ReplicaSet and its configuration history are absent.\n- No sibling pod, node, or cluster-wide health data is provided.\n- Metrics could not be queried because Thanos Querier was temporarily unavailable. This is **unavailable evidence, not evidence that metrics are absent**, and does not by itself prove a cluster fault.\n\n## Recommended next step\n\nDo **not** change cluster resources or infrastructure based on this result.\n\nInstead, inspect the workload owner and correct the invalid worker configuration or startup command.\n\n**Preconditions**\n1. Identify the owning controller and capture its current manifest/revision.\n2. Confirm the intended worker settings and startup command.\n3. If available, collect current and previous-container logs before modifying the workload.\n\n**Change**\n- Update only the erroneous workload configuration/command, preferably through its deployment source rather than editing the pod directly.\n\n**Rollback**\n- Retain the current revision and revert to the last known-good workload revision if the corrected rollout fails.\n\n**Verification**\n- Replacement pods become `Ready`.\n- Containers remain running without increasing restart counts or `BackOff` events.\n- Startup logs no longer report invalid worker configuration.\n- Verify the application\u2019s service or readiness endpoint.\n- Restore/retry metrics access separately if telemetry is needed for broader validation.",
+  "scores": {
+    "review_type": "independent qualitative live-adapter/evidence-only model review",
+    "evidence": "pass",
+    "diagnosis": "pass",
+    "timeline": "pass",
+    "uncertainty": "pass",
+    "action_plan": "partial",
+    "note": "Correct current failure and telemetry uncertainty; generic replay prompt left lifecycle/rollback verification underspecified. Superseded by final replay using deployed remediation policy."
+  },
+  "cleanup": "confirmed_deleted",
+  "ended_at": "2026-09-09T12:28:18.188226+00:00"
+}

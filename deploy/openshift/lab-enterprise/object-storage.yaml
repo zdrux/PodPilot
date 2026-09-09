@@ -1,0 +1,96 @@
+# Small authenticated, TLS-protected S3 fixture for Loki's disposable lab data.
+apiVersion: v1
+kind: Service
+metadata:
+  name: podpilot-eval-s3
+  namespace: openshift-logging
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: podpilot-eval-s3-tls
+spec:
+  selector: {app: podpilot-eval-s3}
+  ports:
+    - {name: https, port: 8333, targetPort: 8334}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podpilot-eval-service-ca
+  namespace: openshift-logging
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podpilot-eval-s3
+  namespace: openshift-logging
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: lvms-vg1
+  resources:
+    requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podpilot-eval-s3
+  namespace: openshift-logging
+  labels: {app.kubernetes.io/part-of: podpilot-enterprise-eval}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: podpilot-eval-s3}
+  template:
+    metadata:
+      labels: {app: podpilot-eval-s3}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: s3
+          image: docker.io/chrislusf/seaweedfs@sha256:6a602956ac4915057199a5271343e9c86c403a561db7c21033362f6791aa29c9
+          command: [weed]
+          args: [mini, '-dir=/data', '-s3.port.https=8334', '-s3.key.file=/tls/tls.key', '-s3.cert.file=/tls/tls.crt', '-master.telemetry=false']
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: {secretKeyRef: {name: podpilot-eval-loki-s3, key: access_key_id}}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: podpilot-eval-loki-s3, key: access_key_secret}}
+            - {name: S3_BUCKET, value: loki}
+            - {name: HOME, value: /data}
+          ports: [{containerPort: 8334, name: https}]
+          readinessProbe:
+            tcpSocket: {port: https}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: podpilot-eval-s3}
+        - name: tls
+          secret: {secretName: podpilot-eval-s3-tls}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: podpilot-eval-s3
+  namespace: openshift-logging
+spec:
+  podSelector:
+    matchLabels: {app: podpilot-eval-s3}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - {protocol: TCP, port: 8334}

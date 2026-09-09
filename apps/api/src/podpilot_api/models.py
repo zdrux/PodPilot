@@ -88,6 +88,7 @@ class Cluster(Base):
     api_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     credential_key: Mapped[str | None] = mapped_column(String(253), nullable=True, unique=True)
     tags_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    inventory_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     tls_verify: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     custom_ca_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str] = mapped_column(String(64), nullable=False, default="default", index=True)

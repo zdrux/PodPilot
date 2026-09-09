@@ -3,6 +3,31 @@
 Last reviewed: 2026-09-05
 Update when: identities, permissions, model data flow, storage, telemetry, or remediation scope changes.
 
+## Enterprise development controls (2026-09-09)
+
+`PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` defaults to false and is accepted only
+with PoC mode in a development/test/SNO environment. The SNO overlay opts in.
+It bypasses human approval, not delegated identity, read-only session boundaries,
+RBAC, admission or audit. With it off, unreviewed delegated privileged operations
+fail closed. The generalized delegated approval inbox is not yet implemented.
+Legacy typed proposals support separate approval and creator-owned execution for
+one hour, with target drift checks and one-time execution; approval never runs
+the action. The development UI labels the bypass explicitly.
+
+Delegated proxy requests record durable attempts before contacting the cluster
+and accepted/rejected API responses afterward. Network interruption is recorded
+as indeterminate. Request bodies, query strings and capability URLs are excluded.
+Audit export requires Approver access, redacts sensitive detail keys, uses stable
+event IDs and bounded snapshot pagination, and records the export itself. This
+database is not yet an immutable external audit archive.
+
+Auto-detect uses the initiating user's current delegated session with no runtime
+identity fallback. Inventories expose collection limits and denied APIs. Candidate
+URLs are not automatically trusted as credential destinations. CI/CD references
+can extend an existing matching GitHub connector only for configuration admins;
+they never create or expand credentials, choose between ambiguous connectors, or
+follow cluster-supplied URLs. Unknown APIs remain visible inventory metadata.
+
 ## Trust Boundaries
 
 The optional [incident response PoC](incident-response.md) adds a separate,

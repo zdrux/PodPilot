@@ -122,6 +122,17 @@ class ThanosQueryClient:
             **kwargs,
         )
 
+    def endpoint_status(self) -> dict:
+        """Probe only this adapter destination, never arbitrary inventory URLs."""
+        result = {"kind": "metrics", "verified": False, "checked_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            self.query("vector(1)")
+            result.update(verified=True, status="query_available")
+        except Exception as exc:
+            result.update(status="unavailable", error_type=type(exc).__name__)
+        result["url"] = self._base_url if ".invalid" not in self._base_url else None
+        return result
+
     def query(self, promql: str) -> MetricSnapshot:
         payload = self._request("/api/v1/query", {"query": promql})
         result = self._validate_payload(payload, result_type="vector")

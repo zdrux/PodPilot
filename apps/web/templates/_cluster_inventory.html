@@ -1,0 +1,29 @@
+{% if selected %}
+<section class="settings-form" aria-label="Discovered cluster technologies">
+  <div class="form-actions"><h3>Discovered technologies</h3><button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/detect" data-action-kind="detect">Auto-detect</button></div>
+  {% set inventory = selected.inventory or {} %}
+  {% if inventory.observed_at %}
+  <p class="muted-copy">{{ inventory.status | capitalize }} inventory · {{ inventory.observed_at }} · {{ inventory.delegated_username }}</p>
+  <p>{% for technology in inventory.technologies %}<span class="tag">{{ technology.name }}</span> {% else %}No recognized technologies observed within this identity's access.{% endfor %}</p>
+  {% if inventory.telemetry %}
+  <h4>Investigation telemetry</h4>
+  <ul>{% for backend in inventory.telemetry %}<li><strong>{{ backend.kind | capitalize }}</strong> · {{ 'Query verified' if backend.verified else 'Unavailable to this session' }}{% if backend.url %}<br><code>{{ backend.url }}</code>{% endif %}<p class="muted-copy">{{ backend.checked_at }} · Availability does not establish historical coverage.</p></li>{% endfor %}</ul>
+  {% endif %}
+  {% if inventory.endpoints %}
+  <details><summary>Observed endpoints ({{ inventory.endpoints | length }})</summary>
+    <ul>{% for endpoint in inventory.endpoints %}<li><code>{{ endpoint.url }}</code> · {{ 'Verified' if endpoint.verified else 'Unverified candidate' }}<p class="muted-copy">{{ endpoint.limitation }}</p></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% if inventory.repositories %}
+  <details><summary>CI/CD repository references ({{ inventory.repositories | length }})</summary>
+    <ul>{% for repository in inventory.repositories %}<li><code>{{ repository.url }}</code> · {{ repository.admission | default('observed') | replace('_', ' ') }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  <details><summary>Discovery scope and limitations</summary>
+    <ul>{% for check in inventory.checks %}<li>{{ check.kind }}: {{ check.status }}{% if check.count is defined %} ({{ check.count }}){% endif %}{% if check.http_status %} · HTTP {{ check.http_status }}{% endif %}{% if check.api_version %}<span class="muted-copy"> · {{ check.verb }} {{ check.api_version }}{% if check.resource %}/{{ check.resource }}{% endif %}{% if check.scope %} · {{ check.scope | replace('_', ' ') }}{% endif %}</span>{% endif %}</li>{% endfor %}</ul>
+    {% for limitation in inventory.limitations %}<p class="muted-copy">{{ limitation }}</p>{% endfor %}
+    {% if inventory.api_extensions %}<p class="muted-copy">Additional API inventory: {{ inventory.api_extensions | join(', ') }}</p>{% endif %}
+  </details>
+  {% else %}<p class="muted-copy">Sign in to this cluster, then detect technologies and endpoint candidates using your cluster permissions.</p>{% endif %}
+</section>
+{% endif %}

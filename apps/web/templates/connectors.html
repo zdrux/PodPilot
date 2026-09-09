@@ -11,7 +11,7 @@
   </header>
 
   <div class="connector-layout connector-layout-single">
-    <section class="connector-editor" aria-labelledby="connector-editor-title">
+    <section class="connector-editor{% if not choose_kind and not active_kind %} connector-overview{% endif %}" aria-labelledby="connector-editor-title">
       <div class="connector-editor-accent" aria-hidden="true"></div>
       {% if choose_kind %}
       <header class="connector-editor-header"><div><p class="eyebrow">New connector</p><h2 id="connector-editor-title">Choose a connector type</h2><p>Each endpoint owns its credential and investigation boundary.</p></div></header>
@@ -77,8 +77,23 @@
       {% endif %}
       <p id="incident-feedback" class="incident-feedback connector-feedback" role="status"></p>
       {% else %}
-      <header class="connector-editor-header"><div><p class="eyebrow">Connector inventory</p><h2 id="connector-editor-title">Select an instance</h2><p>Choose a configured connector, or add an independent cluster, Argo CD, or GitHub endpoint.</p></div></header>
-      <div class="connector-editor-empty"><strong>Relationships are discovered during investigation</strong><p>Cluster destinations identify Argo CD Applications; their repository origins, paths, and revisions identify an eligible GitHub connector.</p><a class="button primary" href="/settings/connectors?new=1">Add connector</a></div>
+      <header class="connector-editor-header"><div><p class="eyebrow">Connector inventory</p><h2 id="connector-editor-title"><span class="connector-classic-copy">Select an instance</span><span class="connector-orange-only">Connect your tools</span></h2><p>Choose a configured connector, or add an independent cluster, Argo CD, or GitHub endpoint.</p></div></header>
+      <div class="connector-editor-empty connector-classic-copy"><strong>Relationships are discovered during investigation</strong><p>Cluster destinations identify Argo CD Applications; their repository origins, paths, and revisions identify an eligible GitHub connector.</p><a class="button primary" href="/settings/connectors?new=1">Add connector</a></div>
+      <div class="connector-orange-only connector-setup-list">
+        {% for kind, label, description, href in [
+          ('cluster', 'OpenShift', 'Cluster health, metrics, and incoming alerts.', '/settings/clusters?new=1&connector=1'),
+          ('github', 'GitHub', 'Commits and pull requests from allowed repositories.', '/settings/connectors?new=1&type=github'),
+          ('argocd', 'Argo CD', 'Deployed applications, destinations, and revisions.', '/settings/connectors?new=1&type=argocd')
+        ] %}
+        <div class="connector-setup-row">
+          <span class="connector-tool-icon" aria-hidden="true">{% if kind == 'cluster' %}<svg viewBox="0 0 24 24"><path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/></svg>{% elif kind == 'github' %}<svg viewBox="0 0 24 24"><path d="m8 5-6 7 6 7m8-14 6 7-6 7M14 3l-4 18"/></svg>{% else %}<svg viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-15-2L2 8m0-6v6h6M4 17a9 9 0 0 0 15 2l3-3m0 6v-6h-6"/></svg>{% endif %}</span>
+          <div class="connector-setup-copy"><h3>{{ label }}</h3><p>{{ description }}</p></div>
+          <span class="connector-setup-count">{{ sidebar_connector_groups[kind] | selectattr('configured') | list | length }} configured</span>
+          <a class="button" href="{{ href }}" aria-label="Add {{ label }} connector">Add <span aria-hidden="true">↗</span></a>
+        </div>
+        {% endfor %}
+        <p class="connector-setup-hint">Select an instance in the sidebar to edit or test its connection.</p>
+      </div>
       {% endif %}
     </section>
   </div>
@@ -88,7 +103,7 @@
     <div class="connector-discovery-strip" aria-label="Connector discovery status">
       {% for item in discovery_views %}
       <article class="connector-discovery-card"><div><strong>{{ item.name }}</strong><span>{{ item.kind | upper }}</span></div><span class="connector-discovery-state is-{{ item.status | replace('_','-') }}">{{ item.status | replace('_',' ') | title }}</span><small>{% if item.error %}{{ item.error }}{% elif item.kind == 'argocd' %}{{ item.application_count }} Applications{% elif item.kind == 'github' %}{{ item.repository_count }} repositories{% elif item.checks %}{{ item.checks | length }} capability checks{% else %}Run discovery to verify this connector.{% endif %}{% if item.updated_at %} · <time datetime="{{ item.updated_at.isoformat() }}">{{ item.updated_at | est_time('%b %d · %H:%M') }}</time>{% endif %}</small></article>
-      {% else %}<p class="connector-topology-empty">Add and enable a connector to begin bounded discovery.</p>{% endfor %}
+      {% else %}<p class="connector-topology-empty connector-classic-copy">Add and enable a connector to begin bounded discovery.</p>{% endfor %}
     </div>
     {% if topology %}
     <div class="connector-topology-table" role="table" aria-label="Discovered application relationships">
@@ -103,7 +118,7 @@
       </div>
       {% endfor %}
     </div>
-    {% else %}<div class="connector-topology-empty"><strong>No Application relationships discovered yet</strong><p>Save an enabled Argo CD connector or run “Test &amp; discover.” Matches will appear here without changing connector access.</p></div>{% endif %}
+    {% else %}<div class="connector-topology-empty"><div class="connector-classic-copy"><strong>No Application relationships discovered yet</strong><p>Save an enabled Argo CD connector or run “Test &amp; discover.” Matches will appear here without changing connector access.</p></div><div class="connector-orange-only connector-results-empty"><span class="connector-results-symbol" aria-hidden="true">↳</span><div><strong>No relationships discovered yet</strong><p>Save an enabled Argo CD connector, then use Test &amp; discover to find its applications.</p></div></div></div>{% endif %}
   </section>
 </div>
 <script src="{{ url_for('static', path='/incidents.js') }}?v=connector-discovery-1" defer></script>

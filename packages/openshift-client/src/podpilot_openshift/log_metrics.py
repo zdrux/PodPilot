@@ -13,7 +13,7 @@ from uuid import uuid4
 import httpx
 
 from podpilot_diagnostics.adhoc import AdHocObservation, ReadIntent, ReadResult
-from podpilot_diagnostics.redaction import redact_mapping
+from podpilot_diagnostics.redaction import redact_mapping, redact_text
 from podpilot_openshift.audit_logs import AuditLogEntries, AuditQueryError
 
 
@@ -151,6 +151,20 @@ class LokiQueryClient:
             route_discovery_tls_verify=api_tls_verify,
             **kwargs,
         )
+
+    def endpoint_status(self) -> dict:
+        """Verify a bounded label query through the authorized adapter."""
+        result = {"kind": "logging", "verified": False, "checked_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            now = datetime.now(timezone.utc).timestamp()
+            payload = self._request("/loki/api/v1/labels", {"start": str(int((now - 60) * 1e9)), "end": str(int(now * 1e9))})
+            if not isinstance(payload, dict) or payload.get("status") != "success" or not isinstance(payload.get("data"), list):
+                raise LogMetricsQueryError("Loki returned an unexpected label response.")
+            result.update(verified=True, status="query_available")
+        except Exception as exc:
+            result.update(status="unavailable", error_type=type(exc).__name__)
+        result["url"] = self._base_url if ".invalid" not in self._base_url else None
+        return result
 
     def query_log_volume(self, logql: str) -> LogVolumeSnapshot:
         payload = self._request("/loki/api/v1/query", {"query": logql})
@@ -452,6 +466,46 @@ class BoundedLogVolumeReader:
         self._source = source
         self._max_range_seconds = max_range_seconds
         self._clock = clock
+
+    def endpoint_status(self) -> dict:
+        return self._source.endpoint_status()
+
+    def container_logs(self, intent: ReadIntent) -> ReadResult:
+        end = self._clock()
+        start = end - timedelta(seconds=min(intent.range_seconds, 86400, self._max_range_seconds))
+        snapshot = self._source.query_container_logs(namespace=intent.namespace, pod=intent.name,
+            container=intent.container, start=start, end=end, limit=min(intent.limit, 200))
+        entries, remaining = [], 32768
+        for entry in snapshot.entries:
+            try:
+                at = datetime.fromtimestamp(int(entry.timestamp_ns) / 1e9, timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                continue
+            if not start <= at <= end:
+                continue
+            line = entry.line
+            try:
+                document = json.loads(line)
+                if isinstance(document, dict) and isinstance(document.get("message"), str):
+                    line = document["message"]
+            except ValueError:
+                pass
+            line = redact_text(line)[:2000]
+            encoded = line.encode("utf-8")
+            if len(encoded) > remaining:
+                break
+            remaining -= len(encoded)
+            entries.append({"timestamp": at.isoformat(), "message": line})
+        limitations = ["Retained logs may have gaps. Empty results do not prove the absence of failures.",
+                      "Queries use exact namespace/Pod/container names; retained entries without UID may span Pod replacements."]
+        if not snapshot.is_complete or len(entries) != len(snapshot.entries):
+            limitations.append("Log collection reached a result, time, or byte boundary; history is partial.")
+        return ReadResult((AdHocObservation(id=f"loki-{uuid4()}", tool="pod_logs",
+            summary=f"Collected {len(entries)} retained log entries for {intent.namespace}/{intent.name}/{intent.container}.",
+            source=f"loki:application:{intent.namespace}/{intent.name}/{intent.container}", collected_at=snapshot.collected_at,
+            data={"backend": "loki", "namespace": intent.namespace, "name": intent.name, "container": intent.container,
+                  "start": start.isoformat(), "end": end.isoformat(), "entries": entries,
+                  "tail": "\n".join(e["timestamp"] + " " + e["message"] for e in entries)}),), tuple(limitations))
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         namespace_ranking = (

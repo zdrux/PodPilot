@@ -1,0 +1,10 @@
+[
+  {"op":"test","path":"/spec/storage/deviceClasses/0/name","value":"vg1"},
+  {"op":"add","path":"/spec/storage/deviceClasses/-","value":{
+    "name":"enterprise-eval",
+    "default":false,
+    "deviceSelector":{"paths":["/dev/disk/by-id/wwn-0x6002248009fad22005e448f9e0f7e39b"],"forceWipeDevicesAndDestroyAllData":false},
+    "thinPoolConfig":{"name":"thin-pool-1","sizePercent":90,"overprovisionRatio":1},
+    "storageClassOptions":{"reclaimPolicy":"Delete","volumeBindingMode":"WaitForFirstConsumer"}
+  }}
+]

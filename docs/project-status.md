@@ -1,18 +1,66 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-06
+Last reviewed: 2026-09-09
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
-## Pending deployment: global model budgets and Incident policy
+## Current lab development release
+
+Branch `codex/demandkit-orange-restyle` is deployed as build 165, digest
+`sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9`.
+The Python/Jinja application retains its themes and adds the optional Orange
+layout, folder-style navigation, setup-screen refinements, readable chat contrast,
+and warnings above the composer. Delegated navigation does not add Cluster Health.
+
+Enterprise development adds the PoC-only approval-bypass flag, one-hour separate
+typed approval/execution semantics, attributed request auditing and portable JSON
+export, delegated Auto-detect/first-login inventory, observed telemetry URLs,
+CI/CD repository admission, and evidence-backed memory/Event/log timelines.
+OpenRouter GPT-5.6 Sol is a tested alternative profile; benchmark runs select it
+temporarily and restore the existing active profile afterward. The generalized
+delegated approval inbox, Teams delivery and reliable external audit emission are
+later release work, not enabled features.
+
+Loki, a scoped application-log collector, Istio and dedicated lab storage are
+installed for real isolated tests. The original build-161 baseline passed 907 tests.
+Thirty-two live runs across 25 distinct scenarios (24 diagnostic cases and one
+authorized Action repair, plus reruns) completed with independent reviews and
+confirmed fixture cleanup. The final 341-test API suite passed after build-161
+fixes. Delegated inventory, Thanos/Loki queries, audit pagination, migrations and
+lab dependency readiness passed final verification; the original model default
+was restored. See
+[enterprise-development-plan.md](enterprise-development-plan.md),
+[the live review](../evals/results/enterprise/review.md) and
+[lab dependency limits](../deploy/openshift/lab-enterprise/README.md).
+Older operational milestones below describe their state at the time; in
+particular, Argo CD and Loki are now present.
+
+## Reliability follow-up
+
+Build 165 strengthens target preconditions, guarded rollback, GitOps ownership,
+no-defect conclusions and reused-Pod recovery semantics. Discovery no longer
+reports deadline exhaustion as an empty success, and its scope details include
+API, requested operation and HTTP failure status. The full suite passes 910
+model-free tests. Eight additional full chat runs bring the total to 40 across
+28 distinct scenarios. Three further failure modes have live-adapter/evidence-only
+model coverage, not full chat coverage. Guarded Action repair changed only the
+authorized readiness path; independent GitOps recovery checks reached HTTP 200.
+Final deployment, telemetry queries, audit export and fixture cleanup passed;
+profile 2 was restored. Remediation requirements remain prompt policy rather
+than a generalized machine-enforced plan contract. Follow-up results
+are separate from the original baseline in
+[the reliability review](../evals/results/enterprise-followup/review.md).
+
+## Deployed: global model budgets and Incident policy
 
 The working tree adds migration `0027_model_runtime_policy`. Model settings now
 owns the shared total window and input/output budgets plus tunable Incident collection,
 retention, batching, concurrency and deadlines. Fixed object-count truncation has
 been replaced by pagination and byte/time limits; large evidence is partitioned
 for specialists. See [model-runtime-policy.md](model-runtime-policy.md). These
-changes have not been deployed; the operational history below describes earlier builds.
+changes are deployed, with migrations through `0028_cluster_inventory`; the
+operational history below describes earlier builds.
 
 ## Resume Here
 

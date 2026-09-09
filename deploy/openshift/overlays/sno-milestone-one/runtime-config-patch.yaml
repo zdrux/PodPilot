@@ -5,6 +5,7 @@ metadata:
   namespace: ai-ops
 data:
   environment: sno-lab
+  development_approval_bypass: "true"
   cluster_name: sno.192-168-0-200.sslip.io
   delegated_access_enabled: "true"
   adhoc_run_timeout_seconds: "900"
