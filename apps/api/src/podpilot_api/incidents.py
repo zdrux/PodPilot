@@ -809,21 +809,22 @@ class IncidentService:
 
     def discover_connection(self, engine, connection_id):
         reader = None
-        with Session(engine) as db:
-            row = db.get(IncidentConnection, connection_id)
-            discovery = db.get(ConnectorDiscovery, connection_id)
-            if not row or not discovery:
-                return
-            discovery.status = "running"
-            discovery.started_at = discovery.updated_at = utcnow()
-            discovery.error = None
-            db.commit()
-            cfg = _json_object(row.config_json)
-            token = self.token_for(row, db)
-            cluster = db.get(Cluster, row.cluster_id) if row.cluster_id else None
-            snapshot = {"id": row.id, "kind": row.kind, "name": row.name,
-                "cluster_id": row.cluster_id, "config": cfg, "token": token, "cluster": cluster}
+        LOGGER.info("podpilot.incident.discovery_started connection_id=%s", connection_id)
         try:
+            with Session(engine) as db:
+                row = db.get(IncidentConnection, connection_id)
+                discovery = db.get(ConnectorDiscovery, connection_id)
+                if not row or not discovery:
+                    return
+                discovery.status = "running"
+                discovery.started_at = discovery.updated_at = utcnow()
+                discovery.error = None
+                db.commit()
+                cfg = _json_object(row.config_json)
+                token = self.token_for(row, db)
+                cluster = db.get(Cluster, row.cluster_id) if row.cluster_id else None
+                snapshot = {"id": row.id, "kind": row.kind, "name": row.name,
+                    "cluster_id": row.cluster_id, "config": cfg, "token": token, "cluster": cluster}
             if not snapshot["token"]:
                 raise ValueError("credential unavailable")
             cfg = snapshot["config"]
@@ -871,13 +872,15 @@ class IncidentService:
                 reader = self.cluster_reader(snapshot["cluster"], snapshot["token"])
                 version = reader.collect("version")
                 capabilities = {"version": True}
-                checks = ["Kubernetes API identity and version read succeeded."]
+                checks = ["Kubernetes version endpoint read succeeded; protected resource checks follow."]
                 for key in ("operators", "nodes", "machine-pools"):
                     try:
                         reader.collect(key)
                         capabilities[key] = True
                         checks.append(f"{key}: available")
-                    except Exception:
+                    except Exception as exc:
+                        if isinstance(exc, IncidentReadError) and str(exc) == "Kubernetes API returned HTTP 401.":
+                            raise
                         capabilities[key] = False
                         checks.append(f"{key}: unavailable")
                 try:
@@ -889,7 +892,7 @@ class IncidentService:
                     checks.append("Argo CD Application resources: unavailable")
                 result = {"checks": checks, "cluster": {"id": snapshot["cluster"].id,
                     "name": snapshot["cluster"].name, "api_url": snapshot["cluster"].api_url,
-                    "version": version}, "capabilities": capabilities, "partial": False}
+                    "version": version}, "capabilities": capabilities, "partial": not all(capabilities.values())}
             result = clean_evidence(result, [snapshot["token"]])
             status = "partial" if result.get("partial") else "completed"
             with Session(engine) as db:
@@ -902,12 +905,20 @@ class IncidentService:
                     self.audit(db, discovery.requested_by, "connector_discovery_completed",
                         connection_id=connection_id, status=status)
                     db.commit()
-        except Exception:
+            LOGGER.info("podpilot.incident.discovery_finished connection_id=%s status=%s", connection_id, status)
+        except Exception as exc:
+            LOGGER.error("podpilot.incident.discovery_failed connection_id=%s exception_type=%s",
+                connection_id, type(exc).__name__)
             with Session(engine) as db:
                 discovery = db.get(ConnectorDiscovery, connection_id)
                 if discovery:
                     discovery.status = "error"
-                    discovery.error = "Discovery could not read the configured endpoint. Check its credential, TLS policy, scope, and availability."
+                    if isinstance(exc, CredentialStoreError):
+                        discovery.error = "Discovery could not load the saved credential from PodPilot's credential Secret. Check hosting Secret access and API logs."
+                    elif isinstance(exc, IncidentReadError) and str(exc) == "Kubernetes API returned HTTP 401.":
+                        discovery.error = "The endpoint rejected the saved credential (HTTP 401). Save a valid token and retry discovery."
+                    else:
+                        discovery.error = "Discovery could not read the configured endpoint. Check its saved credential, TLS policy, scope, and availability."
                     discovery.completed_at = discovery.updated_at = utcnow()
                     self.audit(db, discovery.requested_by, "connector_discovery_completed", "failed",
                         connection_id=connection_id)

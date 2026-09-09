@@ -13,7 +13,17 @@
     root.querySelectorAll('[data-incident-post]:not([data-incident-post-bound])').forEach(button => {
       button.dataset.incidentPostBound = 'true';
       button.addEventListener('click', async () => {
+        const connectorForm = button.closest('#incident-connection-form');
+        const isDiscovery = button.dataset.incidentPost.endsWith('/test');
+        if (isDiscovery && connectorForm?.dataset.unsaved === 'true') {
+          const feedback = document.getElementById('incident-feedback');
+          if (feedback) feedback.textContent = 'Save your changes first. Test & discover uses the saved configuration and saved token.';
+          return;
+        }
+        const originalLabel = button.textContent;
         button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        if (isDiscovery) button.textContent = 'Queuing test…';
         if (button.hasAttribute('data-incident-rerun')) preferLatestRun = true;
         try {
           const result = await post(button.dataset.incidentPost);
@@ -21,13 +31,13 @@
           if (button.hasAttribute('data-incident-rerun')) { window.location.reload(); return; }
           const feedback = document.getElementById('incident-feedback');
           if (feedback) feedback.textContent = result.checks ? result.checks.join(' · ') :
-            result.discovery_status ? 'Connector discovery queued. Results will appear automatically.' :
+            result.discovery_status ? `Discovery ${result.discovery_status}. Testing saved credentials; results update below.` :
               'Investigation queued. Live progress will appear automatically.';
         } catch (error) {
           preferLatestRun = false;
           const feedback = document.getElementById('incident-feedback');
           if (feedback) feedback.textContent = error.message;
-        } finally { button.disabled = false; }
+        } finally { button.disabled = false; button.removeAttribute('aria-busy'); button.textContent = originalLabel; }
       });
     });
   }
@@ -135,13 +145,12 @@
         if (stopped) return;
         await refresh();
         fallback();
-      }, 12000);
+      }, 4000);
     };
     if (window.EventSource) {
       source = new EventSource(eventsUrl);
       source.addEventListener('open', () => {
         if (stopped) return;
-        window.clearTimeout(fallbackTimer);
         setLiveState(getRoot(), 'live', 'Live updates');
       });
       source.addEventListener('update', refresh);
@@ -154,6 +163,8 @@
       setLiveState(getRoot(), 'reconnecting', 'Auto-updating');
       fallback();
     }
+    // Poll even when a proxy accepts an SSE connection but buffers every event.
+    fallback();
     const stop = () => {
       stopped = true;
       source?.close();
@@ -279,6 +290,8 @@
 
   const form = document.getElementById('incident-connection-form');
   if (!form) return;
+  form.addEventListener('input', () => { form.dataset.unsaved = 'true'; });
+  form.addEventListener('change', () => { form.dataset.unsaved = 'true'; });
   function visibility() {
     document.querySelectorAll('[data-connection-kinds]').forEach(section => {
       section.hidden = !section.dataset.connectionKinds.split(' ').includes(form.elements.kind.value);

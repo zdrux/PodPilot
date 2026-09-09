@@ -1607,3 +1607,40 @@ def test_connector_queue_error_reports_saved_state_without_blame_on_secret(clien
     assert 'private-cluster-token' not in response.text + caplog.text
     with Session(client.app.state.engine) as db:
         assert db.scalar(select(func.count(IncidentConnection.id))) == 1
+
+
+def test_discovery_credential_load_failure_reaches_terminal_state(client, caplog):
+    from podpilot_openshift.credentials import CredentialStoreError
+    sid = source(client)
+    service = client.app.state.incident_service
+    class Broken(Store):
+        def get(self, key=None): raise CredentialStoreError('secret-value-do-not-log')
+    service.store = Broken()
+    service.queue_discovery(client.app.state.engine, sid, 'admin')
+    service.discover_connection(client.app.state.engine, sid)
+    from podpilot_api.incident_models import ConnectorDiscovery
+    with Session(client.app.state.engine) as db:
+        state = db.get(ConnectorDiscovery, sid)
+        assert state.status == 'error' and state.completed_at is not None
+        assert 'could not load the saved credential' in state.error
+    assert 'discovery_failed' in caplog.text and 'secret-value-do-not-log' not in caplog.text
+    assert service.queue_discovery(client.app.state.engine, sid, 'admin')['queued']
+
+
+def test_discovery_public_version_does_not_validate_bad_token(client, caplog):
+    from podpilot_openshift.incidents import IncidentReadError
+    from podpilot_api.incident_models import ConnectorDiscovery
+    sid = source(client)
+    service = client.app.state.incident_service
+    class Reader:
+        def collect(self, key):
+            if key == 'version': return {'gitVersion':'v1.30'}
+            raise IncidentReadError('Kubernetes API returned HTTP 401.')
+        def close(self): pass
+    service.cluster_reader = lambda *args, **kwargs: Reader()
+    service.queue_discovery(client.app.state.engine, sid, 'admin')
+    service.discover_connection(client.app.state.engine, sid)
+    with Session(client.app.state.engine) as db:
+        state = db.get(ConnectorDiscovery, sid)
+        assert state.status == 'error'
+        assert 'HTTP 401' in state.error

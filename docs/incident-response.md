@@ -360,3 +360,13 @@ Deployment service account's get/patch access to that named Secret. Do not dump
 Secret data. A new enabled incident cluster also requires a separate webhook
 bearer token (at least 32 characters); leaving it blank retains an existing token
 but cannot initialize a new enabled connector.
+
+Discovery UI and failure handling: Test & discover uses persisted credentials;
+unsaved form edits now block that action with an instruction to save first.
+Queued/running statuses display progress indicators, and polling continues every
+four seconds even when a proxy buffers SSE without disconnecting. The API logs
+safe discovery start/completion/failure identifiers without tokens or raw errors.
+Credential loading is inside the terminal-state handler. HTTP 401 on protected
+Kubernetes reads fails discovery; public version reads alone do not validate a
+token. Missing capability reads produce partial coverage. Previously stranded
+running records from older builds are not automatically reset by this change.

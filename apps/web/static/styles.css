@@ -2970,3 +2970,6 @@ html[data-theme] .ask-page .ask-session-title { max-width: 100%; }
   .ask-page .activity-sidebar { height: 100dvh; }
   .ask-page .ask-layout:not(.activity-sidebar-collapsed) .activity-sidebar { position: absolute; right: 0; top: 0; width: min(326px, calc(100% - 44px)); z-index: 8; box-shadow: -6px 0 20px #0002; }
 }
+.connector-discovery-state.is-running::before, .connector-discovery-state.is-queued::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: discovery-spin 1s linear infinite; }
+@keyframes discovery-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .connector-discovery-state::before { animation: none; } }
