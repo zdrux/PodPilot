@@ -4,3 +4,4 @@ resources:
   - credentials.yaml
 patches:
   - path: deployment-patch.yaml
+  - path: runtime-config-patch.yaml

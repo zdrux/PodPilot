@@ -174,6 +174,12 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: adhoc_finalization_reserve_seconds
+            - name: PODPILOT_INCIDENTS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: incidents_enabled
+                  optional: true
             - name: PODPILOT_DELEGATED_ACCESS_ENABLED
               valueFrom:
                 configMapKeyRef:

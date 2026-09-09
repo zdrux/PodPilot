@@ -74,7 +74,15 @@ specialist model calls appear under model-reported uncertainty rather than colle
 
 ## Configuration
 
-Enable `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
+Set `incidents_enabled: "true"` in the `podpilot-runtime` ConfigMap after applying
+the incident-response component (credential RBAC and webhook proxy routing).
+The Deployment reads this key as `PODPILOT_INCIDENTS_ENABLED`; the base defaults
+to false and the incident-response component sets it to true. Restart the
+`podpilot` Deployment after changing the ConfigMap because this is a startup
+setting, not a live admin UI toggle. Preserve the value in your deployment
+configuration so a later manifest apply does not reset it.
+
+For standalone application runs, use `PODPILOT_INCIDENTS_ENABLED=true` after applying migrations through
 `0027_model_runtime_policy`. The default is false. Connectors configuration requires
 configuration-administrator access as well as an SRE role.
 

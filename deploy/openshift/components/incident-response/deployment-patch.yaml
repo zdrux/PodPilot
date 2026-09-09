@@ -10,8 +10,6 @@ spec:
       containers:
         - name: api
           env:
-            - name: PODPILOT_INCIDENTS_ENABLED
-              value: "true"
             - name: PODPILOT_INCIDENT_SECRET_NAMESPACE
               valueFrom:
                 fieldRef:
