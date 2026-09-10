@@ -1923,7 +1923,7 @@ def test_incident_cluster_enrollment_is_explicit_atomic_and_reversible(client):
 def test_namespace_first_investigation_expands_only_with_reason(client, synthetic):
     sid = source(client)
     body = notification()
-    body['alerts'][0]['labels'].update(namespace='checkout', podpilot_test=str(synthetic).lower())
+    body['alerts'][0]['labels'].update(namespace='checkout', deployment='web-a', podpilot_test=str(synthetic).lower())
     send(client, sid, body)
     service = client.app.state.incident_service
     calls, prompts = [], []
@@ -1945,6 +1945,8 @@ def test_namespace_first_investigation_expands_only_with_reason(client, syntheti
             prompts.append(prompt)
             if len(prompts) == 1:
                 assert calls == ['pods:checkout', 'events:checkout', 'rollouts:checkout', 'storage:checkout']
+                assert 'cluster-health' not in prompt['available_collectors']
+                assert prompt['evidence'][0]['data']['alerts'][0]['labels']['deployment'] == 'web-a'
                 return IncidentDecision(collect=['cluster-health'])
             if len(prompts) == 2:
                 assert 'cluster-health' not in calls
@@ -1982,3 +1984,41 @@ def test_specialist_reports_are_matched_by_task_not_shared_name():
     run.evidence_json = json.dumps(reports)
     view = _incident_activity_view(incident, run)
     assert [t['result'] for t in view['specialists']] == ['original 1', 'original 2', '']
+
+
+def test_model_failure_retains_provisional_findings_without_claiming_access_failure(client):
+    from podpilot_api.model_provider import ModelProviderError
+    sid = source(client)
+    send(client, sid, notification())
+    service = client.app.state.incident_service
+    rows = [{'name': f'operator-{i}', 'message': 'observed failure ' * 80} for i in range(150)]
+    class Reader:
+        def collect(self, key): return {'rows': rows}
+        def catalog(self): return {'operators': 'Operators'}
+        def close(self): pass
+    service.cluster_reader = lambda *args: Reader()
+    service.model_context = lambda engine: (ModelProfileConfig(provider_label='test',
+        base_url='https://model.invalid', chat_model='test', embedding_model=None,
+        timeout_seconds=30, max_output_tokens=2000), 'model-secret')
+    class Provider:
+        def incident_step(self, *args):
+            ctx = args[-1]
+            if ctx.get('specialist'):
+                return IncidentDecision(summary='Observed degraded operator; cause remains unverified.',
+                    evidence_ids=[ctx['evidence'][0]['id']])
+            raise ModelProviderError('private upstream response model-secret')
+    service.provider = Provider()
+    with Session(client.app.state.engine) as db:
+        rid = db.scalar(select(IncidentRun.id))
+    service.investigate(client.app.state.engine, rid)
+    with Session(client.app.state.engine) as db:
+        run = db.get(IncidentRun, rid)
+        briefing = json.loads(run.briefing_json)
+        assert run.status == 'partial'
+        assert 'Final assessment unavailable' in briefing['summary']
+        assert 'model request failed' in briefing['summary']
+        assert any('Provisional' in item for item in briefing['problems'])
+        assert 'restore missing investigation access' not in run.briefing_json
+        assert 'private upstream' not in run.briefing_json
+        assert 'model-secret' not in run.briefing_json
+        assert any('Stage:' in item for item in briefing['system_limitations'])

@@ -7,7 +7,12 @@ with configured time and round budgets; the label marks a synthetic premise,
 not a connectivity-only test. Alerts with namespace labels begin with bounded
 pods, events, rollouts, and storage reads in those namespaces. Platform collectors
 remain available, but the coordinator must include an expansion reason in its
-summary before using them; that reason is retained in activity. Without a model,
+summary before using them; that reason is retained in activity. The generic
+`cluster-health` survey is excluded from namespace-scoped runs; focused checks
+such as nodes remain available. Workload target labels (Deployment, StatefulSet,
+DaemonSet, Pod, Service, and container) are retained in the alert evidence so
+the coordinator can distinguish the target from unrelated namespace failures.
+Without a model,
 scoped runs retain namespace evidence without automatically broadening collection.
 Alerts without namespace scope retain the initial platform survey.
 
@@ -17,6 +22,12 @@ The coordinator combines reports, consolidates overlapping observations, and
 selects subsequent reads. Shared source evidence is not independent corroboration;
 unrelated health findings must remain separate from incident causes. Reports are
 matched to task IDs; ambiguous legacy reports preserve each task's saved result.
+
+If no final coordinator assessment is produced, the run retains an explicit
+fallback assessment and cited provisional specialist findings, without claiming
+a root cause. Interrupted runs record the failing stage and a safe error category;
+raw upstream exceptions are not exposed. Generic advice to restore credentials
+is not used as a substitute for a diagnosed authentication failure.
 
 The browser shell's CSS and JavaScript URLs carry a shared content fingerprint
 computed at application startup. Restart/redeploy after changing static files.

@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from podpilot_diagnostics.incident_policy import IncidentPolicy
-from podpilot_api.model_provider import incident_evidence_batches, _estimated_serialized_tokens
+from podpilot_api.model_provider import incident_evidence_batches, _estimated_serialized_tokens, ModelProviderError
 from datetime import datetime, timezone, timedelta
 from threading import Lock
 from uuid import uuid4
@@ -1005,9 +1005,10 @@ class IncidentService:
             }],
             "events": [],
         }
-        briefing = {"summary": "Investigation could not establish a cause.", "hypotheses": [],
-                    "next_steps": ["Review available evidence and restore missing investigation access."], "evidence_ids": []}
+        briefing = {"summary": "Investigation ended before a final assessment was produced.", "hypotheses": [],
+                    "next_steps": ["Review retained evidence and the run limitations before rerunning the investigation."], "evidence_ids": []}
         status = "completed"
+        final_assessment_received = False
 
         def write_activity_locked():
             activity["updated_at"] = utcnow().isoformat()
@@ -1259,11 +1260,11 @@ class IncidentService:
                 limitations.append("Monitoring endpoint is not configured; platform metric trends are unavailable.")
             if not cluster.tls_verify and not cluster.is_system:
                 limitations.append("Kubernetes TLS certificate and hostname verification is disabled for this cluster.")
-            coordinator_activity("Reading the alert and current ClusterOperator health", phase="Initial assessment")
+            coordinator_activity("Reading the alert and its resource scope", phase="Initial assessment")
             record("Alertmanager notification", {"alerts": [{
                 "status": a["status"], "starts_at": a["startsAt"],
                 "labels": {k:v for k,v in a["labels"].items() if k in {
-                    "alertname", "severity", "namespace", "name", "pod", "node", "instance", "job", "reason", "podpilot_test", "podpilot_simulation"}},
+                    "alertname", "severity", "namespace", "name", "pod", "deployment", "statefulset", "daemonset", "container", "service", "node", "instance", "job", "reason", "podpilot_test", "podpilot_simulation"}},
                 "summary": a.get("annotations", {}).get("summary", ""),
             } for a in alert_snapshot.values()], "total_alerts": len(alert_snapshot),
                 "partial": False})
@@ -1398,6 +1399,10 @@ class IncidentService:
                 status = "partial"
             else:
                 consumed = set(initial_consumed)
+                if alert_namespaces:
+                    # A generic cluster survey expands into every unhealthy workload.
+                    # Keep targeted platform checks available instead.
+                    consumed.add("cluster-health")
                 available = {k: v for k, v in reader.catalog().items() if k not in consumed}
                 max_rounds = policy.max_rounds
                 for step in range(max_rounds):
@@ -1419,7 +1424,7 @@ class IncidentService:
                             "Investigate this admitted critical Kubernetes or OpenShift incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
                         ),
                         "scope": {"initial_namespaces": alert_namespaces, "strategy": "namespace-first" if alert_namespaces else "platform"},
-                        "scope_guidance": "Investigate the alert scope first. Expand to platform or other namespaces only to explain an observed dependency, symptom, or collection gap; state the reason in summary when requesting broader collectors. Keep unrelated health findings separate from incident causes. Consolidate overlapping specialist reports; shared source evidence is not independent corroboration.",
+                        "scope_guidance": "Prioritize the named workload in the alert labels; other failures in its namespace are separate unless evidence connects them. Investigate the alert scope first. Expand to platform or other namespaces only to explain an observed dependency, symptom, or collection gap; state the reason in summary when requesting broader collectors. Keep unrelated health findings separate from incident causes. Consolidate overlapping specialist reports; shared source evidence is not independent corroboration.",
                         "evidence": coordination_evidence,
                         "limitations": _dedupe_limitations([
                             *_evidence_limitations(evidence), *limitations,
@@ -1430,6 +1435,7 @@ class IncidentService:
                         "specialist_reports": specialist_reports})
                     if not decision.collect:
                         coordinator_activity("Validating citations and preparing the operator briefing", phase="Final assessment")
+                        final_assessment_received = True
                         briefing = clean_evidence(decision.model_dump(exclude={"collect"}), secrets)
                         valid_ids = {e["id"] for e in evidence}
                         if not decision.evidence_ids or set(decision.evidence_ids)-valid_ids:
@@ -1502,12 +1508,32 @@ class IncidentService:
                                 coordination_evidence.append(source_item)
                     for source_item in log_items[slots:]:
                         limitations.append(f"Pod log specialist report limit reached; {source_item['id']} remains in retained evidence.")
-        except Exception:
+        except Exception as exc:
             status = "partial" if evidence else "failed"
-            limitations.append("Investigation interrupted by an unavailable credential, API, or model. Inspect connection tests and retained evidence.")
+            stage = str(activity.get("current_work") or "investigation")
+            if isinstance(exc, ModelProviderError):
+                reason = "The model request failed or returned an invalid response."
+            elif isinstance(exc, TimeoutError):
+                reason = "The investigation time budget expired."
+            elif isinstance(exc, IncidentReadError):
+                reason = _collector_failure_reason(exc)
+            else:
+                reason = "An internal investigation operation failed."
+            limitations.append(f"{reason} Stage: {stage}")
+            briefing["summary"] = "Final assessment unavailable. " + reason
         finally:
             if reader:
                 reader.close()
+        if not final_assessment_received and evidence:
+            provisional = [item for item in evidence if str(item.get("source", "")).endswith(" specialist")]
+            briefing["problems"] = [briefing["summary"]]
+            for item in provisional[:5]:
+                summary = _activity_result(item.get("source"), item.get("data"))
+                if summary:
+                    briefing["problems"].append(f"Provisional {item['source']} finding [{item['id']}]: {summary}")
+            briefing["evidence_ids"] = [item["id"] for item in provisional[:5]] or [evidence[0]["id"]]
+            briefing["next_steps"] = ["Review the retained evidence and reported interruption or budget limit, then rerun the investigation. No final root-cause assessment was produced."]
+            limitations.append("Fallback assessment: retained specialist findings have not been synthesized into a final coordinator conclusion.")
         model_limitations = _dedupe_limitations([
             *_evidence_limitations(evidence, model_authored=True),
             *briefing.get("limitations", []),
