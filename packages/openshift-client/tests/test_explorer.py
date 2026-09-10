@@ -556,6 +556,22 @@ def test_adaptive_discovery_returns_policy_filtered_resource_coordinates():
     assert resources[0]["verbs"] == ["get", "list", "watch"]
 
 
+def test_inventory_tool_returns_timestamped_namespace_evidence_and_limits():
+    def get_resource(**coordinates):
+        def get(**kwargs):
+            return {"items": [{"metadata": {"name": "dynatrace", "uid": "ns-1"}}]
+                    if coordinates["kind"] == "Namespace" else [], "metadata": {}}
+        return SimpleNamespace(get=get)
+    dynamic = SimpleNamespace(resources=SimpleNamespace(search=lambda: [], get=get_resource))
+    target = KubernetesReadOnlyExplorer(dynamic_client=dynamic, core_api=FakeCore())
+    result = target.execute(ReadIntent(tool="discover_inventory", discovery_query="dynatrace"))
+    observation = result.observations[0]
+    assert observation.tool == "discover_inventory" and observation.collected_at
+    assert observation.data["objects"][0]["name"] == "dynatrace"
+    assert observation.data["absence_supported"] is False
+    assert result.limitations
+
+
 def test_watch_is_bounded_and_projects_events_without_secret_fields():
     resource = FakeResource([])
     watcher = FakeWatch()

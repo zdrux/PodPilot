@@ -1409,7 +1409,7 @@ def _agent_final_answer_quality_issue(content: str) -> str | None:
     if set(payload) == {"toolset"}:
         return "toolset_arguments_as_answer"
     if payload.get("name") in {
-        "execute_shell", "discover_resources", "pod_health_summary",
+        "execute_shell", "discover_resources", "discover_inventory", "pod_health_summary",
         "http_probe", "query_audit_events", "query_metrics", "pod_logs",
     } and "arguments" in payload:
         return "tool_call_as_answer"
@@ -6230,6 +6230,8 @@ def _read_progress_message(intent) -> str:
         return "Reviewing delegated workload permissions across all namespaces."
     if intent.tool == "discover_resources":
         return f"Looking for readable OpenShift APIs related to {intent.discovery_query}."
+    if intent.tool == "discover_inventory":
+        return f"Checking namespaces, workloads and custom resources for {intent.discovery_query}."
     if intent.tool == "http_probe":
         verification = " without certificate verification" if not intent.tls_verify else ""
         return f"Testing {intent.method} connectivity to {_display_probe_url(intent.url)}{verification}."
@@ -6356,6 +6358,7 @@ def _investigation_capability_ledger(
 
     tools = [
         tool_state("discover_resources"),
+        tool_state("discover_inventory"),
         tool_state("get_resource"),
         tool_state("search_resources"),
         tool_state("pod_health_summary"),
@@ -9774,7 +9777,7 @@ async def _collect_bounded_cluster_reads(
                 "mode": "candidate_selection",
                 "direct_intents_allowed": True,
                 "direct_intent_tools": [
-                    "discover_resources", "get_resource",
+                    "discover_resources", "discover_inventory", "get_resource",
                     "search_resources",
                 ],
                 "remaining_reads": remaining_reads,
@@ -10107,7 +10110,7 @@ async def _collect_bounded_cluster_reads(
                     f"outcome={intent.audit_outcome} range={intent.range_seconds}s"
                     if intent.tool == "query_audit_events" else
                     f"discovery query={intent.discovery_query}"
-                    if intent.tool == "discover_resources" else
+                    if intent.tool in {"discover_resources", "discover_inventory"} else
                     "delegated cluster-wide workload authorization matrix"
                     if intent.tool == "access_review_summary" else
                     f"{intent.tool} scope={intent.namespace or 'cluster'} "
@@ -11074,6 +11077,7 @@ def create_app(
                 "and after any `oc get` NoMatch error. Search using the operator's original concept "
                 "when possible, then use only exact resource coordinates returned by discovery. "
                 "API discovery does not prove the delegated identity may read matching objects. Use "
+                "discover_inventory first for software presence; retain observed CR/namespace evidence regardless of labels. Use "
                 "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. "
@@ -11686,7 +11690,7 @@ def create_app(
                     ),
                 )
                 if tool_call.name in {
-                    "discover_resources", "pod_health_summary",
+                    "discover_resources", "discover_inventory", "pod_health_summary",
                     "http_probe", "query_audit_events", "query_metrics", "pod_logs",
                 }:
                     collector_cluster_id = ""

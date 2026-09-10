@@ -1025,7 +1025,9 @@ class KubernetesReadOnlyExplorer:
         from podpilot_openshift.technology_discovery import discover_technologies
 
         self._ensure_clients()
-        return discover_technologies(self._dynamic)
+        if self._catalog is None:
+            self._catalog = ResourceCatalog(self._dynamic.resources.search)
+        return discover_technologies(self._dynamic, catalog=self._catalog)
 
     def _ensure_clients(self) -> None:
         if self._dynamic is not None and self._core is not None:
@@ -1041,6 +1043,7 @@ class KubernetesReadOnlyExplorer:
 
     def resource_catalog(
         self, *, query: str = "", limit: int = 120, refresh: bool = False,
+        matches_only: bool = False,
     ) -> list[dict[str, object]]:
         self._ensure_clients()
         assert self._dynamic is not None
@@ -1052,7 +1055,7 @@ class KubernetesReadOnlyExplorer:
                 if callable(invalidate_discovery):
                     invalidate_discovery()
                 self._catalog.invalidate()
-            return self._catalog.prompt_entries(query=query, limit=limit)
+            return self._catalog.prompt_entries(query=query, limit=limit, matches_only=matches_only)
         except ResourceCatalogError as exc:
             raise ReadOnlyExplorerError(str(exc)) from exc
         except Exception as exc:
@@ -1064,6 +1067,8 @@ class KubernetesReadOnlyExplorer:
         try:
             if intent.tool == "discover_resources":
                 return self._discover_resources(intent)
+            if intent.tool == "discover_inventory":
+                return self._discover_inventory(intent)
             if intent.tool == "http_probe":
                 return self._http_probe.execute(intent)
             if intent.tool == "query_audit_events":
@@ -1487,10 +1492,29 @@ class KubernetesReadOnlyExplorer:
             raise ReadOnlyExplorerError("A namespace is required to read that namespaced resource by name.")
         return api_version, kind, namespaced, namespace, name
 
+    def _discover_inventory(self, intent: ReadIntent) -> ReadResult:
+        from podpilot_openshift.technology_discovery import discover_technologies
+
+        self._ensure_clients()
+        if self._catalog is None:
+            self._catalog = ResourceCatalog(self._dynamic.resources.search)
+        data = discover_technologies(
+            self._dynamic, catalog=self._catalog, query=str(intent.discovery_query or ""),
+            result_limit=intent.limit, max_objects=500,
+        )
+        return ReadResult(observations=(AdHocObservation(
+            id=f"cluster-inventory-{uuid4()}", tool="discover_inventory",
+            summary=f"Observed {data['matched_count']} matching inventory objects; coverage {data['status']}.",
+            source="kubernetes:technology-inventory", collected_at=datetime.now(timezone.utc),
+            data=data,
+        ),), limitations=tuple(data["limitations"]))
+
     def _discover_resources(self, intent: ReadIntent) -> ReadResult:
         entries = self.resource_catalog(
-            query=str(intent.discovery_query or ""), limit=min(intent.limit, 50)
+            query=str(intent.discovery_query or ""), limit=200, matches_only=True,
         )
+        matched_count = len(entries)
+        entries = entries[:min(intent.limit, 50)]
         collected_at = datetime.now(timezone.utc)
         return ReadResult(observations=(AdHocObservation(
             id=f"cluster-discovery-{uuid4()}",
@@ -1506,6 +1530,11 @@ class KubernetesReadOnlyExplorer:
                 "query": str(intent.discovery_query or "")[:253],
                 "resources": entries,
                 "count": len(entries),
+                "matched_count": matched_count,
+                "truncated": matched_count > len(entries) or matched_count == 200,
+                "evidence_type": "api_resource_types_only",
+                "absence_supported": False,
+                "limitations": ["API discovery does not search namespaces or object instances and cannot establish software absence."],
                 "policy": (
                     "dynamic API discovery with sensitive resource types excluded; "
                     "object authorization is not implied"

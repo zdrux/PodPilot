@@ -151,7 +151,7 @@ class ReadIntent(BaseModel):
     """A model-selected request whose final scope is validated by normal code."""
 
     tool: Literal[
-        "discover_resources", "get_resource", "list_resources", "search_resources",
+        "discover_resources", "discover_inventory", "get_resource", "list_resources", "search_resources",
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
         "query_audit_events", "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
@@ -461,13 +461,15 @@ class ReadIntent(BaseModel):
             self.audit_search_until_limit,
         )):
             raise ValueError("audit fields are valid only for query_audit_events")
-        if self.tool == "discover_resources":
+        if self.tool in {"discover_resources", "discover_inventory"}:
             if not self.discovery_query:
-                raise ValueError("discover_resources requires a discovery_query")
+                raise ValueError(f"{self.tool} requires a discovery_query")
             if any((self.resource, self.api_version, self.kind, self.namespace, self.name)):
-                raise ValueError("discover_resources accepts only a discovery_query and limit")
+                raise ValueError(f"{self.tool} accepts only a discovery_query and limit")
+            if self.tool == "discover_inventory" and any((self.label_selector, self.match_field, self.match_value)):
+                raise ValueError("discover_inventory does not accept selectors or field filters")
         elif self.discovery_query:
-            raise ValueError("discovery_query is valid only for discover_resources")
+            raise ValueError("discovery_query is valid only for discover_resources or discover_inventory")
         health_summary_tools = {
             "pod_health_summary", "node_health_summary",
             "cluster_operator_health_summary", "machine_health_summary",

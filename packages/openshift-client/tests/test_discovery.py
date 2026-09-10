@@ -218,3 +218,13 @@ def test_policy_denies_sensitive_descriptor_even_when_get_is_advertised() -> Non
     )
 
     assert resource_is_safe(descriptor) is False
+
+
+def test_vendor_group_matches_before_limit_and_strict_search_has_no_unrelated_filler():
+    catalog = ResourceCatalog(lambda: [
+        *[resource(f"aaa{i}", "example.io/v1", f"Aaa{i}") for i in range(30)],
+        resource("dynakubes", "dynatrace.com/v1beta5", "DynaKube"),
+    ])
+    assert catalog.prompt_entries(query="dynatrace", limit=1)[0]["kind"] == "DynaKube"
+    assert len(catalog.prompt_entries(query="dynatrace", matches_only=True)) == 1
+    assert catalog.prompt_entries(query="nonexistentvendor", matches_only=True) == []

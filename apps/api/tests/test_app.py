@@ -678,8 +678,10 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
 
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
 @pytest.mark.parametrize("approval_bypass", [False, True])
+@pytest.mark.parametrize("discovery_tool", ["discover_resources", "discover_inventory"])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, approval_bypass: bool,
+    discovery_tool: str,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
     constructor_threads: list[int] = []
@@ -760,13 +762,13 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         "tool_calls": [{
                             "id": "discover-clf", "type": "function",
                             "function": {
-                                "name": "discover_resources", "arguments": arguments,
+                                "name": discovery_tool, "arguments": arguments,
                             },
                         }],
                     },
                     content=None,
                     tool_calls=(AgentToolCall(
-                        id="discover-clf", name="discover_resources", arguments=arguments,
+                        id="discover-clf", name=discovery_tool, arguments=arguments,
                     ),),
                 )
             if self.calls == 2:
@@ -959,7 +961,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     assert explorer_kwargs[0]["log_metric_reader"] is not None
     assert explorer_kwargs[0]["audit_reader"] is not None
     assert [intent.tool for intent in explorer_intents] == [
-        "discover_resources", "query_metrics", "query_audit_events",
+        discovery_tool, "query_metrics", "query_audit_events",
     ]
     assert explorer_intents[0].discovery_query == "cluster log forwarder"
     assert telemetry_calls == [

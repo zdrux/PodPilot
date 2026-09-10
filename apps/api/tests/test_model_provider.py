@@ -419,7 +419,7 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call() -> Non
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "discover_resources", "pod_health_summary", "http_probe",
+        "execute_shell", "discover_resources", "discover_inventory", "pod_health_summary", "http_probe",
         "query_audit_events", "pod_logs", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]

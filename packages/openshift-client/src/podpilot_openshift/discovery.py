@@ -212,7 +212,7 @@ class ResourceCatalog:
         )
 
     def prompt_entries(
-        self, *, query: str = "", limit: int = 120
+        self, *, query: str = "", limit: int = 120, matches_only: bool = False
     ) -> list[dict[str, object]]:
         entries = self.entries()
         counts: dict[str, int] = {}
@@ -222,7 +222,8 @@ class ResourceCatalog:
         query_terms = _search_terms(query)
 
         def score(item: ResourceDescriptor) -> tuple[int, int, str, str]:
-            aliases = (item.name, item.kind, item.singular_name or "", *item.short_names)
+            group = item.api_version.split("/", 1)[0] if "/" in item.api_version else ""
+            aliases = (item.name, item.kind, group, item.singular_name or "", *item.short_names)
             exact = any(
                 alias and (
                     _normalized_words(alias) in normalized_query
@@ -235,6 +236,8 @@ class ResourceCatalog:
             ))
             return (0 if exact else 1 if overlap else 2, -overlap, item.name, item.api_version)
 
+        if matches_only and normalized_query:
+            entries = tuple(item for item in entries if score(item)[0] < 2)
         selected = sorted(entries, key=score)[: max(1, min(limit, 200))]
         return [
             item.to_prompt_dict(qualified=counts[item.name] > 1)

@@ -5,6 +5,14 @@ Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
+## Unreleased inventory reliability
+
+Unreleased inventory reliability: Ask now has delegated `discover_inventory`, sharing
+Auto-detect's collector with namespace, workload and discovered custom-resource
+instance evidence. API lookup matches vendor groups and removes unrelated search
+filler. Coverage and absence limitations are explicit. See `docs/operations.md`.
+These inventory changes have not been deployed.
+
 ## Unreleased Secret policy update
 
 Delegated broker Secret access now defaults to allowed under the operator's RBAC.

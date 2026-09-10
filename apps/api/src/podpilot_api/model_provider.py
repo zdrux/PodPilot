@@ -434,7 +434,7 @@ class AuthoredObjectRead(BaseModel):
     """Small model-authored object read; the broker still resolves and authorizes it."""
 
     tool: Literal[
-        "discover_resources", "get_resource", "search_resources"
+        "discover_resources", "discover_inventory", "get_resource", "search_resources"
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -1559,6 +1559,7 @@ _ADHOC_PLANNER_INSTRUCTIONS = (
     "When read_candidates is empty, candidate_ids must be empty and intents is a discovery escape "
     "hatch. Use only tools listed in tool_policy.available and exact coordinates from the operator, "
     "observations, or compact resource_catalog. Discovery results must be followed on a later round. "
+    "Use discover_inventory for software presence; empty results do not prove absence and presence does not prove health. "
     "Use discover_resources for an unknown API; get_resource for an exact object; search_resources "
     "with match_field and match_value for an exact "
     "object-field search; pod_logs only with a supplied candidate; query_metrics only with a metric "
@@ -1589,7 +1590,7 @@ _ADHOC_CANDIDATE_PLANNER_INSTRUCTIONS = (
     "from completed_reads. Author an object read only for novel evidence not represented by a relevant "
     "supplied action. When any supplied action exactly names the needed object, return its ID and do not "
     "author that object again. You may author up to three "
-    "object_reads using only discover_resources, get_resource, or search_resources as named in "
+    "object_reads using only discover_inventory, discover_resources, get_resource, or search_resources as named in "
     "object_read_policy. The generic list_resources helper is not available. "
     "Use the supplied resource_catalog for exact resource types. A named GET requires an exact known name "
     "and namespace; otherwise discover the API or use a bounded field search first. "
@@ -2634,6 +2635,13 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ),
             ("audit_operation_scope", "audit_outcome"),
         )
+        inventory_tool = collector_tool(
+            "discover_inventory",
+            "Find technology evidence by namespace, workload name/image/label, and discovered API instances. "
+            "Use a concise discovery_query. Empty/partial results do not prove absence; presence does not prove health.",
+            ("discovery_query", "limit"),
+            ("discovery_query",),
+        )
         logs_tool = collector_tool(
             "pod_logs",
             "Read exact namespace/Pod/container logs. log_backend=kubernetes supports previous=true and "
@@ -2697,6 +2705,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         tools = [
             shell_tool,
             discovery_tool,
+            inventory_tool,
             pod_health_tool,
             http_probe_tool,
             audit_tool,
@@ -3125,7 +3134,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             return detail
         return (
             f"{detail} ReadIntent cross-field rules: use only fields belonging to the selected "
-            "tool; search_resources requires match_field and match_value; discover_resources "
+            "tool; search_resources requires match_field and match_value; discover_resources or discover_inventory "
             "requires discovery_query and no resource coordinates; http_probe requires an "
             "absolute http/https url; query_metrics requires a catalog metric, metric_scope, "
             "and exact scope coordinates; pod_logs uses a supplied candidate_id when candidates "

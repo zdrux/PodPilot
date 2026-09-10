@@ -9,6 +9,32 @@ bounded delegated queries and displayed with their resolved URLs. Other observed
 Service/Route URLs remain unverified candidates and are not automatically selected
 as credential-bearing telemetry backends.
 
+Ask exposes `discover_inventory` with a concise technology name in `discovery_query`
+and a returned-object `limit`. This is a fresh, identity-scoped read using the same
+collector as Auto-detect; it does not reuse another user's stored inventory.
+It combines namespace names, selected standard application labels, workload images,
+and instances of matching dynamically discovered APIs. For example, `dynatrace`
+matches the `dynatrace.com` API group and lists its served DynaKube resource without
+guessing an API version or requiring permission to list CRD objects. Matching custom
+resources are read first; matching observed namespaces receive prioritized workload
+reads. Unknown vendor names work through API-group/name matching as well.
+
+Each resource check records API, scope, count and read/denied/unavailable/partial/
+time-limit status. Collection has a 45-second budget, per-list request timeouts up
+to five seconds, pages of 50, and at most 500 scanned objects per resource/scope in
+Ask (200 in Auto-detect). Dynamic type expansion is capped at 30 types and prioritized
+namespace expansion at ten namespaces. The response includes timestamped object
+coordinates, evidence categories and explicit limitations; arbitrary CR spec/status,
+annotations, environment variables and Secret contents are not inventory evidence.
+Use exact subsequent reads for configuration or health. `absence_supported=false`
+means even a completed bounded scan cannot prove software is uninstalled.
+Model instructions require this distinction; they are not a deterministic validator
+of every free-text answer.
+
+`discover_resources` remains API-type discovery only. It now matches API groups,
+returns only matching types, and reports result truncation. A registered API does
+not prove an instance exists; an existing namespace or CR does not prove health.
+
 The portable deployment defaults `development_approval_bypass` to false. Only
 the disposable SNO overlay enables it. Its value maps to
 `PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` for the API and migration container;

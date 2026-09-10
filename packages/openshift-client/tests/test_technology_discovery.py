@@ -66,8 +66,9 @@ def test_repeating_pagination_token_is_bounded_and_partial():
         get=lambda **kwargs: SimpleNamespace(get=get),
     )))
     assert result["status"] == "partial"
-    assert len(calls) == 2 * len(result["checks"])
-    assert all(check["status"] == "partial" for check in result["checks"])
+    list_checks = [check for check in result["checks"] if check["verb"] == "list"]
+    assert len(calls) == 2 * len(list_checks)
+    assert all(check["status"] == "partial" for check in list_checks)
 
 
 def test_deadline_before_first_list_is_unknown_not_an_empty_success(monkeypatch):
@@ -79,5 +80,103 @@ def test_deadline_before_first_list_is_unknown_not_an_empty_success(monkeypatch)
     dynamic = SimpleNamespace(resources=SimpleNamespace(get=lambda **kw: SimpleNamespace(get=forbidden_call)))
     result = discover_technologies(dynamic, timeout_seconds=2)
     assert result["status"] == "partial"
-    assert result["checks"][0]["status"] == "time_limit"
+    assert next(c for c in result["checks"] if c["verb"] == "list")["status"] == "time_limit"
     assert not any(c["status"] == "read" for c in result["checks"])
+
+
+def test_dynakube_instances_discovered_without_crd_permission_or_pod_labels():
+    from podpilot_openshift.discovery import ResourceCatalog
+    catalog = ResourceCatalog(lambda: [SimpleNamespace(
+        name="dynakubes", group_version="dynatrace.com/v1beta5", kind="DynaKube",
+        namespaced=True, verbs=["get", "list"],
+    )])
+    calls = []
+    def resource_get(*, api_version, kind):
+        if kind == "CustomResourceDefinition":
+            raise ApiException(status=403)
+        def get(**kwargs):
+            calls.append((api_version, kind, kwargs))
+            items = {
+                "DynaKube": [{"metadata": {"name": "dynakube", "namespace": "dynatrace", "uid": "cr-1"},
+                              "spec": {"token": "must-not-leak", "apiUrl": "https://private.example"},
+                              "status": {"phase": "Deploying"}}],
+                "Namespace": [{"metadata": {"name": "dynatrace"}}],
+                "DaemonSet": [{"metadata": {"name": "agent", "namespace": "dynatrace"},
+                               "spec": {"template": {"spec": {"containers": [{"image": "dynatrace/oneagent:1"}]}}}}],
+            }.get(kind, [])
+            return {"items": items, "metadata": {}}
+        return SimpleNamespace(get=get, namespaced=kind != "Namespace")
+    result = discover_technologies(SimpleNamespace(resources=SimpleNamespace(get=resource_get)),
+                                   query="dynatrace", catalog=catalog)
+    assert calls[0][:2] == ("dynatrace.com/v1beta5", "DynaKube")
+    assert {item["kind"] for item in result["objects"]} == {"DynaKube", "Namespace", "DaemonSet"}
+    assert result["objects"][0]["evidence_type"] == "custom_resource"
+    assert result["technologies"][0]["id"] == "dynatrace"
+    assert result["status"] == "partial" and result["absence_supported"] is False
+    assert "must-not-leak" not in str(result) and "private.example" not in str(result)
+    assert any(kwargs.get("namespace") == "dynatrace" for _, _, kwargs in calls)
+
+
+def test_unknown_vendor_and_paginated_inventory_reports_truncation():
+    from podpilot_openshift.discovery import ResourceCatalog
+    catalog = ResourceCatalog(lambda: [SimpleNamespace(
+        name="widgets", group_version="newvendor.example/v1", kind="Widget",
+        namespaced=True, verbs=["list"],
+    )])
+    def resource_get(*, api_version, kind):
+        return SimpleNamespace(get=lambda **kwargs: {
+            "items": [{"metadata": {"name": "one"}}, {"metadata": {"name": "two"}}]
+                     if kind == "Widget" else [],
+            "metadata": {"continue": "more"} if kind == "Widget" else {},
+        })
+    result = discover_technologies(SimpleNamespace(resources=SimpleNamespace(get=resource_get)),
+                                   query="newvendor", catalog=catalog, max_objects=2, result_limit=1)
+    assert result["objects"][0]["kind"] == "Widget"
+    assert result["matched_count"] == 2 and len(result["objects"]) == 1
+    assert result["status"] == "partial" and result["absence_supported"] is False
+    assert any(c.get("reason") == "result_limit" for c in result["checks"])
+
+
+def test_empty_inventory_does_not_claim_absence():
+    from podpilot_openshift.discovery import ResourceCatalog
+    dynamic = SimpleNamespace(resources=SimpleNamespace(
+        get=lambda **_: SimpleNamespace(get=lambda **kw: {"items": [], "metadata": {}})))
+    result = discover_technologies(dynamic, query="dynatrace", catalog=ResourceCatalog(lambda: []))
+    assert result["status"] == "complete"
+    assert result["objects"] == [] and result["absence_supported"] is False
+
+
+def test_namespace_scoped_cr_permission_recovers_from_cluster_wide_denial():
+    from podpilot_openshift.discovery import ResourceCatalog
+    catalog = ResourceCatalog(lambda: [SimpleNamespace(
+        name="dynakubes", group_version="dynatrace.com/v1beta5", kind="DynaKube",
+        namespaced=True, verbs=["list"],
+    )])
+    def resource_get(*, api_version, kind):
+        def get(**kwargs):
+            if kind == "DynaKube" and not kwargs.get("namespace"):
+                raise ApiException(status=403)
+            return {"items": [{"metadata": {"name": "dynatrace"}}] if kind == "Namespace" else
+                    [{"metadata": {"name": "agent", "namespace": "dynatrace"}}] if kind == "DynaKube" else [],
+                    "metadata": {}}
+        return SimpleNamespace(get=get, namespaced=kind != "Namespace")
+    result = discover_technologies(SimpleNamespace(resources=SimpleNamespace(get=resource_get)),
+                                   query="dynatrace", catalog=catalog)
+    assert any(item["kind"] == "DynaKube" for item in result["objects"])
+    cr_checks = [c for c in result["checks"] if c["kind"] == "DynaKube"]
+    assert [c["status"] for c in cr_checks] == ["denied", "read"]
+    assert cr_checks[1]["namespace"] == "dynatrace"
+    assert result["status"] == "partial"
+
+
+def test_api_discovery_failure_preserves_namespace_evidence():
+    from podpilot_openshift.discovery import ResourceCatalog
+    def unavailable():
+        raise ApiException(status=503)
+    dynamic = SimpleNamespace(resources=SimpleNamespace(get=lambda **coords: SimpleNamespace(
+        get=lambda **kw: {"items": [{"metadata": {"name": "dynatrace"}}]
+                         if coords["kind"] == "Namespace" else [], "metadata": {}})))
+    result = discover_technologies(dynamic, query="dynatrace", catalog=ResourceCatalog(unavailable))
+    assert result["objects"][0]["kind"] == "Namespace"
+    assert result["checks"][0]["status"] == "unavailable"
+    assert result["status"] == "partial"
