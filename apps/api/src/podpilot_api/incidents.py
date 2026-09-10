@@ -1240,7 +1240,8 @@ class IncidentService:
             alert_namespaces = sorted({
                 str((alert.get("labels") or {}).get("namespace") or "")
                 for alert in alert_snapshot.values()
-                if isinstance(alert, dict) and alert.get("status") == "firing"
+                # Reruns retain the original resource scope even after resolution.
+                if isinstance(alert, dict)
                 and re.fullmatch(
                     r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?",
                     str((alert.get("labels") or {}).get("namespace") or ""),

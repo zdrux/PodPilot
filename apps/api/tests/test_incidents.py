@@ -1920,11 +1920,21 @@ def test_incident_cluster_enrollment_is_explicit_atomic_and_reversible(client):
 
 
 @pytest.mark.parametrize("synthetic", [False, True])
-def test_namespace_first_investigation_expands_only_with_reason(client, synthetic):
+@pytest.mark.parametrize("resolved_rerun", [False, True])
+def test_namespace_first_investigation_expands_only_with_reason(client, synthetic, resolved_rerun):
     sid = source(client)
     body = notification()
     body['alerts'][0]['labels'].update(namespace='checkout', deployment='web-a', podpilot_test=str(synthetic).lower())
-    send(client, sid, body)
+    iid = send(client, sid, body).json()['incident_id']
+    if resolved_rerun:
+        body['status'] = 'resolved'
+        body['alerts'][0]['status'] = 'resolved'
+        assert send(client, sid, body).status_code == 202
+        with Session(client.app.state.engine) as db:
+            previous = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == iid))
+            previous.status = 'completed'
+            db.commit()
+        assert client.post(f'/api/v1/incidents/{iid}/rerun', headers=admin_headers(client)).status_code == 200
     service = client.app.state.incident_service
     calls, prompts = [], []
     class Reader:
@@ -1954,7 +1964,7 @@ def test_namespace_first_investigation_expands_only_with_reason(client, syntheti
             return IncidentDecision(summary='Investigation complete.', evidence_ids=['E1'])
     service.provider = Provider()
     with Session(client.app.state.engine) as db:
-        rid = db.scalar(select(IncidentRun.id))
+        rid = db.scalar(select(IncidentRun.id).where(IncidentRun.status == "queued"))
     service.investigate(client.app.state.engine, rid)
     assert calls[-1] == 'nodes'
     assert 'cluster-health' not in calls

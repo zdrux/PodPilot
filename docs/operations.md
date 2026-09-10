@@ -15,6 +15,8 @@ the coordinator can distinguish the target from unrelated namespace failures.
 Without a model,
 scoped runs retain namespace evidence without automatically broadening collection.
 Alerts without namespace scope retain the initial platform survey.
+Reruns preserve namespace scope from retained alert labels even when those alerts
+have resolved; resolution does not turn a workload incident into a platform survey.
 
 Evidence specialists summarize bounded evidence partitions and cite source IDs.
 They cannot collect additional evidence or communicate directly with peers.
