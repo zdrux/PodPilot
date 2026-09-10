@@ -5,14 +5,18 @@ const {chromium} = require('playwright');
   const page = await browser.newPage({viewport:{width:1200,height:700}});
   const pages = JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
   const errors = []; let documents = 0;
+  let releaseApp;
+  const appGate = new Promise(resolve => { releaseApp = resolve; });
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
+    localStorage.setItem('podpilot-color-theme', 'orange');
     window.streams=[];
     window.EventSource=class {constructor(){this.closed=false;window.streams.push(this)}addEventListener(){}close(){this.closed=true}};
   });
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const url = new URL(route.request().url());
     if(route.request().resourceType()==='document') documents++;
+    if(url.pathname === '/static/app.js') await appGate;
     if(url.pathname.startsWith('/static/')) {
       const file='apps/web'+url.pathname;
       if(fs.existsSync(file)) return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'image/svg+xml'});
@@ -20,7 +24,11 @@ const {chromium} = require('playwright');
     const html=pages[url.pathname+url.search];
     return route.fulfill(html?{body:html,contentType:'text/html'}:{status:404,body:'Not found'});
   });
-  await page.goto('http://testserver/settings/connectors');
+  await page.goto('http://testserver/settings/connectors', {waitUntil:'commit'});
+  await page.locator('.sidebar').waitFor({state:'visible'});
+  if(await page.locator('html').getAttribute('data-theme') !== 'orange') throw Error('Saved theme missing before deferred app initialization');
+  releaseApp();
+  await page.waitForLoadState('load');
   await page.waitForFunction(()=>window.PodPilotPage);
   await page.evaluate(()=>{window.savedSidebar=document.querySelector('.sidebar');window.savedNav=document.querySelector('.nav-list');savedNav.scrollTop=90;});
   await page.locator('.connector-discovery-findings > summary').first().click();

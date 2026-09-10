@@ -2,7 +2,8 @@ window.PodPilotPage.register("app.js", (page) => {
 (() => {
   const themePreferenceKey = "podpilot-color-theme";
   const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red", "orange"]);
-  let activeTheme = "classic";
+  let activeTheme = supportedThemes.has(document.documentElement.dataset.theme)
+    ? document.documentElement.dataset.theme : "classic";
   try {
     const savedTheme = window.localStorage.getItem(themePreferenceKey);
     if (supportedThemes.has(savedTheme)) activeTheme = savedTheme;

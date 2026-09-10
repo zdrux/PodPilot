@@ -414,3 +414,7 @@ With Node, Playwright and Chrome available, set `PODPILOT_BROWSER_TESTS=1`
 `pytest apps/api/tests/test_incidents.py -k sidebar_partial_navigation`.
 This uses rendered application fixtures without cluster or model access and checks
 persistent sidebar navigation, history/scroll restoration and stream cleanup.
+
+The blocking `theme.js` bootstrap runs before stylesheet loading to apply the saved
+palette before first paint. Keep it small and independent of page initialization;
+deferred application controls must not be responsible for the initial theme.
