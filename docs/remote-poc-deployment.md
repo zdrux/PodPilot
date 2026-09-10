@@ -258,6 +258,13 @@ oc annotate secret podpilot-model-credentials -n ai-ops \
   kubectl.kubernetes.io/last-applied-configuration- --overwrite
 ```
 
+The remote overlay includes incident response: its credential Secret and scoped
+get/patch Role, runtime enablement, and the OAuth proxy exemption
+`--skip-auth-regex=^/api/v1/incident-webhooks/[a-f0-9-]+$`.
+Only that webhook path bypasses interactive login; the API still validates each
+connector's bearer token. Existing installations must apply the overlay and roll
+out the Deployment; rebuilding the image alone does not add the proxy argument.
+
 Run a server-side dry run, inspect the diff, and then apply the same overlay:
 
 ```bash

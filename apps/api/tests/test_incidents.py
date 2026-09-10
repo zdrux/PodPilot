@@ -125,13 +125,30 @@ def test_generated_webhook_token_cannot_replace_saved_token(client):
     sid = source(client)
     rendered = client.get('/settings/connectors?edit='+sid, headers={'x-forwarded-user':'admin'})
     assert 'data-token-configured="true"' in rendered.text
-    assert 'data-generate-webhook-token disabled' in rendered.text
+    assert 'Replace token…' in rendered.text
+    assert 'data-cancel-webhook-replace autofocus>No' in rendered.text
+    assert 'data-confirm-webhook-replace>Yes' in rendered.text
     assert 'w'*40 not in rendered.text
     rejected = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
         'id':sid, 'kind':'cluster', 'name':'SNO', 'cluster_id':SYSTEM_CLUSTER_ID,
         'enabled':True, 'webhook_token':'a'*80, 'webhook_token_generated':True})
     assert rejected.status_code == 409
     assert send(client, sid, notification()).status_code == 202
+
+
+def test_generated_webhook_token_replaces_saved_token_after_confirmation(client):
+    sid = source(client)
+    saved = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'id':sid, 'kind':'cluster', 'name':'SNO', 'cluster_id':SYSTEM_CLUSTER_ID,
+        'enabled':True, 'webhook_token':'a'*80, 'webhook_token_generated':True,
+        'webhook_token_replace_confirmed':True})
+    assert saved.status_code == 200
+    assert 'a'*80 not in saved.text
+    assert 'webhook_token_replace_confirmed' not in saved.text
+    assert send(client, sid, notification()).status_code == 401
+    accepted = client.post(f'/api/v1/incident-webhooks/{sid}',
+        headers={'Authorization':'Bearer '+'a'*80}, json=notification())
+    assert accepted.status_code == 202
 
 
 def test_generated_webhook_token_can_fill_empty_connector_once(client):

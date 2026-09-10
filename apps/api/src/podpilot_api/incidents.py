@@ -531,6 +531,7 @@ class ConnectionInput(BaseModel):
     token: str = Field(default="", max_length=16384)
     webhook_token: str = Field(default="", max_length=512)
     webhook_token_generated: bool = False
+    webhook_token_replace_confirmed: bool = False
     namespace: str = Field(default="openshift-gitops", pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     projects: list[str] = Field(default_factory=list, max_length=30)
     cluster_aliases: list[str] = Field(default_factory=list, max_length=30)
@@ -768,16 +769,18 @@ class IncidentService:
                 value.url = https_origin(value.url)
                 if not value.repositories or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r) or any(x in (".", "..") for x in r.split('/')) for r in value.repositories):
                     raise HTTPException(422, "Specify allowed GitHub repositories as owner/repository.")
-            config = value.model_dump(exclude={"id", "kind", "name", "cluster_id", "enabled", "token", "webhook_token", "webhook_token_generated"})
+            config = value.model_dump(exclude={"id", "kind", "name", "cluster_id", "enabled", "token", "webhook_token", "webhook_token_generated", "webhook_token_replace_confirmed"})
             if value.kind == "cluster":
                 config["incident_response_enabled"] = value.enabled or not row or incident_enrolled(row)
             connection_id = row.id if row else str(uuid4())
             credential_key = f"connection-{connection_id}"
             webhook_key = f"webhook-{connection_id}" if value.kind == "cluster" else None
             if value.webhook_token_generated and (
-                not webhook_key or not value.webhook_token or self.credentials().get(webhook_key)
+                not webhook_key or not value.webhook_token or (
+                    self.credentials().get(webhook_key) and not value.webhook_token_replace_confirmed
+                )
             ):
-                raise HTTPException(409, "A generated token cannot replace a saved webhook token. Reload the connector to use its current configuration.")
+                raise HTTPException(409, "Confirm token replacement before replacing a saved webhook token with a generated token.")
             existing_token = None
             if value.enabled and not value.token:
                 if value.kind == "argocd" and value.access_mode == "kubernetes":

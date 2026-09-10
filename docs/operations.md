@@ -24,11 +24,16 @@ inspect that repository. Refresh Auto-detect if an older snapshot lacks source d
 Incident cluster connector forms offer **Generate token** only when no webhook
 token is saved and the password field is empty. Generation uses 40 random bytes
 from the browser's cryptographic random generator and fills the pending field;
-it does not save or rotate a token. The modal shows only the first/last four
+it does not save a token. For an existing token, **Replace token…** opens a Yes/No
+confirmation. No or Escape preserves the current form; Yes generates a pending
+replacement and opens the Copy modal. The saved token remains active until the
+connector is saved. Update Alertmanager too: delivery fails while the tokens differ.
+The modal shows only the first/last four
 characters, copies the full value on request, and confirms successful copying.
 Save the connector and configure the same value in Alertmanager. Clipboard access
 requires browser permission and a secure context. Saved tokens are never returned
-to the form; the server rejects generated-token submissions over existing tokens.
+to the form; the server rejects generated-token submissions over existing tokens
+unless the replacement confirmation flag is included.
 
 The webhook token title's **? How to configure Alertmanager** link opens sending-side
 instructions in an evidence-style modal. It includes receiver and child-route YAML,

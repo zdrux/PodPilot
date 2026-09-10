@@ -388,24 +388,26 @@ window.PodPilotPage.register("incidents.js", (page) => {
   const generateToken = form.querySelector('[data-generate-webhook-token]');
   const tokenDialog = document.getElementById('webhook-token-dialog');
   let generatedWebhookToken = false;
+  let webhookTokenReplaceConfirmed = false;
   if (webhookInput && generateToken && tokenDialog) {
     const preview = tokenDialog.querySelector('[data-webhook-token-preview]');
     const copy = tokenDialog.querySelector('[data-copy-webhook-token]');
     const status = tokenDialog.querySelector('[data-webhook-token-status]');
     const configured = webhookInput.dataset.tokenConfigured === 'true';
+    const replaceDialog = document.getElementById('webhook-token-replace-dialog');
     function refreshTokenButton() {
-      generateToken.disabled = configured || (Boolean(webhookInput.value) && !generatedWebhookToken);
-      generateToken.textContent = configured ? 'Token configured' : generatedWebhookToken ? 'Copy generated token' : 'Generate token';
+      generateToken.disabled = !configured && Boolean(webhookInput.value) && !generatedWebhookToken;
+      generateToken.textContent = generatedWebhookToken ? 'Copy generated token' : configured ? 'Replace token…' : 'Generate token';
     }
     webhookInput.addEventListener('input', () => {
       generatedWebhookToken = false;
+      webhookTokenReplaceConfirmed = false;
       refreshTokenButton();
     });
-    generateToken.addEventListener('click', () => {
-      if (configured || (webhookInput.value && !generatedWebhookToken)) return;
+    function showGeneratedToken(replace = false) {
       status.textContent = '';
       status.classList.remove('webhook-token-copied');
-      if (!webhookInput.value) {
+      if (replace || !webhookInput.value) {
         if (!window.crypto?.getRandomValues) {
           document.getElementById('incident-feedback').textContent = 'Secure token generation is unavailable in this browser.';
           return;
@@ -414,11 +416,25 @@ window.PodPilotPage.register("incidents.js", (page) => {
         webhookInput.value = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
         bytes.fill(0);
         generatedWebhookToken = true;
+        webhookTokenReplaceConfirmed = replace;
         form.dataset.unsaved = 'true';
       }
       preview.textContent = `${webhookInput.value.slice(0, 4)}••••••••${webhookInput.value.slice(-4)}`;
       refreshTokenButton();
       tokenDialog.showModal();
+    }
+    generateToken.addEventListener('click', () => {
+      if (configured && !generatedWebhookToken) {
+        replaceDialog.showModal();
+        return;
+      }
+      if (webhookInput.value && !generatedWebhookToken) return;
+      showGeneratedToken();
+    });
+    replaceDialog.querySelector('[data-cancel-webhook-replace]').addEventListener('click', () => replaceDialog.close());
+    replaceDialog.querySelector('[data-confirm-webhook-replace]').addEventListener('click', () => {
+      replaceDialog.close();
+      showGeneratedToken(true);
     });
     copy.addEventListener('click', async () => {
       if (!generatedWebhookToken || !webhookInput.value) return;
@@ -438,9 +454,11 @@ window.PodPilotPage.register("incidents.js", (page) => {
     page.cleanup(() => {
       webhookInput.value = '';
       generatedWebhookToken = false;
+      webhookTokenReplaceConfirmed = false;
       preview.textContent = '';
       status.textContent = '';
       if (tokenDialog.open) tokenDialog.close();
+      if (replaceDialog.open) replaceDialog.close();
     });
     refreshTokenButton();
   }
@@ -470,6 +488,7 @@ window.PodPilotPage.register("incidents.js", (page) => {
         id: data.get('id') || null, kind: form.elements.kind.value, name: data.get('name'),
         cluster_id: data.get('cluster_id') || null, token: data.get('token') || '', webhook_token: data.get('webhook_token') || '',
         webhook_token_generated: generatedWebhookToken,
+        webhook_token_replace_confirmed: webhookTokenReplaceConfirmed,
         access_mode: data.get('access_mode') || 'direct',
         enabled: data.has('enabled'), namespace: data.get('namespace') || 'openshift-gitops', projects: lines('projects'),
         cluster_aliases: lines('cluster_aliases'), target_cluster_ids: [], destination_names: {},

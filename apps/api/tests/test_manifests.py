@@ -448,7 +448,9 @@ def test_remote_overlay_uses_versioned_internal_registry_imagestream_tag() -> No
     assert {item["name"] for item in kustomization["images"]} == {
         "podpilot", "podpilot-oc-runner"
     }
-    assert kustomization["components"] == ["../../components/agentic-runner"]
+    assert kustomization["components"] == [
+        "../../components/agentic-runner", "../../components/incident-response"
+    ]
     assert image_stream["kind"] == "List"
     assert {item["metadata"]["name"] for item in image_stream["items"]} == {
         "podpilot", "podpilot-oc-runner"

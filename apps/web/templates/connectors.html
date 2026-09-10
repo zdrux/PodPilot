@@ -46,8 +46,8 @@
             <div class="connector-field connector-field-full">
               <div class="webhook-token-field-title"><label for="webhook-token">Alertmanager webhook bearer token <em>Secret</em></label><button type="button" class="webhook-help-link" data-incident-evidence-open="alertmanager-help-dialog" aria-haspopup="dialog"><span aria-hidden="true">?</span> How to configure Alertmanager</button></div>
               <span class="connector-control-frame"><input id="webhook-token" type="password" name="webhook_token" minlength="32" autocomplete="new-password" data-token-configured="{{ 'true' if webhook_token_configured else 'false' }}" placeholder="{{ 'Leave blank to keep the saved token' if webhook_token_configured else 'At least 32 random characters' }}"></span>
-              <div><button type="button" class="button secondary" data-generate-webhook-token {% if webhook_token_configured %}disabled{% endif %}>{{ 'Token configured' if webhook_token_configured else 'Generate token' }}</button></div>
-              <small>Configure the same value in this cluster's Alertmanager receiver. Generation is available only when no token is saved and this field is empty.</small>
+              <div><button type="button" class="button secondary" data-generate-webhook-token aria-haspopup="dialog">{{ 'Replace token…' if webhook_token_configured else 'Generate token' }}</button></div>
+              <small>Configure the same value in this cluster's Alertmanager receiver. Replacing a saved token requires confirmation and takes effect when you save the connector.</small>
             </div>
             <label class="connector-field connector-field-full"><span>Argo CD destination aliases <em>Optional</em></span><span class="connector-control-frame"><textarea name="cluster_aliases" rows="3" placeholder="One exact destination name per line">{{ config.get('cluster_aliases',[]) | join('\n') }}</textarea></span><small>Used only when an Application identifies this cluster by destination name instead of API URL.</small></label>
             {% if selected %}<div class="connector-endpoint-note"><div><span>Webhook receiver path</span><small>Last accepted: {{ receiver_status.last_delivery | est_time if receiver_status and receiver_status.last_delivery else 'None yet' }} · {{ receiver_status.incident_count if receiver_status else 0 }} incidents recorded</small></div><code>/api/v1/incident-webhooks/{{ selected.id }}</code></div>{% endif %}
@@ -82,6 +82,13 @@
 
   {% if active_kind == 'cluster' %}
   {% include "_alertmanager_help.html" %}
+  <dialog class="operation-dialog webhook-token-dialog" id="webhook-token-replace-dialog" aria-labelledby="webhook-token-replace-title" aria-describedby="webhook-token-replace-help">
+    <div class="operation-dialog-content">
+      <h2 id="webhook-token-replace-title">Replace webhook token?</h2>
+      <p id="webhook-token-replace-help">Generate a replacement token? Any token entered in this form will be replaced. Your saved token stays active until you save the connector. Update Alertmanager with the new token too; deliveries will fail while the tokens differ.</p>
+      <div class="form-actions"><button type="button" class="button secondary" data-cancel-webhook-replace autofocus>No</button><button type="button" class="button primary" data-confirm-webhook-replace>Yes</button></div>
+    </div>
+  </dialog>
   <dialog class="operation-dialog webhook-token-dialog" id="webhook-token-dialog" aria-labelledby="webhook-token-title" aria-describedby="webhook-token-help">
     <div class="operation-dialog-content">
       <h2 id="webhook-token-title">Webhook token generated</h2>

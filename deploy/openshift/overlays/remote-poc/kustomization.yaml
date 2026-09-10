@@ -7,6 +7,7 @@ resources:
   - image-stream.yaml
 components:
   - ../../components/agentic-runner
+  - ../../components/incident-response
 images:
   # Pods pull the ImageStreamTag through the stable in-cluster registry service.
   # Change newTag when promoting a different PodPilot image.

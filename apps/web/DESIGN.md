@@ -216,6 +216,9 @@ types. The Connectors page uses an Add action on each type row to open its form
 or the registered-cluster picker. General Add links return to these rows; do not
 render a separate type chooser or unrelated integration fields together.
 Relationships between connector types are investigation evidence, not form nesting.
+Existing webhook tokens use a Replace token action with an explicit Yes/No modal;
+No has initial focus and cancellation preserves the form. Yes generates a pending
+replacement; saving the connector activates it. Explain the sending-side update.
 Incident webhook generation uses a modal with a first/last-four-character preview,
 an explicit Copy token action, and an accessible green success message after the
 clipboard write succeeds. Saved or manually populated fields disable generation.
