@@ -154,11 +154,30 @@ bounded OAuth exchange and are discarded immediately afterward.
 
 The broker issues separate random capabilities for read-only and Action use. Read-only capabilities
 allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
-methods and every Secret API read are rejected before the request reaches the cluster. Both modes
+mutation methods are rejected before the request reaches the cluster. Secret reads are allowed by
+default under the delegated user's RBAC; `PODPILOT_SECRET_ACCESS_ENABLED=false` rejects Secret
+operations in both modes, including Action with the development approval bypass. Both modes
 use the same agent loop and expose the same investigation tools; the capability is the enforcement
 difference. Action capabilities inject the same
 user token without reducing its permissions, so Kubernetes RBAC, admission, quota, and policy are
 authoritative. The runner has neither the user token nor a projected service-account token.
+
+Secret access and chat presentation are independent runtime policies. With
+`PODPILOT_SECRET_CHAT_REDACTION_ENABLED=true` (default), the runner can consume raw
+Secret data for local analysis while provider tool output and final chat answers
+redact structured JSON/YAML Secret `data`/`stringData`, private-key PEM blocks, and
+credential patterns. Public certificate PEM and derived certificate facts remain
+available. The runner includes `openssl` for certificate inspection. Setting the
+chat flag to `false` permits raw values in model tool results and persisted final
+chat answers; it does not grant cluster access or bypass mutation approval. This
+is an explicit model-data and chat-storage exposure override. Audit records,
+operation-ledger excerpts and application diagnostics retain redaction regardless
+of the chat flag. Existing saved messages are not rewritten when flags change.
+Redaction is defense in depth: arbitrary shell projections or transformations of
+unlabelled secret bytes cannot be reliably recognized. The agent is instructed
+to analyze sensitive values locally and return non-sensitive findings while
+redaction is enabled. Legacy typed diagnostic collectors keep their existing
+Secret denylist; delegated Secret work uses the brokered runner.
 
 The cluster registry stores API metadata only. Shared entries are configuration-admin managed;
 each authorized user may also create private entries visible only to that owner and configuration

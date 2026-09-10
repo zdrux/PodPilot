@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     )
     role_approver_groups: list[str] = Field(default_factory=lambda: ["podpilot-approvers"])
     role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
+    secret_access_enabled: bool = True
+    secret_chat_redaction_enabled: bool = True
     delegated_access_enabled: bool = False
     delegated_session_lifetime_seconds: int = Field(default=86_400, ge=300, le=86_400)
     delegated_login_timeout_seconds: float = Field(default=15.0, ge=3.0, le=60.0)

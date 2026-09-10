@@ -587,10 +587,10 @@ def test_read_only_proxy_blocks_mutations_and_allows_access_reviews() -> None:
     assert _read_only_proxy_allows("GET", "/apis") is True
     assert _read_only_proxy_allows("GET", "/apis/apps/v1") is True
     assert _read_only_proxy_allows("GET", "/api/v1/pods") is True
-    assert _read_only_proxy_allows("GET", "/api/v1/secrets") is False
+    assert _read_only_proxy_allows("GET", "/api/v1/secrets") is True
     assert _read_only_proxy_allows(
         "GET", "/api/v1/namespaces/dev/secrets/database"
-    ) is False
+    ) is True
     assert _read_only_proxy_allows(
         "POST", "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
     ) is True
@@ -15683,3 +15683,109 @@ def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -
         assert saved.status_code == 200
         with Session(app.state.engine) as db:
             assert _profile_config(db.get(ModelProfile, profile_id)).incident_policy.page_size == 100
+
+
+@pytest.mark.parametrize("access_enabled", [True, False])
+@pytest.mark.parametrize("mode", ["read_only", "action"])
+@pytest.mark.parametrize("upstream_status", [200, 403])
+def test_secret_broker_access_override_preserves_delegated_rbac(
+    tmp_path: Path, monkeypatch, access_enabled, mode, upstream_status,
+) -> None:
+    app, settings = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()))
+    settings.secret_access_enabled = access_enabled
+    # The override must also hold when Action's development bypass is on.
+    settings.development_approval_bypass = True
+    upstream_requests = []
+
+    def respond(request):
+        upstream_requests.append(request)
+        return httpx.Response(upstream_status, json={"kind": "Secret"})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
+        transport=httpx.MockTransport(respond), **kwargs,
+    ))
+    with TestClient(app) as client:
+        with Session(app.state.engine) as db:
+            cluster = db.scalar(select(Cluster))
+            cluster_id = cluster.id
+            cluster.is_system = False
+            db.commit()
+        connection = app.state.delegated_vault.put(
+            session_id="test-session", owner="ada", cluster_id=cluster_id,
+            remote_username="delegated-ada", remote_uid="remote-uid", token="synthetic-user-token",
+        )
+        capability = (connection.read_only_proxy_capability if mode == "read_only"
+                      else connection.action_proxy_capability)
+        response = client.get(
+            f"/internal/delegated-proxy/{capability}/api/v1/namespaces/operators/secrets/tls",
+        )
+        app.state.delegated_vault.pop_all()
+        assert response.status_code == (upstream_status if access_enabled else 403)
+        assert len(upstream_requests) == int(access_enabled)
+        if access_enabled:
+            assert upstream_requests[0].headers["authorization"] == "Bearer synthetic-user-token"
+        else:
+            assert "runtime configuration" in response.json()["message"]
+        app.state.delegated_vault.pop_all()
+
+
+@pytest.mark.parametrize("redaction", [True, False])
+def test_agent_secret_presentation_flag_reaches_provider_and_saved_chat(tmp_path: Path, redaction) -> None:
+    class Provider(FakeModelProvider):
+        calls = 0
+
+        def next_agent_step(self, profile, api_key, messages):
+            self.calls += 1
+            if self.calls == 1:
+                prompt = str(messages[0]["content"])
+                assert "Secret access is enabled" in prompt
+                assert "Chat secret redaction is " + ("enabled" if redaction else "disabled") in prompt
+                arguments = json.dumps({"command": "oc get secret tls -n operators -o json"})
+                return AgentStep(
+                    assistant_message={"role": "assistant", "content": None, "tool_calls": [{
+                        "id": "secret-read", "type": "function",
+                        "function": {"name": "execute_shell", "arguments": arguments},
+                    }]}, content=None,
+                    tool_calls=(AgentToolCall(id="secret-read", name="execute_shell", arguments=arguments),),
+                )
+            output = str(messages[-1]["content"])
+            assert ("synthetic-opaque" in output) is not redaction
+            answer = "Certificate analysis complete. password=synthetic-chat-value"
+            return AgentStep(assistant_message={"role": "assistant", "content": answer},
+                             content=answer, tool_calls=())
+
+    class Runner:
+        def execute(self, command, connection=None, **kwargs):
+            return AgentCommandResult(command=command, exit_code=0, stderr="", stdout=json.dumps({
+                "kind": "Secret", "data": {"custom": "synthetic-opaque"},
+            }))
+
+    provider = Provider()
+    app, settings = make_app(tmp_path, assignments={"ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(), credential_store=MemoryCredentialStore("test-api-token"),
+        model_provider=provider, agent_runner=Runner())
+    settings.secret_chat_redaction_enabled = redaction
+    engine = build_engine(settings)
+    with Session(engine) as db:
+        db.add(ModelProfile(id=1, provider_label="Test", base_url="https://model.example/v1",
+            chat_model="test", api_type="chat-completions", timeout_seconds=240,
+            max_output_tokens=4096, status="ready", capabilities_json='{"tool_calls": true}',
+            updated_by="ivy"))
+        db.commit()
+    engine.dispose()
+    with TestClient(app) as client:
+        page = client.get("/ask", headers={"x-forwarded-user": "ivy"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        created = client.post("/api/v1/adhoc-conversations",
+            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
+            data={"message": "Inspect the TLS certificate in the operators namespace Secret."},
+            follow_redirects=False)
+        rendered = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
+        assert "Certificate analysis complete" in rendered.text
+        assert ("synthetic-chat-value" in rendered.text) is not redaction
+        with Session(app.state.engine) as db:
+            answer = db.scalar(select(AdHocMessage).where(AdHocMessage.role == "assistant"))
+            assert ("synthetic-chat-value" in answer.content) is not redaction
+            assert "synthetic-opaque" not in answer.tool_activity_json
+    assert provider.calls == 2

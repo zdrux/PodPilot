@@ -509,3 +509,14 @@ def test_remote_ldap_group_config_only_maps_elevated_roles() -> None:
         "role_breakglass_groups",
     }
     assert "configuration_admin_groups" in runtime["data"]
+
+
+def test_secret_flags_are_exposed_through_runtime_config() -> None:
+    workload = ROOT / "deploy" / "openshift" / "workload"
+    runtime = yaml.safe_load((workload / "runtime-config.yaml").read_text())
+    deployment = yaml.safe_load((workload / "deployment.yaml").read_text())
+    env = deployment["spec"]["template"]["spec"]["initContainers"][0]["env"]
+    for key in ("secret_access_enabled", "secret_chat_redaction_enabled"):
+        assert runtime["data"][key] == "true"
+        configured = next(item for item in env if item["name"] == f"PODPILOT_{key.upper()}")
+        assert configured["valueFrom"]["configMapKeyRef"] == {"name": "podpilot-runtime", "key": key}

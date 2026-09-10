@@ -1020,7 +1020,8 @@ and pin an immutable application image digest.
 The current delegated runtime binds `podpilot-investigator` only to the custom
 `podpilot-role-reader` ClusterRole for exact OpenShift Group GETs; it is not a
 `cluster-reader`. ConfigMaps, Pod logs, and other Ask Kubernetes evidence are read with
-the signed-in user's brokered capability, which denies Secrets and mutations in read-only mode.
+the signed-in user's brokered capability, which denies mutations in read-only mode and
+allows Secret reads under that user's RBAC by default.
 For well-known built-in resources, the broker canonicalizes plural/case variants
 and their authoritative apiVersion (for example, `pods` becomes `v1`/`Pod`) before
 validation. This prevents model syntax variation from becoming a failed cluster
@@ -1879,3 +1880,24 @@ provide historical platform audit attribution. PodPilot's own attributed audit
 stream and Kubernetes audit forwarding are distinct sources. The public
 `argoproj/argocd-example-apps` repository was automatically admitted during the
 CI/CD discovery test; its existing GitHub connector credentials were unchanged.
+
+
+### Delegated Secret access and chat redaction
+
+Configure these independent keys in `podpilot-runtime` (environment equivalents
+in parentheses):
+
+| Runtime key | Default | Behavior |
+| --- | --- | --- |
+| `secret_access_enabled` (`PODPILOT_SECRET_ACCESS_ENABLED`) | `true` | Allow brokered Secret operations subject to delegated RBAC and the existing mode/approval policy. Set `false` to block Secret access in both Investigator and Action modes. |
+| `secret_chat_redaction_enabled` (`PODPILOT_SECRET_CHAT_REDACTION_ENABLED`) | `true` | Redact Secret exports, private keys and credential patterns from runner results sent to the model and final chat answers. Set `false` to permit unredacted values in those results and persisted chat. |
+
+Apply the ConfigMap and restart the PodPilot Deployment to reload environment
+settings. Rebuild the runner image for the added `openssl` executable. No RBAC
+expansion is required. With both defaults, an operator can inspect certificate
+material inside the runner and report subjects, issuers, SANs, expiry dates and
+verification failures. Public certificate PEM is preserved by presentation
+redaction. Disabling redaction does not enable denied cluster access. Audit and
+operation-ledger redaction remain enabled, and existing saved chats are not
+rewritten. Arbitrary transformed/unlabelled values are not guaranteed to be
+recognized by output redaction; see `docs/security.md` for the exposure boundary.

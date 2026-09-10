@@ -44,6 +44,16 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: cluster_name
+            - name: PODPILOT_SECRET_ACCESS_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: secret_access_enabled
+            - name: PODPILOT_SECRET_CHAT_REDACTION_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: secret_chat_redaction_enabled
             - name: PODPILOT_CHAT_MAX_CHARS
               valueFrom:
                 configMapKeyRef:

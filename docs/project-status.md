@@ -1,9 +1,18 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-09
+Last reviewed: 2026-09-10
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
+
+## Unreleased Secret policy update
+
+Delegated broker Secret access now defaults to allowed under the operator's RBAC.
+`secret_access_enabled=false` restores the block in both conversation modes;
+`secret_chat_redaction_enabled` independently defaults to true and controls model
+tool-result/final-chat redaction. The runner adds OpenSSL for certificate analysis.
+Deployment and model-exposure details are in `docs/operations.md` and
+`docs/security.md`. These source changes have not been deployed to the lab.
 
 ## Current lab development release
 
@@ -296,7 +305,8 @@ records remain, but execution now awaits a separate approval-gated action servic
   inside purpose-built typed collectors remain supported. Both delegated modes can enumerate and
   filter with deliberately bounded read-only `oc get` commands and then fetch the exact object
   details required for comparison. The
-  broker, not a reduced planner, prevents writes and Secret reads in Investigator mode.
+  broker, not a reduced planner, prevents writes in Investigator mode. Secret access is
+  now separately configurable and defaults to delegated RBAC authorization.
 - Agent tool schemas now enumerate selected cluster IDs. Rejected model-formatting attempts receive retry guidance and render
   as collapsed diagnostics instead of unresolved yellow limitations; genuine access, collection,
   and command failures remain visible. Loki transport normalization preserves
@@ -980,8 +990,9 @@ current repository and cluster state.
 - Alert labels are never treated as PromQL or network destinations. The server
   owns the query shape and escapes exact-match values. No DNS, TCP, TLS, or HTTP
   connection is made to the alert `instance` or selected Service.
-- The application-level Ask broker denies mutations and Secrets even though the
-  runtime also has one narrowly resource-named model-credential Secret permission.
+- The delegated Ask broker denies Investigator mutations and permits Secret reads
+  under user RBAC by default, with an independent runtime access override. Runtime
+  model-credential Secret permission does not expand delegated user access.
 - Pod DELETE preview carries `dryRun: ["All"]` in `DeleteOptions` and the query
   parameter because live SNO testing found the query-only Python-client form was
   not sufficient on this OpenShift path.

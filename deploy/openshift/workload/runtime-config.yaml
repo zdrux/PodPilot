@@ -37,6 +37,8 @@ data:
   adhoc_http_probe_max_bytes: "16384"
   adhoc_run_timeout_seconds: "900"
   adhoc_finalization_reserve_seconds: "60"
+  secret_access_enabled: "true"
+  secret_chat_redaction_enabled: "true"
   delegated_access_enabled: "true"
   delegated_session_lifetime_seconds: "86400"
   delegated_login_attempts_per_minute: "5"
