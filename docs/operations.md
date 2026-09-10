@@ -1,5 +1,11 @@
 # PodPilot Operations
 
+The browser shell's CSS and JavaScript URLs carry a shared content fingerprint
+computed at application startup. Restart/redeploy after changing static files.
+In-page navigation performs a full navigation when the returned shell fingerprint
+differs, ensuring new markup uses the matching scripts and styles. Browsers running
+the older navigation code need one full reload after this change is deployed.
+
 Enterprise development work is tracked in [the implementation plan](enterprise-development-plan.md).
 Migration 0028 adds cluster inventory snapshots. After signing in to a cluster in
 Ask PodPilot, use **Auto-detect** in that cluster's details to refresh bounded

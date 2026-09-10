@@ -6,12 +6,13 @@
   <meta name="color-scheme" content="dark light">
   {% if csrf_token is defined %}<meta name="podpilot-csrf" content="{{ csrf_token }}">{% endif %}
   <title>{% block title %}PodPilot{% endblock %}</title>
-  <script src="{{ url_for('static', path='/theme.js') }}?v=theme-first-paint-1"></script>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=connector-sidebar-38">
-  <link rel="stylesheet" href="{{ url_for('static', path='/orange.css') }}?v=orange-chat-contrast-4">
-  <script src="{{ url_for('static', path='/navigation.js') }}?v=partial-navigation-1" defer></script>
-  <script src="{{ url_for('static', path='/app.js') }}?v=partial-navigation-1" defer></script>
-  <script src="{{ url_for('static', path='/incidents.js') }}?v=partial-navigation-1" defer></script>
+  <meta name="podpilot-assets" content="{{ asset_version }}">
+  <script src="{{ url_for('static', path='/theme.js') }}?v={{ asset_version }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v={{ asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/orange.css') }}?v={{ asset_version }}">
+  <script src="{{ url_for('static', path='/navigation.js') }}?v={{ asset_version }}" defer></script>
+  <script src="{{ url_for('static', path='/app.js') }}?v={{ asset_version }}" defer></script>
+  <script src="{{ url_for('static', path='/incidents.js') }}?v={{ asset_version }}" defer></script>
 </head>
 <body class="saas-app {% block body_class %}{% endblock %}">
   <div class="shell">

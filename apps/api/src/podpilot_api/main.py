@@ -10613,6 +10613,13 @@ def create_app(
     templates.env.filters["operator_filter_reason"] = _operator_filter_reason
     templates.env.filters["operation_display_text"] = _operation_display_text
     templates.env.globals["operator_filter_reasons"] = _operator_filter_reasons
+    # Version the entire shell bundle together so deployed markup cannot reuse
+    # stale scripts/styles merely because a manual query-string was unchanged.
+    asset_digest = hashlib.sha256()
+    for asset_name in ("theme.js", "styles.css", "orange.css", "navigation.js", "app.js", "incidents.js"):
+        asset_digest.update(asset_name.encode())
+        asset_digest.update((app_settings.web_dir / "static" / asset_name).read_bytes())
+    templates.env.globals["asset_version"] = asset_digest.hexdigest()[:20]
     templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
     templates.env.globals["approval_bypass"] = app_settings.development_approval_bypass
 

@@ -13487,7 +13487,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "html[data-theme] .ask-thread .chat-meta .answer-status-grounded" in styles
     assert "color: #55f0a5" in styles
     assert "background: rgba(26, 126, 78, .3)" in styles
-    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .ask-thread .chat-meta .answer-status-grounded' in styles
+    assert 'html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"], [data-theme="orange"]) .ask-thread .chat-meta .answer-status-grounded' in styles
     assert "--conversation-content-width: 1120px" in styles
     assert "--conversation-author-column: 190px" in styles
     assert "--conversation-column-gap: clamp(28px, 4vw, 64px)" in styles

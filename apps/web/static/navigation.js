@@ -92,6 +92,9 @@
       if (!response.ok || target.origin !== location.origin || !response.headers.get('content-type')?.includes('text/html')) throw new Error('Full navigation required');
       const next = new DOMParser().parseFromString(await response.text(), 'text/html');
       if (ticket !== sequence) return;
+      const loadedAssets = document.querySelector('meta[name="podpilot-assets"]')?.content;
+      const nextAssets = next.querySelector('meta[name="podpilot-assets"]')?.content;
+      if (loadedAssets !== nextAssets) throw new Error('Updated assets require full navigation');
       const nextMain = next.querySelector('.shell > .main');
       const nextSidebar = next.querySelector('.sidebar');
       if (!nextMain || !nextSidebar || target.pathname.startsWith('/session/')) throw new Error('Full navigation required');

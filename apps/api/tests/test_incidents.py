@@ -506,8 +506,8 @@ def test_incident_dashboard_pins_active_runs_and_expands_live_activity(client):
     assert 'incident-row-live-pulse' in page.text
     assert page.text.count('Open full investigation') == 2
     assert page.text.count('class="incident-row-open-case"') == 2
-    assert '/static/navigation.js?v=partial-navigation-1' in page.text
-    assert '/static/incidents.js?v=partial-navigation-1' in page.text
+    assert re.search(r'/static/navigation.js\?v=[0-9a-f]{20}', page.text)
+    assert re.search(r'/static/incidents.js\?v=[0-9a-f]{20}', page.text)
     assert 'data-events-url="/api/v1/incidents/events"' in page.text
     assert 'class="incident-board-table-header" role="row"' in page.text
 
@@ -548,6 +548,21 @@ def test_connector_directory_groups_independent_types_and_uses_row_add_actions(c
     assert '/settings/connectors?new=1&amp;type=github' in chooser.text
     cluster_setup=client.get('/settings/clusters?new=1&connector=1',headers={'x-forwarded-user':'admin'})
     assert 'data-redirect-template="/settings/connectors?new=1&amp;type=cluster&amp;cluster_id={cluster_id}"' in cluster_setup.text
+
+
+def test_shell_assets_use_current_content_fingerprint(client):
+    import hashlib
+    static = Path(__file__).resolve().parents[2] / 'web' / 'static'
+    names = ('theme.js', 'styles.css', 'orange.css', 'navigation.js', 'app.js', 'incidents.js')
+    digest = hashlib.sha256()
+    for name in names:
+        digest.update(name.encode())
+        digest.update((static / name).read_bytes())
+    version = digest.hexdigest()[:20]
+    page = client.get('/settings/connectors?new=1&type=cluster', headers={'x-forwarded-user':'admin'})
+    assert f'name="podpilot-assets" content="{version}"' in page.text
+    for name in names:
+        assert f'/static/{name}?v={version}' in page.text
 
 
 def test_rerun_keeps_history_and_rejects_duplicates(client):

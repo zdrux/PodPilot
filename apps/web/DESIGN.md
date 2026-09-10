@@ -60,6 +60,8 @@ a visited URL restores its scroll offsets and expanded sections. Page initializa
 uses `PodPilotPage` scopes so navigation cancels old requests, timers, streams and
 global listeners before binding the destination. Authentication, external links and
 modified clicks retain normal browser navigation.
+Shell assets share a content-based version. When in-page navigation detects a new
+version, reload the full page before initializing the new markup.
 
 ### Security is visible
 
