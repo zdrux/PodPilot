@@ -10,18 +10,11 @@
     <a class="button connector-add-button" href="/settings/connectors?new=1" aria-label="Add connector"><span aria-hidden="true">+</span> Add connector</a>
   </header>
 
-  {% if choose_kind or active_kind %}
+  {% if active_kind %}
   <div class="connector-layout connector-layout-single">
-    <section class="connector-editor{% if not choose_kind and not active_kind %} connector-overview{% endif %}" aria-labelledby="connector-editor-title">
+    <section class="connector-editor" aria-labelledby="connector-editor-title">
       <div class="connector-editor-accent" aria-hidden="true"></div>
-      {% if choose_kind %}
-      <header class="connector-editor-header"><div><p class="eyebrow">New connector</p><h2 id="connector-editor-title">Choose a connector type</h2><p>Each endpoint owns its credential and investigation boundary.</p></div></header>
-      <div class="connector-kind-chooser">
-        <button type="button" class="button" data-incident-cluster-picker><strong>OpenShift clusters</strong><span>Select registered clusters for incident response.</span></button>
-        <a href="/settings/connectors?new=1&amp;type=argocd"><strong>Argo CD instance</strong><span>Application destinations, managed resources, repository paths, and revisions.</span></a>
-        <a href="/settings/connectors?new=1&amp;type=github"><strong>GitHub instance</strong><span>Allowed repository commit and pull-request metadata.</span></a>
-      </div>
-      {% elif active_kind %}
+      {% if active_kind %}
       <header class="connector-editor-header"><div><p class="eyebrow">{{ 'OpenShift cluster' if active_kind == 'cluster' else ('Argo CD instance' if active_kind == 'argocd' else 'GitHub instance') }}</p><h2 id="connector-editor-title">{{ selected.name if selected else 'Add ' + ('cluster' if active_kind == 'cluster' else ('Argo CD' if active_kind == 'argocd' else 'GitHub')) }}</h2><p>Configure this endpoint independently; investigation-time evidence establishes any relationships.</p></div><span class="connector-editor-status">{{ 'Configured' if selected else 'New connector' }}</span></header>
 
       <form id="incident-connection-form" class="settings-form connector-form">
@@ -50,7 +43,12 @@
             <label class="connector-field connector-field-full"{% if active_kind == 'argocd' %} data-argocd-access-mode="direct"{% if argocd_access_mode != 'direct' %} hidden{% endif %}{% endif %}><span>{{ 'Argo CD API token' if active_kind == 'argocd' else 'Read-only token' }} <em>Secret</em></span><span class="connector-control-frame"><input type="password" name="token" autocomplete="new-password" placeholder="{{ 'Leave blank to keep the saved token' if selected else 'Paste a read-only token' }}"></span><small>Stored server-side and never returned to the browser.</small></label>
             {% if active_kind == 'cluster' %}
             <label class="connector-field connector-field-full"><span>Thanos/Prometheus HTTPS origin <em>Optional</em></span><span class="connector-control-frame"><input type="url" name="monitoring_url" value="{{ config.get('monitoring_url','') }}" placeholder="https://thanos-querier.example.com"></span></label>
-            <label class="connector-field connector-field-full"><span>Alertmanager webhook bearer token <em>Secret</em></span><span class="connector-control-frame"><input type="password" name="webhook_token" minlength="32" autocomplete="new-password" placeholder="At least 32 random characters"></span><small>Configure the same value in this cluster's Alertmanager receiver.</small></label>
+            <div class="connector-field connector-field-full">
+              <div class="webhook-token-field-title"><label for="webhook-token">Alertmanager webhook bearer token <em>Secret</em></label><button type="button" class="webhook-help-link" data-incident-evidence-open="alertmanager-help-dialog" aria-haspopup="dialog"><span aria-hidden="true">?</span> How to configure Alertmanager</button></div>
+              <span class="connector-control-frame"><input id="webhook-token" type="password" name="webhook_token" minlength="32" autocomplete="new-password" data-token-configured="{{ 'true' if webhook_token_configured else 'false' }}" placeholder="{{ 'Leave blank to keep the saved token' if webhook_token_configured else 'At least 32 random characters' }}"></span>
+              <div><button type="button" class="button secondary" data-generate-webhook-token {% if webhook_token_configured %}disabled{% endif %}>{{ 'Token configured' if webhook_token_configured else 'Generate token' }}</button></div>
+              <small>Configure the same value in this cluster's Alertmanager receiver. Generation is available only when no token is saved and this field is empty.</small>
+            </div>
             <label class="connector-field connector-field-full"><span>Argo CD destination aliases <em>Optional</em></span><span class="connector-control-frame"><textarea name="cluster_aliases" rows="3" placeholder="One exact destination name per line">{{ config.get('cluster_aliases',[]) | join('\n') }}</textarea></span><small>Used only when an Application identifies this cluster by destination name instead of API URL.</small></label>
             {% if selected %}<div class="connector-endpoint-note"><div><span>Webhook receiver path</span><small>Last accepted: {{ receiver_status.last_delivery | est_time if receiver_status and receiver_status.last_delivery else 'None yet' }} · {{ receiver_status.incident_count if receiver_status else 0 }} incidents recorded</small></div><code>/api/v1/incident-webhooks/{{ selected.id }}</code></div>{% endif %}
             {% elif active_kind == 'argocd' %}
@@ -82,6 +80,18 @@
   </div>
   {% endif %}
 
+  {% if active_kind == 'cluster' %}
+  {% include "_alertmanager_help.html" %}
+  <dialog class="operation-dialog webhook-token-dialog" id="webhook-token-dialog" aria-labelledby="webhook-token-title" aria-describedby="webhook-token-help">
+    <div class="operation-dialog-content">
+      <h2 id="webhook-token-title">Webhook token generated</h2>
+      <p id="webhook-token-help">Copy this token for Alertmanager, then save the connector. The token is not saved yet.</p>
+      <p><code data-webhook-token-preview></code></p>
+      <div class="form-actions"><button type="button" class="button primary" data-copy-webhook-token>Copy token</button><button type="button" class="button secondary" data-close-webhook-token>Close</button></div>
+      <p data-webhook-token-status role="status" aria-live="polite"></p>
+    </div>
+  </dialog>
+  {% endif %}
   {% include "_connector_directory.html" %}
 </div>
 {% endblock %}

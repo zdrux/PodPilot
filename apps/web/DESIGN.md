@@ -210,10 +210,17 @@ Use the Connectors and Admin Config pattern:
 
 The Connectors directory lives in the persistent Manage navigation and groups
 OpenShift clusters, GitHub instances, and Argo CD instances as independent endpoint
-types. Do not duplicate that directory inside the Connectors page. Its add action
-opens a type chooser before showing a type-specific form; do not render unrelated
-integration fields together.
+types. The Connectors page uses an Add action on each type row to open its form
+or the registered-cluster picker. General Add links return to these rows; do not
+render a separate type chooser or unrelated integration fields together.
 Relationships between connector types are investigation evidence, not form nesting.
+Incident webhook generation uses a modal with a first/last-four-character preview,
+an explicit Copy token action, and an accessible green success message after the
+clipboard write succeeds. Saved or manually populated fields disable generation.
+The Alertmanager help modal reuses operation-dialog styling and monospaced YAML.
+Its Validate Configuration action requires a saved connector and current cluster
+login; a focusable disabled-button wrapper explains the login requirement on hover
+or keyboard focus. Findings contain static checks and limitations, never raw Secrets.
 Below the editor, use the observed-topology surface for bounded connector discovery:
 compact per-connector status cards followed by a horizontally contained Application
 relationship table. Show incomplete and ambiguous matches explicitly; never style a

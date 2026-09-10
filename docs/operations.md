@@ -9,6 +9,40 @@ bounded delegated queries and displayed with their resolved URLs. Other observed
 Service/Route URLs remain unverified candidates and are not automatically selected
 as credential-bearing telemetry backends.
 
+CI/CD repository references display the source resource kind and namespace/name
+from the inventory snapshot. These are URLs referenced by cluster objects, not
+proof of a local Argo CD controller or local deployment destination. “Connector
+required” indicates that PodPilot needs a matching enabled GitHub connector to
+inspect that repository. Refresh Auto-detect if an older snapshot lacks source details.
+
+Incident cluster connector forms offer **Generate token** only when no webhook
+token is saved and the password field is empty. Generation uses 40 random bytes
+from the browser's cryptographic random generator and fills the pending field;
+it does not save or rotate a token. The modal shows only the first/last four
+characters, copies the full value on request, and confirms successful copying.
+Save the connector and configure the same value in Alertmanager. Clipboard access
+requires browser permission and a secure context. Saved tokens are never returned
+to the form; the server rejects generated-token submissions over existing tokens.
+
+The webhook token title's **? How to configure Alertmanager** link opens sending-side
+instructions in an evidence-style modal. It includes receiver and child-route YAML,
+the saved connector ID (or a save-first placeholder), platform/user-workload Secret
+locations, optional CA mounting, validation and delivery checks. Token values are
+never interpolated into these examples. Preserve existing sibling routes and the
+root receiver's fallback delivery when merging the configuration.
+
+**Validate Configuration** in that modal uses the signed-in operator's current
+delegated cluster session, never the saved incident automation credential. It is
+disabled until the connector is saved and that cluster login exists; save edits
+before validation. The read-only broker and remote RBAC still govern Secret access.
+The check reads platform and optional user-workload Alertmanager configuration,
+compares the saved webhook token in memory, and can resolve conventional
+`/etc/alertmanager/secrets/<secret>/<key>` references in the same namespace.
+Only findings are returned or audited, not Secret contents, YAML, or tokens. Reads
+are bounded to ten requests, a 20-second collection budget and 1 MB per response.
+Passing static checks does not verify route matching, reload, mounts, CA trust,
+or delivery; perform a controlled end-to-end test separately.
+
 Ask exposes `discover_inventory` with a concise technology name in `discovery_query`
 and a returned-object `limit`. This is a fresh, identity-scoped read using the same
 collector as Auto-detect; it does not reuse another user's stored inventory.

@@ -362,6 +362,88 @@ window.PodPilotPage.register("incidents.js", (page) => {
 
   const form = document.getElementById('incident-connection-form');
   if (!form) return;
+  bindEvidenceDialogs(document);
+  const validationButton = document.querySelector('[data-validate-alertmanager]');
+  validationButton?.addEventListener('click', async () => {
+    if (validationButton.disabled) return;
+    const output = document.querySelector('[data-alertmanager-validation-result]');
+    output.hidden = false;
+    if (form.dataset.unsaved === 'true') {
+      output.textContent = 'Save your connector changes first. Validation compares against the saved webhook token.';
+      return;
+    }
+    validationButton.disabled = true;
+    validationButton.setAttribute('aria-busy', 'true');
+    output.textContent = 'Reading Alertmanager configuration using your cluster login…';
+    try {
+      output.textContent = JSON.stringify(await post(validationButton.dataset.validateAlertmanager), null, 2);
+    } catch (error) {
+      output.textContent = error.message;
+    } finally {
+      validationButton.disabled = false;
+      validationButton.removeAttribute('aria-busy');
+    }
+  });
+  const webhookInput = form.elements.webhook_token;
+  const generateToken = form.querySelector('[data-generate-webhook-token]');
+  const tokenDialog = document.getElementById('webhook-token-dialog');
+  let generatedWebhookToken = false;
+  if (webhookInput && generateToken && tokenDialog) {
+    const preview = tokenDialog.querySelector('[data-webhook-token-preview]');
+    const copy = tokenDialog.querySelector('[data-copy-webhook-token]');
+    const status = tokenDialog.querySelector('[data-webhook-token-status]');
+    const configured = webhookInput.dataset.tokenConfigured === 'true';
+    function refreshTokenButton() {
+      generateToken.disabled = configured || (Boolean(webhookInput.value) && !generatedWebhookToken);
+      generateToken.textContent = configured ? 'Token configured' : generatedWebhookToken ? 'Copy generated token' : 'Generate token';
+    }
+    webhookInput.addEventListener('input', () => {
+      generatedWebhookToken = false;
+      refreshTokenButton();
+    });
+    generateToken.addEventListener('click', () => {
+      if (configured || (webhookInput.value && !generatedWebhookToken)) return;
+      status.textContent = '';
+      status.classList.remove('webhook-token-copied');
+      if (!webhookInput.value) {
+        if (!window.crypto?.getRandomValues) {
+          document.getElementById('incident-feedback').textContent = 'Secure token generation is unavailable in this browser.';
+          return;
+        }
+        const bytes = window.crypto.getRandomValues(new Uint8Array(40));
+        webhookInput.value = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+        bytes.fill(0);
+        generatedWebhookToken = true;
+        form.dataset.unsaved = 'true';
+      }
+      preview.textContent = `${webhookInput.value.slice(0, 4)}••••••••${webhookInput.value.slice(-4)}`;
+      refreshTokenButton();
+      tokenDialog.showModal();
+    });
+    copy.addEventListener('click', async () => {
+      if (!generatedWebhookToken || !webhookInput.value) return;
+      copy.disabled = true;
+      status.textContent = '';
+      status.classList.remove('webhook-token-copied');
+      try {
+        await navigator.clipboard.writeText(webhookInput.value);
+        status.textContent = '✓ Token copied to clipboard.';
+        status.classList.add('webhook-token-copied');
+      } catch {
+        status.textContent = 'Copy failed. Allow clipboard access and try again.';
+      } finally { copy.disabled = false; }
+    });
+    tokenDialog.querySelector('[data-close-webhook-token]').addEventListener('click', () => tokenDialog.close());
+    tokenDialog.addEventListener('close', () => { preview.textContent = ''; status.textContent = ''; });
+    page.cleanup(() => {
+      webhookInput.value = '';
+      generatedWebhookToken = false;
+      preview.textContent = '';
+      status.textContent = '';
+      if (tokenDialog.open) tokenDialog.close();
+    });
+    refreshTokenButton();
+  }
   form.addEventListener('input', () => { form.dataset.unsaved = 'true'; });
   form.addEventListener('change', () => { form.dataset.unsaved = 'true'; });
   function visibility() {
@@ -387,6 +469,7 @@ window.PodPilotPage.register("incidents.js", (page) => {
       const result = await post('/api/v1/incident-connections', {
         id: data.get('id') || null, kind: form.elements.kind.value, name: data.get('name'),
         cluster_id: data.get('cluster_id') || null, token: data.get('token') || '', webhook_token: data.get('webhook_token') || '',
+        webhook_token_generated: generatedWebhookToken,
         access_mode: data.get('access_mode') || 'direct',
         enabled: data.has('enabled'), namespace: data.get('namespace') || 'openshift-gitops', projects: lines('projects'),
         cluster_aliases: lines('cluster_aliases'), target_cluster_ids: [], destination_names: {},

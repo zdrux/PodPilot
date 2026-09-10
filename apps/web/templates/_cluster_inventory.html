@@ -16,7 +16,15 @@
   {% endif %}
   {% if inventory.repositories %}
   <details><summary>CI/CD repository references ({{ inventory.repositories | length }})</summary>
-    <ul>{% for repository in inventory.repositories %}<li><code>{{ repository.url }}</code> · {{ repository.admission | default('observed') | replace('_', ' ') }}</li>{% endfor %}</ul>
+    <p class="muted-copy">Repository URLs referenced by resources on this cluster. A reference does not establish that Argo CD is running here or that the application deploys here. Connector required means PodPilot needs a matching GitHub connector to inspect the repository.</p>
+    <ul>{% for repository in inventory.repositories %}<li>
+      <code>{{ repository.url }}</code> · {{ repository.admission | default('observed') | replace('_', ' ') }}
+      {% for reference in repository.references | default([], true) %}
+      <p class="muted-copy">Referenced by <strong>{{ reference.kind | default('Resource', true) }}</strong> · <code>{% if reference.namespace %}{{ reference.namespace }}/{% endif %}{{ reference.name | default('Unknown name', true) }}</code></p>
+      {% else %}
+      <p class="muted-copy">Source resource details unavailable. Run Auto-detect to refresh this inventory.</p>
+      {% endfor %}
+    </li>{% endfor %}</ul>
   </details>
   {% endif %}
   <details><summary>Discovery scope and limitations</summary>

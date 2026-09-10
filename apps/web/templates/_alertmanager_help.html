@@ -1,0 +1,65 @@
+<dialog id="alertmanager-help-dialog" class="operation-dialog" data-incident-evidence-dialog aria-labelledby="alertmanager-help-title">
+  <header class="operation-dialog-header"><div><p class="eyebrow">Sending cluster · Alertmanager</p><h2 id="alertmanager-help-title">How to configure Alertmanager</h2></div><button type="button" data-incident-evidence-close aria-label="Close Alertmanager help">×</button></header>
+  <div class="operation-dialog-content">
+    <section>
+      <span class="alertmanager-validation-control" tabindex="0" {% if not alertmanager_validation_available %}data-tooltip="{{ 'Sign in to this cluster in Ask PodPilot, then reload this page to validate.' if selected else 'Save this connector first, then sign in to its cluster in Ask PodPilot.' }}"{% endif %}>
+        <button type="button" class="button secondary" data-validate-alertmanager="{{ '/api/v1/incident-connections/' + selected.id + '/validate-alertmanager' if selected else '' }}" {% if not alertmanager_validation_available %}disabled{% endif %}>Validate Configuration</button>
+      </span>
+      <p class="muted-copy">Uses your current cluster login for read-only checks against the saved connector. Secret-read permission is required. No configuration or token values are displayed.</p>
+      <pre data-alertmanager-validation-result role="status" aria-live="polite" hidden></pre>
+    </section>
+    <section><h3>1. Prepare this connector</h3>
+      <p>Save this cluster connector with its webhook token, read-only cluster credential, and admitted alert names, then enable it. Copy the newly generated token before leaving the form. Saved tokens are not displayed or returned.</p>
+      {% if not selected %}<p><strong>Save the connector first.</strong> Reopen this help afterward to get its assigned receiver path. Do not use SAVE_CONNECTOR_FIRST as an ID.</p>{% endif %}
+      <p>Replace PODPILOT_HOST below with PodPilot's HTTPS hostname reachable from the sending Alertmanager. Use this connector only for alerts from its registered cluster. The webhook path must accept bearer authentication without an interactive login redirect.</p>
+    </section>
+    <section><h3>2. Locate each sending Alertmanager configuration</h3>
+      <p>For OpenShift platform monitoring, edit the decoded <code>alertmanager.yaml</code> key in Secret <code>openshift-monitoring/alertmanager-main</code>. If a separate user-workload Alertmanager is enabled, its configuration is in <code>openshift-user-workload-monitoring/alertmanager-user-workload</code>. Configure the instance that actually routes these alerts; do not enable a second sender unnecessarily.</p>
+      <p>For standalone Alertmanager, edit its configured YAML file. For Helm or GitOps-managed installations, update the owning configuration instead of editing generated Pods. Back up the existing configuration and merge the following additions; these snippets are not replacement files.</p>
+    </section>
+    <section><h3>3. Add a receiver to receivers</h3>
+      <p>Append this entry to the existing top-level <code>receivers</code> list. Replace PASTE_WEBHOOK_TOKEN with the exact token saved in PodPilot, without a Bearer prefix. Keep the resulting secret configuration out of Git and logs.</p>
+      <pre><code># Append to receivers:
+- name: podpilot
+  webhook_configs:
+    - url: "https://PODPILOT_HOST/api/v1/incident-webhooks/{{ selected.id if selected else 'SAVE_CONNECTOR_FIRST' }}"
+      send_resolved: true
+      http_config:
+        follow_redirects: false
+        authorization:
+          type: Bearer
+          credentials: "PASTE_WEBHOOK_TOKEN"</code></pre>
+      <p>If a receiver named podpilot already exists, update it rather than adding a duplicate. Alternatively, use <code>credentials_file</code> instead of <code>credentials</code> when the token is mounted from a Secret; the path must exist inside every Alertmanager replica.</p>
+    </section>
+    <section><h3>4. Route critical alerts to PodPilot</h3>
+      <p>Insert this as the first child of the existing root <code>route.routes</code>, before routes that stop matching. Keep the root receiver, existing sibling routes, inhibition rules, and other settings.</p>
+      <pre><code># First entry under route.routes:
+- receiver: podpilot
+  matchers:
+    - 'severity="critical"'
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  continue: true</code></pre>
+      <p><code>continue: true</code> allows later sibling routes to deliver their existing notifications. It does not also notify the parent receiver. If you rely on the root receiver as a fallback, add a final catch-all child using that same receiver name:</p>
+      <pre><code># Last entry under route.routes, when needed:
+- receiver: EXISTING_ROOT_RECEIVER_NAME</code></pre>
+      <p>This forwards critical alerts; PodPilot accepts only names in this connector's saved <strong>Admitted alert names</strong>. Resolved notifications are required to close incidents. Sending the same cluster's alerts through multiple connectors can create duplicate incidents.</p>
+    </section>
+    <section><h3>5. Configure trust and apply</h3>
+      <p>Keep certificate verification enabled. For a private CA, mount the CA bundle into Alertmanager and add the following beneath the receiver's <code>http_config</code>:</p>
+      <pre><code>tls_config:
+  ca_file: /etc/alertmanager/secrets/podpilot-webhook-ca/ca.crt</code></pre>
+      <p>For OpenShift platform monitoring, create Secret <code>podpilot-webhook-ca</code> with key <code>ca.crt</code> in <code>openshift-monitoring</code>, and add its name to <code>alertmanagerMain.secrets</code> in the <code>config.yaml</code> key of ConfigMap <code>cluster-monitoring-config</code>. Preserve the existing secret mounts. Other installations need their own supported mount configuration.</p>
+      <p>Validate the complete merged file using an amtool version matching your Alertmanager:</p>
+      <pre><code>amtool check-config alertmanager.yaml</code></pre>
+      <p>Save the merged YAML through its Secret or deployment configuration. OpenShift's monitoring operator reloads the managed configuration; for standalone Alertmanager, use its configured reload mechanism. Check configuration reload status and notification errors.</p>
+    </section>
+    <section><h3>6. Verify delivery</h3>
+      <p>Use a controlled critical test alert whose name is admitted for this connector, then resolve it. Confirm the incident appears in PodPilot, its receiver's <strong>Last accepted</strong> timestamp updates, and the resolution arrives. This can start an investigation. <strong>Test &amp; discover</strong> checks connector access; it does not test Alertmanager delivery.</p>
+      <p>HTTP 401 indicates an invalid token or disabled/missing receiver; a login redirect indicates front-door routing/authentication needs correction. HTTP 202 alone does not prove an incident was created: a non-admitted alert can be acknowledged and ignored. TLS errors require correcting certificate trust or hostname; timeouts require checking sender reachability.</p>
+    </section>
+    <p class="muted-copy">References: <a href="https://prometheus.io/docs/alerting/latest/configuration/" target="_blank" rel="noopener noreferrer">Alertmanager configuration</a> · <a href="https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html/configuring_core_platform_monitoring/configuring-alerts-and-notifications" target="_blank" rel="noopener noreferrer">OpenShift alert configuration</a>. Use the documentation matching your installed version.</p>
+  </div>
+</dialog>

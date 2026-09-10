@@ -121,6 +121,82 @@ def notification(status='firing', starts='2026-09-05T12:00:00Z', name='etcdNoLea
         'startsAt':starts, 'fingerprint':'abc', 'annotations':{'summary':'test'}}]}
 
 
+def test_generated_webhook_token_cannot_replace_saved_token(client):
+    sid = source(client)
+    rendered = client.get('/settings/connectors?edit='+sid, headers={'x-forwarded-user':'admin'})
+    assert 'data-token-configured="true"' in rendered.text
+    assert 'data-generate-webhook-token disabled' in rendered.text
+    assert 'w'*40 not in rendered.text
+    rejected = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={
+        'id':sid, 'kind':'cluster', 'name':'SNO', 'cluster_id':SYSTEM_CLUSTER_ID,
+        'enabled':True, 'webhook_token':'a'*80, 'webhook_token_generated':True})
+    assert rejected.status_code == 409
+    assert send(client, sid, notification()).status_code == 202
+
+
+def test_generated_webhook_token_can_fill_empty_connector_once(client):
+    payload = {'kind':'cluster', 'name':'New receiver', 'cluster_id':SYSTEM_CLUSTER_ID,
+               'enabled':False}
+    created = client.post('/api/v1/incident-connections', headers=admin_headers(client), json=payload)
+    assert created.status_code == 200
+    sid = created.json()['id']
+    rendered = client.get('/settings/connectors?edit='+sid, headers={'x-forwarded-user':'admin'})
+    assert 'data-token-configured="false"' in rendered.text
+    assert 'id="webhook-token-dialog"' in rendered.text
+    generated = {**payload, 'id':sid, 'webhook_token':'b'*80, 'webhook_token_generated':True}
+    saved = client.post('/api/v1/incident-connections', headers=admin_headers(client), json=generated)
+    assert saved.status_code == 200
+    assert 'b'*80 not in saved.text
+    assert client.post('/api/v1/incident-connections', headers=admin_headers(client), json=generated).status_code == 409
+
+
+def test_alertmanager_help_contains_scoped_receiver_and_valid_yaml(client):
+    import html
+    import yaml
+    sid = source(client)
+    rendered = client.get('/settings/connectors?edit='+sid, headers={'x-forwarded-user':'admin'}).text
+    assert 'data-incident-evidence-open="alertmanager-help-dialog"' in rendered
+    dialog = rendered.split('id="alertmanager-help-dialog"', 1)[1].split('</dialog>', 1)[0]
+    snippets = [html.unescape(value) for value in re.findall(r'<pre><code>(.*?)</code></pre>', dialog, re.S)]
+    receiver = yaml.safe_load(snippets[0])[0]
+    assert receiver['webhook_configs'][0]['url'].endswith('/api/v1/incident-webhooks/'+sid)
+    assert receiver['webhook_configs'][0]['http_config']['authorization']['credentials'] == 'PASTE_WEBHOOK_TOKEN'
+    assert receiver['webhook_configs'][0]['send_resolved'] is True
+    route = yaml.safe_load(snippets[1])[0]
+    assert route['continue'] is True and route['matchers'] == ['severity="critical"']
+    assert yaml.safe_load(snippets[2])[0]['receiver'] == 'EXISTING_ROOT_RECEIVER_NAME'
+    assert yaml.safe_load(snippets[3])['tls_config']['ca_file'].endswith('/ca.crt')
+    assert 'w'*40 not in dialog
+    unsaved = client.get('/settings/connectors?new=1&type=cluster', headers={'x-forwarded-user':'admin'}).text
+    assert 'Save the connector first.' in unsaved and 'SAVE_CONNECTOR_FIRST' in unsaved
+
+
+def test_alertmanager_validation_requires_current_owner_login_and_csrf(client, monkeypatch):
+    sid = source(client)
+    url = '/api/v1/incident-connections/'+sid+'/validate-alertmanager'
+    assert client.post(url, headers={'x-forwarded-user':'admin'}).status_code == 403
+    assert client.post(url, headers=admin_headers(client)).status_code == 409
+    rendered = client.get('/settings/connectors?edit='+sid, headers={'x-forwarded-user':'admin'}).text
+    assert 'Sign in to this cluster in Ask PodPilot' in rendered
+    assert 'data-validate-alertmanager="'+url+'" disabled' in rendered
+    vault = client.app.state.delegated_vault
+    session_id = vault.new_session_id()
+    connection = vault.put(session_id=session_id, owner='admin', cluster_id=SYSTEM_CLUSTER_ID,
+                           remote_username='admin', remote_uid='admin', token='delegated-only')
+    client.cookies.set('podpilot_delegated_session', session_id)
+    calls = []
+    def collect(proxy_url, **kwargs):
+        calls.append((proxy_url, kwargs))
+        return {'configurations':[{'status':'static_checks_passed'}], 'limitations':[]}
+    monkeypatch.setattr('podpilot_api.incidents.validate_alertmanager_configuration', collect)
+    response = client.post(url, headers=admin_headers(client))
+    assert response.status_code == 200
+    assert connection.read_only_proxy_capability in calls[0][0]
+    assert calls[0][1]['expected_token'] == 'w'*40
+    assert 'w'*40 not in response.text and 'delegated-only' not in response.text
+    vault.pop_session(session_id=session_id, owner='admin')
+
+
 def send(client, source_id, payload):
     return client.post(f'/api/v1/incident-webhooks/{source_id}', headers={'Authorization':'Bearer '+'w'*40}, json=payload)
 
@@ -449,7 +525,7 @@ def test_connections_secret_isolation_and_access(client):
     assert client.post('/api/v1/incident-connections',headers={'x-forwarded-user':'admin'},json={}).status_code == 403
 
 
-def test_connector_directory_groups_independent_types_and_uses_type_chooser(client):
+def test_connector_directory_groups_independent_types_and_uses_row_add_actions(client):
     source(client)
     headers=admin_headers(client)
     assert client.post('/api/v1/incident-connections',headers=headers,json={
@@ -465,9 +541,9 @@ def test_connector_directory_groups_independent_types_and_uses_type_chooser(clie
     assert 'Central GitOps' in page.text and 'Corporate GitHub' in page.text
     assert 'aria-label="Configured connectors"' not in page.text
     chooser=client.get('/settings/connectors?new=1',headers={'x-forwarded-user':'admin'})
-    assert 'Choose a connector type' in chooser.text
+    assert 'Choose a connector type' not in chooser.text
+    assert 'connector-kind-chooser' not in chooser.text
     assert 'data-incident-cluster-picker' in chooser.text
-    assert 'Select registered clusters for incident response.' in chooser.text
     assert '/settings/connectors?new=1&amp;type=argocd' in chooser.text
     assert '/settings/connectors?new=1&amp;type=github' in chooser.text
     cluster_setup=client.get('/settings/clusters?new=1&connector=1',headers={'x-forwarded-user':'admin'})

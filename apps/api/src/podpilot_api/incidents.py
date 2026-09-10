@@ -29,6 +29,7 @@ from podpilot_diagnostics.incidents import DEFAULT_ALERTS, AlertWebhook, admitte
 from podpilot_openshift.incidents import IncidentReadError, IncidentReader, https_origin, clean_evidence
 from podpilot_openshift.log_metrics import LokiQueryClient
 from podpilot_openshift.credentials import KubernetesSecretCredentialStore, CredentialStoreError
+from podpilot_openshift.alertmanager_validation import validate_alertmanager_configuration
 
 LOGGER = logging.getLogger("uvicorn.error")
 
@@ -529,6 +530,7 @@ class ConnectionInput(BaseModel):
     enabled: bool = False
     token: str = Field(default="", max_length=16384)
     webhook_token: str = Field(default="", max_length=512)
+    webhook_token_generated: bool = False
     namespace: str = Field(default="openshift-gitops", pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
     projects: list[str] = Field(default_factory=list, max_length=30)
     cluster_aliases: list[str] = Field(default_factory=list, max_length=30)
@@ -766,12 +768,16 @@ class IncidentService:
                 value.url = https_origin(value.url)
                 if not value.repositories or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r) or any(x in (".", "..") for x in r.split('/')) for r in value.repositories):
                     raise HTTPException(422, "Specify allowed GitHub repositories as owner/repository.")
-            config = value.model_dump(exclude={"id", "kind", "name", "cluster_id", "enabled", "token", "webhook_token"})
+            config = value.model_dump(exclude={"id", "kind", "name", "cluster_id", "enabled", "token", "webhook_token", "webhook_token_generated"})
             if value.kind == "cluster":
                 config["incident_response_enabled"] = value.enabled or not row or incident_enrolled(row)
             connection_id = row.id if row else str(uuid4())
             credential_key = f"connection-{connection_id}"
             webhook_key = f"webhook-{connection_id}" if value.kind == "cluster" else None
+            if value.webhook_token_generated and (
+                not webhook_key or not value.webhook_token or self.credentials().get(webhook_key)
+            ):
+                raise HTTPException(409, "A generated token cannot replace a saved webhook token. Reload the connector to use its current configuration.")
             existing_token = None
             if value.enabled and not value.token:
                 if value.kind == "argocd" and value.access_mode == "kubernetes":
@@ -1856,6 +1862,10 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         rows = [row for row in rows if row.kind != "cluster" or incident_enrolled(row)]
         discovery_views, topology = _connector_topology(rows, discoveries, clusters)
         selected = next((r for r in rows if r.id == request.query_params.get("edit")), None)
+        validation_login = (app.state.delegated_vault.get(
+            session_id=request.cookies.get('podpilot_delegated_session', ''), owner=user.username,
+            cluster_id=selected.cluster_id,
+        ) if selected and selected.kind == 'cluster' else None)
         requested_kind = request.query_params.get("type")
         new_kind = requested_kind if requested_kind in {"cluster", "argocd", "github"} else None
         requested_cluster_id = request.query_params.get("cluster_id") if new_kind in {"cluster", "argocd"} else None
@@ -1875,6 +1885,8 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
                 }
         return page(request, user, "connectors.html", {"connections": rows, "clusters": clusters,
             "selected": selected, "new_kind": new_kind, "new_cluster": new_cluster,
+            "alertmanager_validation_available": bool(validation_login),
+            "webhook_token_configured": bool(selected and selected.webhook_key and service.credentials().get(selected.webhook_key)),
             "choose_kind": request.query_params.get("new") == "1" and new_kind is None,
             "config": json.loads(selected.config_json) if selected else (
                 {"access_mode": "kubernetes", "namespace": request.query_params.get("namespace", "openshift-gitops")}
@@ -1883,6 +1895,39 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             "enrolled_cluster_ids": {row.cluster_id for row in rows if row.kind == "cluster"},
             "receiver_status": receiver_status,
             })
+
+    @app.post("/api/v1/incident-connections/{connection_id}/validate-alertmanager")
+    async def validate_alertmanager(connection_id: str, request: Request, user=Depends(current_user)):
+        verify_csrf(request)
+        service.manage(user)
+        with Session(app.state.engine) as db:
+            source = db.get(IncidentConnection, connection_id)
+            if not source or source.kind != 'cluster':
+                raise HTTPException(404, 'Incident cluster connector not found.')
+            cluster = db.get(Cluster, source.cluster_id)
+            if not cluster or not cluster.is_enabled or cluster.visibility != 'shared':
+                raise HTTPException(409, 'The registered cluster is unavailable.')
+            cluster_id, webhook_key = source.cluster_id, source.webhook_key
+        login = app.state.delegated_vault.get(
+            session_id=request.cookies.get('podpilot_delegated_session', ''),
+            owner=user.username, cluster_id=cluster_id,
+        )
+        if login is None:
+            raise HTTPException(409, 'Sign in to this cluster in Ask PodPilot, then reload this page to validate.')
+        proxy_url = 'http://127.0.0.1:8080/internal/delegated-proxy/' + login.read_only_proxy_capability
+        def collect():
+            return validate_alertmanager_configuration(proxy_url, source_id=connection_id,
+                expected_token=service.credentials().get(webhook_key), public_host=request.url.hostname)
+        try:
+            report = await asyncio.to_thread(collect)
+        except Exception:
+            raise HTTPException(503, 'Alertmanager validation is unavailable. Check your cluster login and retry.') from None
+        with Session(app.state.engine) as db:
+            service.audit(db, user.username, 'alertmanager_configuration_validated',
+                connection_id=connection_id, cluster_id=cluster_id,
+                statuses=[item['status'] for item in report['configurations']])
+            db.commit()
+        return report
 
     @app.post("/api/v1/incident-clusters/enrollment")
     async def enroll_incident_clusters(request: Request, user=Depends(current_user)):
