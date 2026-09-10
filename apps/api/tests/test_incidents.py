@@ -1917,3 +1917,68 @@ def test_incident_cluster_enrollment_is_explicit_atomic_and_reversible(client):
     with Session(client.app.state.engine) as db:
         audit = db.scalars(select(AuditEvent).where(AuditEvent.action=='incident.cluster_enrollment_changed')).all()
         assert audit and all(item.actor == 'admin' for item in audit)
+
+
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_namespace_first_investigation_expands_only_with_reason(client, synthetic):
+    sid = source(client)
+    body = notification()
+    body['alerts'][0]['labels'].update(namespace='checkout', podpilot_test=str(synthetic).lower())
+    send(client, sid, body)
+    service = client.app.state.incident_service
+    calls, prompts = [], []
+    class Reader:
+        def catalog(self):
+            return {key: key for key in ['operators', 'cluster-health', 'nodes',
+                'pods:checkout', 'events:checkout', 'rollouts:checkout', 'storage:checkout']}
+        def collect(self, key):
+            calls.append(key)
+            return {'rows': []}
+        def close(self): pass
+    service.cluster_reader = lambda *args: Reader()
+    service.model_context = lambda engine: (ModelProfileConfig(provider_label='test',
+        base_url='https://model.invalid', chat_model='test', embedding_model=None,
+        timeout_seconds=30, max_output_tokens=2000), 'model-secret')
+    class Provider:
+        def incident_step(self, *args):
+            prompt = args[-1]
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                assert calls == ['pods:checkout', 'events:checkout', 'rollouts:checkout', 'storage:checkout']
+                return IncidentDecision(collect=['cluster-health'])
+            if len(prompts) == 2:
+                assert 'cluster-health' not in calls
+                return IncidentDecision(collect=['nodes'], summary='Check node availability to explain scheduling symptoms.')
+            return IncidentDecision(summary='Investigation complete.', evidence_ids=['E1'])
+    service.provider = Provider()
+    with Session(client.app.state.engine) as db:
+        rid = db.scalar(select(IncidentRun.id))
+    service.investigate(client.app.state.engine, rid)
+    assert calls[-1] == 'nodes'
+    assert 'cluster-health' not in calls
+    assert prompts[0]['scope']['initial_namespaces'] == ['checkout']
+    if synthetic:
+        assert 'normal full investigation' in prompts[0]['objective']
+        assert 'basic platform access' not in prompts[0]['objective']
+    with Session(client.app.state.engine) as db:
+        run = db.get(IncidentRun, rid)
+        assert 'Expanding incident scope' in run.activity_json
+        assert run.status == 'completed'
+
+
+def test_specialist_reports_are_matched_by_task_not_shared_name():
+    incident = SimpleNamespace(alerts_json='{}', title='Test', updated_at=datetime.now(timezone.utc))
+    tasks = [dict(id=f'specialist-{i}', role='specialist', label='Evidence specialist',
+        source='Evidence specialist', state='completed' if i < 3 else 'running',
+        result=f'original {i}' if i < 3 else '') for i in range(1, 4)]
+    reports = [dict(id=f'E{i}', source='Evidence specialist', task_id=f'specialist-{i}',
+        data={'summary': f'report {i}'}) for i in (1, 2)]
+    run = SimpleNamespace(status='running', created_at=datetime.now(timezone.utc), completed_at=None,
+        briefing_json='{}', activity_json=json.dumps({'tasks': tasks}), evidence_json=json.dumps(reports))
+    view = _incident_activity_view(incident, run)
+    assert [t['result'] for t in view['specialists']] == ['report 1', 'report 2', '']
+    for report in reports:
+        report.pop('task_id')
+    run.evidence_json = json.dumps(reports)
+    view = _incident_activity_view(incident, run)
+    assert [t['result'] for t in view['specialists']] == ['original 1', 'original 2', '']

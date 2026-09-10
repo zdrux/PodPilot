@@ -322,12 +322,22 @@ def _incident_activity_view(incident, run):
         for item in evidence
         if isinstance(item, dict) and str(item.get("source") or "").endswith(" specialist")
     }
+    task_reports = {
+        item.get("task_id"): _activity_result(item.get("source"), item.get("data"))
+        for item in evidence if isinstance(item, dict) and item.get("task_id")
+    }
+    # Legacy recovery is safe only when both the task and report are unique.
+    specialist_summaries = {
+        source: summary for source, summary in specialist_summaries.items()
+        if sum(task.get("source") == source for task in tasks) == 1
+        and sum(item.get("source") == source for item in evidence if isinstance(item, dict)) == 1
+    }
     # Specialist evidence retains the complete bounded report. Prefer it over
     # activity text persisted by older builds that cut summaries at 240 chars.
     tasks = [
         {
             **task,
-            "result": specialist_summaries.get(str(task.get("source")), task.get("result", "")),
+            "result": task_reports.get(task.get("id"), specialist_summaries.get(str(task.get("source")), task.get("result", ""))) if task.get("state") == "completed" else task.get("result", ""),
         }
         for task in tasks
     ]
@@ -1074,9 +1084,9 @@ class IncidentService:
                 })
                 write_activity_locked()
 
-        def record(source, data, *, coordinate=True):
+        def record(source, data, *, coordinate=True, task_id=None):
             item = clean_evidence({"id": f"E{len(evidence)+1}", "source": source,
-                "observed_at": utcnow().isoformat(), "cluster_id": cluster.id, "data": data}, secrets)
+                "observed_at": utcnow().isoformat(), "cluster_id": cluster.id, "data": data, **({"task_id": task_id} if task_id else {})}, secrets)
             if _serialized_bytes(evidence) + _serialized_bytes(item) > policy.max_evidence_bytes:
                 limitations.append("Total evidence budget reached; remaining collection is incomplete.")
                 raise ValueError("Evidence budget reached")
@@ -1133,7 +1143,7 @@ class IncidentService:
                 if not report["evidence_ids"]:
                     limitations.append(f"{label} specialist returned no valid source citation.")
                 update_specialist(task_id, "completed", result=_activity_result(label, report))
-                return record(f"{label} specialist", report)
+                return record(f"{label} specialist", report, task_id=task_id)
             except Exception:
                 limitations.append(f"{label} specialist analysis unavailable; bounded source evidence is retained.")
                 update_specialist(task_id, "error", result="Analysis unavailable; source evidence was retained.")
@@ -1203,7 +1213,7 @@ class IncidentService:
                 alert_snapshot = json.loads(run.alert_snapshot_json)
                 synthetic = all(a.get('labels', {}).get('podpilot_test') == 'true' for a in alert_snapshot.values())
                 simulation = all(a.get('labels', {}).get('podpilot_simulation') == 'true' for a in alert_snapshot.values())
-                run_timeout = 240 if synthetic else policy.run_timeout_seconds
+                run_timeout = policy.run_timeout_seconds
                 hard_deadline_minutes = run_timeout / 60
                 hard_deadline_limit = (
                     f"Overall {hard_deadline_minutes:g}-minute safety deadline reached."
@@ -1257,24 +1267,20 @@ class IncidentService:
                 "summary": a.get("annotations", {}).get("summary", ""),
             } for a in alert_snapshot.values()], "total_alerts": len(alert_snapshot),
                 "partial": False})
-            try:
-                record("operators", reader.collect("operators"))
-            except Exception as exc:
-                limitations.append(
-                    f"Cluster operator snapshot failed: {_collector_failure_reason(exc)} "
-                    "Other evidence collection continued."
-                )
-            cluster_health_collected = False
-            if "cluster-health" in reader.catalog():
+            initial_collectors = (
+                [f"{kind}:{ns}" for ns in alert_namespaces for kind in ("pods", "events", "rollouts", "storage")]
+                if alert_namespaces else ["operators", "cluster-health"]
+            )
+            initial_consumed = set()
+            for key in initial_collectors:
+                if key not in reader.catalog():
+                    continue
+                initial_consumed.add(key)
                 try:
-                    coordinator_activity("Surveying unhealthy resources across the cluster", phase="Initial assessment")
-                    record("cluster-health", reader.collect("cluster-health"))
-                    cluster_health_collected = True
+                    coordinator_activity(f"Collecting initial incident evidence: {key}", phase="Initial assessment")
+                    record(key, reader.collect(key))
                 except Exception as exc:
-                    limitations.append(
-                        "Cluster-wide unhealthy-resource survey failed: "
-                        f"{_collector_failure_reason(exc)} Scoped investigation continued."
-                    )
+                    limitations.append(f"{key}: {_collector_failure_reason(exc)} Initial collection continued.")
             # Preserve recent changes before model-guided investigation; no arbitrary repository traversal.
             changes = []
             onset = min(datetime.fromisoformat(a["startsAt"]) for a in alert_snapshot.values())
@@ -1384,20 +1390,16 @@ class IncidentService:
             if not profile or not api_key:
                 coordinator_activity("Collecting deterministic cluster snapshots", phase="Evidence collection")
                 limitations.append("No usable model profile; deterministic cluster snapshots only.")
-                for key in ("version", "nodes", "machine-pools"):
+                for key in (() if alert_namespaces else ("version", "nodes", "machine-pools")):
                     try:
                         record(key, reader.collect(key))
                     except Exception:
                         limitations.append(f"{key}: evidence unavailable.")
                 status = "partial"
             else:
-                available = reader.catalog()
-                available.pop("operators", None)
-                consumed = {"operators"}
-                if cluster_health_collected:
-                    available.pop("cluster-health", None)
-                    consumed.add("cluster-health")
-                max_rounds = 6 if synthetic else policy.max_rounds
+                consumed = set(initial_consumed)
+                available = {k: v for k, v in reader.catalog().items() if k not in consumed}
+                max_rounds = policy.max_rounds
                 for step in range(max_rounds):
                     if time.monotonic()-started > run_timeout:
                         limitations.append(hard_deadline_limit)
@@ -1410,12 +1412,14 @@ class IncidentService:
                     compact_coordinator()
                     decision = self.provider.incident_step(deadline_profile(), api_key, {
                         "objective": (
-                            "This signal is labelled as a synthetic webhook test. Verify basic platform access from the operator snapshot and at most version/node snapshots, then finish with a concise test result. The test signal is not evidence of an etcd outage. Report any independently observed health issues separately; do not pursue an RCA for the synthetic signal."
+                            "This is a synthetic incident test. Run the normal full investigation within configured budgets. The trigger is synthetic, not proof of a real fault; distinguish observed problems from the test premise."
                             if synthetic else
                             "This is a controlled incident simulation. Conduct a normal, thorough Kubernetes or OpenShift investigation across relevant bounded collectors and specialist reports, but do not assume the simulated alert labels prove a real failure. Separate observed cluster impact from the scenario premise and finish with cited findings and operator next steps."
                             if simulation else
                             "Investigate this admitted critical Kubernetes or OpenShift incident; identify impact, likely causes, contradictions, recent changes and operator next steps."
                         ),
+                        "scope": {"initial_namespaces": alert_namespaces, "strategy": "namespace-first" if alert_namespaces else "platform"},
+                        "scope_guidance": "Investigate the alert scope first. Expand to platform or other namespaces only to explain an observed dependency, symptom, or collection gap; state the reason in summary when requesting broader collectors. Keep unrelated health findings separate from incident causes. Consolidate overlapping specialist reports; shared source evidence is not independent corroboration.",
                         "evidence": coordination_evidence,
                         "limitations": _dedupe_limitations([
                             *_evidence_limitations(evidence), *limitations,
@@ -1450,6 +1454,14 @@ class IncidentService:
                         if key not in available:
                             limitations.append("Model requested an unavailable collector; request rejected.")
                             continue
+                        if alert_namespaces and key in {"operators", "cluster-health", "nodes", "version", "machine-pools"}:
+                            if not decision.summary.strip():
+                                limitations.append(f"{key}: scope expansion requires a reason in the coordinator summary.")
+                                continue
+                            coordinator_activity(
+                                "Expanding incident scope: " + clean_evidence(decision.summary, secrets),
+                                phase="Scope expansion",
+                            )
                         collector_label = available.pop(key)
                         consumed.add(key)
                         try:
@@ -1482,9 +1494,9 @@ class IncidentService:
                         with ThreadPoolExecutor(max_workers=min(policy.specialist_concurrency, len(selected_logs)),
                                 thread_name_prefix="incident-log-specialist") as pool:
                             analyses = list(pool.map(analyze_log, specialist_work))
-                        for source_item, (analysis, error) in zip(selected_logs, analyses):
+                        for (source_item, task_id), (analysis, error) in zip(specialist_work, analyses):
                             if analysis:
-                                record("Pod log specialist", analysis)
+                                record("Pod log specialist", analysis, task_id=task_id)
                             else:
                                 limitations.append(error)
                                 coordination_evidence.append(source_item)

@@ -1,5 +1,23 @@
 # PodPilot Operations
 
+## Incident investigation scope
+
+Synthetic alerts (`podpilot_test=true`) run the normal read-only investigation
+with configured time and round budgets; the label marks a synthetic premise,
+not a connectivity-only test. Alerts with namespace labels begin with bounded
+pods, events, rollouts, and storage reads in those namespaces. Platform collectors
+remain available, but the coordinator must include an expansion reason in its
+summary before using them; that reason is retained in activity. Without a model,
+scoped runs retain namespace evidence without automatically broadening collection.
+Alerts without namespace scope retain the initial platform survey.
+
+Evidence specialists summarize bounded evidence partitions and cite source IDs.
+They cannot collect additional evidence or communicate directly with peers.
+The coordinator combines reports, consolidates overlapping observations, and
+selects subsequent reads. Shared source evidence is not independent corroboration;
+unrelated health findings must remain separate from incident causes. Reports are
+matched to task IDs; ambiguous legacy reports preserve each task's saved result.
+
 The browser shell's CSS and JavaScript URLs carry a shared content fingerprint
 computed at application startup. Restart/redeploy after changing static files.
 In-page navigation performs a full navigation when the returned shell fingerprint
