@@ -169,7 +169,7 @@ html[data-theme="orange"] .activity-sidebar { background: var(--theme-surface); 
 /* Reading surfaces and code use neutral contrast; orange identifies actions. */
 html[data-theme="orange"] .ask-thread,
 html[data-theme="orange"] .ask-panel .ask-empty { background: var(--chat-canvas); }
-html[data-theme="orange"] .ask-thread .chat-markdown { max-width: 100ch; color: var(--chat-ink); font-size: 16px; line-height: 1.8; }
+html[data-theme="orange"] .ask-thread .chat-markdown { max-width: none; color: var(--chat-ink); font-size: 16px; line-height: 1.8; }
 html[data-theme="orange"] .ask-thread .chat-markdown code { padding: .12em .3em; border: 1px solid var(--chat-code-border); border-radius: 4px; color: var(--chat-code-ink); background: var(--chat-code-surface); font-size: .9em; font-weight: 500; box-decoration-break: clone; -webkit-box-decoration-break: clone; overflow-wrap: anywhere; }
 html[data-theme="orange"] .ask-thread .chat-markdown pre { padding: 16px 18px; border-color: var(--chat-code-border); background: var(--chat-code-surface); line-height: 1.65; }
 html[data-theme="orange"] .ask-thread .chat-markdown pre code,

@@ -119,10 +119,15 @@ provenance, and save/test actions remain visible. Connector forms use the same
 flat section treatment without removing field help or security boundaries.
 
 Orange chat uses a soft neutral reading canvas, 16px body text at 1.8 line height,
-and a 100-character maximum prose width. Inline code and code blocks use dark slate
+and prose spanning the full message column, aligned with answer tables. Inline code and code blocks use dark slate
 text on a pale neutral fill with a visible border, rather than dark cyan highlights.
 Links and citations retain orange action emphasis; semantic operational states keep
 their existing meaning. Selection uses a pale peach fill with dark text.
+
+Evidence-backed badges use dark green text on pale green in all light themes,
+including Orange. Answer-status tooltips use the paired `--theme-tooltip-text`
+and `--theme-tooltip-surface` tokens to retain light text on a dark popup in every
+theme, for both hover and keyboard focus.
 
 | Role | Default dark value | Visual use |
 | --- | --- | --- |

@@ -7,6 +7,8 @@
   --border: #243149;
   --border-bright: #344563;
   --text: #f4f7fb;
+  --theme-tooltip-text: #f4f7fb;
+  --theme-tooltip-surface: #111b29;
   --muted: #93a2b8;
   --subtle: #677891;
   --cyan: #45d4e8;
@@ -259,7 +261,7 @@ h3 { margin-bottom: 8px; font-size: 16px; }
 .answer-status { position: relative; display: inline-flex; align-items: center; min-height: 20px; padding: 2px 8px; border: 1px solid; border-radius: 999px; font-size: 9px; font-weight: 800; line-height: 1; cursor: help; }
 .answer-status-grounded { border-color: rgba(74, 222, 154, .26); color: var(--green); background: rgba(74, 222, 154, .08); }
 .answer-status-limited { border-color: rgba(255, 157, 102, .3); color: var(--orange); background: rgba(255, 157, 102, .08); }
-.answer-status::after { position: absolute; z-index: 20; top: calc(100% + 7px); left: 0; width: max-content; max-width: min(330px, 70vw); padding: 7px 9px; border: 1px solid var(--border-bright); border-radius: 7px; color: var(--text); background: #111b29; box-shadow: 0 8px 22px rgba(0, 0, 0, .35); content: attr(data-tooltip); font-size: 10px; font-weight: 500; line-height: 1.4; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .14s ease, transform .14s ease; }
+.answer-status::after { position: absolute; z-index: 20; top: calc(100% + 7px); left: 0; width: max-content; max-width: min(330px, 70vw); padding: 7px 9px; border: 1px solid var(--border-bright); border-radius: 7px; color: var(--theme-tooltip-text); background: var(--theme-tooltip-surface); box-shadow: 0 8px 22px rgba(0, 0, 0, .35); content: attr(data-tooltip); font-size: 10px; font-weight: 500; line-height: 1.4; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity .14s ease, transform .14s ease; }
 .answer-status:hover::after, .answer-status:focus-visible::after { opacity: 1; transform: translateY(0); }
 .chat-citations { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .chat-citations span, .chat-guidance { color: var(--subtle); font-size: 8px; }
@@ -2041,7 +2043,7 @@ html[data-theme] .ask-thread .chat-meta .answer-status-grounded {
   background: rgba(26, 126, 78, .3);
   box-shadow: inset 0 0 0 1px rgba(85, 240, 165, .08), 0 0 12px rgba(38, 210, 120, .08);
 }
-html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"]) .ask-thread .chat-meta .answer-status-grounded {
+html:is([data-theme="light"], [data-theme="medium-light"], [data-theme="cibc-red"], [data-theme="orange"]) .ask-thread .chat-meta .answer-status-grounded {
   border-color: #168248;
   color: #075f32;
   background: #bfeccc;
