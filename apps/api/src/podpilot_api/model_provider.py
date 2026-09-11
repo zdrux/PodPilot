@@ -1876,8 +1876,11 @@ class OpenAIResponsesProvider:
             if response.output_parsed is None:
                 raise ValueError("Missing incident decision")
             return response.output_parsed
+        except ModelProviderError:
+            raise
         except Exception as exc:
-            raise ModelProviderError("Incident model response unavailable or invalid.") from exc
+            raise ModelProviderError("Incident model response unavailable or invalid.",
+                failure_type="schema_validation" if isinstance(exc, ValidationError) else _provider_failure_type(exc)) from exc
 
     """OpenAI Responses adapter; SDK objects never cross this boundary."""
 

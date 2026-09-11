@@ -37,6 +37,11 @@ class IncidentReader:
             raise ValueError("Investigation credential is missing.")
         self.token = token
         self.log_targets = {}
+        self.workload_targets = {}
+        self.workload_selectors = {}
+        self.focus_objects = {}
+        self.focus_claims = {}
+        self.focus_node_label_keys = set()
         self.monitor = None
         self.loki = None
         overrides = {key: value for key, value in {
@@ -56,6 +61,33 @@ class IncidentReader:
             timeout=8, follow_redirects=False, transport=transport,
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
         self.configure(self.policy)
+
+    def focus_workloads(self, targets):
+        """Constrain Deployment incident evidence without guessing Pod name prefixes."""
+        for target in targets:
+            ns, name = target.get("namespace", ""), target.get("deployment", "")
+            if self._valid_namespace(ns) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", name):
+                self.workload_targets.setdefault(ns, set()).add(name)
+
+    @staticmethod
+    def _matches_workload_selector(labels, selector):
+        if not selector or not (selector.get("matchLabels") or selector.get("matchExpressions")):
+            return False
+        if any(labels.get(k) != v for k, v in selector.get("matchLabels", {}).items()):
+            return False
+        for expr in selector.get("matchExpressions", []):
+            key, op, values = expr.get("key"), expr.get("operator"), expr.get("values", [])
+            if op == "In" and labels.get(key) not in values:
+                return False
+            if op == "NotIn" and labels.get(key) in values:
+                return False
+            if op == "Exists" and key not in labels:
+                return False
+            if op == "DoesNotExist" and key in labels:
+                return False
+            if op not in {"In", "NotIn", "Exists", "DoesNotExist"}:
+                return False
+        return True
 
     def close(self):
         self.client.close()
@@ -313,7 +345,36 @@ class IncidentReader:
             path = paths[key]
         rows, limitations = [], []
         retained_bytes = 0
+        targets = self.workload_targets.get(ns, set())
+        if targets and kind == "pods" and ns not in self.workload_selectors:
+            selectors = []
+            for name in sorted(targets):
+                workload = self.get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+                selector = workload.get("spec", {}).get("selector", {})
+                if not selector:
+                    raise IncidentReadError("Target Deployment has no usable selector; unrelated Pods were not collected.")
+                selectors.append(selector)
+            self.workload_selectors[ns] = selectors
         for item in self._items(path, params, limitations):
+            metadata = item.get("metadata", {})
+            if targets:
+                name = metadata.get("name")
+                if kind == "pods":
+                    if not any(self._matches_workload_selector(metadata.get("labels", {}), selector)
+                               for selector in self.workload_selectors.get(ns, [])):
+                        continue
+                    self.focus_objects.setdefault(ns, set()).add(name)
+                    self.focus_objects[ns].update(ref.get("name") for ref in metadata.get("ownerReferences", []))
+                    self.focus_claims.setdefault(ns, set()).update(
+                        volume.get("persistentVolumeClaim", {}).get("claimName")
+                        for volume in item.get("spec", {}).get("volumes", [])
+                        if volume.get("persistentVolumeClaim", {}).get("claimName"))
+                elif kind == "rollouts" and name not in targets:
+                    continue
+                elif kind == "events" and item.get("involvedObject", {}).get("name") not in targets | self.focus_objects.get(ns, set()):
+                    continue
+                elif kind == "storage" and name not in self.focus_claims.get(ns, set()):
+                    continue
             meta, spec, status = item.get("metadata", {}), item.get("spec", {}), item.get("status", {})
             row = {"name": meta.get("name"), "namespace": meta.get("namespace"),
                    "uid": meta.get("uid"), "created_at": meta.get("creationTimestamp")}
@@ -353,7 +414,10 @@ class IncidentReader:
                         containers.append({'name':container.get('name'),'ready':container.get('ready'),
                             'restartCount':container.get('restartCount'),'state':state,
                             'lastState':last_state})
-                    row.update(phase=status.get("phase"), containers=containers,
+                    self.focus_node_label_keys.update(spec.get("nodeSelector", {}))
+                    row.update(node_selector=spec.get("nodeSelector", {}), node_name=spec.get("nodeName"),
+                        resource_requests=[{"name": c.get("name"), "requests": c.get("resources", {}).get("requests", {})} for c in spec.get("containers", [])],
+                        phase=status.get("phase"), containers=containers,
                         images=[c.get("image") for c in spec.get("containers", [])],
                         owner_references=[{field: owner.get(field) for field in (
                             "apiVersion", "kind", "name", "uid", "controller"
@@ -371,6 +435,14 @@ class IncidentReader:
                     ]
                     for c in candidate_containers:
                         pod_name, container_name = meta.get("name", ""), c.get("name", "")
+                        container_status = statuses.get(container_name, {})
+                        if targets and status.get("phase") == "Pending" and not (
+                            container_status.get("state", {}).get("running")
+                            or container_status.get("state", {}).get("terminated")
+                            or container_status.get("lastState")
+                        ):
+                            # Unstarted target containers cannot supply application logs.
+                            continue
                         if (all(re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", x)
                                     for x in (pod_name, container_name))):
                             suffix = hashlib.sha256(f"{ns}/{pod_name}/{container_name}".encode()).hexdigest()[:20]
@@ -381,7 +453,8 @@ class IncidentReader:
                             if self.loki is not None:
                                 self.log_targets["loki-logs:" + suffix] = (ns, pod_name, container_name, "loki")
                 elif kind == "rollouts":
-                    row.update(generation=meta.get("generation"), observed_generation=status.get("observedGeneration"),
+                    row.update(node_selector=spec.get("template", {}).get("spec", {}).get("nodeSelector", {}),
+                        generation=meta.get("generation"), observed_generation=status.get("observedGeneration"),
                         replicas=spec.get("replicas"), available=status.get("availableReplicas"),
                         images=[c.get("image") for c in spec.get("template", {}).get("spec", {}).get("containers", [])])
                 elif kind == "storage":
@@ -390,7 +463,8 @@ class IncidentReader:
                 elif kind == "version":
                     row.update(history=status.get("history", []), desired=status.get("desired"))
                 elif kind == "nodes":
-                    row.update(capacity=status.get("capacity", {}), allocatable=status.get("allocatable", {}),
+                    row.update(selector_labels={k: v for k, v in meta.get("labels", {}).items() if k in self.focus_node_label_keys},
+                        capacity=status.get("capacity", {}), allocatable=status.get("allocatable", {}),
                         roles=[k.removeprefix('node-role.kubernetes.io/') for k in meta.get('labels', {}) if k.startswith('node-role.kubernetes.io/')])
                 elif kind == "operators":
                     row["versions"] = status.get("versions", [])

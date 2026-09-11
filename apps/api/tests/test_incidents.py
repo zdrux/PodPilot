@@ -1996,7 +1996,13 @@ def test_specialist_reports_are_matched_by_task_not_shared_name():
     assert [t['result'] for t in view['specialists']] == ['original 1', 'original 2', '']
 
 
-def test_model_failure_retains_provisional_findings_without_claiming_access_failure(client):
+@pytest.mark.parametrize("failure_type, expected", [
+    ("provider_error", "model request failed"), ("timeout", "timed out"),
+    ("schema_validation", "assessment schema"), ("empty_response", "no structured"),
+    ("input_limit", "context budget"), ("rate_limited", "rate-limited"),
+    ("request_rejected", "rejected the request"),
+])
+def test_model_failure_retains_provisional_findings_without_claiming_access_failure(client, failure_type, expected):
     from podpilot_api.model_provider import ModelProviderError
     sid = source(client)
     send(client, sid, notification())
@@ -2016,7 +2022,7 @@ def test_model_failure_retains_provisional_findings_without_claiming_access_fail
             if ctx.get('specialist'):
                 return IncidentDecision(summary='Observed degraded operator; cause remains unverified.',
                     evidence_ids=[ctx['evidence'][0]['id']])
-            raise ModelProviderError('private upstream response model-secret')
+            raise ModelProviderError('private upstream response model-secret', failure_type=failure_type)
     service.provider = Provider()
     with Session(client.app.state.engine) as db:
         rid = db.scalar(select(IncidentRun.id))
@@ -2026,7 +2032,7 @@ def test_model_failure_retains_provisional_findings_without_claiming_access_fail
         briefing = json.loads(run.briefing_json)
         assert run.status == 'partial'
         assert 'Final assessment unavailable' in briefing['summary']
-        assert 'model request failed' in briefing['summary']
+        assert expected in briefing['summary']
         assert any('Provisional' in item for item in briefing['problems'])
         assert 'restore missing investigation access' not in run.briefing_json
         assert 'private upstream' not in run.briefing_json
@@ -2059,3 +2065,35 @@ def test_incident_deletion_requires_admin_confirmation_and_inactive_runs(client)
     assert client.post(url, headers=admin_headers(client), json={'confirmed': True}).status_code == 404
     # Deletion is not suppression: a new firing notification can create a case.
     assert send(client, sid, notification()).json()['incident_id'] != iid
+
+
+def test_deployment_focus_preserves_scheduling_evidence_and_excludes_peer_logs():
+    def handler(request):
+        path = request.url.path
+        if path.endswith('/deployments/web-a'):
+            return httpx.Response(200, json={'spec': {'selector': {'matchLabels': {'app': 'web-a'}}}})
+        if path.endswith('/pods'):
+            return httpx.Response(200, json={'items': [
+                {'metadata': {'name': 'web-a-pod', 'namespace': 'test', 'labels': {'app': 'web-a'},
+                    'ownerReferences': [{'kind': 'ReplicaSet', 'name': 'web-a-rs'}]},
+                 'spec': {'nodeSelector': {'test/pool': 'absent'}, 'containers': [{'name': 'web'}]},
+                 'status': {'phase': 'Pending', 'conditions': [{'type': 'PodScheduled', 'status': 'False', 'reason': 'Unschedulable'}]}},
+                {'metadata': {'name': 'other-pod', 'namespace': 'test', 'labels': {'app': 'other'}},
+                 'spec': {'containers': [{'name': 'client'}]}, 'status': {'phase': 'Running'}}]})
+        if path.endswith('/events'):
+            return httpx.Response(200, json={'items': [
+                {'metadata': {'name': name}, 'involvedObject': {'name': pod}, 'reason': 'FailedScheduling',
+                 'message': 'node selector mismatch'} for name, pod in [('target-event', 'web-a-pod'), ('other-event', 'other-pod')]]})
+        if path.endswith('/nodes'):
+            return httpx.Response(200, json={'items': [{'metadata': {'name': 'node1',
+                'labels': {'test/pool': 'other', 'unrelated': 'omit'}}, 'status': {}}]})
+        return httpx.Response(200, json={'items': []})
+    reader = IncidentReader('https://cluster.invalid', 'credential', namespaces=['test'], transport=httpx.MockTransport(handler))
+    reader.focus_workloads([{'namespace': 'test', 'deployment': 'web-a'}])
+    pods = reader.collect('pods:test')['rows']
+    assert [p['name'] for p in pods] == ['web-a-pod']
+    assert pods[0]['node_selector'] == {'test/pool': 'absent'}
+    assert all(target[1] != 'other-pod' for target in reader.log_targets.values())
+    assert [e['name'] for e in reader.collect('events:test')['rows']] == ['target-event']
+    assert reader.collect('nodes')['rows'][0]['selector_labels'] == {'test/pool': 'other'}
+    reader.close()

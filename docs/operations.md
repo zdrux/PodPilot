@@ -23,6 +23,14 @@ summary before using them; that reason is retained in activity. The generic
 such as nodes remain available. Workload target labels (Deployment, StatefulSet,
 DaemonSet, Pod, Service, and container) are retained in the alert evidence so
 the coordinator can distinguish the target from unrelated namespace failures.
+For Deployment targets, the reader resolves the Deployment's selector and retains
+matching Pods, related warning events, the target rollout, and referenced PVCs.
+Only those Pods become log capabilities; unstarted Pending containers do not offer
+application logs. Namespace LISTs may still find matching objects, but unrelated
+workloads are excluded from projected evidence. An unreadable target is reported
+as a collection failure rather than broadening to unrelated Pods. Pod/rollout
+evidence includes node selectors and Pod resource requests; node evidence includes
+only labels needed for collected node selectors.
 Without a model,
 scoped runs retain namespace evidence without automatically broadening collection.
 Alerts without namespace scope retain the initial platform survey.
@@ -41,6 +49,9 @@ fallback assessment and cited provisional specialist findings, without claiming
 a root cause. Interrupted runs record the failing stage and a safe error category;
 raw upstream exceptions are not exposed. Generic advice to restore credentials
 is not used as a substitute for a diagnosed authentication failure.
+Known model failure categories (timeout, rate limit, request rejection, input limit,
+empty response, and schema validation) appear as fixed operator-facing text.
+Unknown failures remain generic; raw provider response bodies are not exposed.
 
 The browser shell's CSS and JavaScript URLs carry a shared content fingerprint
 computed at application startup. Restart/redeploy after changing static files.

@@ -1255,6 +1255,9 @@ class IncidentService:
                 limitations.append(f"Initial namespace collection reached the configured {policy.max_namespaces}-namespace ceiling.")
                 alert_namespaces = alert_namespaces[:policy.max_namespaces]
             reader = self.cluster_reader(cluster, token, alert_namespaces, policy, started + run_timeout)
+            focus_workloads = getattr(reader, "focus_workloads", None)
+            if callable(focus_workloads):
+                focus_workloads([a.get("labels", {}) for a in alert_snapshot.values()])
             source_config = json.loads(source.config_json)
             if source_config.get("monitoring_url"):
                 reader.monitor = self.reader_factory(source_config["monitoring_url"], token,
@@ -1517,7 +1520,14 @@ class IncidentService:
             status = "partial" if evidence else "failed"
             stage = str(activity.get("current_work") or "investigation")
             if isinstance(exc, ModelProviderError):
-                reason = "The model request failed or returned an invalid response."
+                reason = {
+                    "timeout": "The model request timed out.",
+                    "rate_limited": "The model provider rate-limited the request.",
+                    "request_rejected": "The model provider rejected the request.",
+                    "schema_validation": "The model response did not match the required assessment schema.",
+                    "empty_response": "The model returned no structured assessment content.",
+                    "input_limit": "The incident model input exceeded its configured context budget.",
+                }.get(exc.failure_type, "The model request failed or returned an invalid response.")
             elif isinstance(exc, TimeoutError):
                 reason = "The investigation time budget expired."
             elif isinstance(exc, IncidentReadError):
