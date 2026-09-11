@@ -2032,3 +2032,30 @@ def test_model_failure_retains_provisional_findings_without_claiming_access_fail
         assert 'private upstream' not in run.briefing_json
         assert 'model-secret' not in run.briefing_json
         assert any('Stage:' in item for item in briefing['system_limitations'])
+
+
+def test_incident_deletion_requires_admin_confirmation_and_inactive_runs(client):
+    sid = source(client)
+    iid = send(client, sid, notification()).json()['incident_id']
+    url = f'/api/v1/incidents/{iid}/delete'
+    assert client.post(url, headers=admin_headers(client), json={}).status_code == 422
+    assert client.post(url, headers=admin_headers(client), json={'confirmed': True}).status_code == 409
+    assert client.post(url, headers={'x-forwarded-user': 'admin'}, json={'confirmed': True}).status_code == 403
+    with Session(client.app.state.engine) as db:
+        run = db.scalar(select(IncidentRun).where(IncidentRun.incident_id == iid))
+        run.status = 'completed'
+        db.commit()
+    rendered = client.get(f'/incidents/{iid}', headers={'x-forwarded-user': 'admin'})
+    assert 'Yes, delete incident' in rendered.text
+    headers = admin_headers(client)
+    headers['x-forwarded-user'] = 'sre'
+    assert client.post(url, headers=headers, json={'confirmed': True}).status_code == 403
+    assert client.post(url, headers=admin_headers(client), json={'confirmed': True}).status_code == 200
+    with Session(client.app.state.engine) as db:
+        assert db.get(FleetIncident, iid) is None
+        assert db.scalar(select(func.count()).select_from(IncidentRun).where(IncidentRun.incident_id == iid)) == 0
+        assert db.get(IncidentConnection, sid) is not None
+    assert client.get(f'/incidents/{iid}', headers={'x-forwarded-user': 'admin'}).status_code == 404
+    assert client.post(url, headers=admin_headers(client), json={'confirmed': True}).status_code == 404
+    # Deletion is not suppression: a new firing notification can create a case.
+    assert send(client, sid, notification()).json()['incident_id'] != iid

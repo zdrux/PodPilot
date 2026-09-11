@@ -1,5 +1,16 @@
 # PodPilot Operations
 
+## Managing incident history
+
+Configuration administrators can use **Delete incident…** on the incident detail
+page. The Yes/No confirmation identifies the case and run count. Deletion removes
+the case and all investigation runs, evidence, and assessments; it retains audit
+history, connector credentials, and separate Ask conversations. Queued or running
+investigations block deletion. It does not silence Alertmanager: later firing
+deliveries can create another incident. The CSRF-protected POST
+`/api/v1/incidents/{id}/delete` requires `{"confirmed": true}` and administrator
+authorization, returns 409 for active work, and records an `incident.deleted` audit.
+
 ## Incident investigation scope
 
 Synthetic alerts (`podpilot_test=true`) run the normal read-only investigation

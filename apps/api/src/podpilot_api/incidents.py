@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict, ValidationError
-from sqlalchemy import select, update, func
+from sqlalchemy import select, update, delete, func
 from sqlalchemy.orm import Session
 
 from podpilot_api.auth import Role
@@ -528,6 +528,10 @@ def _collector_failure_reason(exc):
     if isinstance(exc, TimeoutError):
         return "collector operation timed out."
     return "unexpected collector error."
+
+
+class IncidentDeleteInput(BaseModel):
+    confirmed: bool = False
 
 
 class ConnectionInput(BaseModel):
@@ -1806,6 +1810,28 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
             "Cache-Control": "no-cache, no-store",
             "X-Accel-Buffering": "no",
         })
+
+    @app.post("/api/v1/incidents/{incident_id}/delete")
+    async def delete_incident(incident_id: str, value: IncidentDeleteInput, request: Request, user=Depends(current_user)):
+        service.manage(user)
+        verify_csrf(request)
+        if not value.confirmed:
+            raise HTTPException(422, "Confirm deletion of the incident and its investigation history.")
+        async with service.lock:
+            with Session(app.state.engine) as db:
+                incident = db.get(FleetIncident, incident_id)
+                if not incident:
+                    raise HTTPException(404, "Incident not found.")
+                active = db.scalar(select(IncidentRun.id).where(
+                    IncidentRun.incident_id == incident_id,
+                    IncidentRun.status.in_(["queued", "running"])))
+                if active:
+                    raise HTTPException(409, "Wait for the queued or running investigation to finish before deleting this incident.")
+                db.execute(delete(IncidentRun).where(IncidentRun.incident_id == incident_id))
+                db.delete(incident)
+                service.audit(db, user.username, "deleted", incident_id=incident_id)
+                db.commit()
+        return {"ok": True, "url": "/incidents"}
 
     @app.post("/api/v1/incidents/{incident_id}/rerun")
     async def rerun(incident_id: str, request: Request, user=Depends(current_user)):

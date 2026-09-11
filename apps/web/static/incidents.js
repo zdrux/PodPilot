@@ -27,7 +27,7 @@ window.PodPilotPage.register("incidents.js", (page) => {
         if (isDiscovery) button.textContent = 'Queuing test…';
         if (button.hasAttribute('data-incident-rerun')) preferLatestRun = true;
         try {
-          const result = await post(button.dataset.incidentPost);
+          const result = await post(button.dataset.incidentPost, button.hasAttribute('data-incident-delete-confirmed') ? {confirmed: true} : undefined);
           if (result.url) { window.location.assign(result.url); return; }
           if (button.hasAttribute('data-incident-rerun')) { window.location.reload(); return; }
           if (isDiscovery) document.dispatchEvent(new Event('podpilot-discovery-started'));
@@ -37,6 +37,8 @@ window.PodPilotPage.register("incidents.js", (page) => {
               'Investigation queued. Live progress will appear automatically.';
         } catch (error) {
           preferLatestRun = false;
+          const dialogError = button.closest('dialog')?.querySelector('[data-incident-delete-error]');
+          if (dialogError) dialogError.textContent = error.message;
           const feedback = document.getElementById('incident-feedback');
           if (feedback) feedback.textContent = error.message;
         } finally { button.disabled = false; button.removeAttribute('aria-busy'); button.textContent = originalLabel; }

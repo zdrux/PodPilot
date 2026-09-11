@@ -20,10 +20,21 @@
       {% if investigation_active %}<span class="incident-live-connection" data-live-status role="status">Connecting…</span>{% endif %}
       <button class="button primary" data-incident-rerun data-incident-post="/api/v1/incidents/{{ incident.id }}/rerun">Rerun investigation</button>
       <button class="button" data-incident-post="/api/v1/incidents/{{ incident.id }}/continue">Continue in Ask</button>
+      {% if user.can_manage_configuration %}<button type="button" class="button" data-incident-evidence-open="delete-incident-dialog" aria-haspopup="dialog" {% if investigation_active %}disabled title="Wait for the investigation to finish before deleting."{% endif %}>Delete incident…</button>{% endif %}
     </div>
   </header>
 
   <p role="status" id="incident-feedback" class="incident-feedback"></p>
+  {% if user.can_manage_configuration %}
+  <dialog class="operation-dialog" id="delete-incident-dialog" data-incident-evidence-dialog aria-labelledby="delete-incident-title" aria-describedby="delete-incident-description">
+    <div class="operation-dialog-content">
+      <h2 id="delete-incident-title">Delete this incident?</h2>
+      <p id="delete-incident-description">Permanently delete {{ incident.title }} and all {{ runs | length }} investigation runs, including their evidence and assessments? This cannot be undone. Audit history and separately created Ask conversations are retained. This does not resolve or silence alerts in Alertmanager; a new firing delivery may create another incident.</p>
+      <div class="form-actions"><button type="button" class="button secondary" data-incident-evidence-close autofocus>No, keep incident</button><button type="button" class="button primary" data-incident-delete-confirmed data-incident-post="/api/v1/incidents/{{ incident.id }}/delete">Yes, delete incident</button></div>
+      <p role="status" data-incident-delete-error></p>
+    </div>
+  </dialog>
+  {% endif %}
   {% if not cluster.tls_verify and not cluster.is_system %}<section class="notice warning-notice">TLS certificate and hostname verification is disabled for this cluster.</section>{% endif %}
   {% for limitation in incident_limitations %}<section class="notice warning-notice">{{ limitation }}</section>{% endfor %}
 

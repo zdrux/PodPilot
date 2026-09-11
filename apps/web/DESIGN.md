@@ -30,6 +30,11 @@ must clarify ownership, state, grouping, or interaction.
 
 ## 2. Design Principles
 
+Incident deletion uses an operation dialog with the case name, history count,
+explicit consequences, and Yes/No actions; No receives initial focus. Errors stay
+visible inside the dialog. Configuration administrators see the delete action;
+active investigations disable it, with the server enforcing the same guard.
+
 ### Evidence first
 
 Observed facts, model interpretation, limitations, and operator actions must be
