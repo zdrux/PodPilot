@@ -231,6 +231,9 @@ The Alertmanager help modal reuses operation-dialog styling and monospaced YAML.
 Its Validate Configuration action requires a saved connector and current cluster
 login; a focusable disabled-button wrapper explains the login requirement on hover
 or keyboard focus. Findings contain static checks and limitations, never raw Secrets.
+Incident evidence dialogs can grow to the viewport height minus 32px. Keep the
+header and close action visible and use a single scrolling content body; retained
+payload blocks expand naturally instead of adding nested vertical scrollbars.
 Below the editor, use the observed-topology surface for bounded connector discovery:
 compact per-connector status cards followed by a horizontally contained Application
 relationship table. Show incomplete and ambiguous matches explicitly; never style a
