@@ -678,7 +678,7 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
 
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
 @pytest.mark.parametrize("approval_bypass", [False, True])
-@pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False)])
+@pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False), ("pod_logs", False)])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, approval_bypass: bool,
     discovery_tool: str, inventory_enabled: bool,
@@ -703,7 +703,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                 summary=f"Collected delegated {intent.tool} evidence.",
                 source=f"test:{intent.tool}",
                 collected_at=datetime.now(timezone.utc),
-                data={"complete": True},
+                data=({"tail": "isolated-log-marker"} if intent.tool == "pod_logs" else {"complete": True}),
             ),))
 
     def build_explorer(**kwargs):
@@ -747,6 +747,12 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
             self.calls = 0
             self.agent_messages: list[list[dict[str, object]]] = []
 
+        def analyze_logs(self, _profile, _api_key, context):
+            from podpilot_api.model_provider import AdHocLogAnalysis
+            assert context["logs"][0]["excerpt"] == "isolated-log-marker"
+            assert "history" not in context
+            return AdHocLogAnalysis(overview="No anomalies in the bounded excerpt.")
+
         def next_agent_step(self, _profile, _api_key, messages):
             self.agent_messages.append(list(messages))
             self.calls += 1
@@ -755,6 +761,9 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                     "cluster_id": cluster_id,
                     "discovery_query": "cluster log forwarder",
                     "limit": 5,
+                } if discovery_tool != "pod_logs" else {
+                    "cluster_id": cluster_id, "namespace": "dns", "name": "dns-1",
+                    "container": "dns", "log_mode": "analyze",
                 })
                 return AgentStep(
                     assistant_message={
@@ -964,7 +973,12 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     assert [intent.tool for intent in explorer_intents] == [
         *([discovery_tool] if discovery_tool != "discover_inventory" or inventory_enabled else []), "query_metrics", "query_audit_events",
     ]
-    if discovery_tool != "discover_inventory" or inventory_enabled:
+    if discovery_tool == "pod_logs":
+        serialized = json.dumps(provider.agent_messages)
+        assert "isolated-log-marker" not in serialized
+        assert "No anomalies in the bounded excerpt." in serialized
+        assert "raw_log_excerpt" in serialized
+    elif discovery_tool != "discover_inventory" or inventory_enabled:
         assert explorer_intents[0].discovery_query == "cluster log forwarder"
     else:
         assert "disabled in this model profile" in json.dumps(provider.agent_messages)
@@ -2513,6 +2527,15 @@ def test_collection_lets_model_investigate_repeated_certificate_log_signals() ->
     class Provider:
         def __init__(self) -> None:
             self.contexts = []
+
+        def analyze_logs(self, _profile, _api_key, context):
+            from podpilot_api.model_provider import AdHocLogAnalysis, LogAnalysisIssue
+            log = context["logs"][0]
+            return AdHocLogAnalysis(overview="Certificate files are missing.", issues=[LogAnalysisIssue(
+                evidence_ids=[log["evidence_id"]], severity="error", category="tls",
+                summary="Certificate files cannot be opened.", potential_impact="TLS unavailable",
+                supporting_excerpt=log["excerpt"], confidence="high",
+            )])
 
         def plan_ad_hoc(self, _profile, _api_key, context):
             self.contexts.append(context)
@@ -13186,6 +13209,13 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
             actor="ivy",
             content="Investigate safely",
         ))
+        db_session.add(AdHocMessage(
+            id="saved-operation-message", conversation_id=conversation_id, role="assistant",
+            content="Earlier inventory complete.", tool_activity_json=json.dumps({
+                "evidence_ledger": [{"sequence": 1, "tool": "pod_health_summary",
+                    "status": "succeeded", "command": "earlier-saved-operation"}],
+            }),
+        ))
         db_session.add(AdHocRun(
             id="00000000-0000-0000-0000-000000000189",
             conversation_id=conversation_id,
@@ -13216,7 +13246,9 @@ def test_active_ask_progress_renders_each_update_message_once(tmp_path: Path) ->
     for index in range(1, 7):
         assert f"Command update {index}." not in page.text
     assert 'data-operation-key="call-live-1"' in page.text
-    assert "1 operation" in page.text
+    assert "2 operations" in page.text
+    timeline = page.text.split('<ol class="operation-timeline"', 1)[1].split("</ol>", 1)[0]
+    assert timeline.index("earlier-saved-operation") < timeline.index('data-operation-key="call-live-1"')
     assert "oc get pods -A" in page.text
     assert status.status_code == 200
     assert status.json()["operations"] == operations
@@ -13418,7 +13450,9 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "data-activity-live" not in template
     assert "data-operation-live-tail" in template
     assert "<strong>Investigating" in template
-    assert 'timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]")' in script
+    assert 'timeline.insertBefore(row, timeline.querySelector("[data-operation-live-tail]"))' in script
+    timeline_template = template.split('<ol class="operation-timeline"', 1)[1].split("</ol>", 1)[0]
+    assert timeline_template.index("for message in messages") < timeline_template.index("if active_run and active_run.operations")
     assert "active_run.events[-6:]" not in template
     assert 'hiddenProgressPhases = new Set(["queued", "starting"])' in script
     assert 'phaseName === "agent_command" ? 5 : 3' in script
@@ -15839,3 +15873,63 @@ def test_bounded_planner_enforces_inventory_policy_before_cluster_read(enabled):
     if not enabled:
         assert any("disabled in this model profile" in item for item in result.limitations)
         assert result.activity[0]["status"] == "rejected_before_collection"
+
+
+def test_retained_ask_logs_are_owner_scoped_and_expire(tmp_path: Path) -> None:
+    from podpilot_api.ask_logs import LOG_EXCERPTS
+    app, settings = make_app(tmp_path, assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+                             source=FakeAlertSource())
+    reference = LOG_EXCERPTS.put("<script>untrusted log text</script>")
+    observation = {"id": "log-1", "tool": "pod_logs", "summary": "Log analysis",
+                   "source": "pod/dns", "collected_at": datetime.now(timezone.utc).isoformat(),
+                   "data": {"raw_log_excerpt": reference}}
+    engine = build_engine(settings)
+    with Session(engine) as session:
+        session.add(AdHocConversation(id="log-test", created_by="ivy", title="DNS logs",
+                    status="active", evidence_json=json.dumps([observation])))
+        session.add(AdHocMessage(id="log-message", conversation_id="log-test", role="assistant",
+                    content="Inspected logs.", citations_json='["log-1"]',
+                    tool_activity_json=json.dumps({"evidence_ledger": [{"sequence": 1, "tool": "pod_logs",
+                    "status": "succeeded", "evidence_ids": ["log-1"], "observations": [observation]}]})))
+        session.commit()
+    engine.dispose()
+    url = "/api/v1/ask/log-test/log-excerpts/log-1"
+    with TestClient(app) as client:
+        assert client.get(url, headers={"x-forwarded-user": "ada"}).status_code == 404
+        response = client.get(url, headers={"x-forwarded-user": "ivy"})
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["excerpt"] == "<script>untrusted log text</script>"
+        page = client.get("/ask/log-test", headers={"x-forwarded-user": "ivy"})
+        assert page.status_code == 200
+        assert f'data-log-evidence-url="{url}"' in page.text
+        assert "<script>untrusted log text</script>" not in page.text
+        with LOG_EXCERPTS.lock:
+            _, _, size = LOG_EXCERPTS.entries.pop(reference["id"])
+            LOG_EXCERPTS.size -= size
+        assert client.get(url, headers={"x-forwarded-user": "ivy"}).status_code == 410
+
+
+@pytest.mark.parametrize("command,expected", [
+    ("oc get pod api-1 -n payments", "Get Pod api-1 in payments"),
+    ("kubectl -n payments get pod/api-1 -o yaml", "Get Pod api-1 in payments"),
+    ("oc get namespaces payments", "Get Namespace payments"),
+    ("oc get po -A -o json | jq '.items'", "Get Pods across namespaces"),
+    ("oc logs api-1 -n payments --tail=50", "Read logs for Pod api-1 in payments"),
+    ("oc get pods; oc delete pod api-1", "Run multiple commands"),
+    ("echo 'oc get secret credentials'", "Execute shell"),
+    ("curl -H 'Authorization: Bearer sensitive-token' https://example.test", "HTTP request"),
+    ("oc --token sensitive-token get pod api-1", "Get Pod api-1"),
+])
+def test_operation_titles_describe_commands_without_exposing_arguments(command, expected):
+    from podpilot_api.main import _operation_title
+    assert _operation_title({"tool": "execute_shell", "command": command}) == expected
+
+
+def test_operation_titles_cover_typed_calls_and_live_ledger():
+    from podpilot_api.main import _operation_title
+    assert _operation_title({"tool": "http_probe", "request": {"url": "https://example.test/private?token=secret"}}) == "HTTP probe"
+    entry = _agent_tool_ledger_entry(sequence=1, tool_name="execute_shell", tool_call_id="test",
+        cluster_id="local", cluster_name="Local", status="running",
+        request={"command": "oc get pod api-1"}, result={})
+    assert entry["title"] == "Get Pod api-1"

@@ -2196,7 +2196,7 @@ class KubernetesReadOnlyExplorer:
         try:
             text = self._read_pod_log(
                 name=name, namespace=namespace, container=container, previous=previous,
-                since_seconds=intent.since_seconds,
+                since_seconds=intent.since_seconds, tail_lines=intent.tail_lines,
             )
         except ApiException as exc:
             body = str(getattr(exc, "body", "") or "").lower()
@@ -2204,7 +2204,7 @@ class KubernetesReadOnlyExplorer:
                 raise
             text = self._read_pod_log(
                 name=name, namespace=namespace, container=container, previous=False,
-                since_seconds=intent.since_seconds,
+                since_seconds=intent.since_seconds, tail_lines=intent.tail_lines,
             )
             previous = False
             limitations = (

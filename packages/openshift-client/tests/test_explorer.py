@@ -1288,9 +1288,10 @@ def test_logs_preserve_semantic_time_bound_in_api_call_and_evidence():
 
     result = target.execute(ReadIntent(
         tool="pod_logs", namespace="payments", name="api", container="app",
-        since_seconds=600,
+        since_seconds=600, tail_lines=50, log_mode="display",
     ))
 
+    assert core.calls[0]["tail_lines"] == 50
     assert core.calls[0]["since_seconds"] == 600
     assert result.observations[0].data["sinceSeconds"] == 600
 

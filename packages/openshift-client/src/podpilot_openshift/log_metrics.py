@@ -474,7 +474,7 @@ class BoundedLogVolumeReader:
         end = self._clock()
         start = end - timedelta(seconds=min(intent.range_seconds, 86400, self._max_range_seconds))
         snapshot = self._source.query_container_logs(namespace=intent.namespace, pod=intent.name,
-            container=intent.container, start=start, end=end, limit=min(intent.limit, 200))
+            container=intent.container, start=start, end=end, limit=min(intent.tail_lines or intent.limit, 200))
         entries, remaining = [], 32768
         for entry in snapshot.entries:
             try:
@@ -498,6 +498,8 @@ class BoundedLogVolumeReader:
             entries.append({"timestamp": at.isoformat(), "message": line})
         limitations = ["Retained logs may have gaps. Empty results do not prove the absence of failures.",
                       "Queries use exact namespace/Pod/container names; retained entries without UID may span Pod replacements."]
+        if intent.tail_lines and intent.tail_lines > 200:
+            limitations.append("Requested log line count exceeds the Loki collector cap of 200 entries.")
         if not snapshot.is_complete or len(entries) != len(snapshot.entries):
             limitations.append("Log collection reached a result, time, or byte boundary; history is partial.")
         return ReadResult((AdHocObservation(id=f"loki-{uuid4()}", tool="pod_logs",

@@ -3,6 +3,7 @@
 {% block title %}Ask PodPilot{% endblock %}
 {% block body_class %}ask-page{% endblock %}
 {% block content %}
+<script src="{{ url_for('static', path='/ask-logs.js') }}" defer></script>
 {% set delegated_action_session = conversation and conversation.execution_mode == 'action' %}
 <div class="ask-layout{% if delegated_action_session %} action-session{% endif %}" data-ask-layout>
   <section class="panel ask-panel">
@@ -352,6 +353,13 @@
                 <strong>{{ cited.summary if cited else id }}</strong>
                 {% if cited and cited.facts %}<dl class="evidence-reference-facts">{% for fact in cited.facts %}<div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}</dl>{% endif %}
                 {% if cited %}<small>Collected {{ cited.collected_at | est_time('%Y-%m-%d %H:%M:%S') }} · {{ cited.source }}</small>{% endif %}
+                {% if cited and cited.raw_log_excerpt %}
+                <details data-log-evidence-url="/api/v1/ask/{{ conversation.id }}/log-excerpts/{{ id | urlencode }}">
+                  <summary>View retained Pod logs</summary>
+                  <p>Bounded, redacted excerpt retained for up to 24 hours.</p>
+                  <pre><code data-log-excerpt>Open to load logs.</code></pre>
+                </details>
+                {% endif %}
                 <code>{{ id }}</code>
               </span>
             </div></li>
@@ -595,42 +603,17 @@
       <ol class="operation-timeline" data-operation-timeline
         data-run-id="{{ active_run.id if active_run else '' }}"
         data-completed-operation-count="{{ activity_summary.operation_count }}">
-        {% if active_run and active_run.operations %}
-          {% for item in active_run.operations %}
-          {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
-          <li class="operation-event operation-status-{{ item.status }}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
-            <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
-              aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
-              <span class="operation-marker" aria-hidden="true"></span>
-              <div class="operation-event-body">
-                <div class="operation-event-heading">
-                  <strong>{{ item.tool | replace('_', ' ') }}</strong>
-                  {% if item.content_filtered %}<span class="filtered-output-indicator" title="{{ operator_filter_reasons(item.filter_reasons) | join(' ') }}"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""></span>{% endif %}
-                  <span class="operation-status">{{ item.status | replace('_', ' ') }}</span>
-                </div>
-                <div class="operation-event-meta">
-                  {% if item.started_at %}<time>{{ item.started_at | est_time('%H:%M:%S') }}</time>{% endif %}
-                  <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
-                  {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
-                </div>
-                {% if item.command %}<code>{{ item.command | operation_display_text }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
-              </div>
-            </button>
-          </li>
-          {% endfor %}
-        {% endif %}
         {% for message in messages if message.activity and message.activity.evidence_ledger %}
           {% for item in message.activity.evidence_ledger %}
           {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
           <li class="operation-event operation-status-{{ item.status }}">
             <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
               aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item.tool | replace('_', ' ') }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
+              aria-label="View {{ item | operation_title }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
               <span class="operation-marker" aria-hidden="true"></span>
               <div class="operation-event-body">
               <div class="operation-event-heading">
-                <strong>{{ item.tool | replace('_', ' ') }}</strong>
+                <strong>{{ item | operation_title }}</strong>
                 {% if item.content_filtered %}
                 <span class="filtered-output-indicator" title="{{ operator_filter_reasons(item.filter_reasons) | join(' ') }}">
                   <img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt="">
@@ -649,6 +632,31 @@
           </li>
           {% endfor %}
         {% endfor %}
+        {% if active_run and active_run.operations %}
+          {% for item in active_run.operations %}
+          {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
+          <li class="operation-event operation-status-{{ item.status }}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
+            <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
+              aria-haspopup="dialog" aria-controls="{{ operation_id }}"
+              aria-label="View {{ item | operation_title }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
+              <span class="operation-marker" aria-hidden="true"></span>
+              <div class="operation-event-body">
+                <div class="operation-event-heading">
+                  <strong>{{ item | operation_title }}</strong>
+                  {% if item.content_filtered %}<span class="filtered-output-indicator" title="{{ operator_filter_reasons(item.filter_reasons) | join(' ') }}"><img src="{{ url_for('static', path='/icons/shield-exclamation.svg') }}" alt=""></span>{% endif %}
+                  <span class="operation-status">{{ item.status | replace('_', ' ') }}</span>
+                </div>
+                <div class="operation-event-meta">
+                  {% if item.started_at %}<time>{{ item.started_at | est_time('%H:%M:%S') }}</time>{% endif %}
+                  <span>{{ item.cluster_name or item.cluster_id or 'Unresolved cluster' }}</span>
+                  {% if item.duration_ms is defined %}<span>{{ '%.1f' | format(item.duration_ms / 1000) }}s</span>{% endif %}
+                </div>
+                {% if item.command %}<code>{{ item.command | operation_display_text }}</code>{% elif item.request %}<code>{{ item.request | tojson }}</code>{% endif %}
+              </div>
+            </button>
+          </li>
+          {% endfor %}
+        {% endif %}
         {% if active_run %}
         <li class="operation-live-tail" data-operation-live-tail role="status" aria-live="polite">
           <span class="thinking-spinner" aria-hidden="true"></span><strong>Investigating…</strong>
@@ -669,7 +677,7 @@
   {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
   <dialog id="{{ operation_id }}" class="operation-dialog" data-operation-dialog data-live-operation-dialog data-operation-key="{{ item.tool_call_id }}" aria-labelledby="{{ operation_id }}-title">
     <div class="operation-dialog-header">
-      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item.tool | replace('_', ' ') }}</h2></div>
+      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item | operation_title }}</h2></div>
       <button type="button" data-operation-close aria-label="Close operation details">×</button>
     </div>
     <div class="operation-dialog-content">
@@ -686,6 +694,17 @@
       {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt | operation_display_text }}</code></pre></section>{% endif %}
+
+      {% for evidence_id in item.evidence_ids or [] %}
+        {% set log_evidence = evidence_by_id.get(evidence_id) %}
+        {% if log_evidence and log_evidence.raw_log_excerpt %}
+        <details data-log-evidence-url="/api/v1/ask/{{ conversation.id }}/log-excerpts/{{ evidence_id | urlencode }}">
+          <summary>View retained Pod logs</summary>
+          <p>Bounded, redacted excerpt. Available for up to 24 hours; restart or cache eviction may remove it sooner.</p>
+          <pre><code data-log-excerpt>Open to load logs.</code></pre>
+        </details>
+        {% endif %}
+      {% endfor %}
       {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error | operation_display_text }}</code></pre></section>{% endif %}
@@ -699,7 +718,7 @@
   {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
   <dialog id="{{ operation_id }}" class="operation-dialog" data-operation-dialog aria-labelledby="{{ operation_id }}-title">
     <div class="operation-dialog-header">
-      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item.tool | replace('_', ' ') }}</h2></div>
+      <div><p class="eyebrow">Operation {{ item.sequence }}</p><h2 id="{{ operation_id }}-title">{{ item | operation_title }}</h2></div>
       <button type="button" data-operation-close aria-label="Close operation details">×</button>
     </div>
     <div class="operation-dialog-content">
@@ -721,6 +740,17 @@
       {% if item.request %}<section><h3>Request</h3><pre><code>{{ item.request | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.stdout_excerpt %}<section><h3>Standard output</h3><pre><code>{{ item.stdout_excerpt | operation_display_text }}</code></pre></section>{% endif %}
       {% if item.stderr_excerpt %}<section><h3>Standard error</h3><pre class="operation-error"><code>{{ item.stderr_excerpt | operation_display_text }}</code></pre></section>{% endif %}
+
+      {% for evidence_id in item.evidence_ids or [] %}
+        {% set log_evidence = evidence_by_id.get(evidence_id) %}
+        {% if log_evidence and log_evidence.raw_log_excerpt %}
+        <details data-log-evidence-url="/api/v1/ask/{{ conversation.id }}/log-excerpts/{{ evidence_id | urlencode }}">
+          <summary>View retained Pod logs</summary>
+          <p>Bounded, redacted excerpt. Available for up to 24 hours; restart or cache eviction may remove it sooner.</p>
+          <pre><code data-log-excerpt>Open to load logs.</code></pre>
+        </details>
+        {% endif %}
+      {% endfor %}
       {% if item.observations %}<section><h3>Observations</h3><pre><code>{{ item.observations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.limitations %}<section><h3>Limitations</h3><pre class="operation-error"><code>{{ item.limitations | tojson(indent=2) }}</code></pre></section>{% endif %}
       {% if item.error %}<section><h3>Error</h3><pre class="operation-error"><code>{{ item.error | operation_display_text }}</code></pre></section>{% endif %}

@@ -58,6 +58,10 @@ preserve existing profile budgets and populate the new window and policy columns
 ## Pre-Release Checklist
 
 - Run the selected formatter, lint, typecheck, unit tests, and builds.
+- When updating the application image, update both `api` and the `migrate` init
+  container to the same digest. Verify Alembic is at the new image's head after
+  rollout, and smoke-test `/settings/model` with an authorized configuration-admin
+  identity. Health endpoints alone do not verify model-profile schema compatibility.
 - Run sanitized diagnostic evals without live model credentials where possible.
 - Validate manifests server-side against the target OpenShift version.
 - Audit the service account and confirm no mutation verbs or secret reads were added unintentionally.

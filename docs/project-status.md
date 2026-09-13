@@ -1,31 +1,69 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-10
+Last reviewed: 2026-09-12
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
 
-## Unreleased inventory reliability
+## Descriptive operation headings
 
-Unreleased inventory reliability: Ask now has delegated `discover_inventory`, sharing
+SNO build 168 adds server-authored headings for oc/kubectl resource commands and
+typed helpers, with resource names and namespace scope where safely identifiable.
+Saved and live evidence use matching labels; full commands remain in details.
+Twenty-eight focused regression checks, rollout, authenticated model settings,
+readiness, static asset and deployed-heading checks passed.
+
+## Ask activity display correction
+
+SNO application build 167 fixes oldest-first evidence ordering during live turns
+and page reloads. Specialist progress identifies the Pod/container instead of
+presenting the 20-call budget as a Pod total. Fifteen focused regression checks
+passed. Rollout, authenticated model settings, readiness and deployed-source
+checks passed; migration remains at `0029_model_tool_policy`. API and migration
+init-container share the build-167 digest; runner remains build 20.
+
+## Deployed Ask log isolation
+
+Ask troubleshooting log reads now use isolated specialist calls and compact cited
+reports, while direct log-view requests preserve actual lines. Bounded redacted
+excerpts are available through owner-scoped evidence controls for up to 24 hours
+in a volatile cache. See `docs/architecture.md` for budgets and retention limits.
+Deployed to SNO in application build 166. Validation: 1007 model-free tests passed,
+1 skipped; all three containers ready, API health and new static asset HTTP 200,
+and deployed source hashes match the local working tree. The public route returns
+the expected OAuth login redirect. Windows route probing used best-effort certificate
+revocation checking because revocation data was unavailable; certificate and hostname
+validation remained enabled.
+
+## Deployed inventory reliability
+
+Ask now has delegated `discover_inventory`, sharing
 Auto-detect's collector with namespace, workload and discovered custom-resource
 instance evidence. API lookup matches vendor groups and removes unrelated search
 filler. Coverage and absence limitations are explicit. See `docs/operations.md`.
-These inventory changes have not been deployed.
+These inventory changes are included in SNO build 166.
 
-## Unreleased Secret policy update
+## Deployed Secret policy update
 
 Delegated broker Secret access now defaults to allowed under the operator's RBAC.
 `secret_access_enabled=false` restores the block in both conversation modes;
 `secret_chat_redaction_enabled` independently defaults to true and controls model
 tool-result/final-chat redaction. The runner adds OpenSSL for certificate analysis.
 Deployment and model-exposure details are in `docs/operations.md` and
-`docs/security.md`. These source changes have not been deployed to the lab.
+`docs/security.md`. These source changes are deployed in application build 166 and runner build 20.
 
 ## Current lab development release
 
-Branch `codex/demandkit-orange-restyle` is deployed as build 165, digest
-`sha256:a7d6b6e5701e6caafd016ed6eda59e0277156b016dd69e352df856dc4275b5b9`.
+The current `main` working tree is deployed as build 168, digest
+`sha256:1d5f3fe870919287fa3e0d66722a85fed96b9939f9fc55365dff27240b17d28a`.
+Runner build 20 is pinned to
+`sha256:3e6c83931f9f2a61643b7f6e9f7a13655d34e4c9255c853d10b59d3a0a6f0e63`.
+A pre-release SQLite backup remains on the protected application PVC. The release
+updated the API, migration init-container, and runner images, preserving existing
+runtime configuration. A follow-up rollout corrected the migration init-container
+from build 165 to 166 and applied migration `0029_model_tool_policy`; model settings
+then returned HTTP 200 for the lab configuration administrator.
+Application build 167 remains the previous release.
 The Python/Jinja application retains its themes and adds the optional Orange
 layout, folder-style navigation, setup-screen refinements, readable chat contrast,
 and warnings above the composer. Delegated navigation does not add Cluster Health.

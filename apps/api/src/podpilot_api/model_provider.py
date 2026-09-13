@@ -2685,8 +2685,12 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "pod_logs",
             "Read exact namespace/Pod/container logs. log_backend=kubernetes supports previous=true and "
             "since_seconds. log_backend=loki queries retained application logs for range_seconds (maximum "
-            "24 hours), previous must be false. Empty or unavailable logs do not prove absence of failure.",
-            ("namespace", "name", "container", "log_backend", "previous", "since_seconds", "range_seconds", "limit"),
+            "24 hours), previous must be false. Use log_mode=analyze for troubleshooting or checking Pods "
+            "for errors; isolated specialists return cited findings while raw excerpts remain in temporary "
+            "evidence storage. Use log_mode=display only when the user wants to view actual lines, and "
+            "tail_lines for an explicit line count. Consolidate repeated findings across Pods, name outliers, "
+            "and report checked versus discovered coverage. Empty or unavailable logs do not prove absence of failure.",
+            ("namespace", "name", "container", "log_backend", "log_mode", "tail_lines", "previous", "since_seconds", "range_seconds", "limit"),
             ("namespace", "name", "container", "log_backend"),
         )
         metric_tool = collector_tool(

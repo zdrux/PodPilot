@@ -1099,9 +1099,10 @@ window.PodPilotPage.register("app.js", (page) => {
         row = document.createElement("li");
         row.dataset.liveOperation = "";
         row.dataset.operationKey = key;
-        const insertionPoint = timeline.querySelector(".operation-event:not([data-live-operation]), [data-operation-live-tail]");
-        timeline.insertBefore(row, insertionPoint);
+
       }
+      // Current-turn operations follow saved history and retain their server order.
+      timeline.insertBefore(row, timeline.querySelector("[data-operation-live-tail]"));
       row.className = `operation-event operation-status-${operation.status || "running"}`;
       const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "-");
       const dialogId = `operation-live-${timeline.dataset.runId || "run"}-${safeKey}`;
@@ -1111,7 +1112,7 @@ window.PodPilotPage.register("app.js", (page) => {
       button.dataset.operationOpen = dialogId;
       button.setAttribute("aria-haspopup", "dialog");
       button.setAttribute("aria-controls", dialogId);
-      button.setAttribute("aria-label", `View ${String(operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
+      button.setAttribute("aria-label", `View ${String(operation.title || operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
       const marker = document.createElement("span");
       marker.className = "operation-marker";
       marker.setAttribute("aria-hidden", "true");
@@ -1120,7 +1121,7 @@ window.PodPilotPage.register("app.js", (page) => {
       const heading = document.createElement("div");
       heading.className = "operation-event-heading";
       const title = document.createElement("strong");
-      title.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      title.textContent = String(operation.title || operation.tool || "operation").replaceAll("_", " ");
       heading.append(title);
       if (operation.content_filtered) {
         const filtered = document.createElement("span");
@@ -1178,7 +1179,7 @@ window.PodPilotPage.register("app.js", (page) => {
       eyebrow.textContent = `Operation ${operation.sequence || index + 1}`;
       const dialogTitle = document.createElement("h2");
       dialogTitle.id = `${dialogId}-title`;
-      dialogTitle.textContent = String(operation.tool || "operation").replaceAll("_", " ");
+      dialogTitle.textContent = String(operation.title || operation.tool || "operation").replaceAll("_", " ");
       dialogHeading.append(eyebrow, dialogTitle);
       const close = document.createElement("button");
       close.type = "button";

@@ -223,6 +223,8 @@ class ReadIntent(BaseModel):
     step_seconds: int = Field(default=60, ge=15, le=3600)
     previous: bool = False
     log_backend: Literal["kubernetes", "loki"] = "kubernetes"
+    log_mode: Literal["auto", "display", "analyze"] = "auto"
+    tail_lines: int | None = Field(default=None, ge=1, le=1000)
     since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
@@ -498,6 +500,8 @@ class ReadIntent(BaseModel):
             raise ValueError(f"{self.tool} is cluster-scoped and does not accept a namespace")
         if self.tool != "watch_resources" and self.watch_seconds != 10:
             raise ValueError("watch_seconds is valid only for watch_resources")
+        if self.tool != "pod_logs" and (self.log_mode != "auto" or self.tail_lines is not None):
+            raise ValueError("log_mode and tail_lines are valid only for pod_logs")
         if self.tool != "pod_logs" and self.since_seconds is not None:
             raise ValueError("since_seconds is valid only for pod_logs")
         if self.log_backend == "loki":
@@ -2297,6 +2301,12 @@ def derive_adhoc_findings(evidence: list[dict[str, object]]) -> list[dict[str, o
         if not isinstance(data, dict):
             continue
         tail = str(data.get("tail") or "")[:32_768]
+        if not tail and isinstance(data.get("log_analysis"), dict):
+            # Only server-validated supporting quotes feed deterministic follow-up signals.
+            report = data["log_analysis"]
+            if report.get("status") == "completed":
+                tail = "\n".join(str(issue.get("supporting_excerpt") or "")
+                                 for issue in report.get("issues", [])[:3])[:1500]
         if not tail:
             continue
         source = str(observation.get("source") or "")

@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
 from starlette.background import BackgroundTask
 
+from podpilot_api.ask_logs import AskLogAnalyst, LOG_EXCERPTS, prepare_log_intent
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.audit import export_event
 from podpilot_api.repository_admission import admit_repositories
@@ -5301,6 +5302,9 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
         add("Container", data.get("container") or "default container")
         add("Previous container", data.get("previous"))
         view["excerpt"] = str(data.get("tail") or "")
+        view["raw_log_excerpt"] = data.get("raw_log_excerpt")
+        add("Log analysis", (data.get("log_analysis") or {}).get("status"))
+        add("Coverage", data.get("coverage"))
     elif tool == "query_metrics":
         add("Metric", data.get("metric"))
         add("Scope", data.get("scope"))
@@ -5457,6 +5461,8 @@ def _model_fact_cards(
         }
         if item.get("tool") == "pod_logs":
             card["log_excerpt"] = redact_text(str(data.get("tail") or ""))[-1_500:]
+            if data.get("log_analysis"):
+                card["log_analysis"] = data["log_analysis"]
         else:
             objects = data.get("items") if isinstance(data.get("items"), list) else []
             projected = objects[:4] if objects else [data]
@@ -8485,6 +8491,83 @@ def _redact_ledger_value(value: object) -> object:
         return redact_text(str(value))
 
 
+def _operation_title(operation: dict[str, object]) -> str:
+    """Server-authored display label only; never used for execution or authorization."""
+    tool = str(operation.get("tool") or "operation")
+    request = operation.get("request")
+    request = request if isinstance(request, dict) else {}
+    labels = {"http_probe": "HTTP probe", "pod_logs": "Read Pod logs",
+              "pod_health_summary": "Check Pod health", "query_metrics": "Query metrics",
+              "query_audit_events": "Query audit events", "discover_resources": "Discover resources",
+              "discover_inventory": "Discover inventory"}
+    if tool != "execute_shell":
+        title = labels.get(tool, tool.replace("_", " ").capitalize())
+        name = _safe_progress_identifier(str(request.get("name") or ""))
+        namespace = _safe_progress_identifier(str(request.get("namespace") or ""))
+        return title + (f" {name}" if name else "") + (f" in {namespace}" if namespace else "")
+    command = str(operation.get("command") or request.get("command") or "")
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return "Execute shell"
+    if not tokens:
+        return "Execute shell"
+    if any(token in {";", "&&", "||", "&", "(", ")"} for token in tokens) or "\n" in command:
+        return "Run multiple commands"
+    if "|" in tokens:
+        boundary = tokens.index("|")
+        if boundary + 1 >= len(tokens) or tokens[boundary + 1] not in {"jq", "head", "tail", "grep", "sort", "wc"}:
+            return "Run shell pipeline"
+        tokens = tokens[:boundary]
+    executable = tokens.pop(0).rsplit("/", 1)[-1]
+    if executable in {"curl", "wget"}:
+        return "HTTP request"
+    if executable not in {"oc", "kubectl"}:
+        return "Execute shell"
+    positional, namespace, all_namespaces = [], "", False
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"-n", "--namespace"} and index + 1 < len(tokens):
+            namespace = _safe_progress_identifier(tokens[index + 1]) or ""
+        elif token.startswith("--namespace="):
+            namespace = _safe_progress_identifier(token.split("=", 1)[1]) or ""
+        if token in {"-A", "--all-namespaces"}:
+            all_namespaces = True
+        if token in _OC_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            positional.append(token)
+        index += 1
+    if not positional:
+        return "OpenShift command"
+    verb = positional.pop(0)
+    if verb not in _OC_COMMAND_VERBS:
+        return "OpenShift command"
+    if verb in {"auth", "rollout", "adm", "set"}:
+        return {"auth": "Check authorization", "rollout": "Manage rollout",
+                "adm": "OpenShift administration", "set": "Update resource configuration"}[verb]
+    resource = positional[0] if positional else ""
+    name = positional[1] if len(positional) > 1 else ""
+    if "/" in resource:
+        resource, name = resource.split("/", 1)
+    elif verb in {"logs", "exec", "rsh"}:
+        resource, name = "pod", resource
+    key = resource.split(".", 1)[0].lower()
+    singular, plural = _RESOURCE_LABELS.get(key, (key, key))
+    safe_name = _safe_progress_identifier(name)
+    target = _safe_progress_identifier(singular if safe_name else plural) or "resources"
+    title = {"logs": "Read logs for", "exec": "Execute in", "rsh": "Open shell in"}.get(verb, verb.capitalize())
+    title += f" {target}" + (f" {safe_name}" if safe_name else "")
+    return title + (" across namespaces" if all_namespaces else f" in {namespace}" if namespace else "")
+
+
 def _agent_tool_ledger_entry(
     *, sequence: int, tool_name: str, tool_call_id: str,
     cluster_id: str, cluster_name: str, status: str,
@@ -8501,6 +8584,8 @@ def _agent_tool_ledger_entry(
         "cluster_name": cluster_name[:200],
         "status": status[:80],
     }
+    entry["title"] = _operation_title({"tool": tool_name, "request": request,
+                                        "command": request.get("command") if isinstance(request, dict) else request})
     if started_at is not None:
         entry["started_at"] = started_at.isoformat()
     if completed_at is not None:
@@ -8555,6 +8640,8 @@ def _agent_tool_ledger_entry(
         entry["request"] = _compact_provider_value(
             _redact_ledger_value(request), string_limit=300, list_limit=12,
         )
+        entry["evidence_ids"] = [str(item["id"]) for item in result.get("observations", [])
+                                 if isinstance(item, dict) and item.get("id")]
         entry["observations"] = _compact_provider_value(
             _redact_ledger_value(result.get("observations") or []),
             string_limit=500, list_limit=8,
@@ -9591,6 +9678,7 @@ async def _collect_bounded_cluster_reads(
     progress: ProgressReporter | None = None,
     inquiry: InquirySemantics | None = None,
 ) -> _BoundedReadCollection:
+    log_analyst = AskLogAnalyst()
     evidence = list(existing_evidence)
     activity: list[dict[str, object]] = []
     limitations: list[str] = []
@@ -10046,7 +10134,7 @@ async def _collect_bounded_cluster_reads(
         new_intents = []
         current_log_candidates = pod_log_candidates_from_evidence(evidence)
         for proposed_intent in plan.intents[:remaining_reads]:
-            intent = normalize_read_intent(proposed_intent)
+            intent = prepare_log_intent(normalize_read_intent(proposed_intent), question)
             if (
                 intent.tool == "list_resources"
                 and inventory_request
@@ -10137,7 +10225,13 @@ async def _collect_bounded_cluster_reads(
                 units_used += unit_cost
                 read_started = True
                 result = await run_in_threadpool(cluster_reader.execute, intent)
-                evidence.extend(item.to_dict() for item in result.observations)
+                collected, log_limitations = await log_analyst.process(
+                    [item.to_dict() for item in result.observations], intent=intent,
+                    question=question, provider=model_provider, profile=profile, api_key=api_key,
+                    progress=progress,
+                )
+                evidence.extend(collected)
+                limitations.extend(log_limitations)
                 limitations.extend(result.limitations)
                 if (
                     collection_analysis_required
@@ -10615,6 +10709,7 @@ def create_app(
     templates.env.filters["est_time"] = _format_est_time
     templates.env.filters["operator_filter_reason"] = _operator_filter_reason
     templates.env.filters["operation_display_text"] = _operation_display_text
+    templates.env.filters["operation_title"] = _operation_title
     templates.env.globals["operator_filter_reasons"] = _operator_filter_reasons
     # Version the entire shell bundle together so deployed markup cannot reuse
     # stale scripts/styles merely because a manual query-string was unchanged.
@@ -11010,6 +11105,7 @@ def create_app(
             raise ModelProviderError(
                 "Agentic investigation requires a Chat Completions model profile."
             )
+        log_analyst = AskLogAnalyst()
         target_catalog = [
             {
                 "cluster_id": cluster_id,
@@ -11136,6 +11232,10 @@ def create_app(
                 "claim a larger limit only delays failure without evidence of continued growth. "
                 "For GitOps and mesh failures, trace observed workload ownership, application/revision and "
                 "traffic-policy dependencies, then inspect the responsible controllers and their logs. "
+                "For troubleshooting logs, use pod_logs with log_mode=analyze rather than shell log dumps. "
+                "Use log_mode=display only for requests to see actual lines, with tail_lines when specified. "
+                "Log specialists receive isolated excerpts; consolidate repeated findings and outliers, cite evidence, "
+                "and state checked versus discovered Pod counts and unexamined coverage. "
                 "Use pod_logs with log_backend=loki for retained application logs when available; if unavailable, state the limitation and use "
                 "bounded Pod logs. Never invent metric samples or infer causation solely from timing. "
                 "Finish with evidence-linked observations, a timeline, the leading explanation and "
@@ -11744,6 +11844,7 @@ def create_app(
                             tool=tool_call.name,
                             **collector_arguments,
                         ))
+                        intent = prepare_log_intent(intent, question)
                         unit_cost = _investigation_unit_cost(intent)
                         if agent_actions_used + unit_cost > app_settings.adhoc_max_reads_per_turn:
                             raise ValueError(
@@ -11777,6 +11878,12 @@ def create_app(
                             attributed["cluster_name"] = collector_cluster_name
                             collector_evidence.append(attributed)
                         collector_limitations.extend(str(item) for item in result.limitations)
+                        collector_evidence, log_limitations = await log_analyst.process(
+                            collector_evidence, intent=intent, question=question,
+                            provider=provider, profile=profile, api_key=api_key, progress=progress,
+                            deadline=run_deadline,
+                        )
+                        collector_limitations.extend(log_limitations)
                         agent_evidence.extend(collector_evidence)
                         agent_evidence = agent_evidence[-app_settings.adhoc_max_evidence :]
                         agent_limitations.extend(collector_limitations)
@@ -13765,6 +13872,26 @@ def create_app(
                 })
                 return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
         return RedirectResponse(f"/ask?new=1&cluster_ids={cluster_id}", status_code=303)
+
+    @app.get("/api/v1/ask/{conversation_id}/log-excerpts/{evidence_id}")
+    async def ask_log_excerpt(
+        conversation_id: str, evidence_id: str, request: Request,
+        user: AuthContext = Depends(current_user),
+    ):
+        with Session(request.app.state.engine) as db_session:
+            conversation = db_session.get(AdHocConversation, conversation_id)
+            if conversation is None or conversation.created_by != user.username:
+                raise HTTPException(status_code=404, detail="Log evidence not found.")
+            evidence = json.loads(conversation.evidence_json or "[]")
+            observation = next((item for item in evidence if item.get("id") == evidence_id), None)
+            reference = ((observation or {}).get("data") or {}).get("raw_log_excerpt")
+            if not reference:
+                raise HTTPException(status_code=404, detail="Log evidence not found.")
+            excerpt = LOG_EXCERPTS.get(reference.get("id"))
+            if excerpt is None:
+                raise HTTPException(status_code=410, detail="This temporary log excerpt expired or was evicted. Collect fresh logs to inspect it.")
+            return JSONResponse({"excerpt": excerpt, "expires_at": reference.get("expires_at")},
+                                headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     @app.get("/ask/{conversation_id}", response_class=HTMLResponse)
     async def ask_podpilot_conversation(

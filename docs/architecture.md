@@ -1,5 +1,51 @@
 # PodPilot Architecture
 
+## Ask log specialists
+
+The evidence timeline uses oldest-first order for both saved turns and live
+operations; updates keep active operations after prior history. Server-authored
+operation headings describe supported oc/kubectl commands and typed helpers,
+including resource names and namespace scope. Existing saved operations receive
+the same headings when rendered. Compound or unrecognized commands use generic
+labels, and the original command remains in the detail view. Heading parsing is
+for display only and never controls authorization or execution. Specialist progress
+names the selected Pod/container without presenting the internal call budget as a
+Pod total.
+
+Ask `pod_logs` supports `log_mode=analyze`, `display`, or `auto` (default). The
+agent chooses analysis for troubleshooting and display for requests for actual
+lines. Auto routes simple viewing requests directly and defaults other requests
+to analysis. `tail_lines` bounds an explicit line count (1-1000 for Kubernetes;
+Loki retains its existing 200-entry cap). Collection still uses delegated RBAC,
+existing tool policies, time windows, redaction, and byte limits.
+
+Both Ask execution paths invoke the existing `analyze_logs` provider method with
+one isolated excerpt and the bounded current question, without conversation
+history. Specialists execute serially within a turn, at most 20 calls per pass,
+with transport retries disabled, a maximum 30-second provider request timeout,
+and 1600 output tokens. Provider schema-repair behavior remains unchanged.
+The agentic path also preserves time for finalization against its run deadline.
+Compact reports include at most three validated, evidence-cited supporting quotes,
+confidence, omitted-issue counts, and coverage limits. The coordinator consolidates
+repeated findings and outliers and reports checked versus discovered Pods. Failed,
+unavailable, empty, and budget-skipped analyses remain explicit gaps; they never
+fall back to injecting raw logs into coordinator context. Existing deterministic
+follow-up signals consume validated quotes when analysis is available.
+
+Bounded, redacted raw excerpts are held in a process-local volatile cache (24-hour
+access TTL, 32 MiB of text, 512 entries, maximum 64 KiB per excerpt). Expired entries
+are removed on cache access; FIFO eviction or a process restart may remove them
+sooner. Only references and compact reports enter conversation evidence and the
+operation ledger. Both Kubernetes `tail` and duplicate Loki `entries` are removed
+from analyzed observations. The conversation owner can expand **View retained Pod
+logs** in the evidence timeline operation dialog or answer citations. The
+owner-authorized `GET /api/v1/ask/{conversation_id}/log-excerpts/{evidence_id}`
+returns JSON with `Cache-Control: no-store`, or 410 when the excerpt is gone;
+browser rendering uses text content. Logs become available there when the turn's
+evidence is saved. This cache is suitable for the current single-process runtime;
+multiple replicas require shared temporary storage. Display mode retains the
+existing direct evidence behavior and does not invoke the specialist.
+
 ## Incident response PoC addition
 
 The opt-in fleet incident service has separate Secret-backed automation identities,
