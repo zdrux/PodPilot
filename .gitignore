@@ -45,6 +45,9 @@ tmp/
 temp/
 .data/
 
+# Local marketing website
+/marketing/
+
 # Editors and operating systems
 .idea/
 .vscode/
