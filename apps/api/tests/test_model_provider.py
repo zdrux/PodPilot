@@ -383,7 +383,8 @@ def test_chat_completions_adapter_requests_and_validates_strict_json_schema() ->
     assert request["reasoning_effort"] == "high"
 
 
-def test_chat_completions_delegated_agent_returns_structured_shell_call() -> None:
+@pytest.mark.parametrize("inventory_enabled", [False, True])
+def test_chat_completions_delegated_agent_returns_structured_shell_call(inventory_enabled) -> None:
     completions = ToolCallingCompletions()
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     provider = OpenAIChatCompletionsProvider()
@@ -397,6 +398,7 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call() -> Non
         profile(
             base_url="https://openrouter.ai/api/v1",
             chat_model="openai/gpt-oss-120b",
+            tool_policy={"discover_inventory": inventory_enabled},
         ),
         "secret-token",
         [{
@@ -419,7 +421,7 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call() -> Non
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "discover_resources", "discover_inventory", "pod_health_summary", "http_probe",
+        "execute_shell", "discover_resources", *(["discover_inventory"] if inventory_enabled else []), "pod_health_summary", "http_probe",
         "query_audit_events", "pod_logs", "query_metrics", "finish_investigation",
     ]
     parameters = request["tools"][0]["function"]["parameters"]
@@ -1904,3 +1906,20 @@ def test_ask_schema_probe_identifies_log_analysis_phase() -> None:
         "AdHocLogAnalysis probe failed. "
         "Provider response does not match AdHocLogAnalysis."
     )
+
+
+@pytest.mark.parametrize("candidate_mode", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_inventory_policy_filters_planner_schema_and_guidance(candidate_mode, enabled):
+    from openai.lib._pydantic import to_strict_json_schema
+    from podpilot_api.model_provider import _planner_instructions, _tool_filtered_schema
+    config = profile(tool_policy={"discover_inventory": enabled})
+    contract = ActionSelection if candidate_mode else ReadPlan
+    schema = to_strict_json_schema(_tool_filtered_schema(contract, config))
+    serialized = json.dumps(schema)
+    assert ('"discover_inventory"' in serialized) is enabled
+    assert '"discover_resources"' in serialized
+    instructions = _planner_instructions(candidate_mode=candidate_mode, profile=config)
+    assert ("discover_inventory" in instructions) is enabled
+    # Filtering must not mutate the shared contract or another model's schema.
+    assert '"discover_inventory"' in json.dumps(contract.model_json_schema())

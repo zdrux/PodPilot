@@ -611,6 +611,7 @@ def _profile_config(profile: ModelProfile) -> ModelProfileConfig:
         context_window_tokens=profile.context_window_tokens or 64000,
         protocol_reserve_tokens=profile.protocol_reserve_tokens if profile.protocol_reserve_tokens is not None else 2048,
         incident_policy=IncidentPolicy.model_validate_json(profile.incident_policy_json or "{}"),
+        tool_policy=json.loads(profile.tool_policy_json or "{}"),
         reasoning_effort=profile.reasoning_effort,
         temperature=profile.temperature,
         max_retries=profile.max_retries,
@@ -9776,10 +9777,10 @@ async def _collect_bounded_cluster_reads(
             "tool_policy": {
                 "mode": "candidate_selection",
                 "direct_intents_allowed": True,
-                "direct_intent_tools": [
+                "direct_intent_tools": [name for name in (
                     "discover_resources", "discover_inventory", "get_resource",
                     "search_resources",
-                ],
+                ) if profile.tool_enabled(name)],
                 "remaining_reads": remaining_reads,
                 "remaining_investigation_units": remaining_reads,
                 "logs_and_configmaps_allowed": True,
@@ -10128,6 +10129,8 @@ async def _collect_bounded_cluster_reads(
             }
             read_started = False
             try:
+                if not profile.tool_enabled(intent.tool):
+                    raise ReadOnlyExplorerError(f"{intent.tool} is disabled in this model profile. Enable it in Model settings > Tools to use it.")
                 preflight = getattr(cluster_reader, "preflight", None)
                 if callable(preflight):
                     await run_in_threadpool(preflight, intent)
@@ -11084,8 +11087,9 @@ def create_app(
                 "and after any `oc get` NoMatch error. Search using the operator's original concept "
                 "when possible, then use only exact resource coordinates returned by discovery. "
                 "API discovery does not prove the delegated identity may read matching objects. Use "
-                "discover_inventory first for software presence; retain observed CR/namespace evidence regardless of labels. Use "
-                "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
+                + ("discover_inventory first for software presence; retain observed CR/namespace evidence regardless of labels. Use "
+                   if profile.tool_enabled("discover_inventory") else "")
+                + "bounded read-only `oc get` commands through execute_shell for Kubernetes inventory and "
                 "field filtering, project only the fields needed for the operator's question, and filter "
                 "large JSON responses inside the runner before returning them. "
                 "Prefer custom-columns, JSONPath, or a compact jq projection over broad raw JSON. If a successful "
@@ -11712,6 +11716,8 @@ def create_app(
                     collector_failure_category: str | None = None
                     intent: ReadIntent | None = None
                     try:
+                        if not profile.tool_enabled(tool_call.name):
+                            raise ValueError(f"{tool_call.name} is disabled in this model profile. Enable it in Model settings > Tools to use it.")
                         raw_arguments = json.loads(tool_call.arguments)
                         if not isinstance(raw_arguments, dict):
                             raise ValueError("arguments must be an object")
@@ -15062,6 +15068,7 @@ def create_app(
                     "context_window_tokens": row.context_window_tokens,
                     "protocol_reserve_tokens": row.protocol_reserve_tokens,
                     "incident_policy": IncidentPolicy.model_validate_json(row.incident_policy_json or "{}").model_dump(),
+                    "tool_policy": json.loads(row.tool_policy_json or "{}"),
                     "max_input_tokens": row.max_input_tokens,
                     "max_output_tokens": row.max_output_tokens,
                     "temperature": row.temperature,
@@ -15246,6 +15253,7 @@ def create_app(
             profile.context_window_tokens = context_window_tokens
             profile.protocol_reserve_tokens = protocol_reserve_tokens
             profile.incident_policy_json = incident_policy.model_dump_json()
+            profile.tool_policy_json = json.dumps({"discover_inventory": form.get("tool_discover_inventory") == "true"})
             profile.max_input_tokens = max_input_tokens
             profile.temperature = temperature
             profile.reasoning_effort = reasoning_effort
@@ -15273,6 +15281,7 @@ def create_app(
                     "chat_model": chat_model,
                     "reasoning_efforts": reasoning_efforts,
                     "default_reasoning_effort": reasoning_effort or "provider_default",
+                    "tool_policy": json.loads(profile.tool_policy_json),
                     "temperature": temperature if temperature is not None else "provider_default",
                     "context_window_tokens": context_window_tokens,
                     "protocol_reserve_tokens": protocol_reserve_tokens,

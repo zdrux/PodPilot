@@ -678,10 +678,10 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
 
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
 @pytest.mark.parametrize("approval_bypass", [False, True])
-@pytest.mark.parametrize("discovery_tool", ["discover_resources", "discover_inventory"])
+@pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False)])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, approval_bypass: bool,
-    discovery_tool: str,
+    discovery_tool: str, inventory_enabled: bool,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
     constructor_threads: list[int] = []
@@ -880,6 +880,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                 created_by="ada", updated_by="ada", created_at=now, updated_at=now,
             ))
             db_session.add(ModelProfile(
+                tool_policy_json=json.dumps({"discover_inventory": inventory_enabled}),
                 id=1, provider_label="OpenRouter",
                 base_url="https://openrouter.ai/api/v1",
                 chat_model="openai/gpt-oss-120b", api_type="chat-completions",
@@ -961,9 +962,12 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     assert explorer_kwargs[0]["log_metric_reader"] is not None
     assert explorer_kwargs[0]["audit_reader"] is not None
     assert [intent.tool for intent in explorer_intents] == [
-        discovery_tool, "query_metrics", "query_audit_events",
+        *([discovery_tool] if discovery_tool != "discover_inventory" or inventory_enabled else []), "query_metrics", "query_audit_events",
     ]
-    assert explorer_intents[0].discovery_query == "cluster log forwarder"
+    if discovery_tool != "discover_inventory" or inventory_enabled:
+        assert explorer_intents[0].discovery_query == "cluster log forwarder"
+    else:
+        assert "disabled in this model profile" in json.dumps(provider.agent_messages)
     assert telemetry_calls == [
         ("metrics", "https://api.central-dev.example:6443", "delegated-token"),
         ("application", "https://api.central-dev.example:6443", "delegated-token"),
@@ -986,6 +990,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     assert runner_connection.proxy_url.endswith(expected_capability)
     assert other_capability not in runner_connection.proxy_url
     system_prompt = str(provider.agent_messages[0][0]["content"])
+    assert ("discover_inventory first" in system_prompt) is inventory_enabled
     if execution_mode == "read_only":
         assert "delegated read-only investigation mode" in system_prompt
         assert "broker will reject Kubernetes writes" in system_prompt
@@ -15665,6 +15670,8 @@ def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -
         profile_id = response.json()["profile_id"]
         with Session(app.state.engine) as db:
             config = _profile_config(db.get(ModelProfile, profile_id))
+            assert not config.tool_enabled("discover_inventory")
+            assert config.tool_enabled("discover_resources")
             assert config.effective_input_tokens == 45952
             assert config.max_output_tokens == 16000
             assert config.incident_policy.page_size == 100
@@ -15685,6 +15692,18 @@ def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -
         assert saved.status_code == 200
         with Session(app.state.engine) as db:
             assert _profile_config(db.get(ModelProfile, profile_id)).incident_policy.page_size == 100
+
+
+        for enabled in (True, False):
+            updated = {**form, "profile_id": str(profile_id)}
+            if enabled:
+                updated["tool_discover_inventory"] = "true"
+            assert client.post("/api/v1/model-profile", headers=headers, data=updated).status_code == 200
+            with Session(app.state.engine) as db:
+                assert _profile_config(db.get(ModelProfile, profile_id)).tool_enabled("discover_inventory") is enabled
+            page = client.get(f"/settings/model?edit={profile_id}", headers=headers)
+            control = re.search(r'<input[^>]+name="tool_discover_inventory"[^>]*>', page.text).group(0)
+            assert ("checked" in control) is enabled
 
 
 @pytest.mark.parametrize("access_enabled", [True, False])
@@ -15791,3 +15810,32 @@ def test_agent_secret_presentation_flag_reaches_provider_and_saved_chat(tmp_path
             assert ("synthetic-chat-value" in answer.content) is not redaction
             assert "synthetic-opaque" not in answer.tool_activity_json
     assert provider.calls == 2
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_bounded_planner_enforces_inventory_policy_before_cluster_read(enabled):
+    class Provider:
+        def plan_ad_hoc(self, _profile, _key, context):
+            assert ("discover_inventory" in context["tool_policy"]["direct_intent_tools"]) is enabled
+            return ReadPlan(goal_type="inventory", scope_summary="Discover software",
+                intents=[ReadIntent(tool="discover_inventory", discovery_query="dynatrace")])
+
+    class Explorer:
+        def __init__(self):
+            self.calls = []
+        def execute(self, intent):
+            self.calls.append(intent.tool)
+            return ReadResult(observations=())
+
+    explorer = Explorer()
+    config = ModelProfileConfig(provider_label="test", base_url="https://model.test/v1",
+        chat_model="test", embedding_model=None, timeout_seconds=30, max_output_tokens=1000,
+        tool_policy={"discover_inventory": enabled})
+    result = asyncio.run(_collect_bounded_cluster_reads(
+        model_provider=Provider(), cluster_reader=explorer, profile=config, api_key="test",
+        settings=Settings(), actor="ivy", workflow_id="inventory-policy",
+        question="Is Dynatrace installed?", conversation=[], existing_evidence=[]))
+    assert explorer.calls == (["discover_inventory"] if enabled else [])
+    if not enabled:
+        assert any("disabled in this model profile" in item for item in result.limitations)
+        assert result.activity[0]["status"] == "rejected_before_collection"

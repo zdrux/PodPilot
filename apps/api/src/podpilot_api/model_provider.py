@@ -109,9 +109,14 @@ class ModelProfileConfig:
     context_window_tokens: int = 64_000
     protocol_reserve_tokens: int = 2048
     incident_policy: IncidentPolicy = field(default_factory=IncidentPolicy)
+    tool_policy: dict[str, bool] = field(default_factory=dict)
     reasoning_effort: str | None = None
     temperature: float | None = None
     max_retries: int = 3
+
+    def tool_enabled(self, name: str) -> bool:
+        # Optional tools are opt-in; existing core tools retain their availability.
+        return self.tool_policy.get(name, name != "discover_inventory") is True
 
 
     @property
@@ -1639,14 +1644,45 @@ _LOG_ANALYSIS_INSTRUCTIONS = (
 
 
 def _planner_instructions(
-    *_legacy_prompt: str, candidate_mode: bool = False
+    *_legacy_prompt: str, candidate_mode: bool = False, profile: ModelProfileConfig | None = None
 ) -> str:
     """Ignore the legacy verbose literal while providers migrate to the compact planner prompt."""
 
-    return (
+    instructions = (
         _ADHOC_CANDIDATE_PLANNER_INSTRUCTIONS
         if candidate_mode else _ADHOC_PLANNER_INSTRUCTIONS
     )
+    if profile is None or not profile.tool_enabled("discover_inventory"):
+        instructions = instructions.replace(
+            "Use discover_inventory for software presence; empty results do not prove absence and presence does not prove health. ", ""
+        ).replace("discover_inventory, ", "")
+    return instructions
+
+
+def _tool_filtered_schema(schema: type[BaseModel], profile: ModelProfileConfig) -> type[BaseModel]:
+    """Filter advertised tool choices without changing stored evidence contracts."""
+    class ToolFilteredSchema(schema):
+        @classmethod
+        def model_json_schema(cls, *args, **kwargs):
+            result = schema.model_json_schema(*args, **kwargs)
+
+            def visit(value):
+                if isinstance(value, dict):
+                    properties = value.get("properties", {})
+                    tool = properties.get("tool", {})
+                    if "enum" in tool:
+                        tool["enum"] = [name for name in tool["enum"] if profile.tool_enabled(name)]
+                    for child in value.values():
+                        visit(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        visit(child)
+
+            visit(result)
+            return result
+
+    ToolFilteredSchema.__name__ = schema.__name__
+    return ToolFilteredSchema
 
 
 def _fallback_fact_cards(context: dict[str, object]) -> list[dict[str, object]]:
@@ -2299,10 +2335,10 @@ class OpenAIResponsesProvider:
                     "Secrets, token/access-review resources, subresources other than pod_logs, commands, "
                     "mutations, exec, attach, proxy, or port-forward. If scope is "
                     "missing, return no reads and explain what identifier is needed.",
-                    candidate_mode=candidate_mode,
+                    candidate_mode=candidate_mode, profile=profile,
                 ),
                 input=json.dumps(payload, sort_keys=True, default=str),
-                text_format=plan_schema,
+                text_format=_tool_filtered_schema(plan_schema, profile),
                 max_output_tokens=profile.max_output_tokens,
                 store=False,
                 **_responses_reasoning(profile),
@@ -2725,6 +2761,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         metric_parameters["range_seconds"]["description"] = (
             "Requested period in seconds; default 300."
         )
+        tools = [tool for tool in tools if profile.tool_enabled(tool["function"]["name"])]
         prepared_messages = _prepare_chat_input(profile, messages, tools=tools)
         capture = _MODEL_DIAGNOSTIC_CAPTURE.get()
         request_start = len(capture) if capture is not None else 0
@@ -2861,7 +2898,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             "json_schema": {
                 "name": schema.__name__.lower(),
                 "strict": True,
-                "schema": to_strict_json_schema(schema),
+                "schema": to_strict_json_schema(_tool_filtered_schema(schema, profile)),
             },
         }
         messages = [
@@ -3137,8 +3174,8 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             return detail
         return (
             f"{detail} ReadIntent cross-field rules: use only fields belonging to the selected "
-            "tool; search_resources requires match_field and match_value; discover_resources or discover_inventory "
-            "requires discovery_query and no resource coordinates; http_probe requires an "
+            "tool; search_resources requires match_field and match_value; available discovery tools "
+            "require discovery_query and no resource coordinates; http_probe requires an "
             "absolute http/https url; query_metrics requires a catalog metric, metric_scope, "
             "and exact scope coordinates; pod_logs uses a supplied candidate_id when candidates "
             "exist. Do not put capability-ledger labels such as service_spec or endpoints into "
@@ -3322,7 +3359,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
                 "instructions, examples, or future values such as FIRST_POD_FROM_LIST into intent fields. "
                 "Never request Secrets, identity/token/access-review resources, arbitrary subresources, "
                 "commands, exec, proxy, port-forward, or mutations.",
-                candidate_mode=candidate_mode,
+                candidate_mode=candidate_mode, profile=profile,
             ),
             payload=(_minimal_action_payload(context) if candidate_mode else context),
             limit=profile.max_output_tokens,

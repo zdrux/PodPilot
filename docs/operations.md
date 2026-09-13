@@ -107,7 +107,17 @@ are bounded to ten requests, a 20-second collection budget and 1 MB per response
 Passing static checks does not verify route matching, reload, mounts, CA trust,
 or delivery; perform a controlled end-to-end test separately.
 
-Ask exposes `discover_inventory` with a concise technology name in `discovery_query`
+Model settings > Tools provides **Allow inventory discovery in Ask** per model.
+It defaults off for both new and existing profiles. Save the model to apply it to
+subsequent Ask turns (including existing conversations); an already-running turn
+keeps its starting policy. Disabled inventory discovery is removed from agent
+tools, structured planner tool choices and guidance, and rejected before cluster
+execution if a model still requests it. Manual cluster Auto-detect and the lighter
+`discover_resources` API discovery remain available. The setting is audited with
+model saves and does not grant additional cluster permissions. Apply database
+migration `0029_model_tool_policy` with the normal upgrade before starting the new API.
+
+When enabled, Ask exposes `discover_inventory` with a concise technology name in `discovery_query`
 and a returned-object `limit`. This is a fresh, identity-scoped read using the same
 collector as Auto-detect; it does not reuse another user's stored inventory.
 It combines namespace names, selected standard application labels, workload images,

@@ -56,6 +56,7 @@ class ModelProfile(Base):
     context_window_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=64_000)
     protocol_reserve_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=2048)
     incident_policy_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    tool_policy_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     max_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=128_000)
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
     reasoning_effort: Mapped[str | None] = mapped_column(String(16), nullable=True)
