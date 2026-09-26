@@ -8,12 +8,9 @@ def test_chat_message_limit_defaults_to_supported_maximum() -> None:
     assert Settings(_env_file=None).chat_max_chars == 4000
 
 
-def test_development_approval_bypass_is_explicit_and_lab_only():
-    assert not Settings(_env_file=None).development_approval_bypass
-    assert Settings(environment="sno-lab", poc_mode=True, development_approval_bypass=True).development_approval_bypass
-    for environment, poc in [("production", True), ("remote-poc", True), ("development", False)]:
-        with pytest.raises(ValidationError, match="approval bypass"):
-            Settings(environment=environment, poc_mode=poc, development_approval_bypass=True)
+def test_external_approval_and_bypass_settings_are_removed():
+    assert "development_approval_bypass" not in Settings.model_fields
+    assert "role_approver_groups" not in Settings.model_fields
 
 
 def test_role_groups_are_loaded_from_json_environment_lists(monkeypatch) -> None:
@@ -40,19 +37,19 @@ def test_same_group_cannot_map_to_multiple_application_roles() -> None:
     with pytest.raises(ValidationError, match="only one PodPilot role"):
         Settings(
             role_investigator_groups=["corp-operations"],
-            role_approver_groups=["corp-operations"],
+            role_read_write_groups=["corp-operations"],
         )
 
 
 def test_all_elevated_role_groups_may_be_empty() -> None:
     settings = Settings(
         role_investigator_groups=[],
-        role_approver_groups=[],
+        role_read_write_groups=[],
         role_breakglass_groups=[],
     )
 
     assert settings.role_investigator_groups == []
-    assert settings.role_approver_groups == []
+    assert settings.role_read_write_groups == []
     assert settings.role_breakglass_groups == []
 
 

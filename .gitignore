@@ -48,6 +48,10 @@ temp/
 # Local marketing website
 /marketing/
 
+# Local SNO lab documentation and storage configuration
+/docs/cluster-lab.md
+/deploy/openshift/storage/sno-lvm/
+
 # Editors and operating systems
 .idea/
 .vscode/

@@ -9,7 +9,7 @@ def test_sqlite_engine_enables_wal_and_waits_for_concurrent_writers(tmp_path) ->
         data_dir=tmp_path,
         database_url=f"sqlite:///{tmp_path / 'concurrent.db'}",
         role_investigator_groups=[],
-        role_approver_groups=[],
+        role_read_write_groups=[],
         role_breakglass_groups=[],
     )
 

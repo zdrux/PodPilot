@@ -37,7 +37,6 @@ class Settings(BaseSettings):
     configuration_admin_groups: list[str] = Field(
         default_factory=lambda: ["podpilot-configuration-admins"]
     )
-    role_approver_groups: list[str] = Field(default_factory=lambda: ["podpilot-approvers"])
     role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
     secret_access_enabled: bool = True
     secret_chat_redaction_enabled: bool = True
@@ -123,13 +122,11 @@ class Settings(BaseSettings):
     cluster_secret_namespace: str = "ai-ops"
     cluster_secret_name: str = "podpilot-cluster-credentials"
     poc_mode: bool = False
-    development_approval_bypass: bool = False
 
     @field_validator(
         "role_investigator_groups",
         "role_read_write_groups",
         "configuration_admin_groups",
-        "role_approver_groups",
         "role_breakglass_groups",
     )
     @classmethod
@@ -145,14 +142,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_role_group_mapping(self) -> "Settings":
-        if self.development_approval_bypass and (
-            not self.poc_mode or self.environment not in {"development", "test", "sno-lab", "openshift-poc"}
-        ):
-            raise ValueError("Development approval bypass requires an explicit development or SNO PoC environment and poc_mode")
         role_groups = (
             self.role_investigator_groups,
             self.role_read_write_groups,
-            self.role_approver_groups,
             self.role_breakglass_groups,
         )
         configured = [name for groups in role_groups for name in groups]

@@ -1,9 +1,69 @@
 # PodPilot Project Status
 
-Last reviewed: 2026-09-12
+
+## Approval handoff correction (SNO build 176)
+
+A live Action turn for `fix the node selector` ended with a prose promise to submit
+patches and zero broker approval records, so no modal could appear. Action final
+answers that claim submission or request approval without a current-run approval
+record now receive up to two tool-loop corrections. Exhaustion reports explicitly
+that no approval was created. Existing approval decisions and read-only answers
+are preserved. API regression tests passed; focused recovery/exhaustion and broker
+coverage passed 32 tests (one optional browser test skipped).
+
+Build `podpilot-176` pins API and migration to
+`sha256:41ce52bc54833f3f4533cefcb36d56038a66c5744b331a585037c5a1f3e45c8a`.
+Rollout succeeded, live/ready returned 200, the route returned its OAuth redirect,
+and the deployed API source hash matches the tested local file. A fresh live user
+turn is still needed to exercise the model-driven patch-to-modal sequence.
+
+
+## Requester self-approval (SNO build 175)
+
+Action chat now pauses every delegated Kubernetes write for an expiring approve/reject
+modal owned by the requester and originating browser session. Each approval applies
+once to the original request; Kubernetes RBAC still applies. Separate approver group
+and development bypass settings are removed. Incident investigation is diagnosis-only:
+no executable proposals, mutation dry-runs, or approval/execution controls/routes.
+Historical records remain readable; migration 0030 cancels old pending proposals.
+
+Build `podpilot-175` is deployed with API and migration images pinned to
+`sha256:d741c1a3d3c1c138d3614efaad2ee8a4aa822363ceed0a66f798e09a9d6b8382`.
+A pre-upgrade SQLite backup remains on the protected PVC. Migration
+`0030_requester_write_approval` completed, no legacy approvals remain pending,
+all three containers are ready, and both health endpoints return 200. The public
+route returns the expected OAuth login redirect. Deployed broker/UI hashes match
+the locally tested files; live mutation testing remains for the operator.
+Retired approver/bypass runtime entries and the obsolete lab approver group and
+role marker were removed. `podpilot-breakglass` remains in `podpilot-read-write`.
+
+
+
+Last reviewed: 2026-09-26
 Update when: a milestone is completed, the deployed version changes, a release
 gate changes, a material blocker is discovered, or the immediate next work is
 selected.
+
+## Retained infrastructure logs (SNO build 174)
+
+Ask now routes exact-container Loki queries by namespace, with an empty-result
+alternate-tenant check and an explicit `check_both` mode for uncertain forwarding.
+Incident history shares the namespace routing rule. Historical Ask analysis searches
+bounded two-hour slices and offers a registered node-scaling activity filter; tenant,
+window, access-failure and partial-coverage evidence survives specialist processing.
+No cluster-specific routing configuration or new permissions were added. Focused
+collector, model-schema, specialist, incident and diagnostics tests passed, along with
+135 selected log/observability/evidence integration checks. See `docs/operations.md`
+for limits and `docs/release.md` for regression requirements.
+
+Build `podpilot-174` was deployed with API and migration containers pinned to
+`sha256:a67390b2cbb0a0a3d5d3d70b025dc537e487f7ebc00294c164a6a210a0d857a5`.
+The existing runner image remains unchanged. A pre-upgrade database backup is on
+the protected PVC. Rollout, liveness/readiness, deployed infrastructure routing,
+and the public route's login redirect were verified. `podpilot-breakglass` is a
+member of `podpilot-read-write`. Approval bypass is disabled in the live runtime
+and SNO overlay for approval-flow testing. The application is available at
+`https://podpilot-ai-ops.apps.sno.192-168-0-200.sslip.io/`.
 
 ## Descriptive operation headings
 

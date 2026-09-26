@@ -382,7 +382,7 @@ persistence. It contains no model call, PromQL query, chat, or cluster mutation.
 
 The provider registry keeps endpoint metadata and capability results in SQLite;
 tokens live only as per-profile data keys in the resourceName-restricted
-`ai-ops/podpilot-model-credentials` Secret. An Approver can add, edit, probe,
+`ai-ops/podpilot-model-credentials` Secret. A configuration administrator can add, edit, probe,
 activate, and delete endpoints without restarting the Pod. Exactly one successfully
 probed profile is active. The API rereads its token key from the Secret for every
 model call. Provider-neutral contracts route either to the official OpenAI
@@ -424,7 +424,7 @@ Aggregate application-log rankings similarly discover the conventional
 `openshift-logging/logging-loki` Route and use the registered cluster bearer token.
 
 Cluster memory stores curated Markdown or text as immutable
-versions in SQLite and indexes heading-aware bounded chunks with FTS5. Approvers
+versions in SQLite and indexes heading-aware bounded chunks with FTS5. Configuration administrators
 create, revise, enable, and disable entries; Investigators can preview retrieval.
 Normal code filters candidates by current version, enabled and reviewed state,
 expiry, optional namespace, sensitivity, and target eligibility before BM25 ranking.
@@ -432,38 +432,24 @@ An entry is eligible when it is global (no targets), explicitly selects the clus
 or all of its required key/value tags match the cluster. Explicit and tag matches use
 OR semantics. Search
 input is tokenized into a bounded quoted expression rather than accepted as raw
-FTS syntax. Restricted entries are visible only to Approvers and are never supplied
+FTS syntax. Restricted entries are visible only to read/write operators and are never supplied
 to Ask workers. Eligible internal entries are supplied to planning and answer prompts
 with their applicable cluster identity and an explicit guidance-only trust label; they
 cannot define tools, authorize reads, replace live evidence, or serve as citations for
 current cluster state.
 
-Milestone 5 adds a policy-owned typed action catalog. A crash-loop investigation
-can generate at most two server-built proposals: delete the exact failed,
-controller-owned Pod or restart its Deployment, StatefulSet, or DaemonSet. The
-browser submits only an opaque action ID; it cannot provide a target, patch, or
-command. Each proposal persists its target UID and resourceVersion, fixed API
-operation, risk, expiry, server dry-run, verification query, and recovery note.
+Incident investigation is diagnosis-only. It produces evidence and recommendations,
+but does not generate executable remediation proposals, perform mutation dry-runs,
+or expose approval/execution endpoints. Historical action records remain readable;
+migration 0030 cancels old pending/approved proposals.
 
-Approver-or-higher users approve the immutable proposal without executing it.
-The requesting operator may execute it once within one hour of approval through
-the separate `/execute` endpoint. The API atomically claims the approved action,
-re-reads resource identity, executes through the OpenShift adapter, polls bounded
-postconditions, and stores before/API/verification/after results. Pod verification
-requires a new Ready UID owned by the same direct controller and explicitly
-excludes pre-existing healthy siblings. A rollout verifies its fixed restart
-annotation, observed generation, and desired updated/Ready counts. Executing one
-proposal cancels sibling previews; another mutation requires fresh evidence.
-
-Milestone 6 adds a lifecycle reconciler around those proposals. Dashboard reads
-expire overdue previews and, only from a complete Alertmanager snapshot, cancel
-previews whose source fingerprint is no longer active. Investigation reads call a
-read-only executor validation for the exact target UID/resourceVersion and close
-missing or stale previews without issuing a dry-run or mutation. Approval fetches
-Alertmanager again and fails closed if the alert cannot be proven active.
-Investigation creators and Approvers may explicitly cancel previews; only
-the requesting operator retains execution permission. Closure reason, actor, time, and detail
-are persisted in the action result and audit stream.
+Action chat is the sole mutation path. Each in-flight Kubernetes write pauses at
+the delegated broker and creates an expiring, redacted request preview. Only the
+requester, in the originating browser session, can approve or reject it. Approval
+is consumed once for the exact original method, path, query, content type and body;
+execution uses the same delegated credential and remains subject to Kubernetes
+RBAC. A later request needs a new approval. No separate approver or bypass setting
+exists. Restart, cancellation, disconnection or expiry invalidates pending work.
 
 Milestone 7 adds persisted `DiagnosticCheck` records and a server-owned tool
 registry. A `TargetDown` investigation with namespace and Service labels receives

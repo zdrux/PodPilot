@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import httpx
@@ -12,10 +12,197 @@ from podpilot_openshift.log_metrics import (
     LogVolumeSnapshot,
     LokiQueryClient,
     ContainerLogSnapshot, ContainerLogEntry,
+    container_log_tenant,
 )
 
 
 NOW = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("namespace,tenant", [
+    ("openshift-machine-api", "infrastructure"), ("openshift", "infrastructure"),
+    ("kube-system", "infrastructure"), ("default", "infrastructure"),
+    ("payments", "application"),
+])
+def test_namespace_log_routing(namespace, tenant):
+    assert container_log_tenant(namespace) == tenant
+
+
+def retained_intent(**kwargs):
+    return ReadIntent(tool="pod_logs", namespace="openshift-machine-api", name="controller",
+                      container="manager", log_backend="loki", **kwargs)
+
+
+def routed_client(handler):
+    return LokiQueryClient(base_url="https://logs.example/api/logs/v1/application", token="fixture",
+                           transport=httpx.MockTransport(handler))
+
+
+def log_response(values=()):
+    return httpx.Response(200, json={"status": "success", "data": {"resultType": "streams",
+        "result": [{"stream": {}, "values": list(values)}] if values else []}})
+
+
+def test_historical_scaling_search_reaches_twenty_hour_old_activity_and_marks_busy_slices():
+    requests = []
+    old_time = NOW - timedelta(hours=20, minutes=15)
+    old_stamp = str(int(old_time.timestamp() * 1e9))
+    def handler(request):
+        requests.append(request)
+        assert "/infrastructure/" in request.url.path
+        assert "scale" in request.url.params["query"] and "|~" in request.url.params["query"]
+        start, end = int(request.url.params["start"]), int(request.url.params["end"])
+        if start <= int(old_stamp) <= end:
+            return log_response([[old_stamp, "scale-down: removing node worker-3 token=secret-value"]])
+        # A busy newest window must not crowd out the historical slice.
+        if end == int(NOW.timestamp() * 1e9):
+            return log_response([[str(end-i), f"scaling status {i}"] for i in range(int(request.url.params["limit"]))])
+        return log_response()
+    client = routed_client(handler)
+    result = BoundedLogVolumeReader(client, clock=lambda: NOW).container_logs(
+        retained_intent(range_seconds=86400, log_activity="node_scaling"))
+    data = result.observations[0].data
+    assert len(requests) == 12
+    assert "worker-3" in data["tail"] and "secret-value" not in str(result)
+    assert data["log_coverage"]["partial"] is True
+    assert len(data["log_coverage"]["windows"]) == 12
+    assert client._tenant == "application" and client._timeout_seconds == 90
+    assert all(request.headers["authorization"] == "Bearer fixture" for request in requests)
+
+
+def test_empty_primary_falls_back_with_separate_provenance():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        if "/infrastructure/" in request.url.path:
+            return log_response()
+        return log_response([[str(int(NOW.timestamp()*1e9)), "custom forwarded controller log"]])
+    result = BoundedLogVolumeReader(routed_client(handler), clock=lambda: NOW).container_logs(retained_intent())
+    assert len(requests) == 2
+    assert [o.data["tenant"] for o in result.observations] == ["infrastructure", "application"]
+    assert result.observations[1].data["log_coverage"]["selection"] == "empty_primary_fallback"
+    assert "custom forwarded" in result.observations[1].data["tail"]
+
+
+@pytest.mark.parametrize("routing,expected_calls", [("auto", 1), ("check_both", 2)])
+def test_tenant_denial_is_visible_and_never_changes_credentials(routing, expected_calls):
+    requests = []
+    def handler(request):
+        requests.append(request)
+        if "/infrastructure/" in request.url.path:
+            return httpx.Response(403)
+        return log_response([[str(int(NOW.timestamp()*1e9)), "application evidence"]])
+    result = BoundedLogVolumeReader(routed_client(handler), clock=lambda: NOW).container_logs(
+        retained_intent(log_routing=routing))
+    assert len(requests) == expected_calls
+    assert result.observations[0].data["log_coverage"]["failure"] == "forbidden"
+    assert result.observations[0].data["log_coverage"]["partial"] is True
+    assert "403" in " ".join(result.limitations)
+    assert all(r.headers["authorization"] == "Bearer fixture" for r in requests)
+
+
+def test_both_tenants_share_budgets_and_retain_tenant_identity():
+    def handler(request):
+        count = int(request.url.params["limit"])
+        stamp = int(request.url.params["end"])
+        return log_response([[str(stamp-i), "x"*1900] for i in range(count)])
+    source = routed_client(handler)
+    source._max_response_bytes = 1024 * 1024
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).container_logs(
+        retained_intent(log_routing="check_both", range_seconds=86400))
+    assert len(result.observations) == 2
+    assert all(o.data["entries"] for o in result.observations)
+    assert sum(len(o.data["tail"].encode()) for o in result.observations) <= 61440
+    assert all(o.data["log_coverage"]["partial"] for o in result.observations)
+    assert sum(len(o.data["log_coverage"]["windows"]) for o in result.observations) <= 24
+
+
+def test_registered_filter_rejects_arbitrary_patterns_and_kubernetes_usage():
+    with pytest.raises(ValueError):
+        retained_intent(log_activity='.* | json')
+    with pytest.raises(ValueError):
+        ReadIntent(tool="pod_logs", log_activity="node_scaling")
+    with pytest.raises(ValueError):
+        ReadIntent(tool="query_metrics", log_routing="check_both")
+
+
+def test_direct_loki_endpoint_uses_selected_tenant_header():
+    def handler(request):
+        assert request.headers["X-Scope-OrgID"] == "infrastructure"
+        return log_response([[str(int(NOW.timestamp()*1e9)), "node log"]])
+    source = LokiQueryClient(base_url="https://logs.example", token="fixture",
+                            transport=httpx.MockTransport(handler))
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).container_logs(retained_intent())
+    assert result.observations[0].data["tenant"] == "infrastructure"
+
+
+def test_display_retains_latest_bounded_lines_without_history_slicing():
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert int(request.url.params["limit"]) == 10
+        assert request.url.params["direction"] == "backward"
+        stamp = int(NOW.timestamp()*1e9)
+        return log_response([[str(stamp-i*10**9), f"line {i}"] for i in range(10)])
+    result = BoundedLogVolumeReader(routed_client(handler), clock=lambda: NOW).container_logs(
+        retained_intent(range_seconds=86400, log_mode="display", tail_lines=10))
+    assert len(requests) == 1 and len(result.observations[0].data["entries"]) == 10
+    assert result.observations[0].data["log_coverage"]["partial"] is True
+
+
+def test_incident_history_uses_shared_namespace_routing():
+    from types import SimpleNamespace
+    from podpilot_openshift.incidents import IncidentReader
+    calls = []
+    class Source:
+        def for_tenant(self, tenant):
+            calls.append(tenant)
+            return self
+        def query_container_logs(self, **kwargs):
+            return SimpleNamespace(entries=(), is_complete=True)
+    reader = IncidentReader("https://api.example", "fixture", namespaces=["payments"],
+                            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+    reader.loki = Source()
+    try:
+        result = reader._collect_loki_logs("payments", "worker", "app")
+        assert calls == ["application"]
+        assert result["tenant"] == "application"
+        assert result["mechanism"] == "loki-application-query"
+    finally:
+        reader.close()
+
+
+def test_remote_tenant_routing_preserves_discovery_and_fresh_credential_provider():
+    requests, tokens = [], []
+    def token():
+        tokens.append(True)
+        return "delegated-fixture"
+    def handler(request):
+        requests.append(request)
+        if request.url.host == "api.example":
+            return httpx.Response(200, json={"spec": {"host": "logs.example"}})
+        assert "/infrastructure/" in request.url.path
+        return log_response([[str(int(NOW.timestamp()*1e9)), "controller output"]])
+    client = LokiQueryClient.for_remote_cluster(api_url="https://api.example", token_provider=token,
+                                               transport=httpx.MockTransport(handler))
+    result = BoundedLogVolumeReader(client, clock=lambda: NOW).container_logs(retained_intent())
+    assert result.observations[0].data["tenant"] == "infrastructure"
+    assert len(tokens) == 1 and len(requests) == 2
+    assert client._tenant == "application"
+
+
+def test_deadline_stops_history_with_explicit_partial_coverage(monkeypatch):
+    ticks = iter([0, 0, 31])
+    monkeypatch.setattr("podpilot_openshift.log_metrics.time.monotonic", lambda: next(ticks))
+    from types import SimpleNamespace
+    source = SimpleNamespace(query_container_logs=lambda **kw: ContainerLogSnapshot(
+        entries=(ContainerLogEntry(str(int(kw["end"].timestamp()*1e9)), "evidence"),),
+        collected_at=NOW, is_complete=True))
+    intent = ReadIntent(tool="pod_logs", namespace="payments", name="api", container="app",
+                        log_backend="loki", range_seconds=86400)
+    result = BoundedLogVolumeReader(source, clock=lambda: NOW).container_logs(intent)
+    coverage = result.observations[0].data["log_coverage"]
+    assert coverage["partial"] and len(coverage["windows"]) == 1
 
 
 def test_retained_log_tool_preserves_times_redacts_and_rejects_unbounded_scope():

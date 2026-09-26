@@ -22,11 +22,10 @@ the same result shape across repeated runs.
 
 ## Release Surfaces
 
-The enterprise development increment additionally requires secure-default approval
-bypass validation (PoC-only opt-in), separate approval and original-operator
-execution within one hour, expiry/drift/one-shot tests, durable attributed broker
-attempt/result events and authorized bounded audit export. Verify read-only mode
-still denies mutation and Secret reads even when development bypass is enabled.
+Action writes require requester self-approval for each exact broker request,
+with expiry, session ownership, single-use consumption and attributed audit events.
+Read-only mode must still deny mutation. Incident flows must expose no approval
+or execution endpoints. Audit export remains authorized and bounded.
 Inventory must use the current delegated session, show denied/partial scope,
 distinguish endpoint candidates from successful telemetry queries, and admit CI/CD
 repository references only within an existing validated provider connection.
@@ -70,7 +69,7 @@ preserve existing profile budgets and populate the new window and policy columns
 - Exercise degraded paths for unavailable Kubernetes, Thanos, Alertmanager, and model APIs.
 - Exercise the Loki audit tenant success, empty-result, timeout, and 403 paths; confirm audit
   username matching is exact and case-insensitive and raw audit lines are never persisted.
-- Verify Investigator, Approver, and Breakglass can submit audit questions through Ask while
+- Verify Investigator, Read/write, and Breakglass can submit audit questions through Ask while
   Viewer remains denied by the existing Investigator-or-higher boundary.
 - Confirm production image digests—or the explicitly accepted versioned
   ImageStreamTag for a remote PoC—plus resource limits, probes, NetworkPolicy,
@@ -130,25 +129,15 @@ bounded alert normalization, workload collection degradation, and evidence-backe
 synthetic CrashLooping, image-waiting, and unscheduled diagnoses. Rule-state and
 PromQL evidence remain a later enhancement; the three workload fixtures no longer
 claim root cause from Alertmanager data alone.
-It also covers Approver-only profile writes, token non-disclosure, capability
+It also covers configuration-admin-only profile writes, token non-disclosure, capability
 gating, structured model interpretation, and deterministic fallback during a
 provider outage. Live release validation must additionally exercise the real
 OpenShift Secret, OpenAI probe, and browser role boundaries without logging the
 credential.
 
-Milestone 5 adds fixtures for the two-action allowlist, server dry-run, role and
-CSRF denial, preview expiry, atomic single execution, stale UID/resourceVersion
-failure, delete preconditions, new-UID replacement verification, rollout patch
-shape, rollout readiness verification, sibling cancellation, and complete audit
-events. Live QA must use a disposable fixture namespace and must confirm the
-fixture is healthy or removed before release.
-
-Milestone 6 adds gates for creator cancellation, unauthorized cancellation,
-atomic closure, expiry reconciliation, source-alert resolution, missing/stale
-target validation, approval-time Alertmanager recheck, and audit attribution.
-Truncated Alertmanager snapshots must neither cancel previews nor authorize an
-action. Live QA must confirm cancellation performs no Kubernetes mutation and
-that a removed target is closed by `system:reconciler`.
+The former Milestone 5/6 incident remediation routes are retired. Verify old
+pending proposals are cancelled by migration 0030, historical records remain
+readable, and investigation creation performs no mutation dry-run or proposal creation.
 
 Milestone 7 adds gates for server-owned `TargetDown` planning, missing-scope
 abstention, Viewer denial, CSRF denial, atomic single execution, registered-tool
@@ -355,7 +344,7 @@ chunking, safe query-token handling, reviewed/current/enabled/expiry filters,
 global/explicit-cluster/all-required-tag and namespace scope, restricted-entry
 authorization, content-free audit details, and guidance-only eligible memory in standalone
 Ask prompts. Tests must prove restricted or mismatched memory is absent from prompts.
-Cluster registry gates must cover Approver authorization, CSRF, HTTPS-origin validation,
+Cluster registry gates must cover configuration-admin authorization, CSRF, HTTPS-origin validation,
 secret-backed token non-disclosure/rotation/removal, runtime-cluster immutability, soft
 disable, and audited connection tests. Multi-cluster conversations must pin one to ten IDs,
 retain prior sessions when selection changes, share the 25-unit weighted ceiling, attribute every
@@ -416,6 +405,13 @@ section labels and Unicode bullets into valid headings and lists. Follow-up Pod-
 invoke the separate bounded log-analysis request before regenerating the answer. A model
 that twice stops on an actionable structured gap may trigger only the highest-priority matching
 candidate through the unchanged broker.
+Retained log tests must verify deterministic application/infrastructure routing,
+empty-result fallback, explicit cross-tenant searches with shared budgets, visible
+tenant denials, and preservation of delegated credentials and TLS. A 24-hour scaling
+fixture must retain activity older than 20 hours even when the newest slice saturates.
+Time/line/byte boundaries must mark partial coverage, and tenant/window/filter details
+must survive specialist processing into operator evidence. Model schemas must expose
+only registered routing/activity choices, never arbitrary tenants or LogQL.
 Typed planning and authored-read schemas must neither offer nor execute generic
 `list_resources` or `search_resources` calls, the runtime settings and manifests must contain no
 generic inventory-helper feature flag, and unified-agent tool schemas must omit both helpers.
@@ -503,9 +499,8 @@ summary must preserve the complete-coverage rule before confirming absence.
   pressure must reduce successful read-only shell details before mutation, typed-observation, or
   failure details. Manifest tests must keep the single app-wide action budget at 50 for delegated
   agents and typed planning.
-  Successful mutations must be marked as writes. In Action mode, a final answer that describes
-  writes as blocked, claims the session is read-only, or asks for another approval without an actual
-  forbidden write result must be rejected and returned to the tool-capable loop before display.
+  Successful mutations must be marked as writes. Action prompts must initiate the
+  broker approval flow and must never invent successful writes or resource absence.
 - Multi-cluster agent tests must prove every command names a selected cluster, only that cluster's
   token reaches the loopback runner, tokens never enter model messages or logs, the temporary
   kubeconfig requests insecure TLS in the remote agentic overlay, and a redacted failed-command
@@ -610,3 +605,22 @@ backward-compatible until a separate, tested database rollback procedure exists.
 - Report full live chat investigations separately from live adapter probes and
   evidence-only model replays. An empty pre-fixture Loki window does not validate
   deletion of previously ingested records by retention.
+
+## Requester write approval and diagnosis-only incidents
+
+- Run `apps/api/tests/test_write_approvals.py`: exact-request approval, requester/session
+  authorization, CSRF, single use, rejection, expiry, cancellation, token loss,
+  redacted Secret previews, read-only denial and removed incident routes.
+- Run the optional browser case with `PODPILOT_BROWSER_TESTS=1` and Playwright on
+  `NODE_PATH`: modal details, no automatic approval, refresh, mobile layout,
+  decision errors and Escape rejection.
+- Apply migration 0030 before starting the API. Old incident proposals must be
+  cancelled; incident pages must expose diagnosis and historical records only.
+- Action writes must retain delegated-user Kubernetes RBAC enforcement. A second
+  API write requires a new approval even within the same shell command.
+
+Action completion must not accept a prose approval handoff when the current run has
+no broker approval record. Regression coverage must return such responses to the
+tool loop with a bounded correction, preserve read-only/advice/blocked responses,
+and never retry a turn that already reached requester approval. Exhausted corrections
+must say no approval was created rather than leaving a fictitious pending request.

@@ -240,11 +240,6 @@ spec:
                 configMapKeyRef:
                   name: podpilot-runtime
                   key: configuration_admin_groups
-            - name: PODPILOT_ROLE_APPROVER_GROUPS
-              valueFrom:
-                configMapKeyRef:
-                  name: podpilot-runtime
-                  key: role_approver_groups
             - name: PODPILOT_ROLE_BREAKGLASS_GROUPS
               valueFrom:
                 configMapKeyRef:
@@ -260,12 +255,6 @@ spec:
               value: kubernetes
             - name: PODPILOT_POC_MODE
               value: "true"
-            - name: PODPILOT_DEVELOPMENT_APPROVAL_BYPASS
-              valueFrom:
-                configMapKeyRef:
-                  name: podpilot-runtime
-                  key: development_approval_bypass
-                  optional: true
           securityContext: &restricted-context
             allowPrivilegeEscalation: false
             capabilities:

@@ -11,7 +11,7 @@ RoleGroups = tuple[tuple[Role, tuple[str, ...]], ...]
 
 DEFAULT_ROLE_GROUPS: RoleGroups = (
     (Role.BREAKGLASS, ("podpilot-breakglass",)),
-    (Role.APPROVER, ("podpilot-approvers",)),
+    (Role.READ_WRITE, ("podpilot-read-write",)),
     (Role.INVESTIGATOR, ("podpilot-investigators",)),
 )
 

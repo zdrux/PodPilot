@@ -433,6 +433,10 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call(inventor
     tools_by_name = {
         item["function"]["name"]: item["function"] for item in request["tools"]
     }
+    log_properties = tools_by_name["pod_logs"]["parameters"]["properties"]
+    assert log_properties["log_activity"]["enum"] == ["all", "node_scaling"]
+    assert log_properties["log_routing"]["enum"] == ["auto", "check_both"]
+    assert "tenant" not in log_properties and "logql" not in log_properties
     assert tools_by_name["execute_shell"]["strict"] is True
     assert all(
         "strict" not in item["function"]

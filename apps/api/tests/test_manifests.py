@@ -492,7 +492,6 @@ def test_poc_gui_access_uses_same_authenticated_user_boundary() -> None:
         "podpilot-investigators",
         "podpilot-read-write",
         "podpilot-configuration-admins",
-        "podpilot-approvers",
         "podpilot-breakglass",
     }
 
@@ -507,7 +506,7 @@ def test_remote_ldap_group_config_only_maps_elevated_roles() -> None:
     } == {
         "role_investigator_groups",
         "role_read_write_groups",
-        "role_approver_groups",
+        "role_read_write_groups",
         "role_breakglass_groups",
     }
     assert "configuration_admin_groups" in runtime["data"]

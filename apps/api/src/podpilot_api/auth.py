@@ -19,7 +19,7 @@ class Role(IntEnum):
     VIEWER = 10
     DELEGATED_OPERATOR = 15
     INVESTIGATOR = 20
-    APPROVER = 30
+    READ_WRITE = 30
     BREAKGLASS = 40
 
     @property
@@ -46,7 +46,7 @@ class StaticRoleResolver:
         return self._assignments.get(username)
 
     def can_manage(self, username: str) -> bool:
-        return self._assignments.get(username) in {Role.APPROVER, Role.BREAKGLASS}
+        return self._assignments.get(username) in {Role.READ_WRITE, Role.BREAKGLASS}
 
 
 def auth_dependency(settings: Settings, resolver: RoleResolver):

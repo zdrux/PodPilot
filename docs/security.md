@@ -5,19 +5,34 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 
 ## Enterprise development controls (2026-09-09)
 
-`PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` defaults to false and is accepted only
-with PoC mode in a development/test/SNO environment. The SNO overlay opts in.
-It bypasses human approval, not delegated identity, read-only session boundaries,
-RBAC, admission or audit. With it off, unreviewed delegated privileged operations
-fail closed. The generalized delegated approval inbox is not yet implemented.
-Legacy typed proposals support separate approval and creator-owned execution for
-one hour, with target drift checks and one-time execution; approval never runs
-the action. The development UI labels the bypass explicitly.
+Action chat uses requester self-approval only. No external approver or development
+bypass can authorize writes. A command-scoped ephemeral capability links each
+actual brokered write to its owner, live run, selected cluster and delegated browser
+session. The broker holds the original HTTP body in memory while a modal displays
+a redacted preview; approval binds to the method, path, query, content type and
+body hash. The browser submits only the approval ID and decision, never replacement
+execution text. Only the requester in the originating session with Action access may
+decide, with CSRF protection and an atomic single-use claim. Kubernetes receives
+the unchanged request using the same delegated token, subject to RBAC and admission.
+
+Requests expire after 120 seconds or on command/session/run cancellation. A rejection
+or expiry blocks subsequent writes in that turn. Restart cancels pending decisions
+and marks interrupted executions indeterminate; no approval is replayed. Records
+retain redacted previews, hashes, ownership, expiry and decision/outcome audit events,
+never raw credentials or capabilities. Bodies larger than 64 KiB and binary bodies
+are rejected before review; a turn is bounded to 64 proposals. This guard does not
+promise rollback, dry-run validation or unchanged target state unless the request
+itself includes Kubernetes preconditions. The agent must verify results afterward.
+
+Incidents and alert investigations are diagnosis-only. Legacy mutation/approval
+endpoints, runtime executor and controls are removed; migration retires outstanding
+previews while retaining historical outcomes. Read/write admission and configuration
+administration remain separate capabilities. The old Approver group setting is removed.
 
 Delegated proxy requests record durable attempts before contacting the cluster
 and accepted/rejected API responses afterward. Network interruption is recorded
 as indeterminate. Request bodies, query strings and capability URLs are excluded.
-Audit export requires Approver access, redacts sensitive detail keys, uses stable
+Audit export requires read/write access, redacts sensitive detail keys, uses stable
 event IDs and bounded snapshot pagination, and records the export itself. This
 database is not yet an immutable external audit archive.
 
@@ -67,7 +82,8 @@ cluster health or degraded-ClusterOperator relationship collectors. An alert, cl
 or model response never becomes a free-form path or selector. Current and Kubernetes
 previous-container reads are issued only for exact Pod/container names observed in a prior bounded
 Pod snapshot. When deeper or missing crash history warrants it, a server-authored Loki query uses
-those same immutable coordinates against the infrastructure tenant; arbitrary LogQL, label
+those same immutable coordinates against the namespace-selected container-log tenant
+(`openshift*`, `kube*`, and `default` use infrastructure; others use application); arbitrary LogQL, label
 selectors, tenants, and time ranges are not model inputs. The default Loki incident window is
 six hours around alert onset with 2,000 lines / 96 KiB retained. Each selected log is sent alone
 to the structured log specialist; the coordinator receives its redacted cited report
@@ -89,8 +105,15 @@ and incident workers do not share evidence lists, credentials, or model contexts
   `openshift-monitoring/podpilot-alertmanager-api-view` Role.
 - OpenShift Logging remains read-only through `cluster-logging-application-view`,
   `cluster-logging-infrastructure-view`, and `cluster-logging-audit-view`. The application
-  tenant supplies aggregate namespace-volume evidence. The infrastructure tenant additionally
-  supplies exact-container incident history through the bounded server-owned query above. The audit tenant supports bounded
+  tenant supplies aggregate namespace-volume evidence. Both container-log tenants supply
+  exact-container history using server-owned routing. Ask can check the alternate tenant
+  after a successful empty result, or both when `log_routing=check_both` is requested.
+  Queries retain the same authorized endpoint, delegated credential provider and TLS
+  policy; tenant denials remain visible and never cause identity escalation. The
+  model can choose only `all` or the registered `node_scaling` activity filter, never
+  author LogQL or choose arbitrary tenant names. Ask history is bounded by 24 hours,
+  24 queries, 1,000 retained lines and 60 KiB of redacted text; coverage and filtering
+  limitations accompany specialist and final-answer evidence. The audit tenant supports bounded
 user-activity queries through a server-owned LogQL template; the model may extract only the
 optional username, period, result limit, operation scope, and outcome filter. Omitting the
 username requests matching activity across all users; a supplied username is matched exactly and
@@ -156,7 +179,7 @@ The broker issues separate random capabilities for read-only and Action use. Rea
 allow GET/HEAD/OPTIONS and the non-mutating SelfSubject access-review APIs; all other Kubernetes
 mutation methods are rejected before the request reaches the cluster. Secret reads are allowed by
 default under the delegated user's RBAC; `PODPILOT_SECRET_ACCESS_ENABLED=false` rejects Secret
-operations in both modes, including Action with the development approval bypass. Both modes
+operations in both modes, including Action with requester self-approval. Both modes
 use the same agent loop and expose the same investigation tools; the capability is the enforcement
 difference. Action capabilities inject the same
 user token without reducing its permissions, so Kubernetes RBAC, admission, quota, and policy are
@@ -198,7 +221,7 @@ The following historical design is superseded and retained only as migration con
 ### Delegated sessions
 
 When `PODPILOT_DELEGATED_ACCESS_ENABLED=true`, an authenticated user who matches none of the
-configured Investigator, Approver, or Breakglass groups is assigned the explicit Delegated
+configured Investigator, Read/write, or Breakglass groups is assigned the explicit Delegated
 Operator application role. This is not inferred inside a conversation. The user must select only
 enabled entries from PodPilot's configured cluster registry, including the runtime system cluster,
 enter one username/password pair, and accept the
@@ -206,7 +229,7 @@ delegated-session warning. PodPilot performs the OpenShift challenging-client OA
 validates `/users/~`, and immediately discards the password.
 The API sends Basic credentials only after a Basic challenge from the exact HTTPS origin advertised
 by that cluster's verified OAuth discovery document and refuses later cross-origin redirects.
-Because all selected DEV clusters receive the same credentials, Approvers and users must trust every
+Because all selected DEV clusters receive the same credentials, Configuration administrators and users must trust every
 selected remote-cluster registration and its CA; a malicious but trusted API registration can advertise a
 credential-capturing OAuth endpoint.
 
@@ -220,7 +243,7 @@ therefore evaluate writes as the signed-in remote user.
 
 Delegated conversations persist `read_only` or `action` plus the originating session ID and an
 immutable cluster list. They cannot be continued after that exact in-memory session expires, is
-lost, or signs out; the user must reconnect and start a new conversation. Investigator, Approver,
+lost, or signs out; the user must reconnect and start a new conversation. Investigator, Read/write,
 and Breakglass sessions use the same role-authorized workflow. The API service account retains its read roles for typed collection and
 group resolution, but its projected credential is mounted only into the API and OAuth-proxy
 containers—not the command runner.
@@ -239,7 +262,7 @@ persisted, an API-process or node crash destroys PodPilot's only copy before it 
 remote token can then remain valid until the cluster TTL or administrator revocation. This is an
 explicit availability-versus-recoverability consequence of memory-only storage.
 
-Each registered remote cluster may carry an Approver-managed PEM CA bundle (maximum 64 KiB;
+Each registered remote cluster may carry an configuration-admin-managed PEM CA bundle (maximum 64 KiB;
 private keys rejected). PodPilot appends it to system trust for OAuth discovery/login, identity
 validation, delegated API proxying, revocation, and tokenless connection tests. TLS verification
 remains enabled; a custom CA is not an insecure-mode fallback.
@@ -360,7 +383,7 @@ on the runtime identity do not authorize Ask Kubernetes reads.
 Model diagnostics follow the existing conversation and model-management authorization boundaries.
 An Ask turn stores only normalized call metadata and token counts; it does not store provider request
 bodies, response content, authorization headers, or credentials. The conversation owner sees this
-metadata in a collapsed control. Model capability probes are Approver-only, use fixed synthetic
+metadata in a collapsed control. Model capability probes are configuration-admin-only, use fixed synthetic
 inputs, and may store a redacted 4,000-character response preview so schema failures can be diagnosed.
 Only the latest probe trace is retained on each profile and saving new profile settings clears it.
 
@@ -390,7 +413,7 @@ registry metadata, revokes live delegated connections for that cluster, and reta
 conversation records. Shared entries remain disable-only. These operations require CSRF and
 content-free audit metadata and never return a bearer token.
 
-Remote Kubernetes API TLS verification defaults on in portable deployments. An Approver may explicitly disable
+Remote Kubernetes API TLS verification defaults on in portable deployments. A configuration administrator may explicitly disable
 certificate and hostname verification for one registered cluster. This is a
 credential-bearing exception: a network attacker can impersonate the API server, steal
 the bearer token, and alter evidence. The management page warns before use, the registry
@@ -443,7 +466,7 @@ same-origin OAuth session; the API rechecks ownership before opening the stream.
 
 ## Curated Memory Policy
 
-Cluster memory accepts only Approver-curated Markdown or text and redacts common
+Cluster memory accepts only configuration-admin-curated Markdown or text and redacts common
 secret patterns before persistence. Every immutable version records its source,
 owner, cluster and optional namespace/resource scope, verification state,
 sensitivity, review time, optional expiry, and checksum. Audit events retain IDs
@@ -452,7 +475,7 @@ and metadata but not document content.
 Only current, enabled, reviewed, unexpired versions are retrievable. Normal code
 applies global, explicit-cluster, required-tag, and namespace filters before ranking;
 restricted entries require
-the Approver role. Search text is converted to a bounded quoted FTS expression,
+the read/write role. Search text is converted to a bounded quoted FTS expression,
 so operators and cluster-derived text cannot supply SQLite FTS instructions.
 Retrieved memory remains untrusted guidance rather than live evidence. Delegated-agent context
 receives eligible internal chunks annotated with their
@@ -471,8 +494,8 @@ its local `podpilot-htpasswd` provider.
 | --- | --- |
 | Any authenticated OpenShift user | Viewer: view health, alerts, investigations, collected evidence, and audit history |
 | Investigator groups | Start analyses and use investigation-scoped chat |
-| Approver groups | Manage cluster, model, and curated-memory configuration; approve registered low/moderate-risk actions |
-| Breakglass groups | The same configuration access as Approver plus future high-risk approval workflows; no direct cluster-admin grant |
+| Read/write groups | Start Action chats and self-approve their own brokered writes |
+| Breakglass groups | Action and configuration access; writes still require requester approval and delegated RBAC |
 
 The GUI RoleBinding admits the built-in `system:authenticated` group to the exact
 PodPilot Service. The application defaults authenticated users to Viewer, accepts
@@ -513,7 +536,7 @@ secret-pattern redacted before investigation persistence and treated as untruste
 evidence; no model receives them. Secret resources and pull-secret contents are
 never read by the workload collector.
 
-Milestone 4 permits Approver-or-higher users to update one fixed model-credential
+Milestone 4 permits configuration-admin users to update one fixed model-credential
 Secret through a dedicated settings endpoint. RBAC limits `get`, `patch`, and
 `update` to `ai-ops/podpilot-model-credentials`; it cannot create or enumerate
 Secrets. The browser may submit a replacement token over the protected Route, but
@@ -632,34 +655,9 @@ before applying, prefer server-side dry-run, record before/after state, enforce
 timeouts, and present rollback. Production must use a separate action service and
 identity with a small allowlist rather than cluster-admin.
 
-Milestone 5 enables the first workload-mutation endpoint only for two registered
-types: `delete_controller_owned_pod` and `restart_workload_rollout`. Proposals are
-derived from normalized live evidence and are never accepted from model or browser
-payloads. Each stores exact UID/resourceVersion preconditions and expires after ten
-minutes. Creation performs a server dry-run. Execution requires Approver-or-higher,
-same-site CSRF, an atomic single-use claim, and a second explicit UI confirmation.
-
-Immediately before mutation the executor re-reads the target and fails stale if
-UID, resourceVersion, or Pod controller changed. Pod deletion uses Kubernetes
-delete preconditions and applies only to crash-looping controller-owned Pods.
-Its preview carries `dryRun: ["All"]` in `DeleteOptions` as well as the API
-query parameter, covering OpenShift DELETE dry-run compatibility without relying
-on a client-side simulation.
-Rollout restart uses a fixed `podpilot.io/restartedAt` template annotation and
-supports only Deployment, StatefulSet, and DaemonSet. Every attempt records the
-actor, preview, approval, operation result, before/after identities, and bounded
-verification. Shell, arbitrary YAML/patches, Secrets, RBAC, nodes, system-namespace
-targets, and model-created tools remain non-executable.
-
-Milestone 6 treats a preview as revocable state rather than durable authority.
-An investigation creator may cancel but cannot execute it. Dashboard
-reconciliation infers resolution only from a complete bounded Alertmanager
-snapshot; truncated or unavailable snapshots neither cancel nor authorize.
-Approval independently rechecks that source fingerprint and fails closed when it
-cannot be proven active. A separate read-only target validation classifies exact
-identity as current, stale, missing, or unavailable. Only stale or missing closes
-the preview automatically; transient Kubernetes failures leave it unapproved and
-visible for retry.
+The former milestone 5/6 registered remediation execution path is retired.
+Historical action rows do not authorize any new execution. Incident collectors and
+investigation endpoints have no remediation executor or approval routes.
 
 Milestone 7 does not give the model Kubernetes credentials or a generic tool
 channel. Normal code selects check types and exact namespace/Service scope from a

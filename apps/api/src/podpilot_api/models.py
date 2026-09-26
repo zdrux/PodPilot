@@ -295,6 +295,21 @@ class AdHocRun(Base):
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class WriteApproval(Base):
+    __tablename__ = "write_approvals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("adhoc_runs.id", ondelete="CASCADE"), index=True)
+    owner: Mapped[str] = mapped_column(String(253), nullable=False)
+    cluster_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    preview_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class UserModelPreference(Base):
     __tablename__ = "user_model_preferences"
     __table_args__ = (

@@ -101,10 +101,18 @@ window.PodPilotPage.register("app.js", (page) => {
       window.sessionStorage.removeItem("podpilot-action-notice");
     }
   }
+  const nearScrollEnd = (element) => !element || element.scrollHeight - element.clientHeight - element.scrollTop <= 48;
+  const chatScrollRestoreKey = `podpilot-chat-completion-scroll:${window.location.pathname}`;
   const latestThread = document.querySelector(".ask-thread[data-scroll-latest]");
   if (latestThread) {
+    let restoredTop = null;
+    try {
+      const saved = JSON.parse(window.sessionStorage.getItem(chatScrollRestoreKey) || "null");
+      window.sessionStorage.removeItem(chatScrollRestoreKey);
+      if (saved && Date.now() - saved.at < 60000 && Number.isFinite(saved.top)) restoredTop = saved.top;
+    } catch (_error) { /* Scroll restoration is optional. */ }
     window.requestAnimationFrame(() => {
-      latestThread.scrollTop = latestThread.scrollHeight;
+      if (latestThread.isConnected) latestThread.scrollTop = restoredTop ?? latestThread.scrollHeight;
     });
   }
   document.querySelectorAll(".analyze-button").forEach((button) => {
@@ -478,62 +486,6 @@ window.PodPilotPage.register("app.js", (page) => {
     });
   });
 
-  document.querySelectorAll(".review-action").forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = document.querySelector(`#${CSS.escape(button.dataset.reviewTarget || "")}`);
-      if (target) {
-        target.hidden = !target.hidden;
-        button.textContent = target.hidden ? "Review approval" : "Hide approval";
-      }
-    });
-  });
-  document.querySelectorAll(".approve-action").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!csrf || !button.dataset.actionUrl) return;
-      const prior = button.textContent;
-      button.disabled = true;
-      button.textContent = button.dataset.actionUrl.endsWith("/execute") ? "Executing and verifying…" : "Saving approval…";
-      try {
-        const response = await page.fetch(button.dataset.actionUrl, {
-          method: "POST",
-          headers: {"X-PodPilot-CSRF": csrf},
-          credentials: "same-origin",
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || "The remediation could not be executed.");
-        }
-        window.location.assign(response.url);
-      } catch (error) {
-        if (toast) { toast.textContent = error.message; toast.hidden = false; }
-        button.disabled = false;
-        button.textContent = prior;
-      }
-    });
-  });
-  document.querySelectorAll(".cancel-action").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!csrf || !button.dataset.actionUrl) return;
-      button.disabled = true;
-      button.textContent = "Cancelling…";
-      try {
-        const response = await page.fetch(button.dataset.actionUrl, {
-          method: "POST",
-          headers: {"X-PodPilot-CSRF": csrf},
-          credentials: "same-origin",
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.detail || "The remediation preview could not be cancelled.");
-        }
-        window.location.assign(response.url);
-      } catch (error) {
-        if (toast) { toast.textContent = error.message; toast.hidden = false; }
-        button.disabled = false;
-        button.textContent = "Cancel preview";
-      }
-    });
-  });
   document.querySelectorAll(".run-checks-action").forEach((button) => {
     button.addEventListener("click", async () => {
       if (!csrf || !button.dataset.actionUrl) return;
@@ -635,6 +587,10 @@ window.PodPilotPage.register("app.js", (page) => {
     activitySidebarToggle.setAttribute("aria-label", open ? "Hide evidence panel" : "Show evidence panel");
     activitySidebarToggle.title = open ? "Hide evidence panel" : "Show evidence panel";
     if (activitySidebarToggleLabel) activitySidebarToggleLabel.textContent = open ? "Hide evidence" : "Show evidence";
+    if (open) {
+      const panel = activitySidebar.querySelector(".activity-timeline-panel");
+      if (panel) panel.scrollTop = panel.scrollHeight;
+    }
     if (persist) {
       try { window.localStorage.setItem(activitySidebarPreferenceKey, String(open)); } catch (_error) { /* Preference storage is optional. */ }
     }
@@ -1080,6 +1036,10 @@ window.PodPilotPage.register("app.js", (page) => {
     const timeline = document.querySelector("[data-operation-timeline]");
     const count = document.querySelector("[data-activity-count]");
     if (!timeline || !Array.isArray(operations)) return;
+    const panel = timeline.closest(".activity-tab-panel");
+    const followUpdates = nearScrollEnd(panel);
+    const previousKeys = new Set(Array.from(timeline.querySelectorAll("[data-live-operation]"), row => row.dataset.operationKey));
+    const hasNewEntries = operations.some((item, index) => !previousKeys.has(String(item.tool_call_id || `operation-${index + 1}`)));
     const operationsSnapshot = JSON.stringify(operations);
     if (operationsSnapshot === lastLiveOperationsSnapshot) return;
     lastLiveOperationsSnapshot = operationsSnapshot;
@@ -1104,6 +1064,7 @@ window.PodPilotPage.register("app.js", (page) => {
       // Current-turn operations follow saved history and retain their server order.
       timeline.insertBefore(row, timeline.querySelector("[data-operation-live-tail]"));
       row.className = `operation-event operation-status-${operation.status || "running"}`;
+      row.classList.toggle("operation-write", operation.operation_kind === "write");
       const safeKey = key.replace(/[^a-zA-Z0-9_-]/g, "-");
       const dialogId = `operation-live-${timeline.dataset.runId || "run"}-${safeKey}`;
       const button = document.createElement("button");
@@ -1112,7 +1073,7 @@ window.PodPilotPage.register("app.js", (page) => {
       button.dataset.operationOpen = dialogId;
       button.setAttribute("aria-haspopup", "dialog");
       button.setAttribute("aria-controls", dialogId);
-      button.setAttribute("aria-label", `View ${String(operation.title || operation.tool || "operation").replaceAll("_", " ")} operation details${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
+      button.setAttribute("aria-label", `View ${String(operation.title || operation.tool || "operation").replaceAll("_", " ")} operation details${operation.operation_kind === "write" ? ". Write operation" : ""}${operation.content_filtered ? ". This item contains redacted or shortened content" : ""}`);
       const marker = document.createElement("span");
       marker.className = "operation-marker";
       marker.setAttribute("aria-hidden", "true");
@@ -1254,7 +1215,92 @@ window.PodPilotPage.register("app.js", (page) => {
     const total = completedCount + operations.length;
     if (count) count.textContent = `${total} operation${total === 1 ? "" : "s"}`;
     document.querySelector("[data-activity-empty]")?.toggleAttribute("hidden", total > 0);
+    // Scroll only this panel; scrolling an entry into view can also move the chat/page.
+    if (panel && (hasNewEntries || followUpdates)) panel.scrollTop = panel.scrollHeight;
   };
+
+  let writeApprovalDialog = null;
+  let writeApprovalId = null;
+  const updateWriteApprovals = (approvals) => {
+    const approval = approvals[0];
+    if (!approval) {
+      writeApprovalDialog?.close();
+      writeApprovalDialog?.remove();
+      writeApprovalDialog = null;
+      writeApprovalId = null;
+      return;
+    }
+    if (writeApprovalId === approval.id) return;
+    writeApprovalDialog?.close();
+    writeApprovalDialog?.remove();
+    writeApprovalId = approval.id;
+    const dialog = document.createElement("dialog");
+    dialog.className = "operation-dialog write-approval-dialog";
+    dialog.setAttribute("aria-labelledby", "write-approval-title");
+    const header = document.createElement("header");
+    header.className = "operation-dialog-header";
+    const title = document.createElement("h2");
+    title.id = "write-approval-title";
+    title.textContent = "Review and approve this change";
+    header.append(title);
+    const content = document.createElement("div");
+    content.className = "operation-dialog-content";
+    const notice = document.createElement("p");
+    notice.textContent = approval.notice;
+    const risk = document.createElement("p");
+    risk.textContent = approval.risk;
+    const facts = document.createElement("dl");
+    facts.className = "operation-facts";
+    for (const [label, value] of [["Cluster", approval.cluster], ["API endpoint", approval.api_url], ["Requested by", approval.requester],
+      ["Cluster identity", approval.cluster_identity], ["Method", approval.method],
+      ["Target", approval.path], ["Expires", new Date(approval.expires_at).toLocaleString()]]) {
+      const group = document.createElement("div");
+      const dt = document.createElement("dt"); dt.textContent = label;
+      const dd = document.createElement("dd"); dd.textContent = value;
+      group.append(dt, dd); facts.append(group);
+    }
+    content.append(notice, risk, facts);
+    for (const [label, value] of [["Command", approval.command], ["Query parameters", approval.query],
+      ["Content type", approval.content_type], ["Exact request body (sensitive values redacted)", approval.body || "No request body"],
+      ["Request fingerprint", approval.request_hash]]) {
+      if (!value) continue;
+      const heading = document.createElement("h3"); heading.textContent = label;
+      const pre = document.createElement("pre");
+      const code = document.createElement("code"); code.textContent = value;
+      pre.append(code); content.append(heading, pre);
+    }
+    const error = document.createElement("p"); error.setAttribute("role", "alert");
+    const actions = document.createElement("div"); actions.className = "write-approval-actions";
+    const reject = document.createElement("button"); reject.type = "button";
+    reject.className = "button secondary"; reject.textContent = "Reject change";
+    const approve = document.createElement("button"); approve.type = "button";
+    approve.className = "button primary"; approve.textContent = "Approve and execute once";
+    const decide = async (decision) => {
+      reject.disabled = true; approve.disabled = true; error.textContent = "";
+      try {
+        const response = await page.fetch(`/api/v1/write-approvals/${encodeURIComponent(approval.id)}/${decision}`, {
+          method: "POST", credentials: "same-origin", headers: {"X-PodPilot-CSRF": csrf}
+        });
+        if (!response.ok) {
+          const payload = await response.json();
+          throw new Error(payload.detail || "Unable to save your decision.");
+        }
+        dialog.close(); dialog.remove();
+        if (writeApprovalDialog === dialog) writeApprovalDialog = null;
+      } catch (failure) {
+        error.textContent = failure.message || "Unable to save your decision.";
+        reject.disabled = false; approve.disabled = false;
+      }
+    };
+    reject.addEventListener("click", () => { void decide("reject"); });
+    approve.addEventListener("click", () => { void decide("approve"); });
+    // Escape rejects; it can never approve a mutation.
+    dialog.addEventListener("cancel", (event) => { event.preventDefault(); void decide("reject"); });
+    actions.append(reject, approve); content.append(error, actions);
+    dialog.append(header, content); document.body.append(dialog);
+    writeApprovalDialog = dialog; dialog.showModal(); reject.focus({preventScroll: true}); content.scrollTop = 0; dialog.scrollTop = 0;
+  };
+  page.cleanup(() => { writeApprovalDialog?.close(); writeApprovalDialog?.remove(); });
 
   const pendingRun = document.querySelector(".chat-pending[data-adhoc-run-id]");
   if (pendingRun) {
@@ -1313,12 +1359,21 @@ window.PodPilotPage.register("app.js", (page) => {
           ? "Your request is waiting for an available worker."
           : "PodPilot is choosing and running useful checks.";
       }
-      appendPhaseUpdate(event, seq);
       const thread = pendingRun.closest(".ask-thread");
-      thread?.scrollTo({top: thread.scrollHeight});
+      const followUpdates = nearScrollEnd(thread);
+      const previousTop = thread?.scrollTop;
+      appendPhaseUpdate(event, seq);
+      if (thread) thread.scrollTop = followUpdates ? thread.scrollHeight : previousTop;
     };
     const finish = (payload) => {
-      window.location.assign(payload.location || window.location.pathname);
+      const thread = pendingRun.closest(".ask-thread");
+      const destination = new URL(payload.location || window.location.pathname, window.location.href);
+      if (thread && !nearScrollEnd(thread) && destination.pathname === window.location.pathname) {
+        try {
+          window.sessionStorage.setItem(chatScrollRestoreKey, JSON.stringify({top: thread.scrollTop, at: Date.now()}));
+        } catch (_error) { /* Scroll restoration is optional. */ }
+      }
+      window.location.assign(destination.href);
     };
     let source = null;
     let poll = null;
@@ -1361,6 +1416,7 @@ window.PodPilotPage.register("app.js", (page) => {
         const payload = await response.json();
         payload.events?.forEach(addProgress);
         updateLiveOperations(payload.operations || []);
+        updateWriteApprovals(payload.approvals || []);
         if (!["succeeded", "failed", "cancelled"].includes(payload.status)) return false;
         progressStopped = true;
         source?.close();

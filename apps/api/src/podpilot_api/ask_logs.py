@@ -125,6 +125,7 @@ class AskLogAnalyst:
                         {"operator_request": redact_text(question)[:2000],
                          "logs": [{"evidence_id": item["id"], "source": item.get("source"),
                                    "cluster_id": item.get("cluster_id"), "container": data.get("container"),
+                                   "log_coverage": data.get("log_coverage"),
                                    "excerpt": excerpt}]},
                     )
                     report = analysis.model_dump()

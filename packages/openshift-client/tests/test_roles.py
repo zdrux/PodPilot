@@ -16,14 +16,14 @@ def test_resolver_selects_highest_role_and_caches() -> None:
     reader = FakeGroupReader(
         {
             "podpilot-investigators": {"grace"},
-            "podpilot-approvers": {"grace"},
+            "podpilot-read-write": {"grace"},
         }
     )
     resolver = OpenShiftGroupRoleResolver(reader, cache_seconds=60)
 
-    assert resolver.resolve("grace") is Role.APPROVER
+    assert resolver.resolve("grace") is Role.READ_WRITE
     first_call_count = reader.calls
-    assert resolver.resolve("grace") is Role.APPROVER
+    assert resolver.resolve("grace") is Role.READ_WRITE
     assert reader.calls == first_call_count
 
 
@@ -66,7 +66,7 @@ def test_resolver_supports_multiple_existing_groups_per_role() -> None:
         reader,
         cache_seconds=0,
         role_groups=(
-            (Role.APPROVER, ("corp-platform-admins",)),
+            (Role.READ_WRITE, ("corp-platform-admins",)),
             (Role.INVESTIGATOR, ("corp-sre-primary", "corp-sre-secondary")),
         ),
     )
@@ -83,9 +83,9 @@ def test_resolver_uses_configured_precedence_and_skips_empty_roles() -> None:
         cache_seconds=0,
         role_groups=(
             (Role.BREAKGLASS, ()),
-            (Role.APPROVER, ("corp-platform-admins",)),
+            (Role.READ_WRITE, ("corp-platform-admins",)),
             (Role.INVESTIGATOR, ()),
         ),
     )
 
-    assert resolver.resolve("sam") is Role.APPROVER
+    assert resolver.resolve("sam") is Role.READ_WRITE

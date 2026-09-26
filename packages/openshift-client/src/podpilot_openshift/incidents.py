@@ -11,6 +11,7 @@ import httpx
 from podpilot_openshift.delegated import tls_context
 from podpilot_diagnostics.redaction import redact_text
 from podpilot_diagnostics.incident_policy import IncidentPolicy
+from podpilot_openshift.log_metrics import container_log_tenant
 
 
 def https_origin(value):
@@ -725,8 +726,10 @@ class IncidentReader:
         start = self.log_window_start or end - timedelta(seconds=self.loki_range_seconds)
         if end <= start:
             end = start + timedelta(seconds=min(self.loki_range_seconds, 1800))
+        tenant = container_log_tenant(namespace)
+        source = self.loki.for_tenant(tenant) if callable(getattr(self.loki, "for_tenant", None)) else self.loki
         try:
-            snapshot = self.loki.query_container_logs(
+            snapshot = source.query_container_logs(
                 namespace=namespace, pod=pod, container=container,
                 start=start, end=end, limit=self.loki_log_limit,
             )
@@ -767,7 +770,8 @@ class IncidentReader:
             "namespace": namespace,
             "pod": pod,
             "container": container,
-            "mechanism": "loki-infrastructure-query",
+            "mechanism": f"loki-{tenant}-query",
+            "tenant": tenant,
             "previous": None,
             "range_start": start.isoformat(),
             "range_end": end.isoformat(),

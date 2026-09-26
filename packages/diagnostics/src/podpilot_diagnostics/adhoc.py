@@ -224,6 +224,8 @@ class ReadIntent(BaseModel):
     previous: bool = False
     log_backend: Literal["kubernetes", "loki"] = "kubernetes"
     log_mode: Literal["auto", "display", "analyze"] = "auto"
+    log_activity: Literal["all", "node_scaling"] = "all"
+    log_routing: Literal["auto", "check_both"] = "auto"
     tail_lines: int | None = Field(default=None, ge=1, le=1000)
     since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
@@ -504,6 +506,10 @@ class ReadIntent(BaseModel):
             raise ValueError("log_mode and tail_lines are valid only for pod_logs")
         if self.tool != "pod_logs" and self.since_seconds is not None:
             raise ValueError("since_seconds is valid only for pod_logs")
+        if self.log_activity != "all" and (self.tool != "pod_logs" or self.log_backend != "loki"):
+            raise ValueError("log_activity requires retained Loki pod logs")
+        if self.log_routing != "auto" and (self.tool != "pod_logs" or self.log_backend != "loki"):
+            raise ValueError("log_routing requires retained Loki pod logs")
         if self.log_backend == "loki":
             if self.tool != "pod_logs" or not all((self.namespace, self.name, self.container)):
                 raise ValueError("Loki logs require pod_logs and exact namespace, Pod and container")

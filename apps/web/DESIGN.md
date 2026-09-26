@@ -35,6 +35,12 @@ explicit consequences, and Yes/No actions; No receives initial focus. Errors sta
 visible inside the dialog. Configuration administrators see the delete action;
 active investigations disable it, with the server enforcing the same guard.
 
+Action chat writes use the shared native operation dialog. It presents the exact
+broker request, command, target cluster and identity, expiry, and redacted body.
+Reject receives initial focus. Approve and execute once is explicit; Escape never
+approves. Errors remain in the dialog. Every distinct API write requires a new
+review, and expired or cancelled requests cannot execute.
+
 ### Evidence first
 
 Observed facts, model interpretation, limitations, and operator actions must be
@@ -88,6 +94,8 @@ neutral light canvas, white bordered panels, orange selection fills, and a darke
 orange for readable links and primary actions. Green, amber, and red retain their
 operational meanings. Its shared sidebar is 292px on desktop, 252px below 1180px,
 and 224px below 840px, with 48px primary navigation rows and outline icons.
+All themes share the DemandKit outline SVG navigation icons, including folder icons
+for connector headings. Icon colors follow each theme.
 Connector categories use folder icons and branch lines down to individual instances;
 the add action shares the Connectors row outline while remaining a separate link.
 Secondary navigation uses a quiet vertical guide rather than enclosing cards.
@@ -443,3 +451,19 @@ persistent sidebar navigation, history/scroll restoration and stream cleanup.
 The blocking `theme.js` bootstrap runs before stylesheet loading to apply the saved
 palette before first paint. Keep it small and independent of page initialization;
 deferred application controls must not be responsible for the initial theme.
+
+### Write operations in the Ask timeline
+
+Write-operation cards retain a subtle yellow underglow in every theme, throughout
+running, completed, failed and restored-history states. Use `--theme-write-glow`
+and the server's `operation_kind`; status markers keep their semantic colors.
+Hover and keyboard focus retain the glow. Accessible button labels identify writes.
+
+### Independent live scrolling
+
+New operation cards scroll the evidence panel to its latest entry. Status-only
+updates follow only when that panel is already near the bottom. Opening evidence
+shows the latest entries. These changes never scroll the main chat or page.
+Chat progress follows only within 48px of the bottom; scrolling up preserves the
+reading position through thinking updates and the completion reload. Scrolling
+back to the bottom resumes following, and sending a new message shows that turn.

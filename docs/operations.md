@@ -143,12 +143,37 @@ of every free-text answer.
 returns only matching types, and reports result truncation. A registered API does
 not prove an instance exists; an existing namespace or CR does not prove health.
 
-The portable deployment defaults `development_approval_bypass` to false. Only
-the disposable SNO overlay enables it. Its value maps to
-`PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` for the API and migration container;
-changing it requires restarting the workload. Never enable it in production.
+Action chat writes require requester self-approval. There is no development bypass
+or separate-approver setting. `PODPILOT_DEVELOPMENT_APPROVAL_BYPASS` and
+`PODPILOT_ROLE_APPROVER_GROUPS` are retired and ignored; remove them from custom
+manifests. Apply migration `0030_requester_write_approval` before upgrading.
+The read/write group admits Action mode; configuration-admin groups continue to
+control management access independently. Existing lab account names are unchanged.
 
-For portable audit ingestion, an authenticated Approver may GET
+Each actual Kubernetes write pauses at the broker and opens a review modal showing
+the command, cluster/API endpoint, requesting and delegated identities, HTTP method,
+resource path, query parameters, content type, and request body. Sensitive values
+are redacted and never sent back as execution instructions. The requester chooses
+**Approve and execute once** or **Reject change**; Escape rejects. The same requesting
+browser session is required. Reads continue without approval. Each request in a
+multi-write command requires its own review. This is a soft guardrail, not a dry run
+or a guarantee that the change is safe or reversible; RBAC and admission still decide.
+
+Approvals expire after two minutes, or sooner if the command/run ends or its delegated
+session is lost. Reloading the active chat restores its pending modal. A rejection or
+expiry blocks further writes in that turn; a new user request is required to retry.
+Cancelling the run invalidates pending approval. Deciding twice cannot execute twice.
+After a restart, pending approvals are cancelled and in-flight outcomes are marked
+indeterminate; PodPilot never replays an approved write. Review is bounded to 64 KiB
+request bodies and 64 write requests per turn. Split larger requests into reviewable
+changes. API acceptance is recorded separately from the agent's post-change verification.
+
+Incident and alert investigations are read-only. They no longer create remediation
+previews or expose approve/execute/cancel endpoints. Existing remediation records
+remain read-only history; migration cancels outstanding legacy approvals. Use an
+Action chat for any requested cluster change.
+
+For portable audit ingestion, an authenticated read/write operator may GET
 `/api/v1/audit-events?after=0&limit=100`. Keep the returned `through` value fixed
 while fetching subsequent `next_after` pages until `has_more` is false. Then
 advance the durable consumer cursor and start a new snapshot. Deduplicate by
@@ -406,13 +431,12 @@ The current deployment uses these variables:
 - `PODPILOT_ROLE_READ_WRITE_GROUPS`, JSON array defaulting to `["podpilot-read-write"]`
 - `PODPILOT_CONFIGURATION_ADMIN_GROUPS`, an orthogonal capability array defaulting to
   `["podpilot-configuration-admins"]`
-- `PODPILOT_ROLE_APPROVER_GROUPS`, JSON array defaulting to `["podpilot-approvers"]`
 - `PODPILOT_ROLE_BREAKGLASS_GROUPS`, JSON array defaulting to `["podpilot-breakglass"]`;
   arrays may contain multiple existing groups or be empty, but the same group
   cannot map to more than one role; all arrays may be empty, leaving every
   authenticated user at Viewer
 - the **Manage** navigation and its Clusters, Model settings, and Cluster memory
-  pages are available only to users resolved as Approver or Breakglass; the API
+  pages are available only to configuration administrators; the API
   applies the same authorization to configuration reads and writes
 - role-mapping environment changes require a Pod rollout; membership changes in
   an already configured OpenShift Group are observed after the role cache expires
@@ -441,7 +465,7 @@ The current deployment uses these variables:
   discovery is disabled.
 - `PODPILOT_INCIDENT_LOG_MAX_BYTES`, default `98304` (96 KiB) per Kubernetes or normalized Loki log artifact
 - `PODPILOT_INCIDENT_LOG_RANGE_SECONDS`, default `7200` (two hours) for current Kubernetes logs
-- `PODPILOT_INCIDENT_LOKI_LOG_LIMIT`, default `2000` lines for exact-container infrastructure history
+- `PODPILOT_INCIDENT_LOKI_LOG_LIMIT`, default `2000` lines for exact-container retained history
 - `PODPILOT_INCIDENT_LOKI_RANGE_SECONDS`, default `21600` (six hours), anchored thirty minutes before incident onset
 - `PODPILOT_ADHOC_LOGS_MAX_RANGE_SECONDS`, default `86400` (24 hours)
 - `PODPILOT_ADHOC_AUDIT_INITIAL_RANGE_SECONDS`, default `3600` (one hour), is the
@@ -470,7 +494,7 @@ The current deployment uses these variables:
 - `PODPILOT_ROLE_READ_WRITE_GROUPS`, groups whose members may start Action-mode chats
 - `PODPILOT_CONFIGURATION_ADMIN_GROUPS`, groups whose members may manage shared cluster metadata
 - `PODPILOT_MODEL_TIMEOUT_MAX_SECONDS`, default `240`, controls the highest timeout
-  an Approver may save on a model profile (configuration range `30`–`300` seconds)
+  a configuration administrator may save on a model profile (configuration range `30`–`300` seconds)
 - `PODPILOT_ADHOC_MAX_CLUSTERS_PER_CONVERSATION`, default `10`
 - `PODPILOT_POC_MODE=true` for the lab-only runtime policy
 
@@ -604,7 +628,7 @@ normal code validates those values and runs a fixed query against
 with one, username matching is exact and case-insensitive.
 For example, “show the last 5 successful changes by Druciare-Adm over 2 hours” produces a five-row,
 two-hour mutation query without encoding that username or time window in application code.
-Investigators, Approvers, and Breakglass users can use this Ask capability. A 403 from Loki should
+Investigators, read/write operators, and Breakglass users can use this Ask capability. A 403 from Loki should
 be resolved by verifying the registered cluster identity has `cluster-logging-audit-view` and
 cluster-wide LokiStack tenant authorization.
 
@@ -632,7 +656,7 @@ result is reported as an inconclusive Loki/forwarding observation rather than pr
 activity occurred.
 
 TLS verification defaults on. If an internal API cannot present a trusted certificate,
-an Approver may disable verification on that cluster entry. This also disables hostname
+a configuration administrator may disable verification on that cluster entry. This also disables hostname
 verification for a credential-bearing request and permits interception of the bearer token
 and evidence. The UI, audit event, connection status, and a compact affected-session indicator keep
 the exception visible without repeating it beneath every Ask answer. Prefer repairing trust and do
@@ -662,7 +686,7 @@ Each button remains disabled until a cluster is selected and the model/session i
 submits its bounded prompt through the normal new-conversation endpoint with the current cluster
 selection and reasoning settings. Starter actions never contain write instructions.
 
-An Approver can edit the display name, environment, and tags of the automatically registered runtime
+A configuration administrator can edit the display name, environment, and tags of the automatically registered runtime
 cluster from **Manage → Clusters**. The display name is used on the dashboard, in new Ask evidence,
 and in future runtime-cluster operations. The environment labels and groups the runtime cluster in
 cluster-selection and delegated sign-in UI just like a registered remote cluster. Tags make
@@ -754,13 +778,13 @@ For namespaced resources, including operator-managed custom resources such as St
 and whether the bounded list was complete. A cluster-scoped read can therefore return more
 objects than an `oc get` issued after selecting one namespace.
 
-Approvers and Breakglass users can open `/memory`, test scoped lexical retrieval,
+Configuration administrators can open `/memory`, test scoped lexical retrieval,
 and create cluster facts, runbooks, approved incident summaries, and product
 knowledge; revising an entry creates a new immutable version. Draft, disabled,
 expired, nonmatching, and wrong-namespace entries do not appear in results. An entry
 may select explicit clusters, require exact cluster tags, or leave both empty for global
 guidance. All required tags must match; explicit-cluster and tag matches use OR semantics.
-Restricted entries are visible only to Approvers and Breakglass users and are not supplied to Ask. Assign an
+Restricted entries are visible only to read/write and Breakglass users and are not supplied to Ask. Assign an
 expiry to operational facts likely to drift.
 
 The `0011_cluster_memory` migration creates the relational metadata/chunk tables
@@ -923,16 +947,12 @@ ID per shell call. The API brokers only that cluster's in-memory delegated user 
 to the loopback runner, which deletes its temporary kubeconfig after the command.
 The conversation's immutable mode determines whether the broker exposes read-only
 typed access or the user's full cluster authorization. Investigation mode blocks mutations and
-other prohibited operations at the broker. Action mode forwards operations directly under the
-signed-in user's OpenShift RBAC and admission controls; there is no PodPilot preview or approval
-step. The Ask session-cautions disclosure reflects this persisted conversation mode rather than
-the internal agent-loop mode. PodPilot classifies each completed `oc`/`kubectl` command as a read or
-write operation in the tool result and command audit. The Action-mode prompt must call successful
-patches and other mutations writes, even when they are safe or narrowly scoped. It explicitly states
-that Action mode is already approved and that requested writes must be attempted under the user's
-RBAC and admission controls. Final-answer validation rejects invented claims that writes are blocked
-or need another approval unless an actual write returned `forbidden`; the agent is returned to its
-tools so it can continue unfinished remediation.
+other prohibited operations at the broker. Action mode pauses writes for the
+requester's single-use review described above, then forwards the unchanged request
+under that delegated identity. Shell read/write labels are informational; the broker
+classifies actual HTTP operations and enforces approval even if the model calls a
+write a read. The agent must perform useful reads, initiate requested commands to
+open review, respect rejection, and verify approved changes afterward.
 Within one agent turn, each raw tool result is returned to the model once so it can be interpreted.
 Oversized valid JSON is never sent to the model as a byte-truncated document. PodPilot leaves the
 captured runner result unchanged and replaces only the provider-facing copy with an explicit
@@ -1161,50 +1181,11 @@ and their authoritative apiVersion (for example, `pods` becomes `v1`/`Pod`) befo
 validation. This prevents model syntax variation from becoming a failed cluster
 read; it does not broaden RBAC or permit unknown resource coordinates.
 
-### Typed remediation in the PoC lab
+### Incident investigations are read-only
 
-The normal runtime is now read-only. The `poc-cluster-admin` overlay applies only
-to `ai-observer`, not the application Pod. Existing action records and approval UI
-remain available for evaluation, but live execution will fail closed until a
-separate action executor ServiceAccount and workload are implemented.
-
-For every live action, confirm the investigation shows `server dry-run: passed`,
-the expected UID/resourceVersion, target namespace, operation, verification, and
-recovery note. Use an Approver test identity, expand **Review approval**, and only
-then press **Approve and run**. A stale or expired preview must be regenerated by
-creating a fresh investigation. Do not retry a mutation from an old investigation.
-The investigation creator or an Approver can instead press **Cancel preview**;
-this records a closure and audit event without calling a Kubernetes mutation API.
-Refreshing the dashboard reconciles expiry and resolved source alerts, while
-opening an investigation performs a read-only exact-target check.
-
-After a lab action, inspect the persisted result and cluster state:
-
-```powershell
-. .\scripts\connect-sno.ps1
-oc -n <fixture-namespace> get deployment,pod -o wide
-oc -n ai-ops logs deployment/podpilot -c api --since=10m
-```
-
-Production packaging must introduce a separate action identity and namespace
-policy before enabling these endpoints outside the disposable lab.
-
-The sanitized live fixture is optional and disposable:
-
-```powershell
-oc apply -f evals/live/remediation-crashloop.yaml
-oc -n podpilot-remediation-fixture wait --for=jsonpath='{.status.containerStatuses[0].state.waiting.reason}'=CrashLoopBackOff pod -l app=broken-api --timeout=180s
-# After PodPilot creates the preview, make the next Pod healthy without changing its Pod/StatefulSet preconditions:
-oc -n podpilot-remediation-fixture patch configmap fixture-mode --type=merge --patch '{"data":{"MODE":"healthy"}}'
-# Approve only the controller-owned Pod replacement in the UI, verify the new UID is Ready, then remove the exact lab resources:
-oc delete prometheusrule podpilot-remediation-fixture -n openshift-monitoring
-oc delete namespace podpilot-remediation-fixture
-```
-
-The fixture rule is installed in `openshift-monitoring` because user-workload
-monitoring is disabled on this SNO. The rule observes only the disposable
-fixture namespace; PodPilot still rejects remediation targets in protected
-system namespaces.
+No remediation previews, approvals or executions are available from incident or
+alert investigation pages. Historical records remain available. Request changes
+in an Action chat and approve each brokered write using your delegated identity.
 
 ### Bounded diagnostic plans
 
@@ -1989,8 +1970,38 @@ not establish historical retention or complete namespace access.
 
 The agent's `pod_logs` tool accepts `log_backend=kubernetes` for current/previous
 Pod logs, or `log_backend=loki` for an exact namespace/Pod/container over at most
-24 hours. Loki reads retain at most 200 lines and 32 KiB of redacted message text.
-They cannot prove Pod UID across replacements unless the source supplies it;
+24 hours. Server code selects the infrastructure tenant for `openshift*`, `kube*`,
+and `default` namespaces, and application otherwise. Incident container history uses
+the same namespace rule. Audit activity continues through `query_audit_events`.
+No cluster-specific routing configuration or forwarding discovery is required.
+
+Ask defaults to `log_routing=auto`: a successful empty primary search checks the
+alternate container-log tenant with the same delegated identity. A denial or
+transport failure is reported rather than triggering silent fallback. For uncertain
+or custom forwarding, `log_routing=check_both` searches both with shared budgets and
+separate evidence, including any tenant-specific denial. This does not grant access;
+the selected identity still needs the corresponding Loki tenant authorization.
+
+Loki display reads retain at most 200 lines and 32 KiB. Analysis divides the requested
+window into slices of at most two hours, searched oldest first, with at most 200
+entries per slice, 1,000 total entries (or a smaller explicit `limit`), and 60 KiB of
+redacted timestamped text. The collector schedules at most 24 queries within a
+30-second scheduling budget and caps each HTTP operation at ten seconds or the
+remaining budget. A single in-flight operation may finish after the scheduling
+deadline. In check-both mode the first tenant receives half the remaining evidence
+budget so it cannot crowd out the second. Saturated slices are explicitly partial;
+this is bounded time slicing, not an exhaustive log export.
+
+For example, ask to inspect `openshift-machine-api` controller logs for node scaling
+over the last 24 hours. The agent can select `log_activity=node_scaling`, a fixed
+server-owned filter for scaling, cordoning, draining, eviction and node/machine
+removal terms. No arbitrary regex or LogQL is accepted. Term filtering can miss
+differently worded activity and matching lines alone do not establish causality.
+Leave `log_activity=all` for unfiltered investigation. Both fields require the Loki
+backend. Evidence shows each tenant, selection reason, requested interval, queried
+slices, failures, partial history and collection-budget stops. These details survive
+specialist analysis and are supplied to the final-answer model and operator view.
+These logs cannot prove Pod UID across replacements unless the source supplies it;
 absence of retained logs is not evidence of no failure. Memory timelines with
 an explicit container include up to three current and three previous log lines,
 with a post-read Pod UID check. Events, metrics and log sources remain distinct.

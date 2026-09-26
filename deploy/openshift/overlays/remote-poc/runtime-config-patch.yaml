@@ -13,5 +13,4 @@ data:
   role_investigator_groups: '["replace-with-ldap-investigator-group"]'
   role_read_write_groups: '["replace-with-ldap-read-write-group"]'
   configuration_admin_groups: '["replace-with-ldap-configuration-admin-group"]'
-  role_approver_groups: '[]'
   role_breakglass_groups: '[]'

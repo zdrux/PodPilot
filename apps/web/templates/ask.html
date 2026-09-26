@@ -12,7 +12,7 @@
         <p class="eyebrow">Investigations <span aria-hidden="true">/</span> Cluster conversation</p>
         <div class="ask-session-heading-row">
           <h2>{% if conversation %}{{ conversation.title }}{% else %}New investigation{% endif %}</h2>
-          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>{{ 'ACTION MODE · Development approval bypass' if approval_bypass else 'ACTION MODE · Approval required for writes' }}</span>
+          <span class="action-mode-notice" data-action-mode-notice role="status"{% if not delegated_action_session %} hidden{% endif %}>ACTION MODE · Your approval required for writes</span>
         </div>
       </div>
 
@@ -606,10 +606,10 @@
         {% for message in messages if message.activity and message.activity.evidence_ledger %}
           {% for item in message.activity.evidence_ledger %}
           {% set operation_id = 'operation-' ~ message.id ~ '-' ~ loop.index %}
-          <li class="operation-event operation-status-{{ item.status }}">
+          <li class="operation-event operation-status-{{ item.status }}{% if item.operation_kind == 'write' %} operation-write{% endif %}">
             <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
               aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item | operation_title }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
+              aria-label="View {{ item | operation_title }} operation details{% if item.operation_kind == 'write' %}. Write operation{% endif %}{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
               <span class="operation-marker" aria-hidden="true"></span>
               <div class="operation-event-body">
               <div class="operation-event-heading">
@@ -635,10 +635,10 @@
         {% if active_run and active_run.operations %}
           {% for item in active_run.operations %}
           {% set operation_id = 'operation-live-' ~ active_run.id ~ '-' ~ loop.index %}
-          <li class="operation-event operation-status-{{ item.status }}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
+          <li class="operation-event operation-status-{{ item.status }}{% if item.operation_kind == 'write' %} operation-write{% endif %}" data-live-operation data-operation-key="{{ item.tool_call_id }}">
             <button class="operation-event-button" type="button" data-operation-open="{{ operation_id }}"
               aria-haspopup="dialog" aria-controls="{{ operation_id }}"
-              aria-label="View {{ item | operation_title }} operation details{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
+              aria-label="View {{ item | operation_title }} operation details{% if item.operation_kind == 'write' %}. Write operation{% endif %}{% if item.content_filtered %}. This item contains redacted or shortened content{% endif %}">
               <span class="operation-marker" aria-hidden="true"></span>
               <div class="operation-event-body">
                 <div class="operation-event-heading">

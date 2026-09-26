@@ -2684,13 +2684,21 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
         logs_tool = collector_tool(
             "pod_logs",
             "Read exact namespace/Pod/container logs. log_backend=kubernetes supports previous=true and "
-            "since_seconds. log_backend=loki queries retained application logs for range_seconds (maximum "
-            "24 hours), previous must be false. Use log_mode=analyze for troubleshooting or checking Pods "
+            "since_seconds. log_backend=loki queries retained container logs for range_seconds (maximum "
+            "24 hours), previous must be false. The server selects infrastructure for openshift*, kube*, "
+            "and default namespaces, application otherwise, and checks the alternate tenant after empty results. "
+            "Use log_routing=check_both when custom forwarding or uncertain routing warrants searching both "
+            "container-log tenants; it retains each tenant's coverage and failures separately. "
+            "For historical node scale-up/down, drain or eviction investigations use Loki with "
+            "log_activity=node_scaling; this is a bounded server-owned term filter, not proof of causality. "
+            "Discover the relevant controller Pods first. Inspect log_coverage and report partial windows, "
+            "denials and filtering limitations; use query_audit_events for API changes. "
+            "Use log_mode=analyze for troubleshooting or checking Pods "
             "for errors; isolated specialists return cited findings while raw excerpts remain in temporary "
             "evidence storage. Use log_mode=display only when the user wants to view actual lines, and "
             "tail_lines for an explicit line count. Consolidate repeated findings across Pods, name outliers, "
             "and report checked versus discovered coverage. Empty or unavailable logs do not prove absence of failure.",
-            ("namespace", "name", "container", "log_backend", "log_mode", "tail_lines", "previous", "since_seconds", "range_seconds", "limit"),
+            ("namespace", "name", "container", "log_backend", "log_mode", "log_activity", "log_routing", "tail_lines", "previous", "since_seconds", "range_seconds", "limit"),
             ("namespace", "name", "container", "log_backend"),
         )
         metric_tool = collector_tool(

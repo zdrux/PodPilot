@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
 import ssl
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -23,6 +25,16 @@ class LogMetricsQueryError(RuntimeError):
     def __init__(self, message: str, *, failure_category: str = "query_failed") -> None:
         super().__init__(message)
         self.failure_category = failure_category
+
+
+def container_log_tenant(namespace: str) -> str:
+    """OpenShift's standard container-log classification, independent of models."""
+    return "infrastructure" if namespace == "default" or namespace.startswith(("openshift", "kube")) else "application"
+
+
+LOG_ACTIVITY_PATTERNS = {
+    "node_scaling": r"(?i)(scale[ -]?(up|down)|scaling|scaled|autoscal|cordon|drain|evict|remov.*node|delet.*(node|machine)|terminat.*(node|machine))",
+}
 
 
 def _loki_transport_failure_category(exc: BaseException) -> str:
@@ -152,6 +164,17 @@ class LokiQueryClient:
             **kwargs,
         )
 
+    def for_tenant(self, tenant: str) -> "LokiQueryClient":
+        """Reuse endpoint/discovery configuration, credentials and TLS policy."""
+        if tenant not in {"application", "infrastructure"}:
+            raise ValueError("Container logs require an application or infrastructure tenant.")
+        client = copy.copy(self)
+        client._tenant = tenant
+        marker = "/api/logs/v1/"
+        if marker in self._base_url:
+            client._base_url = self._base_url.split(marker, 1)[0] + marker + tenant
+        return client
+
     def endpoint_status(self) -> dict:
         """Verify a bounded label query through the authorized adapter."""
         result = {"kind": "logging", "verified": False, "checked_at": datetime.now(timezone.utc).isoformat()}
@@ -232,6 +255,7 @@ class LokiQueryClient:
         start: datetime,
         end: datetime,
         limit: int,
+        activity: str = "all",
     ) -> ContainerLogSnapshot:
         """Read exact-container logs without accepting arbitrary LogQL."""
 
@@ -251,8 +275,13 @@ class LokiQueryClient:
             f"kubernetes_pod_name={json.dumps(pod)}",
             f"kubernetes_container_name={json.dumps(container)}",
         ))
+        query = "{" + selectors + "}"
+        if activity != "all":
+            if activity not in LOG_ACTIVITY_PATTERNS:
+                raise ValueError("Unknown registered log activity.")
+            query += " |~ " + json.dumps(LOG_ACTIVITY_PATTERNS[activity])
         payload = self._request("/loki/api/v1/query_range", {
-            "query": "{" + selectors + "}",
+            "query": query,
             "start": str(int(start.timestamp() * 1_000_000_000)),
             "end": str(int(end.timestamp() * 1_000_000_000)),
             "limit": str(limit),
@@ -352,6 +381,7 @@ class LokiQueryClient:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
+                    **({"X-Scope-OrgID": self._tenant} if "/api/logs/v1/" not in base_url else {}),
                 },
             ) as client:
                 with client.stream("GET", f"{base_url}{path}", params=params) as response:
@@ -393,7 +423,9 @@ class LokiQueryClient:
                 message = "The configured logging endpoint does not expose the expected Loki API."
             else:
                 message = "The LokiStack gateway returned an HTTP error."
-            raise LogMetricsQueryError(message) from exc
+            raise LogMetricsQueryError(message, failure_category={
+                401: "unauthorized", 403: "forbidden", 404: "endpoint_unavailable",
+            }.get(exc.response.status_code, "query_failed")) from exc
         except (OSError, httpx.HTTPError, ValueError) as exc:
             failure_category = _loki_transport_failure_category(exc)
             message = (
@@ -472,42 +504,141 @@ class BoundedLogVolumeReader:
 
     def container_logs(self, intent: ReadIntent) -> ReadResult:
         end = self._clock()
+        requested_start = end - timedelta(seconds=intent.range_seconds)
         start = end - timedelta(seconds=min(intent.range_seconds, 86400, self._max_range_seconds))
-        snapshot = self._source.query_container_logs(namespace=intent.namespace, pod=intent.name,
-            container=intent.container, start=start, end=end, limit=min(intent.tail_lines or intent.limit, 200))
-        entries, remaining = [], 32768
-        for entry in snapshot.entries:
-            try:
-                at = datetime.fromtimestamp(int(entry.timestamp_ns) / 1e9, timezone.utc)
-            except (ValueError, OverflowError, OSError):
+        primary = container_log_tenant(intent.namespace)
+        tenants = [primary, "application" if primary == "infrastructure" else "infrastructure"]
+        display = intent.log_mode == "display" or intent.tail_lines is not None
+        line_budget = min(intent.tail_lines or intent.limit, 200) if display else min(
+            intent.limit if "limit" in intent.model_fields_set else 1000, 1000)
+        byte_budget = 32768 if display else 61440
+        slices = 1 if display else max(1, math.ceil((end - start).total_seconds() / 7200))
+        deadline = time.monotonic() + 30
+        observations, limitations = [], [
+            "Retained logs may have gaps. Empty results do not prove the absence of failures.",
+            "Queries use exact namespace/Pod/container names; retained entries without UID may span Pod replacements.",
+        ]
+        if start != requested_start:
+            limitations.append("The requested log period was reduced by the configured range policy.")
+        if intent.log_activity != "all":
+            limitations.append("Activity filtering searches registered terms; differently worded activity may be missed.")
+        if display and (intent.tail_lines or intent.limit) > 200:
+            limitations.append("Requested log line count exceeds the Loki display cap of 200 entries.")
+        calls = 0
+        for tenant_index, tenant in enumerate(tenants):
+            allocation = 2 if intent.log_routing == "check_both" and tenant_index == 0 else 1
+            tenant_lines, tenant_bytes = line_budget // allocation, byte_budget // allocation
+            entries, windows, seen = [], [], set()
+            partial = start != requested_start
+            failure = None
+            stopped_reason = None
+            source = self._source
+            if callable(getattr(source, "for_tenant", None)):
+                source = source.for_tenant(tenant)
+            elif tenant != "application":
+                failure = "tenant_unavailable"
+            for index in range(slices):
+                if failure:
+                    break
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0 or calls >= 24 or tenant_lines <= 0 or tenant_bytes <= 0:
+                    partial = True
+                    stopped_reason = "time_budget" if remaining_seconds <= 0 else "collection_budget"
+                    break
+                window_start = start + (end - start) * index / slices
+                window_end = start + (end - start) * (index + 1) / slices
+                query_limit = min(200, max(1, tenant_lines // (slices - index)))
+                window = {"start": window_start.isoformat(), "end": window_end.isoformat(),
+                          "limit": query_limit, "status": "failed"}
+                windows.append(window)
+                # Cap each network read as well as the overall scheduling budget.
+                if isinstance(source, LokiQueryClient):
+                    source._timeout_seconds = min(source._timeout_seconds, 10, remaining_seconds)
+                    source._timeout = httpx.Timeout(source._timeout_seconds)
+                kwargs = dict(namespace=intent.namespace, pod=intent.name, container=intent.container,
+                              start=window_start, end=window_end, limit=query_limit)
+                if intent.log_activity != "all":
+                    kwargs["activity"] = intent.log_activity
+                calls += 1
+                try:
+                    snapshot = source.query_container_logs(**kwargs)
+                except LogMetricsQueryError as exc:
+                    failure = exc.failure_category
+                    stopped_reason = "query_failure"
+                    window["failure"] = failure
+                    limitations.append(f"{tenant} log query failed: {redact_text(str(exc))}")
+                    break
+                window["status"] = "complete" if snapshot.is_complete else "partial"
+                window["returnedEntries"] = len(snapshot.entries)
+                window["retainedEntries"] = 0
+                partial |= not snapshot.is_complete
+                for entry in snapshot.entries:
+                    try:
+                        at = datetime.fromtimestamp(int(entry.timestamp_ns) / 1e9, timezone.utc)
+                    except (ValueError, OverflowError, OSError):
+                        partial = True
+                        window["status"] = "partial"
+                        continue
+                    if not window_start <= at <= window_end:
+                        partial = True
+                        window["status"] = "partial"
+                        continue
+                    key = (entry.timestamp_ns, entry.line)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    line = entry.line
+                    try:
+                        document = json.loads(line)
+                        if isinstance(document, dict) and isinstance(document.get("message"), str):
+                            line = document["message"]
+                    except ValueError:
+                        pass
+                    redacted = redact_text(line)
+                    partial |= len(redacted) > 2000
+                    if len(redacted) > 2000:
+                        window["status"] = "partial"
+                    line = redacted[:2000]
+                    size = len((at.isoformat() + " " + line + "\n").encode("utf-8"))
+                    if size > tenant_bytes or tenant_lines <= 0:
+                        partial = True
+                        window["status"] = "partial"
+                        stopped_reason = "evidence_budget"
+                        continue
+                    byte_budget -= size
+                    line_budget -= 1
+                    tenant_bytes -= size
+                    tenant_lines -= 1
+                    entries.append({"timestamp": at.isoformat(), "message": line, "tenant": tenant})
+                    window["retainedEntries"] += 1
+            partial |= bool(failure) or len(windows) < slices
+            entries.sort(key=lambda entry: entry["timestamp"])
+            selection = "namespace_rule" if tenant_index == 0 else (
+                "requested_cross_tenant" if intent.log_routing == "check_both" else "empty_primary_fallback")
+            coverage = {"tenant": tenant, "selection": selection,
+                        "requestedStart": requested_start.isoformat(), "requestedEnd": end.isoformat(),
+                        "windows": windows, "partial": partial, "failure": failure,
+                        "stoppedReason": stopped_reason,
+                        "activity": intent.log_activity, "retainedEntries": len(entries)}
+            if partial:
+                limitations.append(f"{tenant}: log history is partial (query, access, time, line or byte boundary).")
+            observations.append(AdHocObservation(id=f"loki-{uuid4()}", tool="pod_logs",
+                summary=f"Collected {len(entries)} {tenant} log entries; " + ("partial coverage." if partial else "searched the bounded window; retention is unverified."),
+                source=f"loki:{tenant}:{intent.namespace}/{intent.name}/{intent.container}", collected_at=end,
+                data={"backend": "loki", "tenant": tenant, "namespace": intent.namespace,
+                      "name": intent.name, "container": intent.container,
+                      "start": start.isoformat(), "end": end.isoformat(), "entries": entries,
+                      "log_coverage": coverage,
+                      "tail": "\n".join(e["timestamp"] + " " + e["message"] for e in entries)}))
+            # An empty successful search leaves routing uncertain. Never mask a denial
+            # or transport failure by silently changing tenant or credential identity.
+            if intent.log_routing == "check_both":
                 continue
-            if not start <= at <= end:
-                continue
-            line = entry.line
-            try:
-                document = json.loads(line)
-                if isinstance(document, dict) and isinstance(document.get("message"), str):
-                    line = document["message"]
-            except ValueError:
-                pass
-            line = redact_text(line)[:2000]
-            encoded = line.encode("utf-8")
-            if len(encoded) > remaining:
+            if entries or failure:
                 break
-            remaining -= len(encoded)
-            entries.append({"timestamp": at.isoformat(), "message": line})
-        limitations = ["Retained logs may have gaps. Empty results do not prove the absence of failures.",
-                      "Queries use exact namespace/Pod/container names; retained entries without UID may span Pod replacements."]
-        if intent.tail_lines and intent.tail_lines > 200:
-            limitations.append("Requested log line count exceeds the Loki collector cap of 200 entries.")
-        if not snapshot.is_complete or len(entries) != len(snapshot.entries):
-            limitations.append("Log collection reached a result, time, or byte boundary; history is partial.")
-        return ReadResult((AdHocObservation(id=f"loki-{uuid4()}", tool="pod_logs",
-            summary=f"Collected {len(entries)} retained log entries for {intent.namespace}/{intent.name}/{intent.container}.",
-            source=f"loki:application:{intent.namespace}/{intent.name}/{intent.container}", collected_at=snapshot.collected_at,
-            data={"backend": "loki", "namespace": intent.namespace, "name": intent.name, "container": intent.container,
-                  "start": start.isoformat(), "end": end.isoformat(), "entries": entries,
-                  "tail": "\n".join(e["timestamp"] + " " + e["message"] for e in entries)}),), tuple(limitations))
+            if tenant_index == 0:
+                limitations.append(f"{tenant} returned no retained matches; checking the alternate container-log tenant with the same identity.")
+        return ReadResult(tuple(observations), tuple(limitations))
 
     def execute(self, intent: ReadIntent) -> ReadResult:
         namespace_ranking = (

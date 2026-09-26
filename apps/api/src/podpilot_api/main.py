@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
 from starlette.background import BackgroundTask
 
+from podpilot_api.write_approvals import WriteApprovalGate
 from podpilot_api.ask_logs import AskLogAnalyst, LOG_EXCERPTS, prepare_log_intent
 from podpilot_api.auth import AuthContext, Role, RoleResolver, auth_dependency
 from podpilot_api.audit import export_event
@@ -70,6 +71,7 @@ from podpilot_api.models import (
     AdHocConversation,
     AdHocMessage,
     AdHocRun,
+    WriteApproval,
     AuditEvent,
     ChatMessage,
     Cluster,
@@ -108,11 +110,6 @@ from podpilot_diagnostics.checks import (
 )
 from podpilot_diagnostics.redaction import redact_mapping, redact_text
 from podpilot_api.secret_policy import redact_secret_output
-from podpilot_diagnostics.remediation import (
-    ActionProposal,
-    RemediationExecutor,
-    propose_actions,
-)
 from podpilot_openshift.alerts import (
     AlertRecord,
     AlertSnapshot,
@@ -148,7 +145,6 @@ from podpilot_openshift.metric_trends import BoundedMetricTrendReader
 from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.checks import KubernetesDiagnosticCheckExecutor
 from podpilot_openshift.roles import LazyOpenShiftGroupRoleResolver
-from podpilot_openshift.remediation import KubernetesRemediationExecutor, RemediationError
 from podpilot_openshift.workloads import (
     KubernetesWorkloadClient,
     WorkloadEvidenceError,
@@ -788,7 +784,7 @@ def _can_manage_configuration(user: AuthContext) -> bool:
 
 
 def _can_use_action_mode(user: AuthContext) -> bool:
-    return user.role in {Role.APPROVER, Role.BREAKGLASS}
+    return user.role in {Role.READ_WRITE, Role.BREAKGLASS}
 
 
 def _visible_clusters(username: str):
@@ -845,11 +841,6 @@ def _redact_alert(alert: AlertRecord) -> AlertRecord:
     )
 
 
-def _proposal_from_json(value: str) -> ActionProposal:
-    payload = json.loads(value)
-    payload["created_at"] = datetime.fromisoformat(payload["created_at"])
-    payload["expires_at"] = datetime.fromisoformat(payload["expires_at"])
-    return ActionProposal(**payload)
 
 
 def _check_spec_from_row(check: DiagnosticCheck) -> DiagnosticCheckSpec:
@@ -1449,6 +1440,19 @@ def _action_mode_answer_quality_issue(
     if any(item.get("status") == "completed" for item in writes):
         return "action_mode_write_capability_contradiction"
     return "action_mode_write_capability_not_tested"
+
+
+_ACTION_APPROVAL_PROMISE = re.compile(
+    r"(?:requested\s+approval|please\s+approve|await(?:ing)?\s+(?:your\s+)?approval|"
+    r"once\s+(?:you\s+have\s+)?approved|"
+    r"(?:I|we)\s+(?:will|shall)\s+(?:now\s+)?(?:submit|execute|apply|patch|create|delete))",
+    re.IGNORECASE,
+)
+
+
+def _missing_action_approval(content: str, *, read_only: bool, has_approval: bool) -> bool:
+    """Catch prose approval handoffs; never use this quality check to authorize a write."""
+    return not read_only and not has_approval and bool(_ACTION_APPROVAL_PROMISE.search(content))
 
 
 _AGENT_WRITE_COMMAND = re.compile(
@@ -5301,6 +5305,19 @@ def _adhoc_evidence_view(item: dict[str, object]) -> dict[str, object]:
     elif tool == "pod_logs":
         add("Container", data.get("container") or "default container")
         add("Previous container", data.get("previous"))
+        log_coverage = data.get("log_coverage") or {}
+        add("Log tenant", data.get("tenant"))
+        add("Requested start", log_coverage.get("requestedStart"))
+        add("Requested end", log_coverage.get("requestedEnd"))
+        add("Activity filter", log_coverage.get("activity"))
+        add("Partial history", log_coverage.get("partial"))
+        add("Log query failure", log_coverage.get("failure"))
+        add("Collection stopped", log_coverage.get("stoppedReason"))
+        add("Tenant selection", log_coverage.get("selection"))
+        add("Searched windows", "; ".join(
+            f"{window['start']} to {window['end']} ({window['status']})"
+            for window in log_coverage.get("windows", [])
+        ))
         view["excerpt"] = str(data.get("tail") or "")
         view["raw_log_excerpt"] = data.get("raw_log_excerpt")
         add("Log analysis", (data.get("log_analysis") or {}).get("status"))
@@ -5461,6 +5478,8 @@ def _model_fact_cards(
         }
         if item.get("tool") == "pod_logs":
             card["log_excerpt"] = redact_text(str(data.get("tail") or ""))[-1_500:]
+            if data.get("log_coverage"):
+                card["log_coverage"] = data["log_coverage"]
             if data.get("log_analysis"):
                 card["log_analysis"] = data["log_analysis"]
         else:
@@ -8602,7 +8621,7 @@ def _agent_tool_ledger_entry(
             retained_result.get("provider_result_requires_refinement")
         )
         entry.update({
-            "operation_kind": str(retained_result.get("operation_kind") or "read")[:32],
+            "operation_kind": str(retained_result.get("operation_kind") or _agent_command_operation_kind(str(request)))[:32],
             "executed": retained_result.get("exit_code") is not None,
             "exit_code": retained_result.get("exit_code"),
             "command": _agent_ledger_excerpt(request, 500),
@@ -10337,137 +10356,10 @@ def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
-def _closure_result(
-    *, summary: str, actor: str, reason: str, detail: str, closed_at: datetime
-) -> str:
-    return json.dumps(
-        {
-            "summary": summary,
-            "verification": {},
-            "closure": {
-                "actor": actor,
-                "reason": reason,
-                "detail": detail,
-                "closed_at": closed_at.isoformat(),
-            },
-        },
-        sort_keys=True,
-    )
 
 
-def _close_preview(
-    db_session: Session,
-    *,
-    action: RemediationAction,
-    investigation: Investigation,
-    status_value: str,
-    actor: str,
-    audit_action: str,
-    reason: str,
-    summary: str,
-    detail: str,
-    now: datetime,
-) -> bool:
-    claimed = db_session.execute(
-        update(RemediationAction)
-        .where(
-            RemediationAction.id == action.id,
-            RemediationAction.status.in_(("preview_ready", "approved")),
-        )
-        .values(
-            status=status_value,
-            result_json=_closure_result(
-                summary=summary,
-                actor=actor,
-                reason=reason,
-                detail=detail,
-                closed_at=now,
-            ),
-        )
-    )
-    if claimed.rowcount != 1:
-        return False
-    db_session.add(
-        AuditEvent(
-            actor=actor,
-            action=audit_action,
-            outcome=status_value,
-            details_json=json.dumps(
-                {
-                    "action_id": action.id,
-                    "investigation_id": investigation.id,
-                    "reason": reason,
-                    "detail": detail,
-                },
-                sort_keys=True,
-            ),
-        )
-    )
-    db_session.flush()
-    remaining = db_session.scalar(
-        select(func.count())
-        .select_from(RemediationAction)
-        .where(
-            RemediationAction.investigation_id == investigation.id,
-            RemediationAction.status == "preview_ready",
-        )
-    ) or 0
-    if remaining == 0 and investigation.status == "awaiting_approval":
-        investigation.status = "cancelled"
-    return True
 
 
-def _reconcile_alert_lifecycle(
-    db_session: Session,
-    *,
-    now: datetime,
-    active_fingerprints: set[str] | None,
-) -> int:
-    changed = 0
-    rows = list(
-        db_session.execute(
-            select(RemediationAction, Investigation)
-            .join(Investigation, RemediationAction.investigation_id == Investigation.id)
-            .where(RemediationAction.status.in_(("preview_ready", "approved")))
-        )
-    )
-    for action, investigation in rows:
-        if now >= _aware(action.expires_at):
-            changed += int(
-                _close_preview(
-                    db_session,
-                    action=action,
-                    investigation=investigation,
-                    status_value="expired",
-                    actor="system:reconciler",
-                    audit_action="remediation.expire",
-                    reason="preview_expired",
-                    summary="The approval window expired without execution.",
-                    detail="Generate a fresh investigation before approving a remediation.",
-                    now=now,
-                )
-            )
-        elif (
-            active_fingerprints is not None
-            and investigation.alert_fingerprint not in active_fingerprints
-        ):
-            changed += int(
-                _close_preview(
-                    db_session,
-                    action=action,
-                    investigation=investigation,
-                    status_value="cancelled",
-                    actor="system:reconciler",
-                    audit_action="remediation.reconcile",
-                    reason="source_alert_not_active",
-                    summary="The preview was cancelled because its source alert is no longer active.",
-                    detail="Create a fresh investigation if the condition returns.",
-                    now=now,
-                )
-            )
-    if changed:
-        db_session.commit()
-    return changed
 
 
 def create_app(
@@ -10477,7 +10369,6 @@ def create_app(
     workload_source: WorkloadEvidenceSource | None = None,
     credential_store: CredentialStore | None = None,
     model_provider: ModelProvider | None = None,
-    remediation_executor: RemediationExecutor | None = None,
     diagnostic_executor: DiagnosticCheckExecutor | None = None,
     read_explorer: ReadOnlyExplorer | None = None,
     cluster_credential_store: CredentialStore | None = None,
@@ -10490,16 +10381,14 @@ def create_app(
         cache_seconds=app_settings.role_cache_seconds,
         role_groups=(
             (Role.BREAKGLASS, tuple(app_settings.role_breakglass_groups)),
-            (Role.APPROVER, tuple([
+            (Role.READ_WRITE, tuple([
                 *app_settings.role_read_write_groups,
-                *app_settings.role_approver_groups,
             ])),
             (Role.INVESTIGATOR, tuple(app_settings.role_investigator_groups)),
         ),
         default_role=None,
         management_groups=tuple([
             *app_settings.configuration_admin_groups,
-            *app_settings.role_approver_groups,
             *app_settings.role_breakglass_groups,
         ]),
     )
@@ -10522,7 +10411,6 @@ def create_app(
         app_settings.agent_runner_url,
         timeout_seconds=app_settings.agent_command_timeout_seconds + 10,
     )
-    executor = remediation_executor or KubernetesRemediationExecutor()
     check_executor = diagnostic_executor or KubernetesDiagnosticCheckExecutor(
         max_events=app_settings.workload_max_events,
         thanos_url=app_settings.thanos_url,
@@ -10719,7 +10607,6 @@ def create_app(
         asset_digest.update((app_settings.web_dir / "static" / asset_name).read_bytes())
     templates.env.globals["asset_version"] = asset_digest.hexdigest()[:20]
     templates.env.globals["ask_first"] = app_settings.delegated_access_enabled
-    templates.env.globals["approval_bypass"] = app_settings.development_approval_bypass
 
     def remote_cluster_reader(cluster: Cluster, token: str) -> ReadOnlyExplorer:
         if remote_read_explorer_factory is not None:
@@ -10817,6 +10704,11 @@ def create_app(
                 if migrated_targets != legacy_targets:
                     document.target_cluster_ids_json = json.dumps(migrated_targets, sort_keys=True)
             db_session.commit()
+        application.state.write_approval_gate = WriteApprovalGate()
+        with Session(application.state.engine) as approval_db:
+            approval_db.execute(update(WriteApproval).where(WriteApproval.status.in_(("pending", "approved"))).values(status="cancelled"))
+            approval_db.execute(update(WriteApproval).where(WriteApproval.status == "executing").values(status="indeterminate"))
+            approval_db.commit()
         application.state.adhoc_run_tasks = {}
         application.state.adhoc_runner_requests = {}
         application.state.connector_discovery_tasks = set()
@@ -10895,11 +10787,15 @@ def create_app(
     async def delegated_kubernetes_proxy(
         capability: str, remote_path: str, request: Request
     ):
-        grant = request.app.state.delegated_vault.grant_by_capability(capability)
+        approval_gate = request.app.state.write_approval_gate
+        command_scope = approval_gate.scope(capability)
+        grant = request.app.state.delegated_vault.grant_by_capability(
+            command_scope.base_capability if command_scope else capability)
         if grant is None:
             raise HTTPException(status_code=401, detail="The delegated cluster session has expired.")
         connection, execution_mode = grant
         proxy_request_id = str(uuid4())
+        approval_id = None
 
         def record_proxy_audit(outcome: str, status_code: int | None = None) -> None:
             # Never persist bodies, credentials, capabilities, or query strings.
@@ -10916,7 +10812,7 @@ def create_app(
                         "delegated_username": connection.remote_username,
                         "delegated_uid": connection.remote_uid,
                         "execution_mode": execution_mode,
-                        "approval_bypassed": app_settings.development_approval_bypass and execution_mode == "action",
+                        "approval_id": approval_id,
                         "method": request.method,
                         "resource_path": redact_text(remote_path)[:2048],
                         "status_code": status_code,
@@ -10939,9 +10835,6 @@ def create_app(
                 status_code=403,
                 detail="This conversation is read-only; the Kubernetes mutation was blocked.",
             )
-        if execution_mode == "action" and not app_settings.development_approval_bypass and not _read_only_proxy_allows(request.method, remote_path):
-            record_proxy_audit("approval_required", 403)
-            raise HTTPException(status_code=403, detail="This operation requires approval. Unreviewed delegated operations are disabled; the development bypass is off.")
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, connection.cluster_id)
             if cluster is None or not cluster.is_enabled:
@@ -10952,6 +10845,9 @@ def create_app(
         body = await request.body()
         if len(body) > 10 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="The delegated Kubernetes request is too large.")
+        if execution_mode == "action" and not _read_only_proxy_allows(request.method, remote_path):
+            approval_id = await approval_gate.wait(request=request, capability=capability,
+                connection=connection, body=body, remote_path=remote_path, api_url=api_url)
         record_proxy_audit("attempted")
         blocked_headers = {
             "authorization", "cookie", "host", "connection", "content-length",
@@ -10998,6 +10894,7 @@ def create_app(
         except httpx.HTTPError as exc:
             await client.aclose()
             record_proxy_audit("indeterminate")
+            approval_gate.finish(request.app.state.engine, approval_id, "indeterminate")
             LOGGER.warning(
                 "podpilot.delegated_proxy.request_failed actor=%s cluster_id=%s "
                 "method=%s target=%r error_type=%s",
@@ -11012,6 +10909,8 @@ def create_app(
                 detail=f"The delegated Kubernetes API request failed ({type(exc).__name__}).",
             ) from exc
 
+        approval_gate.finish(request.app.state.engine, approval_id,
+                             "succeeded" if upstream.status_code < 400 else "failed")
         async def close_upstream() -> None:
             await upstream.aclose()
             await client.aclose()
@@ -11141,20 +11040,14 @@ def create_app(
                     "attach, proxy, and port-forward. Treat a broker rejection as an "
                     "enforced limitation and continue with other useful read-only checks. "
                     if read_only else (
-                    "You are PodPilot running in explicitly accepted delegated Action mode. "
-                    "Cluster writes and privileged operations are enabled and must be attempted when they "
-                    "are necessary to fulfill the operator's request, subject to evidence-backed target "
-                    "preconditions, the signed-in user's OpenShift RBAC and admission controls. The operator already selected Action mode; execute "
-                    "requested remediation without asking for another approval or permission grant. Never claim "
-                    "that this session blocks writes unless an actual tool call returns a forbidden or rejected "
-                    "result, and then report that exact result. "
-                    "A patch, apply, create, delete, edit, scale, rollout, exec, or similar operation "
-                    "is a cluster write or privileged operation even when it is narrowly scoped or successful. "
-                    if app_settings.development_approval_bypass else
-                    "You are PodPilot in delegated Action mode with approvals enforced. "
-                    "Investigate autonomously using read-only operations. Unreviewed writes and privileged "
-                    "operations are blocked. Present the exact proposed change, supporting evidence, risks, "
-                    "preconditions, rollback and verification plan; do not claim it has executed. "
+                    "You are PodPilot in delegated Action mode with requester self-approval. "
+                    "Use safe reads to verify current state, then call execute_shell for requested changes. "
+                    "The broker pauses each actual write before sending it and opens an exact-request "
+                    "approval modal for the requesting user. You cannot approve on their behalf. "
+                    "Do not stop at a prose plan: invoking the command starts the approval flow. "
+                    "After approval the same request executes under the user's RBAC; verify the result. "
+                    "If rejected, expired or cancelled, do not retry writes in this turn. "
+                    "Never claim a resource exists or is absent without a successful observation. "
                     )
                 )
                 +
@@ -11236,7 +11129,10 @@ def create_app(
                 "Use log_mode=display only for requests to see actual lines, with tail_lines when specified. "
                 "Log specialists receive isolated excerpts; consolidate repeated findings and outliers, cite evidence, "
                 "and state checked versus discovered Pod counts and unexamined coverage. "
-                "Use pod_logs with log_backend=loki for retained application logs when available; if unavailable, state the limitation and use "
+                "Use pod_logs with log_backend=loki for retained application or infrastructure container logs; "
+                "the server routes by namespace. For historical node scaling use log_activity=node_scaling "
+                "and the requested range_seconds. For uncertain forwarding use log_routing=check_both. "
+                "Report log_coverage partial windows and tenant failures. If unavailable, state the limitation and use "
                 "bounded Pod logs. Never invent metric samples or infer causation solely from timing. "
                 "Finish with evidence-linked observations, a timeline, the leading explanation and "
                 "alternatives, then an exact remediation plan with risk, rollback and verification. "
@@ -11246,7 +11142,7 @@ def create_app(
                 "expected impact, rollback trigger and measurable recovery checks. Label unknown intent, "
                 "capacity, credentials or missing source revisions as unresolved prerequisites; never "
                 "invent replacement configuration. In Action mode, check those prerequisites before "
-                "writing, without introducing another human approval step when bypass is enabled. "
+                "writing. Each write requires the requesting user to approve the exact broker request. "
                 "Re-read the target immediately before a write. Use atomic UID/resourceVersion and "
                 "old-value JSON Patch tests (or API preconditions) so replacement or concurrent edits "
                 "stop the operation. If a precondition fails, investigate the new state; do not retry "
@@ -11545,46 +11441,12 @@ def create_app(
                     if not agent_content else
                     _agent_final_answer_quality_issue(agent_content)
                 )
-                if answer_issue is None and not read_only and app_settings.development_approval_bypass:
-                    answer_issue = _action_mode_answer_quality_issue(
-                        agent_content, activity,
-                    )
-                if (
-                    answer_issue is not None
-                    and answer_issue.startswith("action_mode_write_capability_")
-                    and action_answer_rejections < 2
-                    and not deadline_finalization_requested
-                ):
-                    action_answer_rejections += 1
-                    successful_writes = sum(
-                        1 for item in activity
-                        if item.get("operation_kind") == "write"
-                        and item.get("status") == "completed"
-                    )
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            "Your proposed answer incorrectly says that this Action conversation "
-                            "blocks write operations or needs another approval. Action mode is already "
-                            "accepted and forwards commands under the signed-in user's RBAC and admission "
-                            f"controls. The operation ledger records {successful_writes} successful write "
-                            "operation(s). Continue with any remaining requested remediation using the "
-                            "available tools. Claim a write is blocked only after that exact operation "
-                            "returns a forbidden or rejected result."
-                        ),
-                    })
-                    LOGGER.warning(
-                        "podpilot.agentic.action_answer_rejected actor=%s conversation_id=%s "
-                        "attempt=%s issue=%s successful_writes=%s",
-                        username, conversation_id, action_answer_rejections,
-                        answer_issue, successful_writes,
-                    )
-                    if progress:
-                        await progress(
-                            "agent_thinking",
-                            "The agent misstated Action-mode permissions; continuing the requested work.",
-                        )
-                    continue
+                if not read_only and answer_issue is None:
+                    with Session(app.state.engine) as approval_session:
+                        has_approval = approval_session.scalar(select(WriteApproval.id).where(
+                            WriteApproval.run_id == run_id).limit(1)) is not None
+                    if _missing_action_approval(agent_content, read_only=read_only, has_approval=has_approval):
+                        answer_issue = "action_approval_not_submitted"
                 forced_fallback: dict[str, object] | None = None
                 if answer_issue is not None:
                     if include_raw_response and agent_content:
@@ -11616,11 +11478,14 @@ def create_app(
                                 "requesting a bounded finalization retry.",
                             )
                         correction_message = (
-                            "This is an accepted Action conversation. Do not claim writes are blocked or "
-                            "require another approval unless the exact attempted operation returned forbidden. "
-                            "Use the retained operation results and return an accurate concise final answer."
-                            if answer_issue is not None
-                            and answer_issue.startswith("action_mode_write_capability_") else
+                            "No approval request was created in this turn. A prose request for approval "
+                            "does not open the modal. If the user requested this change and the target is "
+                            "sufficiently verified, invoke execute_shell with the exact mutation now; the "
+                            "broker will pause it for requester approval before forwarding. Do not request "
+                            "chat confirmation or finish with a promise to submit later. If the user only "
+                            "asked for advice, or information is missing, explain that clearly without "
+                            "claiming approval is pending. Never broaden the user's requested changes."
+                            if answer_issue == "action_approval_not_submitted" else
                             "Your previous turn did not contain a usable operator-facing answer. It was "
                             "empty or serialized tool-call arguments as JSON. Use the command and collector "
                             "results already present in this conversation and return a concise final answer "
@@ -11632,7 +11497,15 @@ def create_app(
                             "content": correction_message,
                         })
                         continue
-                    if agent_evidence:
+                    if answer_issue == "action_approval_not_submitted":
+                        agent_content = (
+                            "No approval request was created and no change was executed. "
+                            "The model stopped at a proposed change instead of submitting the operation "
+                            "for review, even after retrying. There is no pending approval popup."
+                        )
+                        forced_fallback = {"content": agent_content, "citations": [],
+                                           "conclusion_status": "unresolved"}
+                    elif agent_evidence:
                         forced_fallback = _deterministic_provider_failure_answer(
                             question=question,
                             evidence=agent_evidence,
@@ -11651,6 +11524,8 @@ def create_app(
                             "conclusion_status": "unresolved",
                         }
                     agent_limitations.append(
+                        "The model did not initiate requester approval after two corrections."
+                        if answer_issue == "action_approval_not_submitted" else
                         "The model returned an empty response or tool-call arguments after two "
                         "bounded finalization attempts; PodPilot used a deterministic fallback."
                     )
@@ -12184,7 +12059,18 @@ def create_app(
                     runner_requests = app.state.adhoc_runner_requests.setdefault(run_id, set())
                     runner_requests.add(runner_request_id)
                     runner_task: asyncio.Task[AgentCommandResult] | None = None
+                    command_capability = None
+                    command_connection = connection
+                    if not read_only and connection and connection.proxy_url:
+                        base_capability = connection.proxy_url.rsplit("/", 1)[-1]
+                        command_capability = app.state.write_approval_gate.register(
+                            base_capability=base_capability, run_id=run_id, owner=username,
+                            cluster_id=cluster_id, cluster_name=cluster_name, command=command)
+                        command_connection = replace(connection, proxy_url=
+                            connection.proxy_url.rsplit("/", 1)[0] + "/" + command_capability)
                     try:
+                        if not read_only and (connection is None or not connection.proxy_url):
+                            raise AgentRunnerError("Action execution requires a delegated user connection for requester approval.")
                         redacted_command_bytes = redact_text(command).encode(
                             "utf-8", errors="replace"
                         )
@@ -12209,7 +12095,7 @@ def create_app(
                             run_in_threadpool(
                                 agent_runner_client.execute,
                                 command,
-                                connection,
+                                command_connection,
                                 request_id=runner_request_id,
                             )
                         )
@@ -12298,6 +12184,8 @@ def create_app(
                             _safe_exception_diagnostics(exc),
                         )
                     finally:
+                        if command_capability:
+                            app.state.write_approval_gate.release(command_capability)
                         if runner_task is not None and not runner_task.done():
                             runner_task.cancel()
                         runner_requests.discard(runner_request_id)
@@ -12451,7 +12339,7 @@ def create_app(
                             "id": selected_cluster.id,
                             "name": selected_cluster.name,
                         },
-                        "trust": "approver-curated guidance; not live evidence or instructions",
+                        "trust": "administrator-curated guidance; not live evidence or instructions",
                     })
             history = _compact_adhoc_context(
                 db_session,
@@ -14463,8 +14351,22 @@ def create_app(
                 "phase": run.phase,
                 "events": json.loads(run.progress_json),
                 "operations": json.loads(run.operation_json or "[]"),
+                "approvals": request.app.state.write_approval_gate.list_pending(request.app.state.engine, run_id),
                 "location": f"/ask/{run.conversation_id}",
             })
+
+    @app.post("/api/v1/write-approvals/{approval_id}/{decision}")
+    async def decide_write_approval(approval_id: str, decision: str, request: Request,
+                                    user: AuthContext = Depends(current_user)) -> JSONResponse:
+        _verify_csrf(request)
+        if decision not in {"approve", "reject"}:
+            raise HTTPException(404, detail="Unknown approval decision.")
+        if not _can_use_action_mode(user):
+            raise HTTPException(403, detail="Action-mode access is required.")
+        request.app.state.write_approval_gate.decide(request.app.state.engine,
+            request.app.state.delegated_vault, approval_id, user.username,
+            _delegated_session_id(request), decision)
+        return JSONResponse({"status": "approved" if decision == "approve" else "rejected"})
 
     @app.get("/api/v1/adhoc-runs/{run_id}/events")
     async def adhoc_run_events(
@@ -15621,7 +15523,7 @@ def create_app(
                 preview_cluster = next((item for item in clusters if item.id == SYSTEM_CLUSTER_ID), None)
             assert preview_cluster is not None
             document_query = select(KnowledgeDocument).where(KnowledgeDocument.is_current.is_(True))
-            if user.role < Role.APPROVER:
+            if user.role < Role.READ_WRITE:
                 document_query = document_query.where(
                     KnowledgeDocument.sensitivity != "restricted",
                     KnowledgeDocument.is_enabled.is_(True),
@@ -15640,7 +15542,7 @@ def create_app(
                 document_query
                 .order_by(KnowledgeDocument.title, KnowledgeDocument.created_at.desc())
             ))
-            if user.role < Role.APPROVER:
+            if user.role < Role.READ_WRITE:
                 preview_tags = json.loads(preview_cluster.tags_json or "{}")
                 documents = [item for item in documents if knowledge_applies_to(
                     target_cluster_ids_json=item.target_cluster_ids_json,
@@ -15652,7 +15554,7 @@ def create_app(
             results = search_knowledge(
                 db_session, query=query, cluster_id=preview_cluster.id,
                 cluster_tags=json.loads(preview_cluster.tags_json or "{}"),
-                namespace=namespace, include_restricted=user.role >= Role.APPROVER,
+                namespace=namespace, include_restricted=user.role >= Role.READ_WRITE,
             ) if query else []
             recent_conversations = recent_conversations_for(db_session, user.username)
         response = templates.TemplateResponse(
@@ -15699,7 +15601,7 @@ def create_app(
             results = search_knowledge(
                 db_session, query=query, cluster_id=cluster.id,
                 cluster_tags=json.loads(cluster.tags_json or "{}"),
-                namespace=bounded_namespace, include_restricted=user.role >= Role.APPROVER,
+                namespace=bounded_namespace, include_restricted=user.role >= Role.READ_WRITE,
             )
         return JSONResponse({
             "query": query, "cluster_id": cluster.id,
@@ -15891,15 +15793,6 @@ def create_app(
         csrf_token, csrf_is_new = _csrf_token(request)
 
         with Session(request.app.state.engine) as db_session:
-            _reconcile_alert_lifecycle(
-                db_session,
-                now=datetime.now(timezone.utc),
-                active_fingerprints=(
-                    {alert.fingerprint for alert in active_alerts if alert.state == "active"}
-                    if snapshot is not None and snapshot.is_complete
-                    else None
-                ),
-            )
             recent = list(
                 db_session.scalars(
                     select(Investigation)
@@ -15907,14 +15800,6 @@ def create_app(
                     .limit(5)
                 )
             )
-            awaiting_approval_count = db_session.scalar(
-                select(func.count())
-                .select_from(RemediationAction)
-                .where(
-                    RemediationAction.status == "preview_ready",
-                    RemediationAction.expires_at > datetime.now(timezone.utc),
-                )
-            ) or 0
             runtime_cluster = db_session.get(Cluster, SYSTEM_CLUSTER_ID)
             runtime_cluster_name = (
                 runtime_cluster.name if runtime_cluster is not None else app_settings.cluster_name
@@ -15943,7 +15828,6 @@ def create_app(
                 "inhibited_count": sum(alert.is_inhibited for alert in active_alerts),
                 "recent_investigations": recent,
                 "recent_conversations": recent_conversations,
-                "awaiting_approval_count": awaiting_approval_count,
                 "csrf_token": csrf_token,
             },
         )
@@ -16059,47 +15943,6 @@ def create_app(
                 model_result["detail"] = profile.last_error
         analysis_payload["model"] = model_result
         analysis_json = json.dumps(analysis_payload, default=_json_default, sort_keys=True)
-        proposals = (
-            propose_actions(
-                investigation_id=investigation_id,
-                alert_name=alert.name,
-                cluster=runtime_cluster_name,
-                workload=workload,
-            )
-            if workload
-            else ()
-        )
-        action_records: list[RemediationAction] = []
-        for proposal in proposals:
-            try:
-                preview = await run_in_threadpool(executor.preview, proposal)
-                action_status = "preview_ready"
-            except RemediationError as exc:
-                preview = {"server_dry_run": "failed", "detail": str(exc)}
-                action_status = "preview_failed"
-            except Exception as exc:
-                preview = {
-                    "server_dry_run": "failed",
-                    "detail": f"The server dry-run failed ({type(exc).__name__}).",
-                }
-                action_status = "preview_failed"
-            action_records.append(
-                RemediationAction(
-                    id=proposal.id,
-                    investigation_id=investigation_id,
-                    created_at=proposal.created_at,
-                    expires_at=proposal.expires_at,
-                    created_by=user.username,
-                    action_type=proposal.action_type,
-                    status=action_status,
-                    risk=proposal.risk,
-                    target_namespace=proposal.namespace,
-                    target_kind=proposal.target_kind,
-                    target_name=proposal.target_name,
-                    proposal_json=json.dumps(proposal.to_dict(), default=_json_default, sort_keys=True),
-                    preview_json=json.dumps(preview, default=_json_default, sort_keys=True),
-                )
-            )
         check_plan = plan_diagnostic_checks(
             investigation_id=investigation_id,
             alert_name=alert.name,
@@ -16118,11 +15961,7 @@ def create_app(
             )
             for spec in check_plan
         ]
-        investigation_status = (
-            "awaiting_approval"
-            if any(item.status == "preview_ready" for item in action_records)
-            else "recommendation_ready"
-        )
+        investigation_status = "recommendation_ready"
         with Session(request.app.state.engine) as db_session:
             db_session.add(
                 Investigation(
@@ -16135,7 +15974,6 @@ def create_app(
                     analysis_json=analysis_json,
                 )
             )
-            db_session.add_all(action_records)
             db_session.add_all(check_records)
             db_session.add(
                 AuditEvent(
@@ -16152,23 +15990,6 @@ def create_app(
                     ),
                 )
             )
-            for action in action_records:
-                db_session.add(
-                    AuditEvent(
-                        actor=user.username,
-                        action="remediation.preview",
-                        outcome=action.status,
-                        details_json=json.dumps(
-                            {
-                                "action_id": action.id,
-                                "investigation_id": investigation_id,
-                                "action_type": action.action_type,
-                                "target": f"{action.target_kind}/{action.target_namespace}/{action.target_name}",
-                            },
-                            sort_keys=True,
-                        ),
-                    )
-                )
             if check_records:
                 db_session.add(
                     AuditEvent(
@@ -16261,45 +16082,6 @@ def create_app(
                         )
                     )
                 db_session.commit()
-            _reconcile_alert_lifecycle(
-                db_session,
-                now=now,
-                active_fingerprints=None,
-            )
-            candidates = [
-                (action.id, _proposal_from_json(action.proposal_json))
-                for action in db_session.scalars(
-                    select(RemediationAction).where(
-                        RemediationAction.investigation_id == investigation_id,
-                        RemediationAction.status == "preview_ready",
-                    )
-                )
-            ]
-
-        for action_id, proposal in candidates:
-            validation = await run_in_threadpool(executor.validate, proposal)
-            if validation.status not in {"stale", "missing"}:
-                continue
-            with Session(request.app.state.engine) as db_session:
-                investigation = db_session.get(Investigation, investigation_id)
-                action = db_session.get(RemediationAction, action_id)
-                if investigation is None or action is None:
-                    continue
-                changed = _close_preview(
-                    db_session,
-                    action=action,
-                    investigation=investigation,
-                    status_value="cancelled",
-                    actor="system:reconciler",
-                    audit_action="remediation.reconcile",
-                    reason=f"target_{validation.status}",
-                    summary="The preview was cancelled because its exact target is no longer current.",
-                    detail=validation.detail,
-                    now=now,
-                )
-                if changed:
-                    db_session.commit()
-
         with Session(request.app.state.engine) as db_session:
             investigation = db_session.get(Investigation, investigation_id)
             if investigation is None:
@@ -16390,7 +16172,6 @@ def create_app(
             context={
                 "user": user,
                 "investigation": view,
-                "approval_bypass": app_settings.development_approval_bypass,
                 "actions": actions,
                 "checks": checks,
                 "messages": messages,
@@ -16872,230 +16653,6 @@ def create_app(
             status_code=303,
         )
 
-    @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/approve")
-    @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/execute")
-    async def approve_action(
-        investigation_id: str,
-        action_id: str,
-        request: Request,
-        user: AuthContext = Depends(current_user),
-    ) -> RedirectResponse:
-        _verify_csrf(request)
-        executing = request.url.path.endswith("/execute")
-        bypass = app_settings.development_approval_bypass
-        if not executing and not bypass and user.role < Role.APPROVER:
-            raise HTTPException(
-                status_code=403,
-                detail="Approving a remediation requires the Approver role or higher.",
-            )
-        now = datetime.now(timezone.utc)
-        try:
-            approval_snapshot = await run_in_threadpool(alerts.fetch)
-        except AlertSourceError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"PodPilot could not verify that the source alert is still active. {exc}",
-            ) from exc
-        active_fingerprints = {
-            item.fingerprint for item in approval_snapshot.alerts if item.state == "active"
-        }
-        with Session(request.app.state.engine) as db_session:
-            investigation = db_session.get(Investigation, investigation_id)
-            action = db_session.get(RemediationAction, action_id)
-            if investigation is None or action is None or action.investigation_id != investigation_id:
-                raise HTTPException(status_code=404, detail="Remediation action not found.")
-            expected_status = "approved" if executing and not bypass else "preview_ready"
-            if action.status != expected_status:
-                raise HTTPException(status_code=409, detail="This remediation is no longer awaiting approval.")
-            if (executing or bypass) and (user.username != investigation.created_by or user.role < Role.INVESTIGATOR):
-                raise HTTPException(status_code=403, detail="Only the requesting operator may execute this action.")
-            if (
-                not approval_snapshot.is_complete
-                and investigation.alert_fingerprint not in active_fingerprints
-            ):
-                raise HTTPException(
-                    status_code=503,
-                    detail="PodPilot could not prove that the source alert is still active because the Alertmanager snapshot was truncated.",
-                )
-            if investigation.alert_fingerprint not in active_fingerprints:
-                _reconcile_alert_lifecycle(
-                    db_session,
-                    now=now,
-                    active_fingerprints=active_fingerprints,
-                )
-                db_session.commit()
-                raise HTTPException(
-                    status_code=409,
-                    detail="The source alert is no longer active. This preview was cancelled.",
-                )
-            expires_at = _aware(action.expires_at)
-            if now >= expires_at:
-                _close_preview(
-                    db_session,
-                    action=action,
-                    investigation=investigation,
-                    status_value="expired",
-                    actor=user.username,
-                    audit_action="remediation.expire",
-                    reason="preview_expired",
-                    summary="The approval window expired without execution.",
-                    detail="Generate a fresh investigation before approving a remediation.",
-                    now=now,
-                )
-                db_session.commit()
-                raise HTTPException(status_code=409, detail="The preview expired. Generate a fresh investigation before approval.")
-            if not executing and not bypass:
-                approved_until = now + timedelta(hours=1)
-                claimed = db_session.execute(update(RemediationAction).where(
-                    RemediationAction.id == action_id, RemediationAction.status == "preview_ready",
-                ).values(status="approved", approved_by=user.username, approved_at=now, expires_at=approved_until))
-                if claimed.rowcount != 1:
-                    db_session.rollback()
-                    raise HTTPException(status_code=409, detail="This remediation changed during approval.")
-                db_session.add(AuditEvent(actor=user.username, action="remediation.approve", outcome="approved",
-                    details_json=json.dumps({"action_id": action_id, "investigation_id": investigation_id,
-                                             "execute_before": approved_until.isoformat()}, sort_keys=True)))
-                db_session.commit()
-                return RedirectResponse(url=f"/investigations/{investigation_id}#action-{action_id}", status_code=303)
-            proposal = replace(_proposal_from_json(action.proposal_json), expires_at=_aware(action.expires_at))
-            investigation_claim = db_session.execute(update(Investigation).where(
-                Investigation.id == investigation_id, Investigation.status != "executing",
-            ).values(status="executing"))
-            if investigation_claim.rowcount != 1:
-                db_session.rollback()
-                raise HTTPException(status_code=409, detail="Another action is already executing for this investigation.")
-            claimed = db_session.execute(
-                update(RemediationAction)
-                .where(
-                    RemediationAction.id == action_id,
-                    RemediationAction.status == expected_status,
-                )
-                .values(status="executing")
-            )
-            if claimed.rowcount != 1:
-                db_session.rollback()
-                raise HTTPException(status_code=409, detail="This remediation was already approved or changed.")
-            investigation.status = "executing"
-            db_session.add(AuditEvent(
-                actor=user.username,
-                action="remediation.execution_requested",
-                outcome="executing",
-                details_json=json.dumps(
-                    {
-                        "action_id": action_id,
-                        "investigation_id": investigation_id,
-                        "action_type": action.action_type,
-                        "approval_bypassed": bypass,
-                        "approved_by": action.approved_by,
-                        "target": f"{action.target_kind}/{action.target_namespace}/{action.target_name}",
-                    },
-                    sort_keys=True,
-                ),
-            ))
-            db_session.commit()
-
-        result = await run_in_threadpool(executor.execute, proposal)
-        with Session(request.app.state.engine) as db_session:
-            investigation = db_session.get(Investigation, investigation_id)
-            action = db_session.get(RemediationAction, action_id)
-            if investigation is None or action is None:
-                raise HTTPException(status_code=500, detail="The remediation record could not be finalized.")
-            action.status = result.outcome
-            action.result_json = json.dumps(result.to_dict(), default=_json_default, sort_keys=True)
-            investigation.status = result.outcome if result.outcome != "stale" else "unresolved"
-            siblings = list(
-                db_session.scalars(
-                    select(RemediationAction).where(
-                        RemediationAction.investigation_id == investigation_id,
-                        RemediationAction.id != action_id,
-                        RemediationAction.status.in_(("preview_ready", "approved")),
-                    )
-                )
-            )
-            for sibling in siblings:
-                _close_preview(
-                    db_session,
-                    action=sibling,
-                    investigation=investigation,
-                    status_value="cancelled",
-                    actor=user.username,
-                    audit_action="remediation.cancel_siblings",
-                    reason="sibling_action_executed",
-                    summary="The preview was cancelled after another action executed.",
-                    detail="A fresh investigation is required before another mutation.",
-                    now=datetime.now(timezone.utc),
-                )
-            db_session.add(AuditEvent(
-                actor=user.username,
-                action="remediation.execute",
-                outcome=result.outcome,
-                details_json=json.dumps(
-                    {
-                        "action_id": action_id,
-                        "investigation_id": investigation_id,
-                        "summary": result.summary,
-                        "verification": result.verification,
-                    },
-                    sort_keys=True,
-                ),
-            ))
-            db_session.commit()
-        return RedirectResponse(
-            url=f"/investigations/{investigation_id}#action-{action_id}",
-            status_code=303,
-        )
-
-    @app.post("/api/v1/investigations/{investigation_id}/actions/{action_id}/cancel")
-    async def cancel_action(
-        investigation_id: str,
-        action_id: str,
-        request: Request,
-        user: AuthContext = Depends(current_user),
-    ) -> RedirectResponse:
-        _verify_csrf(request)
-        now = datetime.now(timezone.utc)
-        with Session(request.app.state.engine) as db_session:
-            investigation = db_session.get(Investigation, investigation_id)
-            action = db_session.get(RemediationAction, action_id)
-            if investigation is None or action is None or action.investigation_id != investigation_id:
-                raise HTTPException(status_code=404, detail="Remediation action not found.")
-            if user.role < Role.APPROVER and investigation.created_by != user.username:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Only the investigation creator or an Approver can cancel this preview.",
-                )
-            if action.status not in {"preview_ready", "approved"}:
-                raise HTTPException(status_code=409, detail="This preview is no longer active.")
-            status_value = "expired" if now > _aware(action.expires_at) else "cancelled"
-            changed = _close_preview(
-                db_session,
-                action=action,
-                investigation=investigation,
-                status_value=status_value,
-                actor=user.username,
-                audit_action=("remediation.expire" if status_value == "expired" else "remediation.cancel"),
-                reason=("preview_expired" if status_value == "expired" else "user_cancelled"),
-                summary=(
-                    "The approval window expired without execution."
-                    if status_value == "expired"
-                    else "The remediation preview was cancelled without executing it."
-                ),
-                detail=(
-                    "Generate a fresh investigation before approving a remediation."
-                    if status_value == "expired"
-                    else "No Kubernetes mutation was attempted."
-                ),
-                now=now,
-            )
-            if not changed:
-                db_session.rollback()
-                raise HTTPException(status_code=409, detail="This preview was already changed.")
-            db_session.commit()
-        return RedirectResponse(
-            url=f"/investigations/{investigation_id}#action-{action_id}",
-            status_code=303,
-        )
-
     @app.get("/api/v1/audit-events")
     async def audit_events(
         request: Request,
@@ -17104,8 +16661,8 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=500),
         user: AuthContext = Depends(current_user),
     ) -> JSONResponse:
-        if user.role < Role.APPROVER:
-            raise HTTPException(status_code=403, detail="Audit export requires the Approver role.")
+        if user.role < Role.READ_WRITE:
+            raise HTTPException(status_code=403, detail="Audit export requires Action-mode access.")
         with Session(request.app.state.engine) as db_session:
             ceiling = int(db_session.scalar(select(func.max(AuditEvent.id))) or 0)
             ceiling = min(through, ceiling) if through is not None else ceiling

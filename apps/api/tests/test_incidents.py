@@ -95,7 +95,7 @@ def client(tmp_path):
     engine.dispose()
     cluster_store = Store()
     app = create_app(settings=settings, role_resolver=StaticRoleResolver({
-        "sre": Role.INVESTIGATOR, "admin": Role.APPROVER, "viewer": Role.VIEWER,
+        "sre": Role.INVESTIGATOR, "admin": Role.READ_WRITE, "viewer": Role.VIEWER,
         "delegated": Role.DELEGATED_OPERATOR}), incident_credential_store=Store(),
         cluster_credential_store=cluster_store)
     with TestClient(app) as client:

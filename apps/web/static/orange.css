@@ -1,7 +1,5 @@
 /* Optional DemandKit-inspired presentation. Existing theme geometry is retained. */
 .sidebar-theme-options { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.orange-nav-icon { display: none; }
-.orange-folder-icon { display: none; }
 .config-disclosure > summary { display: none; }
 .config-disclosure, .config-disclosure-body { display: contents; }
 .config-disclosure-body > * + * { margin-top: 16px; }
@@ -60,8 +58,6 @@ html[data-theme="orange"] .nav-label { margin: 8px 12px 4px; font-size: 10px; le
 html[data-theme="orange"] .saas-app .nav-link { min-height: 48px; gap: 12px; padding: 10px 12px; border-radius: 8px; color: var(--theme-text); font-size: 14px; font-weight: 500; }
 html[data-theme="orange"] .nav-link:hover { background: var(--theme-surface-soft); }
 html[data-theme="orange"] .saas-app .nav-link.active { color: var(--theme-accent-strong); border-color: transparent; background: var(--theme-accent-soft); }
-html[data-theme="orange"] .nav-icon { display: none; }
-html[data-theme="orange"] .orange-nav-icon { display: block; flex: 0 0 21px; width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
 html[data-theme="orange"] .nav-subtree { margin: 2px 8px 10px 22px; padding: 6px 0 6px 14px; border: 0; border-left: 1px solid var(--theme-border-strong); border-radius: 0; background: transparent; }
 html[data-theme="orange"] .nav-subtree-heading { padding: 0 8px 8px; font-size: 10px; }
 html[data-theme="orange"] .nav-session-link strong { font-size: 12px; font-weight: 550; }
@@ -79,7 +75,6 @@ html[data-theme="orange"] .nav-connector-group + .nav-connector-group { border-t
 html[data-theme="orange"] .nav-connector-group::before { content: ""; position: absolute; top: 22px; left: -14px; width: 14px; border-top: 1px solid var(--theme-border-strong); }
 html[data-theme="orange"] .nav-connector-group-heading { justify-content: flex-start; gap: 7px; padding: 3px 0 7px; color: var(--theme-muted); font-size: 12px; font-weight: 550; letter-spacing: 0; text-transform: none; }
 html[data-theme="orange"] .nav-connector-group-heading > span:last-child { margin-left: auto; color: var(--theme-subtle); font-size: 10px; }
-html[data-theme="orange"] .orange-folder-icon { display: block; width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
 html[data-theme="orange"] .nav-connector-list { margin-left: 8px; padding-left: 10px; border-left: 1px solid var(--theme-border); }
 html[data-theme="orange"] .nav-connector-list li { position: relative; }
 html[data-theme="orange"] .nav-connector-list li::before { content: ""; position: absolute; top: 17px; left: -10px; width: 10px; border-top: 1px solid var(--theme-border); }
@@ -218,3 +213,5 @@ html[data-theme="orange"] .ask-layout:not(.activity-sidebar-collapsed) .ask-sess
   html[data-theme="orange"] .saas-app .brand { padding-bottom: 16px; }
   html[data-theme="orange"] .saas-app .metrics { gap: 12px; }
 }
+
+html[data-theme="orange"] .nav-icon { color: inherit; }

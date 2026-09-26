@@ -9,7 +9,6 @@ metadata:
 data:
   environment: openshift-poc
   incidents_enabled: "false"
-  development_approval_bypass: "false"
   cluster_name: configure-cluster-name
   chat_max_chars: "4000"
   adhoc_inventory_max_objects: "500"
@@ -50,5 +49,4 @@ data:
   role_investigator_groups: '["podpilot-investigators"]'
   role_read_write_groups: '["podpilot-read-write"]'
   configuration_admin_groups: '["podpilot-configuration-admins"]'
-  role_approver_groups: '["podpilot-approvers"]'
   role_breakglass_groups: '["podpilot-breakglass"]'

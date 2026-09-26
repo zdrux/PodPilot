@@ -347,7 +347,7 @@ def test_configuration_comparison_does_not_invoke_removed_list_helper() -> None:
         ),
         api_key="test-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="compare-clf",
@@ -529,7 +529,7 @@ def test_removed_list_tool_rejects_model_authored_list_without_execution() -> No
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="list-disabled", question="List Widgets.",
@@ -676,12 +676,12 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
     assert all("instructions" in str(item["trust"]) for item in compact)
 
 
+@pytest.mark.parametrize("approval_handoff_stuck", [False, True])
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
-@pytest.mark.parametrize("approval_bypass", [False, True])
 @pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False), ("pod_logs", False)])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str, approval_bypass: bool,
-    discovery_tool: str, inventory_enabled: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str,
+    discovery_tool: str, inventory_enabled: bool, approval_handoff_stuck: bool,
 ) -> None:
     cluster_id = "30500000-0000-0000-0000-000000000001"
     constructor_threads: list[int] = []
@@ -846,6 +846,10 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                         id="read-clf", name="execute_shell", arguments=arguments,
                     ),),
                 )
+            if execution_mode == "action" and (self.calls == 5 or approval_handoff_stuck):
+                return _agent_final_step("Requested approval: I will now submit a patch request. Please approve the exact change.")
+            if execution_mode == "action" and self.calls == 6:
+                assert "No approval request was created" in messages[-1]["content"]
             return _agent_final_step("The ClusterLogForwarder configuration was inspected.")
 
     class Runner:
@@ -864,12 +868,12 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     runner = Runner()
     app, settings = make_app(
         tmp_path,
-        assignments={"ivy": Role.APPROVER},
+        assignments={"ivy": Role.READ_WRITE},
         source=FakeAlertSource(),
         credential_store=MemoryCredentialStore("model-token"),
         model_provider=provider,
         agent_runner=runner,
-        settings_overrides={"delegated_access_enabled": True, "development_approval_bypass": approval_bypass},
+        settings_overrides={"delegated_access_enabled": True},
     )
 
     @app.middleware("http")
@@ -952,7 +956,12 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
             created.headers["location"], headers={"x-forwarded-user": "ivy"},
         )
 
-    assert "configuration was inspected" in rendered.text
+    if execution_mode == "action" and approval_handoff_stuck:
+        assert "No approval request was created and no change was executed" in rendered.text
+        assert "Please approve the exact change" not in rendered.text
+        assert provider.calls == 7
+    else:
+        assert "configuration was inspected" in rendered.text
     knowledge_message = next(
         str(item.get("content") or "")
         for item in provider.agent_messages[0]
@@ -1001,23 +1010,17 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         if execution_mode == "read_only"
         else connection.read_only_proxy_capability
     )
-    assert runner_connection.proxy_url.endswith(expected_capability)
+    assert runner_connection.proxy_url.endswith(expected_capability) if execution_mode == "read_only" else expected_capability not in runner_connection.proxy_url
     assert other_capability not in runner_connection.proxy_url
     system_prompt = str(provider.agent_messages[0][0]["content"])
     assert ("discover_inventory first" in system_prompt) is inventory_enabled
     if execution_mode == "read_only":
         assert "delegated read-only investigation mode" in system_prompt
         assert "broker will reject Kubernetes writes" in system_prompt
-    elif approval_bypass:
-        assert "delegated Action mode" in system_prompt
-        assert "Cluster writes and privileged operations are enabled" in system_prompt
-        assert "execute requested remediation without asking for another approval" in system_prompt
-        assert "Never claim that this session blocks writes unless an actual tool call" in system_prompt
-        assert "cluster write or privileged operation" in system_prompt
-        assert "identify successful writes accurately" not in system_prompt
     else:
-        assert "Action mode with approvals enforced" in system_prompt
-        assert "Unreviewed writes and privileged operations are blocked" in system_prompt
+        assert "requester self-approval" in system_prompt
+        assert "The broker pauses each actual write" in system_prompt
+        assert "Do not stop at a prose plan" in system_prompt
     assert "same investigation tools" in system_prompt
     assert "When presenting a list of comparable items" in system_prompt
     assert "otherwise choose the clearest format" in system_prompt
@@ -1228,7 +1231,7 @@ def test_access_question_bypasses_generic_resource_planner() -> None:
         api_key="test-api-token",
         settings=Settings(
             auth_mode="test", role_investigator_groups=[],
-            role_approver_groups=[], role_breakglass_groups=[],
+            role_read_write_groups=[], role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="access-review",
         question="Show my access",
@@ -1464,7 +1467,7 @@ def test_pod_health_heuristic_does_not_override_model_object_field_classificatio
         api_key="test-api-token",
         settings=Settings(
             auth_mode="test", role_investigator_groups=[],
-            role_approver_groups=[], role_breakglass_groups=[],
+            role_read_write_groups=[], role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="pod-health-override",
         question="Are any pods on the cluster crashing currently?",
@@ -2253,7 +2256,7 @@ def test_duplicate_plan_is_repaired_without_pinning_agent_goal() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="duplicate-repair",
@@ -2326,7 +2329,7 @@ def test_preflight_rejection_does_not_consume_cluster_read_budget() -> None:
     settings = Settings(
         auth_mode="test",
         role_investigator_groups=[],
-        role_approver_groups=[],
+        role_read_write_groups=[],
         role_breakglass_groups=[],
     )
     result = asyncio.run(_collect_bounded_cluster_reads(
@@ -2411,7 +2414,7 @@ def test_collection_does_not_automatically_retry_tls_trust_failure() -> None:
     provider = Provider()
     explorer = Explorer()
     settings = Settings(
-        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
         role_breakglass_groups=[],
     )
 
@@ -2488,7 +2491,7 @@ def test_collection_discards_removed_list_reads_but_retains_exact_reads() -> Non
     provider = Provider()
     explorer = Explorer()
     settings = Settings(
-        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
         role_breakglass_groups=[],
     )
 
@@ -2626,7 +2629,7 @@ def test_collection_lets_model_investigate_repeated_certificate_log_signals() ->
     provider = Provider()
     explorer = Explorer()
     settings = Settings(
-        auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+        auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
         role_breakglass_groups=[],
     )
     existing = [{
@@ -3408,7 +3411,7 @@ def test_model_can_traverse_evidence_grounded_owner_references() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="owner-traversal",
@@ -4586,7 +4589,7 @@ def test_model_metric_semantics_are_not_overridden_by_question_heuristics() -> N
         ),
         api_key="test-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy",
@@ -4646,7 +4649,7 @@ def test_model_inventory_semantics_cannot_invoke_removed_list_helper() -> None:
         ),
         api_key="test-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="cluster-node-ranking",
@@ -6536,7 +6539,7 @@ def test_inventory_collection_does_not_turn_live_catalog_into_list_execution() -
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="catalog-kafka-inventory",
@@ -6587,7 +6590,7 @@ def test_model_inventory_semantics_do_not_restore_removed_list_helper() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="semantic-kafka-inventory",
@@ -6644,7 +6647,7 @@ def test_audit_semantics_execute_only_the_typed_audit_read() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[], adhoc_audit_default_limit=20,
             adhoc_audit_initial_range_seconds=3600,
         ),
@@ -6827,7 +6830,7 @@ def test_named_notready_pod_collects_only_exact_pod_logs_and_events() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[], adhoc_inventory_max_objects=500,
         ),
         actor="ivy", workflow_id="named-notready-pod", question=question,
@@ -7019,7 +7022,7 @@ def test_configuration_guidance_follows_exact_nested_configmap_reference() -> No
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="config-reference",
@@ -7221,7 +7224,7 @@ def test_exact_node_label_capability_executes_grounded_get() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="exact-node-labels",
@@ -7295,7 +7298,7 @@ def test_inventory_details_do_not_offer_catalog_list_candidate() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="semantic-kafka-detail-inventory",
@@ -7389,7 +7392,7 @@ def test_collection_analysis_does_not_auto_list_or_fan_out_gets() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[], adhoc_detail_fanout_max_objects=10,
         ),
         actor="ivy", workflow_id="forwarder-analysis",
@@ -7487,7 +7490,7 @@ def test_inventory_catalog_refresh_does_not_execute_removed_list_helper() -> Non
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="catalog-widget-miss",
@@ -7551,7 +7554,7 @@ def test_model_kafka_cluster_alias_is_canonicalized_to_live_kafka_kind() -> None
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="canonical-kafka-inventory",
@@ -8005,7 +8008,7 @@ def test_free_form_diagnostic_cannot_restore_removed_list_helper() -> None:
     settings = Settings(
         auth_mode="test",
         role_investigator_groups=[],
-        role_approver_groups=[],
+        role_read_write_groups=[],
         role_breakglass_groups=[],
         adhoc_inventory_max_objects=500,
     )
@@ -9211,47 +9214,6 @@ class RefusingCatalogProvider(ImpliedHealthProvider):
         )
 
 
-class FakeRemediationExecutor:
-    def __init__(self, outcome: str = "resolved", validation: str = "current") -> None:
-        self.outcome = outcome
-        self.validation = validation
-        self.previews = []
-        self.validations = []
-        self.executions = []
-
-    def preview(self, proposal):
-        self.previews.append(proposal)
-        return {
-            "server_dry_run": "passed",
-            "target_observed": {
-                "uid": proposal.target_uid,
-                "resource_version": proposal.target_resource_version,
-            },
-            "operation": proposal.operation,
-        }
-
-    def execute(self, proposal):
-        self.executions.append(proposal)
-        return ActionResult(
-            outcome=self.outcome,
-            summary="Synthetic verification completed.",
-            before={"uid": proposal.target_uid},
-            api_result={"accepted": True},
-            verification={"replacement_ready": self.outcome == "resolved"},
-            after={"uid": "replacement-uid"},
-        )
-
-    def validate(self, proposal):
-        self.validations.append(proposal)
-        details = {
-            "current": "The exact target identity is still current.",
-            "stale": "The target UID or resourceVersion changed.",
-            "missing": "The exact target no longer exists.",
-            "unavailable": "The Kubernetes API is temporarily unavailable.",
-        }
-        return ActionValidation(self.validation, details[self.validation])
-
-
 class FakeDiagnosticExecutor:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -9423,7 +9385,6 @@ def make_app(
     workload_source: FakeWorkloadSource | None = None,
     credential_store: MemoryCredentialStore | None = None,
     model_provider: FakeModelProvider | None = None,
-    remediation_executor: FakeRemediationExecutor | None = None,
     diagnostic_executor: FakeDiagnosticExecutor | None = None,
     read_explorer: FakeReadExplorer | None = None,
     cluster_credential_store: MemoryCredentialStore | None = None,
@@ -9460,7 +9421,6 @@ def make_app(
             workload_source,
             credential_store or MemoryCredentialStore(),
             model_provider or FakeModelProvider(),
-            remediation_executor or FakeRemediationExecutor(),
             diagnostic_executor or FakeDiagnosticExecutor(),
             read_explorer or FakeReadExplorer(),
             cluster_credential_store,
@@ -9472,7 +9432,7 @@ def make_app(
 
 
 def test_audit_export_is_authorized_bounded_and_snapshot_paginated(tmp_path: Path) -> None:
-    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+    app, _ = make_app(tmp_path, assignments={"ada": Role.READ_WRITE, "ivy": Role.INVESTIGATOR},
                       source=FakeAlertSource(()))
     with TestClient(app) as client:
         with Session(app.state.engine) as db:
@@ -9496,7 +9456,7 @@ def test_audit_export_is_authorized_bounded_and_snapshot_paginated(tmp_path: Pat
 
 
 def test_proxy_durably_audits_delegated_identity_without_body_or_query(tmp_path: Path, monkeypatch) -> None:
-    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()))
+    app, _ = make_app(tmp_path, assignments={"ada": Role.READ_WRITE}, source=FakeAlertSource(()))
     original_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original_client(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"kind": "Pod"})),
@@ -9534,7 +9494,7 @@ def test_proxy_durably_audits_delegated_identity_without_body_or_query(tmp_path:
 
 
 def test_cluster_detection_requires_own_delegated_session_and_persists_inventory(tmp_path: Path, monkeypatch) -> None:
-    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+    app, _ = make_app(tmp_path, assignments={"ada": Role.READ_WRITE, "ivy": Role.INVESTIGATOR},
                       source=FakeAlertSource(()))
     calls = []
     def telemetry(**kwargs):
@@ -9590,7 +9550,7 @@ def test_first_delegated_login_detects_inventory_once(tmp_path: Path, monkeypatc
         key: SimpleNamespace(endpoint_status=lambda: {"verified": False}) for key in ("metric_reader", "log_metric_reader")})
     ca = tmp_path / "fixture-ca.crt"
     ca.write_text("fixture-ca", encoding="utf-8")
-    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()),
+    app, _ = make_app(tmp_path, assignments={"ada": Role.READ_WRITE}, source=FakeAlertSource(()),
         settings_overrides={"delegated_access_enabled": True, "cluster_auto_detect_on_connect": True,
                             "service_account_ca_path": ca, "service_ca_path": ca})
     with TestClient(app) as client:
@@ -9608,7 +9568,7 @@ def test_first_delegated_login_detects_inventory_once(tmp_path: Path, monkeypatc
 def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
     app, _ = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource((watchdog(),)),
     )
     with TestClient(app) as client:
@@ -9625,7 +9585,7 @@ def test_authenticated_dashboard_and_session(tmp_path: Path) -> None:
         assert response.headers["x-frame-options"] == "DENY"
         assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
         session = client.get("/api/v1/session", headers={"x-forwarded-user": "ada"})
-        assert session.json() == {"username": "ada", "role": "approver"}
+        assert session.json() == {"username": "ada", "role": "read_write"}
         assert client.get("/health/ready").json() == {"status": "ready", "database": True}
 
 
@@ -11520,7 +11480,7 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
 
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+        assignments={"ada": Role.READ_WRITE, "ivy": Role.INVESTIGATOR},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
         remote_read_explorer_factory=lambda cluster, token: DiscoverableExplorer(),
@@ -11586,7 +11546,7 @@ def test_owner_deletes_private_secret_backed_cluster_and_credential(tmp_path: Pa
     cluster_credentials = MemoryCredentialStore()
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
     )
@@ -11660,7 +11620,7 @@ def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
     )
     app, _ = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
         settings_overrides={
@@ -11704,7 +11664,7 @@ def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
 ) -> None:
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER, "ivy": Role.INVESTIGATOR},
+        assignments={"ada": Role.READ_WRITE, "ivy": Role.INVESTIGATOR},
         source=FakeAlertSource(),
     )
     with TestClient(app) as client:
@@ -11769,7 +11729,7 @@ def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
 
     restarted_app, _ = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
     )
     with TestClient(restarted_app) as client:
@@ -11815,7 +11775,7 @@ def test_cluster_save_reports_and_logs_credential_store_failure(
 
     app, _settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         cluster_credential_store=FailingCredentialStore(),
     )
@@ -11853,7 +11813,7 @@ def test_cluster_test_does_not_return_raw_remote_client_exception(tmp_path: Path
 
     app, _settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         cluster_credential_store=cluster_credentials,
         remote_read_explorer_factory=failing_remote_reader,
@@ -11900,7 +11860,7 @@ def test_candidate_first_planner_selects_route_then_service_with_compact_context
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="candidate-first-route",
@@ -11957,7 +11917,7 @@ def test_unknown_candidate_id_executes_no_cluster_read() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="unknown-candidate",
@@ -12024,7 +11984,7 @@ def test_structured_log_gap_offers_healthy_pod_log_candidate() -> None:
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="healthy-log-gap",
@@ -12295,7 +12255,7 @@ def test_failure_investigation_does_not_collect_logs_after_model_stops() -> None
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy",
@@ -12392,7 +12352,7 @@ def test_invalid_correction_after_valid_no_read_uses_operator_grounded_anchor(
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="invalid-correction-anchor",
@@ -12480,7 +12440,7 @@ def test_removed_list_plan_stops_before_later_candidate_recovery(caplog) -> None
         ),
         api_key="test-api-token",
         settings=Settings(
-            auth_mode="test", role_investigator_groups=[], role_approver_groups=[],
+            auth_mode="test", role_investigator_groups=[], role_read_write_groups=[],
             role_breakglass_groups=[],
         ),
         actor="ivy", workflow_id="invalid-plan-candidate-recovery",
@@ -13049,7 +13009,7 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
 ) -> None:
     app, settings = make_app(
         tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         settings_overrides={"delegated_access_enabled": True},
     )
@@ -13132,7 +13092,7 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
         assert 'class="ask-layout action-session"' in action_page.text
         assert "execution-mode-read-write" in action_page.text
         assert "execution-mode-read-only" not in action_page.text
-        assert "ACTION MODE · Approval required for writes" in action_page.text
+        assert "ACTION MODE · Your approval required for writes" in action_page.text
         assert "Session cautions" not in action_page.text
         assert "change selected clusters using your OpenShift identity" not in action_page.text
         assert "action-caution-pill" not in action_page.text
@@ -13142,7 +13102,7 @@ def test_read_write_user_selects_action_mode_while_investigator_is_read_only(
 def test_adhoc_conversations_are_private_to_their_openshift_creator(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.READ_WRITE},
         source=FakeAlertSource(),
     )
     conversation_id = "00000000-0000-0000-0000-000000000088"
@@ -13366,7 +13326,7 @@ def test_ask_ui_documents_keyboard_and_unlimited_session_behavior() -> None:
     assert "Session cautions" not in template
     assert "data-action-mode-notice" in template
     assert 'class="ask-session-heading-row"' in template
-    assert "ACTION MODE · Development approval bypass" in template
+    assert "ACTION MODE · Your approval required for writes" in template
     assert ".action-mode-notice[hidden]" in styles
     assert "execution-mode-read-write" in template
     assert "execution-mode-read-only" in template
@@ -13763,6 +13723,8 @@ def test_workload_investigation_collects_and_persists_live_evidence(tmp_path: Pa
         assert snapshot["workload"]["pod_uid"] == "pod-uid"
         analysis = json.loads(investigation.analysis_json)
         assert analysis["hypotheses"][0]["confidence"] == "high"
+        assert db_session.scalar(select(func.count()).select_from(RemediationAction)) == 0
+        assert investigation.status == "recommendation_ready"
     engine.dispose()
 
 
@@ -14263,359 +14225,18 @@ def test_target_down_check_failures_remain_visible_and_model_free(tmp_path: Path
     engine.dispose()
 
 
-@pytest.mark.parametrize("elapsed_minutes", [0, 59, 61])
-def test_typed_actions_require_approver_and_execute_once(tmp_path: Path, elapsed_minutes: int) -> None:
-    workload_source = FakeWorkloadSource(crashloop_evidence())
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
-        source=FakeAlertSource((crashloop(),)),
-        workload_source=workload_source,
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert "Approval-gated actions" in detail.text
-        assert "Delete Controller Owned Pod" in detail.text
-        assert "Restart Workload Rollout" in detail.text
-        assert "Approver required" in detail.text
-        assert "pod-rv" in detail.text
-        assert len(remediation.previews) == 2
-        queue = client.get("/", headers={"x-forwarded-user": "ivy"})
-        assert "Awaiting approval" in queue.text
-        assert re.search(r"Awaiting approval</span>.*?<strong class=\"metric-value\">2</strong>", queue.text, re.S)
-
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            action = db_session.scalar(
-                select(RemediationAction).where(
-                    RemediationAction.action_type == "delete_controller_owned_pod"
-                )
-            )
-            investigation = db_session.scalar(select(Investigation))
-            assert action is not None and investigation is not None
-            action_id = action.id
-            investigation_id = investigation.id
-            assert investigation.status == "awaiting_approval"
-        engine.dispose()
-
-        denied = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert denied.status_code == 403
-        approved = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        assert approved.status_code == 303
-        assert len(remediation.executions) == 0
-        with Session(engine) as db_session:
-            approved_record = db_session.get(RemediationAction, action_id)
-            assert approved_record.status == "approved"
-            assert approved_record.expires_at - approved_record.approved_at == timedelta(hours=1)
-            approved_record.approved_at -= timedelta(minutes=elapsed_minutes)
-            approved_record.expires_at -= timedelta(minutes=elapsed_minutes)
-            db_session.commit()
-        wrong_operator = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/execute",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert wrong_operator.status_code == 403
-        executed = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/execute",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        if elapsed_minutes >= 60:
-            assert executed.status_code == 409
-            assert not remediation.executions
-            return
-        assert executed.status_code == 303
-        result_page = client.get(approved.headers["location"], headers={"x-forwarded-user": "ada"})
-        assert "Synthetic verification completed" in result_page.text
-        assert "replacement_ready" in result_page.text
-        repeated = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert repeated.status_code == 409
-
-    assert len(remediation.executions) == 1
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        action = db_session.get(RemediationAction, action_id)
-        investigation = db_session.get(Investigation, investigation_id)
-        assert action is not None and action.status == "resolved"
-        assert action.approved_by == "ada"
-        assert investigation is not None and investigation.status == "resolved"
-        sibling = db_session.scalar(
-            select(RemediationAction).where(RemediationAction.id != action_id)
-        )
-        assert sibling is not None and sibling.status == "cancelled"
-        audit_actions = list(db_session.scalars(select(AuditEvent.action)))
-        assert "remediation.preview" in audit_actions
-        assert "remediation.approve" in audit_actions
-        assert "remediation.execute" in audit_actions
-        assert "remediation.cancel_siblings" in audit_actions
-    engine.dispose()
 
 
-def test_investigation_creator_can_cancel_previews_without_execution(tmp_path: Path) -> None:
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR, "eve": Role.INVESTIGATOR, "ada": Role.APPROVER},
-        source=FakeAlertSource((crashloop(),)),
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        assert csrf is not None
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            action_ids = list(
-                db_session.scalars(
-                    select(RemediationAction.id).order_by(RemediationAction.created_at)
-                )
-            )
-        engine.dispose()
-
-        denied = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_ids[0]}/cancel",
-            headers={"x-forwarded-user": "eve", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert denied.status_code == 403
-        for action_id in action_ids:
-            cancelled = client.post(
-                f"/api/v1/investigations/{investigation_id}/actions/{action_id}/cancel",
-                headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-                follow_redirects=False,
-            )
-            assert cancelled.status_code == 303
-        rejected_approval = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_ids[0]}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert rejected_approval.status_code == 409
-
-    assert remediation.executions == []
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        actions = list(db_session.scalars(select(RemediationAction)))
-        investigation = db_session.get(Investigation, investigation_id)
-        assert all(action.status == "cancelled" for action in actions)
-        assert all(json.loads(action.result_json or "{}")["closure"]["actor"] == "ivy" for action in actions)
-        assert investigation is not None and investigation.status == "cancelled"
-        assert list(db_session.scalars(select(AuditEvent.action))).count("remediation.cancel") == 2
-    engine.dispose()
 
 
-def test_dashboard_cancels_previews_when_source_alert_resolves(tmp_path: Path) -> None:
-    source = FakeAlertSource((crashloop(),))
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ada": Role.APPROVER},
-        source=source,
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
-        source.alerts = ()
-        reconciled = client.get("/", headers={"x-forwarded-user": "ada"})
-        assert re.search(
-            r"Awaiting approval</span>.*?<strong class=\"metric-value\">0</strong>",
-            reconciled.text,
-            re.S,
-        )
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        actions = list(db_session.scalars(select(RemediationAction)))
-        investigation = db_session.get(Investigation, investigation_id)
-        assert all(action.status == "cancelled" for action in actions)
-        assert investigation is not None and investigation.status == "cancelled"
-        events = list(
-            db_session.scalars(
-                select(AuditEvent).where(AuditEvent.action == "remediation.reconcile")
-            )
-        )
-        assert len(events) == 2
-        assert all(json.loads(event.details_json)["reason"] == "source_alert_not_active" for event in events)
-    engine.dispose()
 
 
-def test_missing_target_is_reconciled_on_investigation_view(tmp_path: Path) -> None:
-    remediation = FakeRemediationExecutor(validation="missing")
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ivy": Role.INVESTIGATOR},
-        source=FakeAlertSource((crashloop(),)),
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ivy"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        detail = client.get(created.headers["location"], headers={"x-forwarded-user": "ivy"})
-        assert detail.status_code == 200
-        assert detail.text.count("The preview was cancelled because its exact target is no longer current") == 2
-        assert "Closed by system:reconciler" in detail.text
-
-    assert len(remediation.validations) == 2
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert all(
-            action.status == "cancelled"
-            for action in db_session.scalars(select(RemediationAction))
-        )
-    engine.dispose()
 
 
-def test_approval_fails_closed_when_source_alert_is_no_longer_active(tmp_path: Path) -> None:
-    source = FakeAlertSource((crashloop(),))
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ada": Role.APPROVER},
-        source=source,
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            action_id = db_session.scalar(select(RemediationAction.id))
-        engine.dispose()
-        source.alerts = ()
-        rejected = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert rejected.status_code == 409
-        assert "source alert is no longer active" in rejected.text.lower()
-    assert remediation.executions == []
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert all(
-            action.status == "cancelled"
-            for action in db_session.scalars(select(RemediationAction))
-        )
-    engine.dispose()
 
 
-def test_truncated_alert_snapshot_neither_cancels_nor_authorizes(tmp_path: Path) -> None:
-    source = FakeAlertSource((crashloop(),))
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ada": Role.APPROVER},
-        source=source,
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            action_id = db_session.scalar(select(RemediationAction.id))
-        engine.dispose()
-        source.alerts = ()
-        source.is_complete = False
-        client.get("/", headers={"x-forwarded-user": "ada"})
-        rejected = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert rejected.status_code == 503
-        assert "snapshot was truncated" in rejected.text
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert db_session.get(RemediationAction, action_id).status == "preview_ready"
-    engine.dispose()
-    assert remediation.executions == []
 
 
-def test_expired_preview_fails_without_execution(tmp_path: Path) -> None:
-    remediation = FakeRemediationExecutor()
-    app, settings = make_app(
-        tmp_path,
-        assignments={"ada": Role.APPROVER},
-        source=FakeAlertSource((crashloop(),)),
-        workload_source=FakeWorkloadSource(crashloop_evidence()),
-        remediation_executor=remediation,
-    )
-    with TestClient(app) as client:
-        dashboard = client.get("/", headers={"x-forwarded-user": "ada"})
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', dashboard.text)
-        created = client.post(
-            "/api/v1/alerts/crashloop-1/investigations",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-            follow_redirects=False,
-        )
-        investigation_id = created.headers["location"].rsplit("/", 1)[-1]
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            action = db_session.scalar(select(RemediationAction))
-            assert action is not None
-            action.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
-            action_id = action.id
-            db_session.commit()
-        engine.dispose()
-        expired = client.post(
-            f"/api/v1/investigations/{investigation_id}/actions/{action_id}/approve",
-            headers={"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert expired.status_code == 409
-        assert "preview expired" in expired.text.lower()
-    assert remediation.executions == []
 
 
 def test_workload_collection_failure_preserves_deterministic_triage(tmp_path: Path) -> None:
@@ -14702,7 +14323,7 @@ def test_model_profile_is_role_gated_and_never_reads_token_back(tmp_path: Path) 
     provider = FakeModelProvider()
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER, "vic": Role.VIEWER},
+        assignments={"ada": Role.READ_WRITE, "vic": Role.VIEWER},
         source=FakeAlertSource((watchdog(),)),
         credential_store=credentials,
         model_provider=provider,
@@ -14869,7 +14490,7 @@ def test_model_registry_uses_distinct_secret_keys_and_one_active_profile(tmp_pat
     provider = FakeModelProvider(ask_schemas=False)
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         credential_store=credentials,
         model_provider=provider,
@@ -14959,7 +14580,7 @@ def test_model_registry_allows_plain_http_only_for_cluster_service_dns(
     credentials = MemoryCredentialStore()
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         credential_store=credentials,
         model_provider=FakeModelProvider(),
@@ -15045,7 +14666,7 @@ def test_active_model_can_be_deleted_with_ready_fallback_or_no_model(tmp_path: P
     credentials.set("second-token", "model_second")
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
         credential_store=credentials,
     )
@@ -15098,7 +14719,7 @@ def test_management_sections_require_approver_or_breakglass(tmp_path: Path) -> N
         tmp_path,
         assignments={
             "ivy": Role.INVESTIGATOR,
-            "ada": Role.APPROVER,
+            "ada": Role.READ_WRITE,
             "bea": Role.BREAKGLASS,
         },
         source=FakeAlertSource(),
@@ -15224,7 +14845,7 @@ def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: P
 def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER, "grace": Role.INVESTIGATOR, "vic": Role.VIEWER},
+        assignments={"ada": Role.READ_WRITE, "grace": Role.INVESTIGATOR, "vic": Role.VIEWER},
         source=FakeAlertSource(),
     )
     with TestClient(app) as client:
@@ -15377,7 +14998,7 @@ def test_cluster_memory_is_versioned_scoped_and_authorized(tmp_path: Path) -> No
 def test_cluster_memory_targets_global_explicit_and_tag_matched_clusters(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(),
     )
     azure_id = "20000000-0000-0000-0000-000000000001"
@@ -15447,7 +15068,7 @@ def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path
     provider = FakeModelProvider()
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource((watchdog(),)),
         credential_store=credentials,
         model_provider=provider,
@@ -15476,7 +15097,7 @@ def test_ready_model_enriches_investigation_and_outage_falls_back(tmp_path: Path
 
     failing_app, _ = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource((watchdog(),)),
         credential_store=credentials,
         model_provider=FakeModelProvider(fail_interpretation=True),
@@ -15498,7 +15119,7 @@ def test_failed_probe_reason_is_shown_with_deterministic_fallback(tmp_path: Path
     credentials = MemoryCredentialStore("test-api-token")
     app, settings = make_app(
         tmp_path,
-        assignments={"ada": Role.APPROVER},
+        assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource((watchdog(),)),
         credential_store=credentials,
     )
@@ -15687,7 +15308,7 @@ def test_tool_activity_summary_groups_safe_names_and_statuses() -> None:
 def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -> None:
     from podpilot_api.main import _profile_config
     credentials = MemoryCredentialStore()
-    app, _ = make_app(tmp_path, assignments={"ada": Role.APPROVER},
+    app, _ = make_app(tmp_path, assignments={"ada": Role.READ_WRITE},
         source=FakeAlertSource(), credential_store=credentials, model_provider=FakeModelProvider())
     with TestClient(app) as client:
         page = client.get("/settings/model", headers={"x-forwarded-user": "ada"})
@@ -15746,10 +15367,8 @@ def test_model_profile_saves_global_window_and_incident_policy(tmp_path: Path) -
 def test_secret_broker_access_override_preserves_delegated_rbac(
     tmp_path: Path, monkeypatch, access_enabled, mode, upstream_status,
 ) -> None:
-    app, settings = make_app(tmp_path, assignments={"ada": Role.APPROVER}, source=FakeAlertSource(()))
+    app, settings = make_app(tmp_path, assignments={"ada": Role.READ_WRITE}, source=FakeAlertSource(()))
     settings.secret_access_enabled = access_enabled
-    # The override must also hold when Action's development bypass is on.
-    settings.development_approval_bypass = True
     upstream_requests = []
 
     def respond(request):
@@ -15877,7 +15496,7 @@ def test_bounded_planner_enforces_inventory_policy_before_cluster_read(enabled):
 
 def test_retained_ask_logs_are_owner_scoped_and_expire(tmp_path: Path) -> None:
     from podpilot_api.ask_logs import LOG_EXCERPTS
-    app, settings = make_app(tmp_path, assignments={"ivy": Role.INVESTIGATOR, "ada": Role.APPROVER},
+    app, settings = make_app(tmp_path, assignments={"ivy": Role.INVESTIGATOR, "ada": Role.READ_WRITE},
                              source=FakeAlertSource())
     reference = LOG_EXCERPTS.put("<script>untrusted log text</script>")
     observation = {"id": "log-1", "tool": "pod_logs", "summary": "Log analysis",

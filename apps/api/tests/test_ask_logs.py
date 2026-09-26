@@ -98,6 +98,31 @@ def test_direct_display_preserves_lines_without_model_call():
     assert not limitations
 
 
+def test_tenant_and_partial_window_coverage_reaches_specialist_and_operator():
+    from podpilot_api.main import _adhoc_evidence_view
+    coverage = {"tenant": "infrastructure", "partial": True, "failure": None,
+                "selection": "namespace_rule", "activity": "node_scaling",
+                "requestedStart": "2026-09-25T12:00:00+00:00",
+                "requestedEnd": "2026-09-26T12:00:00+00:00",
+                "windows": [{"start": "2026-09-25T12:00:00+00:00",
+                             "end": "2026-09-25T14:00:00+00:00", "status": "partial"}]}
+    def analyze(profile, key, context):
+        assert context["logs"][0]["log_coverage"] == coverage
+        return AdHocLogAnalysis(overview="Scale-down appeared in the partial excerpt.")
+    results, limitations = process(AskLogAnalyst(LogExcerptCache()), [{
+        "id": "log-1", "tool": "pod_logs", "source": "loki:infrastructure:openshift-machine-api/c/m",
+        "data": {"tenant": "infrastructure", "log_coverage": coverage,
+                 "tail": "scale-down of worker-3", "entries": [{"message": "scale-down of worker-3"}]},
+    }], SimpleNamespace(analyze_logs=analyze))
+    assert not limitations
+    assert results[0]["data"]["log_coverage"] == coverage
+    facts = {f["label"]: f["value"] for f in _adhoc_evidence_view(results[0])["facts"]}
+    assert facts["Log tenant"] == "infrastructure"
+    assert facts["Partial history"].lower() in {"true", "yes"}
+    assert "partial" in facts["Searched windows"]
+    assert "tail" not in results[0]["data"] and "entries" not in results[0]["data"]
+
+
 def test_explicit_viewing_line_count_is_preserved_when_planner_omits_it():
     from podpilot_api.ask_logs import prepare_log_intent
     intent = ReadIntent(tool="pod_logs")
