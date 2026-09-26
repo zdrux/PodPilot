@@ -10602,7 +10602,7 @@ def create_app(
     # Version the entire shell bundle together so deployed markup cannot reuse
     # stale scripts/styles merely because a manual query-string was unchanged.
     asset_digest = hashlib.sha256()
-    for asset_name in ("theme.js", "styles.css", "orange.css", "navigation.js", "app.js", "incidents.js"):
+    for asset_name in ("theme.js", "styles.css", "orange.css", "compact.css", "navigation.js", "app.js", "incidents.js"):
         asset_digest.update(asset_name.encode())
         asset_digest.update((app_settings.web_dir / "static" / asset_name).read_bytes())
     templates.env.globals["asset_version"] = asset_digest.hexdigest()[:20]

@@ -467,3 +467,15 @@ shows the latest entries. These changes never scroll the main chat or page.
 Chat progress follows only within 48px of the bottom; scrolling up preserves the
 reading position through thinking updates and the completion reload. Scrolling
 back to the bottom resumes following, and sending a new message shows that turn.
+
+### Grafana Compact theme
+
+`static/compact.css` adds the optional `grafana-compact` palette and density preset
+through Appearance. It follows the supplied Grafana sidebar reference: charcoal
+surfaces, regular-weight system sans-serif text (Inter when available, Segoe UI on
+Windows), muted outline icons, blue links and an orange active-navigation marker.
+Desktop navigation uses a 240px rail, 30px rows, 16px icons and flat submenus with
+reduced margins. The rail narrows to 210px below 840px; below 640px navigation stacks
+above the content with 36px rows. Headings and buttons also use tighter spacing.
+Other themes retain their geometry. The selected theme persists across reloads
+and routes, and the compact stylesheet participates in the shared asset hash.

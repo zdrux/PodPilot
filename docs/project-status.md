@@ -1,6 +1,16 @@
 # PodPilot Project Status
 
 
+## Feature branch: Grafana Compact appearance (not deployed)
+
+`codex/grafana-compact-theme` adds an optional compact dark theme under Appearance.
+The sidebar uses 240px width, 30px desktop menu rows, smaller outline icons and
+regular-weight text; headings, nested menus and buttons have reduced spacing.
+Browser checks cover selecting and persisting the theme, Classic geometry isolation,
+mobile width, and the existing approval/scroll flows. The prior changes were
+committed and pushed to main as `473680a` before creating this branch.
+
+
 ## Approval handoff correction (SNO build 176)
 
 A live Action turn for `fix the node selector` ended with a prose promise to submit

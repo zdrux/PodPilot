@@ -10,6 +10,7 @@
   <script src="{{ url_for('static', path='/theme.js') }}?v={{ asset_version }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v={{ asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', path='/orange.css') }}?v={{ asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/compact.css') }}?v={{ asset_version }}">
   <script src="{{ url_for('static', path='/navigation.js') }}?v={{ asset_version }}" defer></script>
   <script src="{{ url_for('static', path='/app.js') }}?v={{ asset_version }}" defer></script>
   <script src="{{ url_for('static', path='/incidents.js') }}?v={{ asset_version }}" defer></script>
@@ -184,6 +185,9 @@
           </button>
           <button type="button" data-theme-option="orange" aria-label="Use Orange theme" aria-pressed="false" title="Orange · DemandKit layout">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"></rect><path d="M9 3v18M13 8h4M13 12h4M13 16h4"></path></svg>
+          </button>
+          <button type="button" data-theme-option="grafana-compact" aria-label="Use Grafana Compact theme" aria-pressed="false" title="Grafana Compact">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 10h16M4 15h16M4 20h16"></path></svg>
           </button>
         </div>
       </div>
