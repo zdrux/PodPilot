@@ -858,27 +858,6 @@ def test_pod_health_cluster_word_is_not_treated_as_a_namespace() -> None:
             tool="machine_health_summary", namespace="openshift-machine-api", limit=200,
         ),
     ),
-    (
-        'Show unhealthy deployments in "my-namespace"',
-        ReadIntent(
-            tool="workload_health_summary", kind="Deployment",
-            namespace="my-namespace", limit=200,
-        ),
-    ),
-    (
-        "Show unhealthy stateful sets in payments",
-        ReadIntent(
-            tool="workload_health_summary", kind="StatefulSet",
-            namespace="payments", limit=200,
-        ),
-    ),
-    (
-        "Show daemon set health in platform",
-        ReadIntent(
-            tool="workload_health_summary", kind="DaemonSet",
-            namespace="platform", limit=200,
-        ),
-    ),
 ])
 def test_known_resource_health_questions_compile_to_typed_summary(
     question: str, expected: ReadIntent,
@@ -892,16 +871,13 @@ def test_known_resource_health_questions_compile_to_typed_summary(
 
 def test_health_summary_scope_validation_matches_resource_scope() -> None:
     assert ReadIntent(
-        tool="workload_health_summary", kind="StatefulSet", namespace="payments",
-    ).namespace == "payments"
-    assert ReadIntent(
         tool="machine_health_summary", namespace="openshift-machine-api",
     ).namespace == "openshift-machine-api"
     with pytest.raises(ValidationError, match="does not accept a namespace"):
         ReadIntent(tool="node_health_summary", namespace="payments")
     with pytest.raises(ValidationError, match="does not accept a namespace"):
         ReadIntent(tool="cluster_operator_health_summary", namespace="payments")
-    with pytest.raises(ValidationError, match="kind must be"):
+    with pytest.raises(ValidationError):
         ReadIntent(tool="workload_health_summary", kind="ReplicaSet")
 
 

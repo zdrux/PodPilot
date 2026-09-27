@@ -678,7 +678,7 @@ def test_agent_knowledge_is_bounded_deduplicated_and_cluster_attributed() -> Non
 
 @pytest.mark.parametrize("approval_handoff_stuck", [False, True])
 @pytest.mark.parametrize("execution_mode", ["read_only", "action"])
-@pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False), ("pod_logs", False), ("workload_health_summary", False)])
+@pytest.mark.parametrize("discovery_tool,inventory_enabled", [("discover_resources", False), ("discover_inventory", True), ("discover_inventory", False), ("pod_logs", False)])
 def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_mode: str,
     discovery_tool: str, inventory_enabled: bool, approval_handoff_stuck: bool,
@@ -761,9 +761,7 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
                     "cluster_id": cluster_id,
                     "discovery_query": "cluster log forwarder",
                     "limit": 5,
-                } if discovery_tool not in {"pod_logs", "workload_health_summary"} else {
-                    "cluster_id": cluster_id, "namespace": "payments",
-                } if discovery_tool == "workload_health_summary" else {
+                } if discovery_tool != "pod_logs" else {
                     "cluster_id": cluster_id, "namespace": "dns", "name": "dns-1",
                     "container": "dns", "log_mode": "analyze",
                 })
@@ -989,10 +987,6 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "isolated-log-marker" not in serialized
         assert "No anomalies in the bounded excerpt." in serialized
         assert "raw_log_excerpt" in serialized
-    elif discovery_tool == "workload_health_summary":
-        assert explorer_intents[0].limit == 10
-        assert explorer_intents[0].unhealthy_only is True
-        assert "Check workload health" in rendered.text
     elif discovery_tool != "discover_inventory" or inventory_enabled:
         assert explorer_intents[0].discovery_query == "cluster log forwarder"
     else:
@@ -1028,15 +1022,11 @@ def test_delegated_conversation_uses_uniform_agent_tools_and_mode_proxy(
         assert "The broker pauses each actual write" in system_prompt
         assert "Do not stop at a prose plan" in system_prompt
     assert "same investigation tools" in system_prompt
-    assert "When presenting a list of comparable items" in system_prompt
-    assert "otherwise choose the clearest format" in system_prompt
-    assert "search_resources helpers are unavailable" in system_prompt
-    assert "discover_resources before guessing" in system_prompt
-    assert "API discovery does not prove" in system_prompt
-    assert "Inspect all IngressController resources" in system_prompt
-    assert "rather than assuming one named default" in system_prompt
-    assert "http_probe originates from the PodPilot application Pod" in system_prompt
-    assert "never describe it as bidirectional inter-cluster connectivity" in system_prompt
+    assert "Use clear prose or Markdown tables" in system_prompt
+    assert "Never reproduce" not in system_prompt
+    assert "discovery does not grant access" in system_prompt
+    assert ("atomic UID/resourceVersion" in system_prompt) is (execution_mode != "read_only")
+    assert len(system_prompt) < (5500 if execution_mode == "read_only" else 8500)
     assert "delegated-token" not in json.dumps(provider.agent_messages)
     assert telemetry_token_providers
     # TestClient shutdown clears the in-memory delegated session; retained
@@ -1417,25 +1407,6 @@ def test_deterministic_resource_health_answer_reports_anomaly() -> None:
     assert "Node | `—` | `worker-1` | Ready=False | DiskPressure, ReadyFalse" in answer["content"]
 
 
-def test_workload_fallback_renders_compact_pages_without_double_counting() -> None:
-    evidence = [{
-        "id": f"page-{index}", "tool": "workload_health_summary", "cluster_name": "lab",
-        "data": {
-            "kind": "Workload", "scope": "test", "scannedCount": 3,
-            "scanComplete": True, "anomalyCount": 2, "unavailableKinds": [],
-            "rows": [{"kind": "Deployment", "namespace": "test", "name": name,
-                      "desired": 1, "ready": 0, "reasons": ["UnavailableReplicas"]}],
-        },
-    } for index, name in enumerate(("web-a", "web-b"))]
-    answer = _deterministic_resource_health_answer(evidence=evidence, activity=[{
-        "tool": "workload_health_summary", "status": "succeeded",
-        "evidence_ids": [item["id"] for item in evidence],
-    }])
-    assert answer is not None
-    assert "found 2 Workload health anomalies among 3" in answer["content"]
-    assert "`web-a` | 0/1 Ready | UnavailableReplicas" in answer["content"]
-    assert "`web-b`" in answer["content"]
-    assert "Details for 0" not in answer["content"]
 
 
 def test_deterministic_resource_health_answer_marks_unavailable_api_unresolved() -> None:
@@ -9739,11 +9710,9 @@ def test_delegated_agent_executes_chat_completion_tool_calls_through_runner(
 
     assert runner.commands == ["oc auth can-i patch deployments --all-namespaces"]
     system_prompt = str(provider.agent_messages[0][0]["content"])
-    assert "`oc logs` with `--tail=200 --timestamps`" in system_prompt
-    assert "Never fetch unbounded Pod logs by default" in system_prompt
-    assert "Use only the tools supplied in this request" in system_prompt
-    assert "empty label-filtered workload query proves only" in system_prompt
-    assert "inspect the exact discovered custom resource and its status" in system_prompt
+    assert "Use only supplied tools" in system_prompt
+    assert "Empty filtered results do not prove a stack absent" in system_prompt
+    assert "Inspect observed ownership and selectors" in system_prompt
     tool_message = provider.agent_messages[1][-1]
     assert tool_message["role"] == "tool"
     assert '"exit_code": 1' in str(tool_message["content"])
@@ -10464,7 +10433,7 @@ def test_delegated_typed_collectors_return_to_agent_without_terminating(
     assert "TLSv1.3" in json.dumps(provider.agent_messages[2])
     assert "druciare-adm" in json.dumps(provider.agent_messages[3])
     assert "cpu_usage" in json.dumps(provider.agent_messages[4])
-    assert "completion does not mean the investigation is complete" in json.dumps(
+    assert "Collector completion is not investigation completion" in json.dumps(
         provider.agent_messages[1]
     )
     assert "interpreted the filtered routes" in rendered.text
@@ -15583,93 +15552,26 @@ def test_operation_titles_cover_typed_calls_and_live_ledger():
     assert entry["title"] == "Get Pod api-1"
 
 
-def test_complete_health_findings_are_ui_only_and_current_turn():
-    from podpilot_api.main import _health_findings_tables, _compact_provider_value
-    rows = [{"kind": "Deployment", "namespace": "test", "name": f"web-{i}",
-             "ready": 0, "desired": 1, "reasons": ["Unavailable"]} for i in range(47)]
-    evidence = [{"id": "health-1", "tool": "workload_health_summary", "cluster_id": "lab",
-                 "data": {"kind": "Workload", "scope": "cluster", "findingsRows": rows,
-                          "rows": rows[:10], "matchedCount": 47, "scannedCount": 100,
-                          "scanComplete": True, "findingsComplete": True}}]
-    activity = {"reads": [{"status": "succeeded", "evidence_ids": ["health-1"]}]}
-    tables = _health_findings_tables(evidence, activity)
-    assert tables[0]["count"] == 47 and tables[0]["complete"]
-    assert _health_findings_tables(evidence, {"reads": []}) == []
-    compact = _compact_provider_value(evidence, list_limit=1000)
-    assert "findingsRows" not in str(compact)
-    assert "web-46" not in str(compact)
-    assert "web-9" in str(compact)
-    evidence[0]["data"]["scanComplete"] = False
-    assert not _health_findings_tables(evidence, activity)[0]["complete"]
 
 
-def test_recent_chat_context_includes_full_displayed_health_tables(tmp_path):
-    from podpilot_api.main import _compact_adhoc_context
-    app, settings = make_app(tmp_path, assignments={"test": Role.INVESTIGATOR}, source=FakeAlertSource())
-    findings = [{"kind": "Deployment", "name": f"web-{i}", "namespace": "demo",
-                 "ready": 0, "desired": 1, "reasons": ["Unavailable"]} for i in range(47)]
-    evidence = [{"id": f"e-{i}", "tool": "workload_health_summary", "cluster_id": "lab",
-                 "data": {"findingsRows": findings, "scope": "demo", "kind": "Workload",
-                          "scanComplete": True, "findingsComplete": True}}
-                for i in range(2)]
-    with Session(build_engine(settings)) as db:
-        conversation = AdHocConversation(id="table-history", created_by="test", title="Health",
-                                          evidence_json=json.dumps(evidence))
-        db.add(conversation)
-        db.flush()
-        for i in range(11):
-            db.add(AdHocMessage(id=f"m-{i}", conversation_id=conversation.id,
-                               created_at=datetime(2026, 9, 26, tzinfo=timezone.utc) + timedelta(seconds=i),
-                               role="assistant" if i < 2 else "user", content=f"message-{i}",
-                               tool_activity_json=json.dumps({"reads": [{"status": "succeeded",
-                                                                         "evidence_ids": [f"e-{i}"]}]})))
-        db.flush()
-        history = _compact_adhoc_context(db, conversation=conversation, recent_limit=10, summary_char_limit=4000)
-        assert len(history) == 10
-        assert history[0]["content"].startswith("message-1")
-        tables = json.loads(history[0]["content"].split("coverage apply):\n", 1)[1])
-        assert len(tables[0]["rows"]) == 47
-        assert tables[0]["rows"][-1]["name"] == "web-46"
-        assert tables[0]["evidence_id"] == "e-1"
-        assert "e-0" not in str(history)
-        assert "web-46" not in conversation.context_summary
-        assert history[-1] == {"role": "user", "content": "message-10"}
 
 
-def test_repeated_health_inventories_use_complete_evidence_table_only():
-    from podpilot_api.main import _without_repeated_health_tables
-    from podpilot_api.markdown import split_markdown_tables
-    tables = [{"rows": [{"name": "web-a"}, {"name": "web-b"}]}]
-    blocks = split_markdown_tables("""Summary remains.
-
-| Namespace | Pod name | Phase | Reasons |
-|---|---|---|---|
-| test | `web-a` | Pending | Unschedulable |
-
-| Name | Recommended action |
-|---|---|
-| web-a | Inspect node labels |
-
-| Name | Status |
-|---|---|
-| unrelated | Ready |
-""")
-    filtered = _without_repeated_health_tables(blocks, tables)
-    assert len([b for b in filtered if b["type"] == "answer_table"]) == 2
-    assert filtered[0]["content"].startswith("Summary remains")
-    assert _without_repeated_health_tables(blocks, []) == blocks
 
 
-def test_pod_health_reply_keeps_only_model_table_and_matching_history(tmp_path):
+def test_pod_health_reply_displays_only_agent_table_and_preserves_evidence(tmp_path):
     app, settings = make_app(tmp_path, assignments={"ivy": Role.INVESTIGATOR}, source=FakeAlertSource())
     with Session(build_engine(settings)) as db:
         db.add(AdHocConversation(id="health-style", created_by="ivy", title="Pod health",
             evidence_json=json.dumps([{"id": "health-1", "tool": "pod_health_summary",
                 "collected_at": "2026-09-26T20:00:00+00:00", "data": {
                     "scope": "cluster", "kind": "Pod", "scanComplete": True, "findingsComplete": True,
-                    "anomalyCount": 1, "scannedCount": 10, "findingsRows": [{"kind": "Pod",
+                    "anomalyCount": 2, "scannedCount": 10, "findingsRows": [{"kind": "Pod",
                     "namespace": "demo", "name": "web-a", "state": "Pending", "reasons": ["Unschedulable"],
-                    "readyContainers": 0, "totalContainers": 1, "restartCount": 3}]}}])))
+                    "readyContainers": 0, "totalContainers": 1, "restartCount": 3},
+                    {"kind": "Pod", "namespace": "demo", "name": "web-d", "state": "Pending",
+                     "severity": "critical", "reasons": ["CreateContainerConfigError"],
+                     "issues": [{"container": "httpd", "containerType": "container",
+                                 "reason": "CreateContainerConfigError", "severity": "critical"}]}]}}])))
         db.flush()
         db.add(AdHocMessage(id="health-answer", conversation_id="health-style", role="assistant",
             content="Summary.\n\n| Pod | Phase |\n|---|---|\n| `web-a` | Pending |",
@@ -15688,19 +15590,10 @@ def test_pod_health_reply_keeps_only_model_table_and_matching_history(tmp_path):
         conversation = db.get(AdHocConversation, "health-style")
         history = _compact_adhoc_context(db, conversation=conversation, recent_limit=10, summary_char_limit=4000)
         assert history == [{"role": "assistant", "content": "Summary.\n\n| Pod | Phase |\n|---|---|\n| `web-a` | Pending |"}]
+        assert "web-d" in conversation.evidence_json
         assert "health-1" in conversation.evidence_json
 
 
-@pytest.mark.parametrize("dash", ["\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])
-def test_repeated_health_table_matches_typographic_hyphens(dash):
-    from podpilot_api.main import _without_repeated_health_tables
-    from podpilot_api.markdown import split_markdown_tables
-    name = "network-client-75dc497687-lhqdg"
-    tables = [{"rows": [{"name": name}]}]
-    blocks = split_markdown_tables("| Namespace | Pod name | Phase | Reason(s) (severity) |\n"
-        "|---|---|---|---|\n| test | " + name.replace("-", dash) + " | Running | CrashLoopBackOff |")
-    assert _without_repeated_health_tables(blocks, tables) == []
-    assert tables[0]["rows"][0]["name"] == name
 
 
 @pytest.mark.parametrize("tls_verify,custom_ca", [(False, None), (False, "saved-ca"), (True, None), (True, "saved-ca")])

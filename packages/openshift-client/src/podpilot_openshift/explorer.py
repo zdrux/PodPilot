@@ -539,73 +539,6 @@ def _machine_health_anomaly(
     })
 
 
-def _workload_health_anomaly(kind: str, raw: dict[str, Any], *, include_healthy: bool = False) -> dict[str, Any] | None:
-    metadata = raw.get("metadata") or {}
-    spec = raw.get("spec") or {}
-    status = raw.get("status") or {}
-    desired = _nonnegative_int(
-        status.get("desiredNumberScheduled")
-        if kind == "DaemonSet" else spec.get("replicas", 1)
-    )
-    ready = _nonnegative_int(
-        status.get("numberReady") if kind == "DaemonSet" else status.get("readyReplicas")
-    )
-    availability_value = (
-        status.get("numberAvailable")
-        if kind == "DaemonSet" else status.get("availableReplicas")
-    )
-    available = ready if availability_value is None else _nonnegative_int(availability_value)
-    updated = _nonnegative_int(
-        status.get("updatedNumberScheduled")
-        if kind == "DaemonSet" else status.get("updatedReplicas")
-    )
-    issues: list[dict[str, Any]] = []
-    if ready < desired:
-        issues.append(_condition_issue(
-            "ReadyReplicasBelowDesired",
-            severity="critical" if desired > 0 and ready == 0 else "warning",
-        ))
-    if available < desired:
-        issues.append(_condition_issue(
-            "AvailableReplicasBelowDesired",
-            severity="critical" if desired > 0 and available == 0 else "warning",
-        ))
-    if updated < desired:
-        issues.append(_condition_issue("RolloutIncomplete", severity="warning"))
-    generation = _nonnegative_int(metadata.get("generation"))
-    observed_generation = _nonnegative_int(
-        status.get("observedGeneration") or status.get("observed_generation")
-    )
-    if generation and observed_generation < generation:
-        issues.append(_condition_issue("StatusStale", severity="warning"))
-    if kind == "DaemonSet" and _nonnegative_int(status.get("numberMisscheduled")):
-        issues.append(_condition_issue("PodsMisscheduled", severity="warning"))
-    conditions = _status_conditions(raw)
-    for condition_type, bad_status in (
-        ("Available", "False"), ("Progressing", "False"), ("ReplicaFailure", "True"),
-    ):
-        condition = conditions.get(condition_type)
-        if condition and str(condition.get("status")) == bad_status:
-            issues.append(_condition_issue(
-                f"{condition_type}{bad_status}", severity="critical", condition=condition,
-            ))
-    if not issues and not include_healthy:
-        return None
-    return _sanitize({
-        "kind": kind,
-        "namespace": metadata.get("namespace") or metadata.get("namespace_"),
-        "name": metadata.get("name"),
-        "state": f"{ready}/{desired} Ready",
-        "desired": desired,
-        "ready": ready,
-        "available": available,
-        "updated": updated,
-        "severity": (
-            "critical" if any(item["severity"] == "critical" for item in issues)
-            else "warning" if issues else "healthy"
-        ),
-        "issues": issues[:12],
-    })
 
 
 def _pod_mount_projection(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1114,8 +1047,6 @@ class KubernetesReadOnlyExplorer:
                 return self._cluster_operator_health_summary(intent)
             if intent.tool == "machine_health_summary":
                 return self._machine_health_summary(intent)
-            if intent.tool == "workload_health_summary":
-                return self._workload_health_summary(intent)
             if intent.tool == "access_review_summary":
                 return self._access_review_summary()
             if intent.tool == "pod_logs":
@@ -2031,91 +1962,6 @@ class KubernetesReadOnlyExplorer:
             retained.append(safe)
         return retained, len(retained) == len(rows)
 
-    def _workload_health_summary(self, intent: ReadIntent) -> ReadResult:
-        namespace = _safe_identifier(intent.namespace, "namespace", required=False)
-        collected_at = datetime.now(timezone.utc)
-        kinds = [intent.kind] if intent.kind else [
-            "Deployment", "StatefulSet", "DaemonSet",
-        ]
-        scanned_total = 0
-        all_complete = True
-        detected: list[dict[str, Any]] = []
-        scanned_by_kind: dict[str, int] = {}
-        unavailable: list[str] = []
-        for kind in kinds:
-            assert kind is not None
-            try:
-                scanned, complete, kind_detected = self._collect_health_objects(
-                    api_version="apps/v1", kind=kind, namespace=namespace,
-                    evaluator=lambda raw, _now, selected_kind=kind: (
-                        _workload_health_anomaly(selected_kind, raw, include_healthy=True)
-                    ),
-                    collected_at=collected_at,
-                )
-            except ApiException as exc:
-                if exc.status not in {403, 404}:
-                    raise
-                scanned, complete, kind_detected = 0, False, []
-                unavailable.append(f"apps/v1 {kind}: HTTP {exc.status}")
-            except ResourceNotFoundError:
-                scanned, complete, kind_detected = 0, False, []
-                unavailable.append(f"apps/v1 {kind}")
-            scanned_by_kind[kind] = scanned
-            scanned_total += scanned
-            all_complete = all_complete and complete
-            detected.extend(kind_detected)
-        scope = namespace or "cluster"
-        summary_kind = intent.kind or "Workload"
-        unhealthy = [item for item in detected if item["issues"]]
-        selected = unhealthy if intent.unhealthy_only else detected
-        selected.sort(key=lambda item: (item["kind"], item["namespace"] or "", item["name"]))
-        full_rows = []
-        for item in selected:
-            row = {key: item[key] for key in ("kind", "namespace", "name", "desired", "ready", "available", "updated")}
-            row["reasons"] = list(dict.fromkeys(
-                issue.get("conditionReason") or issue["reason"] for issue in item["issues"]))[:8]
-            full_rows.append(row)
-        retained, findings_complete = self._retained_health_rows(full_rows)
-        rows = []
-        size = 0
-        for row in full_rows[intent.offset:]:
-            encoded = len(json.dumps(row).encode("utf-8"))
-            if len(rows) >= min(intent.limit, 20) or (rows and size + encoded > 6000):
-                break
-            rows.append(row)
-            size += encoded
-        next_offset = intent.offset + len(rows) if intent.offset + len(rows) < len(selected) else None
-        limitations = []
-        if unavailable:
-            limitations.append("Unavailable workload APIs: " + ", ".join(unavailable) + ".")
-        if not all_complete:
-            limitations.append("Partial scan; narrow namespace/kind. Unscanned resources are not known healthy.")
-        if next_offset is not None:
-            limitations.append("More matching rows exist; continue with nextOffset and the same scope. Pages rescan live state and are not a snapshot.")
-        if not findings_complete:
-            limitations.append("The retained findings reached the 2 MB storage ceiling; narrow the scope for omitted rows.")
-        reason_counts = {}
-        for row in full_rows:
-            for reason in row["reasons"]:
-                reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        data = {
-            "findingsRows": retained, "findingsComplete": findings_complete,
-            "findingsCount": len(retained), "byReason": dict(sorted(reason_counts.items())[:20]),
-            "tableDelivery": "All retained findings are displayed automatically; rows is only a model preview. Do not reproduce the inventory table.",
-            "kind": summary_kind, "scope": scope, "scannedCount": scanned_total,
-            "scannedByKind": scanned_by_kind, "scanComplete": all_complete and not unavailable,
-            "scanLimitPerKind": self._max_search_scan_objects, "unavailableKinds": unavailable,
-            "healthyCount": len(detected) - len(unhealthy), "anomalyCount": len(unhealthy),
-            "unhealthyOnly": intent.unhealthy_only, "matchedCount": len(selected),
-            "returnedCount": len(rows), "offset": intent.offset, "nextOffset": next_offset,
-            "rows": rows,
-        }
-        return ReadResult((AdHocObservation(
-            id=f"cluster-{uuid4()}", tool="workload_health_summary",
-            summary=f"Evaluated {scanned_total} workloads in {scope}; {len(unhealthy)} have health anomalies. "
-                    + ("Coverage is partial." if not data["scanComplete"] else "Coverage is complete."),
-            source=f"kubernetes:apps/v1:Workload/health:{scope}", collected_at=collected_at, data=data,
-        ),), tuple(limitations))
 
     def _pod_health_summary(self, intent: ReadIntent) -> ReadResult:
         """Scan bounded Pod pages and retain anomaly-first, compact evidence."""
@@ -2222,6 +2068,7 @@ class KubernetesReadOnlyExplorer:
              "state": item.get("phase"), "severity": item.get("severity"),
              "readyContainers": item.get("readyContainers"), "totalContainers": item.get("totalContainers"),
              "restartCount": item.get("restartCount"),
+             "issues": [dict(issue) for issue in item.get("issues", [])],
              "reasons": list(dict.fromkeys(str(issue.get("reason") or "Unknown") for issue in item.get("issues", [])))}
             for item in detected
         ])
@@ -2239,7 +2086,6 @@ class KubernetesReadOnlyExplorer:
                 "healthSummaryVersion": 2,
                 "findingsRows": full_rows, "findingsComplete": findings_complete,
                 "findingsCount": len(full_rows),
-                "tableDelivery": "All retained findings are displayed automatically; anomalies is only a model preview. Do not reproduce the inventory table.",
                 "scope": scope,
                 "labelSelector": intent.label_selector,
                 "scannedCount": scanned,

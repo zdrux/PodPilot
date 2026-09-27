@@ -421,9 +421,16 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call(inventor
     assert request["parallel_tool_calls"] is False
     assert request["tools"][0]["function"]["name"] == "execute_shell"
     assert [item["function"]["name"] for item in request["tools"]] == [
-        "execute_shell", "discover_resources", *(["discover_inventory"] if inventory_enabled else []), "pod_health_summary", "workload_health_summary", "http_probe",
+        "execute_shell", "discover_resources", *(["discover_inventory"] if inventory_enabled else []), "pod_health_summary", "http_probe",
         "query_audit_events", "pod_logs", "query_metrics", "finish_investigation",
     ]
+    assert "workload_health_summary" not in [t["function"]["name"] for t in request["tools"]]
+    descriptions = {t["function"]["name"]: t["function"]["description"] for t in request["tools"]}
+    assert "--tail=200 --timestamps" in descriptions["execute_shell"]
+    assert "PodPilot application Pod" in descriptions["http_probe"]
+    assert "do not assume an IngressController named default" in descriptions["http_probe"]
+    assert "Sampled peaks below limits do not disprove OOM" in descriptions["query_metrics"]
+    assert "24h" in descriptions["pod_logs"]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["command", "cluster_id"]
     assert "repeat_reason" not in parameters["properties"]
@@ -453,12 +460,6 @@ def test_chat_completions_delegated_agent_returns_structured_shell_call(inventor
     assert tools_by_name["finish_investigation"]["parameters"]["required"] == [
         "stop_reason", "answer", "unresolved_safe_reads",
     ]
-    workload = tools_by_name["workload_health_summary"]
-    assert workload["parameters"]["properties"]["limit"]["default"] == 10
-    assert workload["parameters"]["properties"]["limit"]["maximum"] == 20
-    assert workload["parameters"]["properties"]["unhealthy_only"]["default"] is True
-    from podpilot_api.model_provider import _estimated_serialized_tokens
-    assert _estimated_serialized_tokens(workload) < 650
     health_tool = tools_by_name["pod_health_summary"]
     assert health_tool["parameters"]["required"] == ["cluster_id"]
     assert "label_selector" in health_tool["parameters"]["properties"]

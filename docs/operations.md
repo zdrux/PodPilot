@@ -1601,8 +1601,7 @@ healthy inventories. The Kubernetes transport currently receives ordinary Pod AP
 compacts them immediately; the model receives only the bounded health summary.
 
 The same anomaly-first envelope is used by `node_health_summary`,
-`cluster_operator_health_summary`, `machine_health_summary`, and
-`workload_health_summary`, but each has its own evaluator:
+`cluster_operator_health_summary`, and `machine_health_summary`, but each has its own evaluator:
 
 - Nodes are cluster-scoped and use `Ready`, pressure, network-unavailable, and schedulability
   conditions.
@@ -1610,12 +1609,8 @@ The same anomaly-first envelope is used by `node_health_summary`,
 - Machines use `machine.openshift.io/v1beta1`, can be limited to a namespace, and evaluate phase,
   age of transitional phases, error conditions, and Node linkage. A missing Machine API is
   unavailable coverage rather than a healthy empty result.
-- Deployments, StatefulSets, and DaemonSets can be scanned together or by kind, cluster-wide or in
-  one namespace. Their evaluator compares desired, ready, available, and updated replicas,
-  observed generation, controller conditions, and DaemonSet misscheduling.
 
-All summaries use `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS`; a combined workload summary applies the
-ceiling independently to each controller kind. Healthy objects contribute only aggregate coverage
+All summaries use `PODPILOT_ADHOC_SEARCH_MAX_SCAN_OBJECTS`. Healthy objects contribute aggregate coverage
 counts. The model receives bounded anomaly records, not the full YAML collection.
 
 OpenShift ingress and browser Route lookups are qualified as
@@ -2048,18 +2043,17 @@ rewritten. Arbitrary transformed/unlabelled values are not guaranteed to be
 recognized by output redaction; see `docs/security.md` for the exposure boundary.
 
 
-### Ask health collection and table limits
+### Ask health collection and presentation
 
-Pod and controller health helpers follow API continuation tokens automatically
-up to their configured object scan limit. Every finding within that scan is
-retained for the operator table, subject to an explicit 2 MB per-observation
-storage ceiling. These normalized `findingsRows` remain in conversation evidence;
-initial collector payloads omit them and retain bounded previews plus counts and
-reason summaries. On ordinary chat follow-ups, the full displayed health tables
-are appended to their assistant messages within the latest configured history
-window (10 messages by default), using the same evidence projection as the UI.
-Tables age out with their parent message. Existing redaction and overall provider
-input-budget handling still apply. The controller tool defaults to 10 preview rows (maximum 20); this is
-not a UI result limit. Partial scan/access/storage coverage is displayed in the
-table. Tables use a 20-row scrolling viewport and export all retained rows.
-Older conversations without these fields keep their original answer tables.
+The Pod health tool remains available and applies the same deterministic classifications.
+It follows API continuation tokens within its scan limit and retains normalized findings
+with structured container issues under the existing 2 MB observation storage ceiling.
+Model calls receive bounded anomaly details, counts and coverage limitations. Saved evidence
+remains intact, but the UI displays the agent answer instead of an automatic Pod findings
+table. Follow-up transcript history contains the displayed answer without hidden table rows.
+
+The dedicated controller-health tool and automatic controller table are removed.
+Deployment, StatefulSet and DaemonSet questions use ordinary resource reads and agent analysis.
+Model-generated tables are allowed without health-inventory suppression.
+The compact shared prompt, tool-specific guidance and Action-only write procedures remain.
+Tool limits, evidence redaction and broker authorization are unchanged.

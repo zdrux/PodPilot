@@ -171,34 +171,6 @@
           <small>Rows are rendered from cited, normalized cluster evidence—not parsed from the model response.</small>
         </section>
         {% endif %}
-        {% for table in message.health_tables %}
-        <section class="resource-result-group health-findings answer-table-group" aria-label="{{ table.title }}">
-          <div class="resource-result-toolbar">
-            <div><strong>{{ table.title }} — {{ table.cluster }}</strong>
-              <p>{{ table.count }} of {{ table.matched }} matching findings · {{ table.scanned }} resources scanned · {{ table.scope }}</p>
-              <small>{% if table.complete %}Complete coverage of this scan.{% else %}Partial coverage: scan, access or storage limits prevented a complete result. Narrow the scope to investigate further.{% endif %}
-                {% if table.unavailable %}Unavailable: {{ table.unavailable | join(', ') }}.{% endif %}
-                Observed {{ table.collected_at | est_time }} · Evidence {{ table.evidence_id }}</small></div>
-            <span class="table-export-actions">
-              <button class="button secondary compact-button" type="button" data-copy-table="health-table-{{ message.id }}-{{ loop.index }}">Copy for email</button>
-              <button class="button secondary compact-button" type="button" data-csv-table="health-table-{{ message.id }}-{{ loop.index }}" data-csv-filename="podpilot-health-findings.csv">Download CSV</button>
-            </span>
-          </div>
-          {% if table.rows %}
-          <div class="resource-table-wrap" tabindex="0" role="region" aria-label="{{ table.title }}: {{ table.count }} rows">
-            <table id="health-table-{{ message.id }}-{{ loop.index }}" class="resource-result-table">
-              <thead><tr><th>Kind</th><th>Namespace</th><th>Name</th><th>Status / Ready</th><th>Reasons</th>{% if table.title == "Pod health findings" %}<th>Ready / Total containers</th><th>Restarts</th>{% endif %}</tr></thead>
-              <tbody>{% for finding in table.rows %}
-                <tr><td>{{ finding.kind }}</td><td><strong>{{ finding.namespace }}</strong></td><td class="answer-table-markdown"><code>{{ finding.name }}</code></td>
-                  <td>{% if finding.kind == 'Pod' %}{{ finding.state }}{% else %}{{ finding.ready }}/{{ finding.desired }} Ready{% endif %}</td>
-                  <td class="answer-table-markdown">{% for reason in finding.reasons %}<code>{{ reason }}</code>{% if not loop.last %} {% endif %}{% endfor %}</td>
-                  {% if finding.kind == 'Pod' %}<td>{{ finding.readyContainers | default('—') }} / {{ finding.totalContainers | default('—') }}</td><td>{{ finding.restartCount | default('—') }}</td>{% endif %}</tr>
-              {% endfor %}</tbody>
-            </table>
-          </div>
-          {% else %}<p class="resource-result-note">No matching findings in the evaluated resources.</p>{% endif %}
-        </section>
-        {% endfor %}
         {% if message.answer_blocks is not none %}
           {% for block in message.answer_blocks %}
             {% if block.type == 'markdown' %}

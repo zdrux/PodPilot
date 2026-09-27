@@ -155,7 +155,7 @@ class ReadIntent(BaseModel):
         "watch_resources", "pod_logs", "http_probe", "query_metrics",
         "query_audit_events", "pod_health_summary", "node_health_summary",
         "cluster_operator_health_summary", "machine_health_summary",
-        "workload_health_summary", "access_review_summary",
+        "access_review_summary",
     ]
     discovery_query: str | None = Field(default=None, max_length=253)
     resource: str | None = Field(default=None, max_length=253)
@@ -230,8 +230,6 @@ class ReadIntent(BaseModel):
     since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
-    unhealthy_only: bool = True
-    offset: int = Field(default=0, ge=0, le=100000)
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
@@ -476,12 +474,9 @@ class ReadIntent(BaseModel):
                 raise ValueError("discover_inventory does not accept selectors or field filters")
         elif self.discovery_query:
             raise ValueError("discovery_query is valid only for discover_resources or discover_inventory")
-        if self.tool != "workload_health_summary" and (not self.unhealthy_only or self.offset):
-            raise ValueError("unhealthy_only and offset apply only to workload_health_summary")
         health_summary_tools = {
             "pod_health_summary", "node_health_summary",
             "cluster_operator_health_summary", "machine_health_summary",
-            "workload_health_summary",
         }
         unsupported_health_selector = (
             self.label_selector if self.tool != "pod_health_summary" else None
@@ -494,14 +489,8 @@ class ReadIntent(BaseModel):
                 "health summary reads accept only their typed scope, optional Pod label selector, "
                 "and result limit"
             )
-        if self.tool != "workload_health_summary" and self.tool in health_summary_tools and self.kind:
-            raise ValueError("kind is valid only for workload_health_summary")
-        if self.tool == "workload_health_summary" and self.kind not in {
-            None, "Deployment", "StatefulSet", "DaemonSet",
-        }:
-            raise ValueError(
-                "workload_health_summary kind must be Deployment, StatefulSet, or DaemonSet"
-            )
+        if self.tool in health_summary_tools and self.kind:
+            raise ValueError("health summary reads do not accept kind")
         if self.tool in {"node_health_summary", "cluster_operator_health_summary"} and self.namespace:
             raise ValueError(f"{self.tool} is cluster-scoped and does not accept a namespace")
         if self.tool != "watch_resources" and self.watch_seconds != 10:
@@ -1526,13 +1515,6 @@ _MACHINE_HEALTH_QUERY = re.compile(
     r"ready|failed|failing|provisioning|deleting|stuck|problems?|issues?)\b)",
     re.IGNORECASE,
 )
-_WORKLOAD_HEALTH_QUERY = re.compile(
-    r"(?=.*\b(?:deployments?|statefulsets?|stateful\s+sets?|daemonsets?|"
-    r"daemon\s+sets?|workloads)\b)"
-    r"(?=.*\b(?:health|healthy|unhealthy|status|states?|ready|available|"
-    r"unavailable|degraded|failing|failed|rollout|stuck|problems?|issues?)\b)",
-    re.IGNORECASE,
-)
 _HEALTH_NAMESPACE_QUERY = re.compile(
     rf"\b(?:pods|machines|deployments|statefulsets|stateful\s+sets|"
     rf"daemonsets|daemon\s+sets?|workloads)\b"
@@ -1887,29 +1869,6 @@ def plan_known_read(
                 ),
                 intents=[ReadIntent(
                     tool="machine_health_summary", namespace=namespace,
-                    limit=min(200, inventory_limit),
-                )],
-            ),
-            True,
-        )
-    if _WORKLOAD_HEALTH_QUERY.search(question):
-        namespace = _health_namespace_from_question(question)
-        normalized = re.sub(r"[^a-z]", "", question.lower())
-        kind = (
-            "StatefulSet" if "statefulset" in normalized else
-            "DaemonSet" if "daemonset" in normalized else
-            "Deployment" if "deployment" in normalized else None
-        )
-        target = f"{kind} health" if kind else "controller workload health"
-        return (
-            ReadPlan(
-                goal_type="health",
-                scope_summary=(
-                    f"Summarize current {target} in namespace {namespace}."
-                    if namespace else f"Summarize current {target} across the cluster."
-                ),
-                intents=[ReadIntent(
-                    tool="workload_health_summary", namespace=namespace, kind=kind,
                     limit=min(200, inventory_limit),
                 )],
             ),

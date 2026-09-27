@@ -492,14 +492,9 @@ visibility checks and active-link highlighting in every theme.
 
 ### Complete health tables
 
-Controller health findings render from current-turn normalized evidence, with
-cluster, scope, timestamp, total count and explicit partial-coverage status. Keep
-all retained rows in the DOM for copy/CSV. Tables are open by default and scroll
-internally above 20 rows with sticky headers and a keyboard-focusable region;
-ResizeObserver recalculates the first-20-row height across widths and themes.
-Initial tool calls send summaries/previews. Follow-up history includes the full
-displayed tables while their parent assistant message remains in the recent
-context window (default 10 messages), subject to the overall provider budget.
+Pod health results are presented through the model-authored answer and evidence timeline.
+Do not inject an additional automatic health findings table or append hidden table rows
+to conversation history. The collector and saved evidence remain independent of presentation.
 
 ### Sidebar session scope and resizing
 
@@ -514,11 +509,7 @@ mobile uses the existing stacked layout with no resize handle.
 The desktop resize edge has a persistent 6×48px rounded grip centered vertically,
 with a 12px drag target and accent hover/focus feedback.
 
-Health findings reuse answer-table code chips for resource names/reasons, bold
-namespace labels, and Pod readiness/restart columns. Recognizable duplicate model
-health inventories are replaced by the complete evidence table; narrative and
-unrelated or recommendation tables remain. Initial model prose is retained in
-storage; displayed history follows the same suppression rule as the UI.
+
 
 Session cluster chips share title font sizing and fit their text; extra sidebar
 width does not stretch chip borders. Typographic hyphens are normalized only
@@ -552,10 +543,7 @@ literal text, including HTML and pipe characters, so later prose and tables are
 not swallowed by an accidental code block.
 
 
-Pod health retains its model-authored answer and evidence timeline without an
-additional automatic findings table. Follow-up history uses that same answer;
-it does not append a hidden Pod table. Controller findings keep the complete
-scrolling evidence table and matching history projection.
+
 
 Theme geometry regression coverage compares all seven palettes in Chrome at
 1200px, 800px and 600px, including navigation descendants, headings and controls.
