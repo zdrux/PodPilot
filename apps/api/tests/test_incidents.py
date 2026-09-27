@@ -570,7 +570,7 @@ def test_connector_directory_groups_independent_types_and_uses_row_add_actions(c
 def test_shell_assets_use_current_content_fingerprint(client):
     import hashlib
     static = Path(__file__).resolve().parents[2] / 'web' / 'static'
-    names = ('theme.js', 'styles.css', 'orange.css', 'navigation.js', 'app.js', 'incidents.js')
+    names = ('theme.js', 'styles.css', 'orange.css', 'compact.css', 'navigation.js', 'app.js', 'incidents.js')
     digest = hashlib.sha256()
     for name in names:
         digest.update(name.encode())

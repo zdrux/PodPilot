@@ -1,5 +1,25 @@
 # PodPilot Project Status
 
+## Main deployment and LOW model comparison (SNO build 192)
+
+Main commit `462f10b` is deployed as build 192. API and migrate share digest
+`sha256:7d687afa45d8021d47bf750e43dcbbee16e87a9df27cec8057a702ab05032738`;
+rollout, migration head 0030, health and authorized model settings were verified.
+The oc-tool experiment's uncommitted work is preserved in a named Git stash.
+
+The same nine live scenario objectives were rerun at LOW on main with tool-name
+references translated to equivalent CLI commands. OSS 120B scored 3 pass / 2
+partial / 4 fail; GPT-5.6 Sol scored 8 pass / 1 partial / 0 fail. The prior feature
+branch scores were respectively 2/2/5 and 6/1/2. These are manual answer-quality
+scores from one sample per case, not completion-rate or production guarantees.
+Main includes other orchestration differences, so this does not isolate tool
+design alone. See `evals/results/main-model-comparison/review.md`.
+
+GPT-5.6 Sol remains active at LOW; all 18 new runs confirmed LOW and none remain
+active. No cluster writes occurred. After the comparison, the asset-fingerprint
+test on main was corrected to include compact.css. Application runtime code was
+unchanged. Synthetic fixture failures remain in place.
+
 ## Multiline table-cell code repair (implemented, not deployed)
 
 A saved troubleshooting response contained triple-backtick JSON inside table cells,

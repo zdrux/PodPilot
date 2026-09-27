@@ -1,0 +1,115 @@
+{
+  "active_model": "openai/gpt-5.6-sol",
+  "default_reasoning": "low",
+  "profile_status": "ready",
+  "unfinished_runs": 0,
+  "runs": [
+    {
+      "conversation_id": "22009325-afbd-4d55-9acf-28f43e49e6d1",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "258dfcdf-d812-4084-8cfb-b683120bdeba",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "3317c71d-6452-4c96-b05d-f98998200d4a",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "33d2874e-f492-4b0e-a0aa-0edbaf71d309",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "38936814-7a57-462c-9669-797506407666",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "81306a78-8807-4ebc-afe9-1c1993654427",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "96a144d0-7146-48ea-8d0a-8800439db9b7",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "9785ccbe-9006-4bab-bd87-2620b81e0f5d",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "a689dc69-e430-4ddd-9684-b448adaba415",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "abe8bd3b-a0ff-4ae9-9d06-584e3d38dc62",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "b9515e95-d925-402d-9cda-0c37c6d03da2",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "c09f89c0-6202-45f1-a640-0b9d4023512e",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "c4935a1c-4de2-4451-95e1-bddb9dee43a3",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "c5d23e6a-cf79-408a-bb87-6fd7473dc9a2",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "c7748bef-f987-49fc-ad4c-d18043d79607",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "d68f1a7e-db6a-4f40-a01c-04da1f8d2a8b",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "e9c49837-3401-460f-9a8d-2750461f783d",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    },
+    {
+      "conversation_id": "f1320c79-f7a8-49f4-974e-5c7445b4111c",
+      "reasoning_effort": "low",
+      "status": "succeeded"
+    }
+  ],
+  "deployment": {
+    "ready": 1,
+    "available": 1,
+    "images": {
+      "api": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:7d687afa45d8021d47bf750e43dcbbee16e87a9df27cec8057a702ab05032738",
+      "oauth-proxy": "quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:22fe71990d4e40d2a353116767ce543d0a2e40acd4f068043ae83bc1c2e04f0d",
+      "oc-runner": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot-oc-runner@sha256:3e6c83931f9f2a61643b7f6e9f7a13655d34e4c9255c853d10b59d3a0a6f0e63",
+      "migrate": "image-registry.openshift-image-registry.svc:5000/ai-ops/podpilot@sha256:7d687afa45d8021d47bf750e43dcbbee16e87a9df27cec8057a702ab05032738"
+    }
+  },
+  "fixture_generations": "NAME             GENERATION\nnetwork-client   1\nweb-a            1\nweb-b            1\nweb-c            1\nweb-d            1\n",
+  "verified_at": "2026-09-27T18:07:05.494221+00:00",
+  "health": {
+    "/health/live": 200,
+    "/health/ready": 200,
+    "/settings/model": 200
+  }
+}

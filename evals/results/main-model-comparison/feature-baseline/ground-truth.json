@@ -1,0 +1,138 @@
+{
+  "observed_at": "2026-09-27T17:07:45.709898+00:00",
+  "results": {
+    "fixture-deployments": {
+      "exit_code": 0,
+      "data": "NAME             DESIRED   READY    AVAILABLE   NODESELECTOR                                            CPU   CLAIM                           CONFIGMAP\nnetwork-client   1         <none>   <none>      <none>                                                  5m    <none>                          <none>\nweb-a            1         <none>   <none>      map[agentic-challenges.invalid/node-pool:nonexistent]   10m   <none>                          <none>\nweb-b            1         <none>   <none>      <none>                                                  10m   oc-tools-eval-missing-content   <none>\nweb-c            1         <none>   <none>      <none>                                                  100   <none>                          <none>\nweb-d            1         <none>   <none>      <none>                                                  10m   <none>                          httpd-configuraton\n"
+    },
+    "fixture-pods": {
+      "exit_code": 0,
+      "data": "NAME                              PHASE     READY    WAITING                      RESTARTS\nnetwork-client-75dc497687-w66w5   Running   false    CrashLoopBackOff             6\nweb-a-6ddbcd57df-kmvts            Pending   <none>   <none>                       <none>\nweb-b-5d7745bbf8-tttf7            Pending   <none>   <none>                       <none>\nweb-c-75f9f6f5d6-vjtl5            Pending   <none>   <none>                       <none>\nweb-d-6c7b7d7c66-4qhn4            Pending   false    CreateContainerConfigError   0\n"
+    },
+    "kafka": {
+      "exit_code": 0,
+      "data": [
+        {
+          "name": "kafka-observability-cluster",
+          "namespace": "kafka-observability",
+          "conditions": [
+            {
+              "lastTransitionTime": "2026-09-02T01:44:10.952768715Z",
+              "status": "True",
+              "type": "Ready"
+            }
+          ],
+          "kafkaVersion": "4.2.0",
+          "kafkaNodePools": [
+            {
+              "name": "sno"
+            }
+          ]
+        }
+      ]
+    },
+    "nodepools": {
+      "exit_code": 0,
+      "data": "NAMESPACE             NAME   REPLICAS   ROLES\nkafka-observability   sno    1          [controller broker]\n"
+    },
+    "kafka-pods": {
+      "exit_code": 0,
+      "data": "NAME                                                           READY   STATUS    RESTARTS         AGE   IP             NODE   NOMINATED NODE   READINESS GATES\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   2/2     Running   45 (4h33m ago)   25d   10.128.0.113   sno1   <none>           <none>\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    1/1     Running   45 (4h33m ago)   25d   10.128.0.114   sno1   <none>           <none>\nkafka-observability-cluster-sno-0                              1/1     Running   11               25d   10.128.0.112   sno1   <none>           <none>\n"
+    },
+    "network-policy": {
+      "exit_code": 0,
+      "data": {
+        "podSelector": {
+          "matchLabels": {
+            "app": "network-target"
+          }
+        },
+        "policyTypes": [
+          "Ingress"
+        ]
+      }
+    },
+    "kafka-observability/services": {
+      "exit_code": 0,
+      "objects": [
+        "service/kafka-observability-cluster-kafka-bootstrap",
+        "service/kafka-observability-cluster-kafka-brokers"
+      ]
+    },
+    "kafka-observability/endpointslices.discovery.k8s.io": {
+      "exit_code": 0,
+      "objects": [
+        "endpointslice.discovery.k8s.io/kafka-observability-cluster-kafka-bootstrap-6tvmj",
+        "endpointslice.discovery.k8s.io/kafka-observability-cluster-kafka-brokers-hsl5q"
+      ]
+    },
+    "kafka-observability/networkpolicies": {
+      "exit_code": 0,
+      "objects": [
+        "networkpolicy.networking.k8s.io/kafka-observability-cluster-entity-operator",
+        "networkpolicy.networking.k8s.io/kafka-observability-cluster-kafka-exporter",
+        "networkpolicy.networking.k8s.io/kafka-observability-cluster-network-policy-kafka"
+      ]
+    },
+    "kafka-observability/statefulsets": {
+      "exit_code": 0,
+      "objects": []
+    },
+    "kafka-observability/daemonsets": {
+      "exit_code": 0,
+      "objects": []
+    },
+    "kafka-observability/kafkatopics.kafka.strimzi.io": {
+      "exit_code": 0,
+      "objects": [
+        "kafkatopic.kafka.strimzi.io/podpilot-audit-large",
+        "kafkatopic.kafka.strimzi.io/podpilot-metrics-test",
+        "kafkatopic.kafka.strimzi.io/podpilot-orders-small",
+        "kafkatopic.kafka.strimzi.io/podpilot-payments-medium"
+      ]
+    },
+    "podpilot-test2/services": {
+      "exit_code": 0,
+      "objects": [
+        "service/network-target"
+      ]
+    },
+    "podpilot-test2/endpointslices.discovery.k8s.io": {
+      "exit_code": 0,
+      "objects": [
+        "endpointslice.discovery.k8s.io/network-target-l55dc"
+      ]
+    },
+    "podpilot-test2/networkpolicies": {
+      "exit_code": 0,
+      "objects": [
+        "networkpolicy.networking.k8s.io/network-target-ingress"
+      ]
+    },
+    "podpilot-test2/statefulsets": {
+      "exit_code": 0,
+      "objects": []
+    },
+    "podpilot-test2/daemonsets": {
+      "exit_code": 0,
+      "objects": []
+    },
+    "podpilot-test2/kafkatopics.kafka.strimzi.io": {
+      "exit_code": 0,
+      "objects": []
+    },
+    "api-group/networking.istio.io": {
+      "exit_code": 0,
+      "data": "NAME               SHORTNAMES   APIVERSION                     NAMESPACED   KIND              VERBS                                                        CATEGORIES\ndestinationrules   dr           networking.istio.io/v1         true         DestinationRule   delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nenvoyfilters                    networking.istio.io/v1alpha3   true         EnvoyFilter       delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\ngateways           gw           networking.istio.io/v1         true         Gateway           delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nproxyconfigs                    networking.istio.io/v1beta1    true         ProxyConfig       delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nserviceentries     se           networking.istio.io/v1         true         ServiceEntry      delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nsidecars                        networking.istio.io/v1         true         Sidecar           delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nvirtualservices    vs           networking.istio.io/v1         true         VirtualService    delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nworkloadentries    we           networking.istio.io/v1         true         WorkloadEntry     delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nworkloadgroups     wg           networking.istio.io/v1         true         WorkloadGroup     delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\n"
+    },
+    "api-group/security.istio.io": {
+      "exit_code": 0,
+      "data": "NAME                     SHORTNAMES   APIVERSION             NAMESPACED   KIND                    VERBS                                                        CATEGORIES\nauthorizationpolicies    ap           security.istio.io/v1   true         AuthorizationPolicy     delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io\npeerauthentications      pa           security.istio.io/v1   true         PeerAuthentication      delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io\nrequestauthentications   ra           security.istio.io/v1   true         RequestAuthentication   delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io\n"
+    },
+    "api-group/argoproj.io": {
+      "exit_code": 0,
+      "data": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappprojects                   appproj,appprojs   argoproj.io/v1alpha1   true         AppProject                   delete,deletecollection,get,list,patch,create,update,watch   \nargocds                                          argoproj.io/v1beta1    true         ArgoCD                       delete,deletecollection,get,list,patch,create,update,watch   \nclusteranalysistemplates      cat                argoproj.io/v1alpha1   false        ClusterAnalysisTemplate      delete,deletecollection,get,list,patch,create,update,watch   \nexperiments                   exp                argoproj.io/v1alpha1   true         Experiment                   delete,deletecollection,get,list,patch,create,update,watch   \nnamespacemanagements                             argoproj.io/v1beta1    true         NamespaceManagement          delete,deletecollection,get,list,patch,create,update,watch   \nnotificationsconfigurations                      argoproj.io/v1alpha1   true         NotificationsConfiguration   delete,deletecollection,get,list,patch,create,update,watch   \nrolloutmanagers                                  argoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch   \n"
+    }
+  },
+  "post_evaluation_deployment_generations": "NAME             GENERATION\nnetwork-client   1\nweb-a            1\nweb-b            1\nweb-c            1\nweb-d            1\n"
+}

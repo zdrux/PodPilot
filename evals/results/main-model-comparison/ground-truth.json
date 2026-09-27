@@ -1,0 +1,106 @@
+{
+  "observed_at": "2026-09-27T17:57:57.103218+00:00",
+  "checks": {
+    "fixture-specs": {
+      "command": [
+        "oc",
+        "get",
+        "deployments",
+        "-n",
+        "podpilot-test",
+        "-o",
+        "custom-columns=NAME:.metadata.name,GENERATION:.metadata.generation,CPU_REQUEST:.spec.template.spec.containers[*].resources.requests.cpu,CPU_LIMIT:.spec.template.spec.containers[*].resources.limits.cpu,NODESELECTOR:.spec.template.spec.nodeSelector,CLAIM:.spec.template.spec.volumes[*].persistentVolumeClaim.claimName,CONFIGMAP:.spec.template.spec.containers[*].envFrom[*].configMapRef.name"
+      ],
+      "output": "NAME             GENERATION   CPU_REQUEST   CPU_LIMIT   NODESELECTOR                                            CLAIM                           CONFIGMAP\nnetwork-client   1            5m            50m         <none>                                                  <none>                          <none>\nweb-a            1            10m           100m        map[agentic-challenges.invalid/node-pool:nonexistent]   <none>                          <none>\nweb-b            1            10m           100m        <none>                                                  oc-tools-eval-missing-content   <none>\nweb-c            1            100           100         <none>                                                  <none>                          <none>\nweb-d            1            10m           100m        <none>                                                  <none>                          httpd-configuraton\n"
+    },
+    "fixture-pods": {
+      "command": [
+        "oc",
+        "get",
+        "pods",
+        "-n",
+        "podpilot-test",
+        "-o",
+        "custom-columns=NAME:.metadata.name,PHASE:.status.phase,WAITING:.status.containerStatuses[*].state.waiting.reason"
+      ],
+      "output": "NAME                              PHASE     WAITING\nnetwork-client-75dc497687-w66w5   Running   CrashLoopBackOff\nweb-a-6ddbcd57df-kmvts            Pending   <none>\nweb-b-5d7745bbf8-tttf7            Pending   <none>\nweb-c-75f9f6f5d6-vjtl5            Pending   <none>\nweb-d-6c7b7d7c66-4qhn4            Pending   CreateContainerConfigError\n"
+    },
+    "kafka-pods": {
+      "command": [
+        "oc",
+        "get",
+        "pods",
+        "-n",
+        "kafka-observability"
+      ],
+      "output": "NAME                                                           READY   STATUS    RESTARTS         AGE\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   2/2     Running   45 (5h23m ago)   25d\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    1/1     Running   45 (5h23m ago)   25d\nkafka-observability-cluster-sno-0                              1/1     Running   11               25d\n"
+    },
+    "kafka-topics": {
+      "command": [
+        "oc",
+        "get",
+        "kafkatopics",
+        "-n",
+        "kafka-observability"
+      ],
+      "output": "NAME                       CLUSTER                       PARTITIONS   REPLICATION FACTOR   READY\npodpilot-audit-large       kafka-observability-cluster   4            1                    True\npodpilot-metrics-test      kafka-observability-cluster   1            1                    True\npodpilot-orders-small      kafka-observability-cluster   2            1                    True\npodpilot-payments-medium   kafka-observability-cluster   3            1                    True\n"
+    },
+    "kafka-other": {
+      "command": [
+        "oc",
+        "get",
+        "services,endpointslices,networkpolicies,statefulsets,daemonsets",
+        "-n",
+        "kafka-observability"
+      ],
+      "output": "NAME                                                  TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)                               AGE\nservice/kafka-observability-cluster-kafka-bootstrap   ClusterIP   172.30.96.59   <none>        9091/TCP,9092/TCP                     25d\nservice/kafka-observability-cluster-kafka-brokers     ClusterIP   None           <none>        9090/TCP,9091/TCP,8443/TCP,9092/TCP   25d\n\nNAME                                                                               ADDRESSTYPE   PORTS                        ENDPOINTS      AGE\nendpointslice.discovery.k8s.io/kafka-observability-cluster-kafka-bootstrap-6tvmj   IPv4          9091,9092                    10.128.0.112   25d\nendpointslice.discovery.k8s.io/kafka-observability-cluster-kafka-brokers-hsl5q     IPv4          8443,9090,9091 + 1 more...   10.128.0.112   25d\n\nNAME                                                                               POD-SELECTOR                                                                                                                       AGE\nnetworkpolicy.networking.k8s.io/kafka-observability-cluster-entity-operator        strimzi.io/cluster=kafka-observability-cluster,strimzi.io/kind=Kafka,strimzi.io/name=kafka-observability-cluster-entity-operator   25d\nnetworkpolicy.networking.k8s.io/kafka-observability-cluster-kafka-exporter         strimzi.io/cluster=kafka-observability-cluster,strimzi.io/kind=Kafka,strimzi.io/name=kafka-observability-cluster-kafka-exporter    25d\nnetworkpolicy.networking.k8s.io/kafka-observability-cluster-network-policy-kafka   strimzi.io/cluster=kafka-observability-cluster,strimzi.io/kind=Kafka,strimzi.io/name=kafka-observability-cluster-kafka             25d\n"
+    },
+    "network-other": {
+      "command": [
+        "oc",
+        "get",
+        "services,endpointslices,networkpolicies,statefulsets,daemonsets",
+        "-n",
+        "podpilot-test2"
+      ],
+      "output": "NAME                     TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE\nservice/network-target   ClusterIP   172.30.192.147   <none>        8080/TCP   14d\n\nNAME                                                  ADDRESSTYPE   PORTS   ENDPOINTS      AGE\nendpointslice.discovery.k8s.io/network-target-l55dc   IPv4          8080    10.128.0.142   14d\n\nNAME                                                     POD-SELECTOR         AGE\nnetworkpolicy.networking.k8s.io/network-target-ingress   app=network-target   14d\n"
+    },
+    "network-policy": {
+      "command": [
+        "oc",
+        "get",
+        "networkpolicy",
+        "network-target-ingress",
+        "-n",
+        "podpilot-test2",
+        "-o",
+        "custom-columns=NAME:.metadata.name,SELECTOR:.spec.podSelector,POLICY_TYPES:.spec.policyTypes,INGRESS:.spec.ingress"
+      ],
+      "output": "NAME                     SELECTOR                                   POLICY_TYPES   INGRESS\nnetwork-target-ingress   map[matchLabels:map[app:network-target]]   [Ingress]      <none>\n"
+    },
+    "argo-apis": {
+      "command": [
+        "oc",
+        "api-resources",
+        "--api-group=argoproj.io"
+      ],
+      "output": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun\nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate\napplications                  app,apps           argoproj.io/v1alpha1   true         Application\napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet\nappprojects                   appproj,appprojs   argoproj.io/v1alpha1   true         AppProject\nargocds                                          argoproj.io/v1beta1    true         ArgoCD\nclusteranalysistemplates      cat                argoproj.io/v1alpha1   false        ClusterAnalysisTemplate\nexperiments                   exp                argoproj.io/v1alpha1   true         Experiment\nnamespacemanagements                             argoproj.io/v1beta1    true         NamespaceManagement\nnotificationsconfigurations                      argoproj.io/v1alpha1   true         NotificationsConfiguration\nrolloutmanagers                                  argoproj.io/v1alpha1   true         RolloutManager\nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout\n"
+    },
+    "istio-networking": {
+      "command": [
+        "oc",
+        "api-resources",
+        "--api-group=networking.istio.io"
+      ],
+      "output": "NAME               SHORTNAMES   APIVERSION                     NAMESPACED   KIND\ndestinationrules   dr           networking.istio.io/v1         true         DestinationRule\nenvoyfilters                    networking.istio.io/v1alpha3   true         EnvoyFilter\ngateways           gw           networking.istio.io/v1         true         Gateway\nproxyconfigs                    networking.istio.io/v1beta1    true         ProxyConfig\nserviceentries     se           networking.istio.io/v1         true         ServiceEntry\nsidecars                        networking.istio.io/v1         true         Sidecar\nvirtualservices    vs           networking.istio.io/v1         true         VirtualService\nworkloadentries    we           networking.istio.io/v1         true         WorkloadEntry\nworkloadgroups     wg           networking.istio.io/v1         true         WorkloadGroup\n"
+    },
+    "istio-security": {
+      "command": [
+        "oc",
+        "api-resources",
+        "--api-group=security.istio.io"
+      ],
+      "output": "NAME                     SHORTNAMES   APIVERSION             NAMESPACED   KIND\nauthorizationpolicies    ap           security.istio.io/v1   true         AuthorizationPolicy\npeerauthentications      pa           security.istio.io/v1   true         PeerAuthentication\nrequestauthentications   ra           security.istio.io/v1   true         RequestAuthentication\n"
+    }
+  }
+}

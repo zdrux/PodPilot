@@ -1,0 +1,1205 @@
+{
+  "scenario": "kafka",
+  "question": "Is Kafka installed in this cluster? Discover its APIs and inspect the actual Kafka clusters and supporting node pools, topics and Pods if available. Report namespaces, names, readiness, broker topology and any observed problems. Explain what you verified and any gaps. Do not change anything.",
+  "reasoning_effort": "low",
+  "started_at": "2026-09-27T17:42:27.748502+00:00",
+  "conversation_id": "996e7560-d95d-47a6-ad2b-6d5e88002ae0",
+  "run_status": "succeeded",
+  "result": {
+    "answer": "## Conclusion\n\n**Yes\u2014Kafka is installed and currently reports Ready.** The cluster uses the **Strimzi Kafka Operator APIs** (`kafka.strimzi.io/v1`) and has one Kafka cluster in namespace `kafka-observability`.\n\n## Discovered Kafka APIs\n\nAPI discovery found these namespaced Strimzi resource types:\n\n- `Kafka`\n- `KafkaNodePool`\n- `KafkaTopic`\n- `KafkaBridge`\n- `KafkaConnect`\n- `KafkaConnector`\n- `KafkaMirrorMaker2`\n- `KafkaRebalance`\n\nDiscovery confirms the APIs are served, while the subsequent object listings confirm actual Kafka resources exist.\n\n## Kafka cluster and broker topology\n\n| Namespace | Kafka resource | Kafka version | Readiness | Topology |\n|---|---|---:|---|---|\n| `kafka-observability` | `kafka-observability-cluster` | 4.2.0 | `Ready=True` | One combined controller/broker node |\n\nThe Kafka status has reconciled `observedGeneration: 1`, matching its resource generation. The reported Strimzi operator version associated with the cluster is `0.51.0`.\n\n### Node pool\n\n| Namespace | Node pool | Desired / status replicas | Roles | Node IDs | Storage |\n|---|---|---:|---|---|---|\n| `kafka-observability` | `sno` | 1 / 1 | `controller`, `broker` | `0` | 10 Gi persistent claim, storage class `kafka-observability-local`, `deleteClaim: false` |\n\nThe node pool has reconciled generation 1 and no reported adverse conditions. Broker Pod `kafka-observability-cluster-sno-0` runs on Kubernetes node `sno1`.\n\nThis is a **single-node KRaft-style topology** in which node ID 0 performs both controller and broker roles. Kafka internal replication settings observed on the Kafka resource are all 1, consistent with the one-broker deployment. It therefore has **no broker or controller redundancy**: loss of that Pod, node, or its storage can interrupt the cluster.\n\n## Topics\n\nFour `KafkaTopic` objects were found, all in `kafka-observability`, associated with `kafka-observability-cluster` in their object metadata and all reporting `Ready=True`:\n\n| Topic | Partitions | Replicas | Status |\n|---|---:|---:|---|\n| `podpilot-audit-large` | 4 | 1 | Ready |\n| `podpilot-metrics-test` | 1 | 1 | Ready |\n| `podpilot-orders-small` | 2 | 1 | Ready |\n| `podpilot-payments-medium` | 3 | 1 | Ready |\n\nEvery topic has replication factor 1, so none has broker-level replica resilience.\n\n## Supporting Pods\n\nAll three Pods in `kafka-observability` are currently `Running`, all containers are Ready, and a complete health scan over these three Pods found no current health anomalies:\n\n| Pod | Function | Current state | Restarts |\n|---|---|---|---:|\n| `kafka-observability-cluster-sno-0` | Kafka broker + controller | Running, Ready | 11 |\n| `kafka-observability-cluster-entity-operator-85c4c74445-v89f8` | Topic and user operators | Running, both containers Ready | 23 / 22 |\n| `kafka-observability-cluster-kafka-exporter-858785db56-bznkf` | Kafka metrics exporter | Running, Ready | 45 |\n\nAll are placed on the single node `sno1`.\n\n## Observed problems and risks\n\n- **Historical restart activity is significant.** The exporter has restarted 45 times; the topic and user operators 23 and 22 times; the broker 11 times.\n- The most recent recorded prior exporter termination ended with exit code 255. Its previous-container log showed it could not initialize a Kafka client because the configured broker endpoint refused the TCP connection. This appears to have occurred during a broker-unavailable/startup window; the exporter is currently Running and Ready.\n- The entity-operator containers' prior states ended with exit code 1. Previous topic-operator logs were collected, but automated analysis failed, so their precise cause remains undetermined.\n- No retained Pod Events were available in the namespace. Event retention is limited, so that does not prove the restarts had no associated warnings.\n- The broker's restart count is 11, but its current status did not retain a prior termination reason.\n- The topology is intentionally or operationally fragile: one OpenShift node, one Kafka broker/controller, replication factor 1, and all supporting Pods on the same node.\n\n## Verification scope and gaps\n\nVerified through read-only API discovery and cluster-wide listings of `Kafka`, `KafkaNodePool`, and `KafkaTopic` objects, followed by namespace Pod inventory, readiness/container-state inspection, a complete selector-scoped Pod health scan, retained Events, and bounded previous-container logs for the exporter and topic operator.\n\nCurrent CR and Pod status establishes that Strimzi Kafka is installed and reconciled, but it does **not** constitute an end-to-end produce/consume test. I did not mutate resources, exec into Pods, or test Kafka protocol connectivity. Historical log coverage was bounded, entity-operator log analysis was incomplete, and expired/missing Events may hide older causes. No changes were made.",
+    "activity": {
+      "conclusion_status": "agent_reported",
+      "diagnostics": [],
+      "evidence_ledger": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:42:29.849043+00:00",
+          "duration_ms": 735,
+          "evidence_ids": [
+            "cluster-discovery-6c469d26-f014-42dd-bbde-7fe12868ca85"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:42:29.848192+00:00",
+              "data": {
+                "absence_supported": false,
+                "count": 9,
+                "evidence_type": "api_resource_types_only",
+                "limitations": [
+                  "API discovery does not search namespaces or object instances and cannot establish software absence."
+                ],
+                "matched_count": 9,
+                "policy": "dynamic API discovery with sensitive resource types excluded; object authorization is not implied",
+                "query": "Kafka",
+                "resources": [
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaBridge",
+                    "namespaced": true,
+                    "resource": "kafkabridges",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaConnector",
+                    "namespaced": true,
+                    "resource": "kafkaconnectors",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaConnect",
+                    "namespaced": true,
+                    "resource": "kafkaconnects",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaMirrorMaker2",
+                    "namespaced": true,
+                    "resource": "kafkamirrormaker2s",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaNodePool",
+                    "namespaced": true,
+                    "resource": "kafkanodepools",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaRebalance",
+                    "namespaced": true,
+                    "resource": "kafkarebalances",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "Kafka",
+                    "namespaced": true,
+                    "resource": "kafkas",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaTopic",
+                    "namespaced": true,
+                    "resource": "kafkatopics",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  }
+                ],
+                "truncated": false
+              },
+              "id": "cluster-discovery-6c469d26-f014-42dd-bbde-7fe12868ca85",
+              "source": "kubernetes:api-discovery",
+              "summary": "Discovered 9 policy-filtered API resource types relevant to Kafka.",
+              "tool": "discover_resources"
+            }
+          ],
+          "request": {
+            "discovery_query": "Kafka",
+            "limit": 100
+          },
+          "sequence": 1,
+          "started_at": "2026-09-27T17:42:29.113856+00:00",
+          "status": "succeeded",
+          "title": "Discover resources",
+          "tool": "discover_resources",
+          "tool_call_id": "call_QPbazdzQkG9EIW80bMkJhgJ0"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkas.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "completed_at": "2026-09-27T17:42:33.634364+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Sensitive values were redacted.",
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [
+            "stdout"
+          ],
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": null,
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "json",
+            "resource": "kafkas.kafka.strimzi.io"
+          },
+          "sequence": 2,
+          "started_at": "2026-09-27T17:42:33.461383+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "{\"apiVersion\": \"v1\", \"items\": [{\"apiVersion\": \"kafka.strimzi.io/v1\", \"kind\": \"Kafka\", \"metadata\": {\"annotations\": {\"kubectl.kubernetes.io/last-applied-configuration\": \"[REDACTED]\"}, \"creationTimestamp\": \"2026-09-02T01:42:50Z\", \"generation\": 1, \"name\": \"kafka-observability-cluster\", \"namespace\": \"kafka-observability\", \"resourceVersion\": \"504483\", \"uid\": \"be96a98c-9863-4b29-8668-276511395ef2\"}, \"spec\": {\"entityOperator\": {\"topicOperator\": {\"resources\": {\"limits\": {\"cpu\": \"500m\", \"memory\": \"512Mi\"}, \"requests\": {\"cpu\": \"50m\", \"memory\": \"128Mi\"}}}, \"userOperator\": {\"resources\": {\"limits\": {\"cpu\": \"500m\", \"memory\": \"512Mi\"}, \"requests\": {\"cpu\": \"50m\", \"memory\": \"128Mi\"}}}}, \"kafka\": {\"config\": {\"default.replication.factor\": 1, \"min.insync.replicas\": 1, \"offsets.topic.replication.factor\": 1, \"transaction.state.log.min.isr\": 1, \"transaction.state.log.replication.factor\": 1}, \"listeners\": [{\"nam\n...[compacted]...\nter-kafka-bootstrap.kafka-observability.svc\", \"port\": 9092}], \"bootstrapServers\": \"kafka-observability-cluster-kafka-bootstrap.kafka-observability.svc:9092\", \"name\": \"plain\"}], \"observedGeneration\": 1, \"operatorLastSuccessfulVersion\": \"0.51.0\"}}], \"kind\": \"List\", \"metadata\": {\"resourceVersion\": \"\"}}",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_zKkPz3NWRui5Hb9IhrvSFPUT"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkanodepools.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "completed_at": "2026-09-27T17:42:36.087719+00:00",
+          "content_filtered": true,
+          "duration_ms": 227,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Sensitive values were redacted.",
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [
+            "stdout"
+          ],
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": null,
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "json",
+            "resource": "kafkanodepools.kafka.strimzi.io"
+          },
+          "sequence": 3,
+          "started_at": "2026-09-27T17:42:35.860840+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "{\"apiVersion\": \"v1\", \"items\": [{\"apiVersion\": \"kafka.strimzi.io/v1\", \"kind\": \"KafkaNodePool\", \"metadata\": {\"annotations\": {\"kubectl.kubernetes.io/last-applied-configuration\": \"[REDACTED]\"}, \"creationTimestamp\": \"2026-09-02T01:42:50Z\", \"generation\": 1, \"labels\": {\"strimzi.io/cluster\": \"kafka-observability-cluster\"}, \"name\": \"sno\", \"namespace\": \"kafka-observability\", \"resourceVersion\": \"504134\", \"uid\": \"a6c505bb-634c-4076-ade3-da67cfc8964a\"}, \"spec\": {\"replicas\": 1, \"resources\": {\"limits\": {\"cpu\": \"2\", \"memory\": \"3Gi\"}, \"requests\": {\"cpu\": \"500m\", \"memory\": \"1Gi\"}}, \"roles\": [\"controller\", \"broker\"], \"storage\": {\"class\": \"kafka-observability-local\", \"deleteClaim\": false, \"size\": \"10Gi\", \"type\": \"persistent-claim\"}}, \"status\": {\"clusterId\": \"PazOEHQ9T_-uVk6wsLVagg\", \"conditions\": [], \"labelSelector\": \"strimzi.io/cluster=kafka-observability-cluster,strimzi.io/name=kafka-observability-cluster-kafka,strimzi.io/kind=Kafka,strimzi.io/pool-name=sno\", \"nodeIds\": [0], \"observedGeneration\": 1, \"replicas\": 1, \"roles\": [\"controller\", \"broker\"]}}], \"kind\": \"List\", \"metadata\": {\"resourceVersion\": \"\"}}",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_fHn3k2LQMQmu5IpsjpatnQ5g"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkatopics.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "completed_at": "2026-09-27T17:42:37.737364+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Sensitive values were redacted.",
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [
+            "stdout"
+          ],
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": null,
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "json",
+            "resource": "kafkatopics.kafka.strimzi.io"
+          },
+          "sequence": 4,
+          "started_at": "2026-09-27T17:42:37.564314+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "{\"apiVersion\": \"v1\", \"items\": [{\"apiVersion\": \"kafka.strimzi.io/v1\", \"kind\": \"KafkaTopic\", \"metadata\": {\"annotations\": {\"kubectl.kubernetes.io/last-applied-configuration\": \"[REDACTED]\"}, \"creationTimestamp\": \"2026-09-02T02:02:52Z\", \"finalizers\": [\"strimzi.io/topic-operator\"], \"generation\": 1, \"labels\": {\"strimzi.io/cluster\": \"kafka-observability-cluster\"}, \"name\": \"podpilot-audit-large\", \"namespace\": \"kafka-observability\", \"resourceVersion\": \"508018\", \"uid\": \"5b883648-f5cf-4d34-b5e0-a3f361d86205\"}, \"spec\": {\"config\": {\"retention.ms\": 86400000, \"segment.bytes\": 1048576}, \"partitions\": 4, \"replicas\": 1}, \"status\": {\"conditions\": [{\"lastTransitionTime\": \"2026-09-02T02:02:53.005025439Z\", \"status\": \"True\", \"type\": \"Ready\"}], \"observedGeneration\": 1, \"topicId\": \"aaYGPs8wS1mMH1T_oHVwhw\", \"topicName\": \"podpilot-audit-large\"}}, {\"apiVersion\": \"kafka.strimzi.io/v1\", \"kind\": \"KafkaTopic\", \"metadata\n...[compacted]...\n\": 3, \"replicas\": 1}, \"status\": {\"conditions\": [{\"lastTransitionTime\": \"2026-09-02T02:02:52.931348271Z\", \"status\": \"True\", \"type\": \"Ready\"}], \"observedGeneration\": 1, \"topicId\": \"daw4kpkIREWpq7IvMR0nVg\", \"topicName\": \"podpilot-payments-medium\"}}], \"kind\": \"List\", \"metadata\": {\"resourceVersion\": \"\"}}",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_bl3fuUA4rHuwHfxqHnNUmuJd"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster --output=json --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:42:39.610043+00:00",
+          "content_filtered": true,
+          "duration_ms": 224,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "A large response was summarized."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "provider_result_requires_refinement": true,
+          "provider_result_summary": {
+            "available_field_paths": [
+              "apiVersion",
+              "items",
+              "items[]",
+              "items[].apiVersion",
+              "items[].kind",
+              "items[].metadata",
+              "items[].metadata.annotations",
+              "items[].metadata.annotations.k8s.ovn.org/pod-networks",
+              "items[].metadata.annotations.k8s.v1.cni.cncf.io/network-status",
+              "items[].metadata.annotations.openshift.io/scc",
+              "items[].metadata.annotations.seccomp.security.alpha.kubernetes.io/pod",
+              "items[].metadata.annotations.security.openshift.io/validated-scc-subject-type",
+              "items[].metadata.annotations.strimzi.io/cluster-ca-cert-generation",
+              "items[].metadata.annotations.strimzi.io/cluster-ca-key-generation",
+              "items[].metadata.annotations.strimzi.io/server-cert-hash",
+              "items[].metadata.creationTimestamp",
+              "items[].metadata.generateName",
+              "items[].metadata.generation",
+              "items[].metadata.labels",
+              "items[].metadata.labels.app.kubernetes.io/instance",
+              "items[].metadata.labels.app.kubernetes.io/managed-by",
+              "items[].metadata.labels.app.kubernetes.io/name",
+              "items[].metadata.labels.app.kubernetes.io/part-of",
+              "items[].metadata.labels.pod-template-hash",
+              "items[].metadata.labels.strimzi.io/cluster",
+              "items[].metadata.labels.strimzi.io/component-type",
+              "items[].metadata.labels.strimzi.io/kind",
+              "items[].metadata.labels.strimzi.io/name",
+              "items[].metadata.name",
+              "items[].metadata.namespace",
+              "items[].metadata.ownerReferences",
+              "items[].metadata.ownerReferences[]",
+              "items[].metadata.ownerReferences[].apiVersion",
+              "items[].metadata.ownerReferences[].blockOwnerDeletion",
+              "items[].metadata.ownerReferences[].controller",
+              "items[].metadata.ownerReferences[].kind",
+              "items[].metadata.ownerReferences[].name",
+              "items[].metadata.ownerReferences[].uid",
+              "items[].metadata.resourceVersion",
+              "items[].metadata.uid",
+              "items[].spec",
+              "items[].spec.containers",
+              "items[].spec.containers[]",
+              "items[].spec.containers[].args",
+              "items[].spec.containers[].env",
+              "items[].spec.containers[].image",
+              "items[].spec.containers[].imagePullPolicy",
+              "items[].spec.containers[].livenessProbe",
+              "items[].spec.containers[].name",
+              "items[].spec.containers[].ports",
+              "items[].spec.containers[].readinessProbe",
+              "items[].spec.containers[].resources",
+              "items[].spec.containers[].securityContext",
+              "items[].spec.containers[].startupProbe",
+              "items[].spec.containers[].terminationMessagePath",
+              "items[].spec.containers[].terminationMessagePolicy",
+              "items[].spec.containers[].volumeMounts",
+              "items[].spec.dnsPolicy",
+              "items[].spec.enableServiceLinks",
+              "items[].spec.imagePullSecrets",
+              "items[].spec.imagePullSecrets[]",
+              "items[].spec.imagePullSecrets[].name",
+              "items[].spec.nodeName",
+              "items[].spec.preemptionPolicy",
+              "items[].spec.priority",
+              "items[].spec.restartPolicy",
+              "items[].spec.schedulerName",
+              "items[].spec.securityContext",
+              "items[].spec.securityContext.fsGroup",
+              "items[].spec.securityContext.seLinuxOptions",
+              "items[].spec.securityContext.seLinuxOptions.level",
+              "items[].spec.securityContext.seccompProfile",
+              "items[].spec.securityContext.seccompProfile.type",
+              "items[].spec.serviceAccount",
+              "items[].spec.serviceAccountName",
+              "items[].spec.terminationGracePeriodSeconds",
+              "items[].spec.tolerations",
+              "items[].spec.tolerations[]",
+              "items[].spec.tolerations[].effect",
+              "items[].spec.tolerations[].key"
+            ],
+            "item_count": 3,
+            "json_root_type": "object",
+            "kind": "List",
+            "kubernetes_continue_present": false,
+            "kubernetes_page_complete": true
+          },
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": null,
+            "field_selector": null,
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "name": null,
+            "namespace": "kafka-observability",
+            "output": "json",
+            "resource": "pods"
+          },
+          "retry_guidance": "The command succeeded, but its complete JSON output is too large for one model tool result. No partial JSON was supplied. Choose the fields needed for the operator's request and rerun a narrower read using the available tool projection fields, namespace, name, or selectors. Do not answer the inventory from this metadata summary alone.",
+          "sequence": 5,
+          "started_at": "2026-09-27T17:42:39.386301+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_GlRTJ5dAG5GfNh5z4WgJg8RF"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.strimzi.io*component-type,PHASE:.status.phase,READY:.status.conditions[*].type,NODE:.spec.nodeName,RESTARTS:.status.containerStatuses[*].restartCount' --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:42:42.947960+00:00",
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAME:.metadata.name",
+              "COMPONENT:.metadata.labels.strimzi.io*component-type",
+              "PHASE:.status.phase",
+              "READY:.status.conditions[*].type",
+              "NODE:.spec.nodeName",
+              "RESTARTS:.status.containerStatuses[*].restartCount"
+            ],
+            "field_selector": null,
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "name": null,
+            "namespace": "kafka-observability",
+            "output": "wide",
+            "resource": "pods"
+          },
+          "sequence": 6,
+          "started_at": "2026-09-27T17:42:42.774975+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                                                           COMPONENT   PHASE     READY                                                                      NODE   RESTARTS\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   <none>      Running   PodReadyToStartContainers,Initialized,Ready,ContainersReady,PodScheduled   sno1   23,22\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    <none>      Running   PodReadyToStartContainers,Initialized,Ready,ContainersReady,PodScheduled   sno1   45\nkafka-observability-cluster-sno-0                              <none>      Running   PodReadyToStartContainers,Initialized,Ready,ContainersReady,PodScheduled   sno1   11",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_HrjuXT6v9J2T6KJaFqAajd09"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkas.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.conditions[*].type,STATUS:.status.conditions[*].status,MESSAGE:.status.conditions[*].message,KAFKA_VERSION:.status.kafkaVersion,REPLICAS:.status.kafkaNodePools[*].replicas,OBSERVED_GEN:.status.observedGeneration' --all-namespaces",
+          "completed_at": "2026-09-27T17:42:46.212779+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAMESPACE:.metadata.namespace",
+              "NAME:.metadata.name",
+              "READY:.status.conditions[*].type",
+              "STATUS:.status.conditions[*].status",
+              "MESSAGE:.status.conditions[*].message",
+              "KAFKA_VERSION:.status.kafkaVersion",
+              "REPLICAS:.status.kafkaNodePools[*].replicas",
+              "OBSERVED_GEN:.status.observedGeneration"
+            ],
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "wide",
+            "resource": "kafkas.kafka.strimzi.io"
+          },
+          "sequence": 7,
+          "started_at": "2026-09-27T17:42:46.040591+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAMESPACE             NAME                          READY   STATUS   MESSAGE   KAFKA_VERSION   REPLICAS   OBSERVED_GEN\nkafka-observability   kafka-observability-cluster   Ready   True     <none>    4.2.0           <none>     1",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_s1qdqijvUYisBvw9a9Cj6m6S"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkatopics.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLUSTER:.metadata.labels.strimzi.io*cluster,PARTITIONS:.spec.partitions,REPLICAS:.spec.replicas,READY:.status.conditions[*].type,STATUS:.status.conditions[*].status,MESSAGE:.status.conditions[*].message' --all-namespaces",
+          "completed_at": "2026-09-27T17:42:48.498862+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAMESPACE:.metadata.namespace",
+              "NAME:.metadata.name",
+              "CLUSTER:.metadata.labels.strimzi.io*cluster",
+              "PARTITIONS:.spec.partitions",
+              "REPLICAS:.spec.replicas",
+              "READY:.status.conditions[*].type",
+              "STATUS:.status.conditions[*].status",
+              "MESSAGE:.status.conditions[*].message"
+            ],
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "wide",
+            "resource": "kafkatopics.kafka.strimzi.io"
+          },
+          "sequence": 8,
+          "started_at": "2026-09-27T17:42:48.326486+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAMESPACE             NAME                       CLUSTER   PARTITIONS   REPLICAS   READY   STATUS   MESSAGE\nkafka-observability   podpilot-audit-large       <none>    4            1          Ready   True     <none>\nkafka-observability   podpilot-metrics-test      <none>    1            1          Ready   True     <none>\nkafka-observability   podpilot-orders-small      <none>    2            1          Ready   True     <none>\nkafka-observability   podpilot-payments-medium   <none>    3            1          Ready   True     <none>",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_nHcHhyEr6vuNlSwJekJdhFqa"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:42:50.194806+00:00",
+          "duration_ms": 26,
+          "evidence_ids": [
+            "cluster-d9586365-c5fe-43b7-ba4c-a02f99ebeb6a"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:42:50.170947+00:00",
+              "data": {
+                "anomalies": [],
+                "anomaliesComplete": true,
+                "anomalyCount": 0,
+                "apiVersion": "v1",
+                "byReason": {},
+                "bySeverity": {},
+                "findingsComplete": true,
+                "findingsCount": 0,
+                "healthSummaryVersion": 2,
+                "kind": "Pod",
+                "labelSelector": "strimzi.io/cluster=kafka-observability-cluster",
+                "objects": [],
+                "returnedAnomalyCount": 0,
+                "scanComplete": true,
+                "scanLimit": 2000,
+                "scannedCount": 3,
+                "scope": "kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster"
+              },
+              "id": "cluster-d9586365-c5fe-43b7-ba4c-a02f99ebeb6a",
+              "source": "kubernetes:v1:Pod/health:kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster",
+              "summary": "Detected no Pod health anomalies after evaluating 3 Pods in kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster.",
+              "tool": "pod_health_summary"
+            }
+          ],
+          "request": {
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "limit": 100,
+            "namespace": "kafka-observability"
+          },
+          "sequence": 9,
+          "started_at": "2026-09-27T17:42:50.168317+00:00",
+          "status": "succeeded",
+          "title": "Check Pod health in kafka-observability",
+          "tool": "pod_health_summary",
+          "tool_call_id": "call_vP4lCBKZ4CxWGQM2GEcVsxUL"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason,LAST_EXIT:.status.containerStatuses[*].l\n...[compacted]...\ned.exitCode,STARTED:.status.containerStatuses[*].state.running.startedAt,NODE:.spec.nodeName' --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:42:54.950128+00:00",
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAME:.metadata.name",
+              "PHASE:.status.phase",
+              "READY:.status.containerStatuses[*].ready",
+              "RESTARTS:.status.containerStatuses[*].restartCount",
+              "LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason",
+              "LAST_EXIT:.status.containerStatuses[*].lastState.terminated.exitCode",
+              "STARTED:.status.containerStatuses[*].state.running.startedAt",
+              "NODE:.spec.nodeName"
+            ],
+            "field_selector": null,
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "name": null,
+            "namespace": "kafka-observability",
+            "output": "wide",
+            "resource": "pods"
+          },
+          "sequence": 10,
+          "started_at": "2026-09-27T17:42:54.777504+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                                                           PHASE     READY       RESTARTS   LAST_REASON   LAST_EXIT   STARTED                                     NODE\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   Running   true,true   23,22      Error,Error   1,1         2026-09-27T12:34:16Z,2026-09-27T12:34:17Z   sno1\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    Running   true        45         Error         255         2026-09-27T12:34:52Z                        sno1\nkafka-observability-cluster-sno-0                              Running   true        11         <none>        <none>      2026-09-27T12:34:10Z                        sno1",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_ZT9puf5pYXzycQ6H9XpWdpZV"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get events --chunk-size=200 --output=wide --field-selector=involvedObject.kind=Pod --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:42:58.312573+00:00",
+          "duration_ms": 174,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "Pod",
+            "name": null,
+            "namespace": "kafka-observability",
+            "uid": null
+          },
+          "sequence": 11,
+          "started_at": "2026-09-27T17:42:58.138938+00:00",
+          "status": "completed",
+          "stderr_excerpt": "No resources found in kafka-observability namespace.",
+          "stdout_excerpt": "",
+          "title": "Read Events",
+          "tool": "oc_events",
+          "tool_call_id": "call_8ZkzAZCwSVUDDRXgJMlq32aS"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:43:02.426479+00:00",
+          "diagnostic_ref": "6160fff65495",
+          "duration_ms": 3,
+          "error": "The Pod name is required for this read tool.",
+          "evidence_ids": [],
+          "failure_category": "read_failed",
+          "limitations": [],
+          "observations": [],
+          "request": {
+            "container": null,
+            "limit": 100,
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": null,
+            "namespace": "kafka-observability",
+            "previous": true,
+            "range_seconds": 86400,
+            "since_seconds": 86400,
+            "tail_lines": null
+          },
+          "sequence": 12,
+          "started_at": "2026-09-27T17:43:02.423452+00:00",
+          "status": "denied_or_unavailable",
+          "title": "Read Pod logs in kafka-observability",
+          "tool": "pod_logs",
+          "tool_call_id": "call_FWxFgYMRQEeIM27guFuwW9cL"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,CONTAINERS:.spec.containers[*].name,OWNERS:.metadata.ownerReferences[*].kind,OWNER_NAMES:.metadata.ownerReferences[*].name,CREATED:.metadata.creationTimestamp,STARTED:.status.containerStatuses[*].state.running.startedAt,R\n...[compacted]...\nterminated.reason,LAST_FINISHED:.status.containerStatuses[*].lastState.terminated.finishedAt' --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:43:07.144848+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAME:.metadata.name",
+              "CONTAINERS:.spec.containers[*].name",
+              "OWNERS:.metadata.ownerReferences[*].kind",
+              "OWNER_NAMES:.metadata.ownerReferences[*].name",
+              "CREATED:.metadata.creationTimestamp",
+              "STARTED:.status.containerStatuses[*].state.running.startedAt",
+              "RESTARTS:.status.containerStatuses[*].restartCount",
+              "LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason",
+              "LAST_FINISHED:.status.containerStatuses[*].lastState.terminated.finishedAt"
+            ],
+            "field_selector": null,
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "name": null,
+            "namespace": "kafka-observability",
+            "output": "wide",
+            "resource": "pods"
+          },
+          "sequence": 13,
+          "started_at": "2026-09-27T17:43:06.972469+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                                                           CONTAINERS                                   OWNERS          OWNER_NAMES                                              CREATED                STARTED                                     RESTARTS   LAST_REASON   LAST_FINISHED\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   topic-operator,user-operator                 ReplicaSet      kafka-observability-cluster-entity-operator-85c4c74445   2026-09-02T01:43:16Z   2026-09-27T12:34:16Z,2026-09-27T12:34:17Z   23,22      Error,Error   2026-09-27T12:34:16Z,2026-09-27T12:34:17Z\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    kafka-observability-cluster-kafka-exporter   ReplicaSet      kafka-observability-cluster-kafka-exporter-858785db56    2026-09-02T01:43:37Z   2026-09-27T12:34:52Z                        45         Error         2026-09-27T12:34:29Z\nkafka-observability-cluster-sno-0                              kafka                                        StrimziPodSet   kafka-observability-cluster-sno                          2026-09-02T01:42:51Z   2026-09-27T12:34:10Z                        11         <none>        <none>",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_4pkmmuMHxO0cQ8D7V8xR0z2u"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:43:18.535417+00:00",
+          "duration_ms": 6821,
+          "evidence_ids": [
+            "cluster-1640ffce-f20a-49ac-a170-bdb2e47c564d"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:43:11.734834+00:00",
+              "data": {
+                "container": "kafka-observability-cluster-kafka-exporter",
+                "coverage": "Only the collected bounded excerpt; not the complete log stream or all discovered Pods.",
+                "excerpt_truncated": false,
+                "log_analysis": {
+                  "issues": [
+                    {
+                      "category": "Kafka exporter connectivity/startup failure",
+                      "confidence": "high",
+                      "evidence_ids": "[\"cluster-1640ffce-f20a-49ac-a170-bdb2e47c564d\"]",
+                      "severity": "error",
+                      "summary": "The Kafka exporter failed during Kafka client initialization after the configured broker endpoint refused the TCP connection.",
+                      "supporting_excerpt": "2026-09-27T12:34:29.526767625Z F0927 12:34:29.526702       5 kafka_exporter.go:951] Error Init Kafka Client: kafka: client has run out of available brokers to talk to: dial tcp 172.30.96.59:9091: conn"
+                    }
+                  ],
+                  "issues_omitted": 0,
+                  "limitations": [
+                    "Only one bounded, redacted previous-container log excerpt was supplied; no Kubernetes API discovery or resource listings were provided.",
+                    "The exporter name and source path indicate namespace kafka-observability and Pod kafka-observability-cluster-kafka-exporter-858785db56-bznkf, but they do not prove that a Kafka broker cluster is currently installed or ready.",
+                    "No evidence was supplied for Kafka CRDs/APIs, Kafka or KafkaNodePool resources, topics, Services, broker Pods, replica counts, readiness conditions, or broker topology.",
+                    "The log identifies only an IP and port; it does not map 172.30.96.59:9091 to a named Service, Pod, listener, or namespace, nor explain why the connection was refused."
+                  ],
+                  "overview": "The bounded previous-container log shows a Kafka exporter starting and then terminating with a fatal Kafka client initialization error because its connection to broker endpoint 172.30.96.59:9091 was refused. This confirms a Kafka-related observability component was present in namespace kafka-observability, but the supplied excerpt alone does not verify a Kafka installation, Kafka APIs/resources, cluster readiness, broker topology, node pools, topics, or broker Pod state.",
+                  "status": "completed"
+                },
+                "previous": true,
+                "raw_log_excerpt": {
+                  "bytes": 489,
+                  "expires_at": 1790617391.7352762,
+                  "id": "123e99f17f3149f9897450f1b1ffa57f"
+                },
+                "sinceSeconds": 86400
+              },
+              "id": "cluster-1640ffce-f20a-49ac-a170-bdb2e47c564d",
+              "source": "kubernetes:v1:Pod/log:kafka-observability/kafka-observability-cluster-kafka-exporter-858785db56-bznkf?previous",
+              "summary": "The bounded previous-container log shows a Kafka exporter starting and then terminating with a fatal Kafka client initialization error because its connection to broker endpoint 172.30.96.59:9091 was refused. This confirms a Kafka-related observability component was present in namespace kafka-observability, but the supplied excerpt alone does not verify a Kafka installation, Kafka APIs/resources, cluster readiness, broker topology, node pools, topics, or broker Pod state.",
+              "tool": "pod_logs"
+            }
+          ],
+          "request": {
+            "container": "kafka-observability-cluster-kafka-exporter",
+            "limit": 100,
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": "kafka-observability-cluster-kafka-exporter-858785db56-bznkf",
+            "namespace": "kafka-observability",
+            "previous": true,
+            "range_seconds": 86400,
+            "since_seconds": 86400,
+            "tail_lines": null
+          },
+          "sequence": 14,
+          "started_at": "2026-09-27T17:43:11.714392+00:00",
+          "status": "succeeded",
+          "title": "Read Pod logs kafka-observability-cluster-kafka-exporter-858785db56-bznkf in kafka-observability",
+          "tool": "pod_logs",
+          "tool_call_id": "call_Lh7POfoiEBtuc3nhdBAGpKus"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:43:30.844498+00:00",
+          "duration_ms": 7885,
+          "evidence_ids": [
+            "cluster-10d8a4e2-4138-4e2c-a511-4d608c8ba43b"
+          ],
+          "limitations": [
+            "cluster-10d8a4e2-4138-4e2c-a511-4d608c8ba43b: Log specialist failed; this excerpt was retained but not analyzed."
+          ],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:43:22.983348+00:00",
+              "data": {
+                "container": "topic-operator",
+                "coverage": "Only the collected bounded excerpt; not the complete log stream or all discovered Pods.",
+                "excerpt_truncated": false,
+                "log_analysis": {
+                  "limitation": "Log specialist failed; this excerpt was retained but not analyzed.",
+                  "status": "unavailable"
+                },
+                "previous": true,
+                "raw_log_excerpt": {
+                  "bytes": 15013,
+                  "expires_at": 1790617402.9853091,
+                  "id": "ec5fa00587574be8aa73c2f436681668"
+                },
+                "sinceSeconds": 86400
+              },
+              "id": "cluster-10d8a4e2-4138-4e2c-a511-4d608c8ba43b",
+              "source": "kubernetes:v1:Pod/log:kafka-observability/kafka-observability-cluster-entity-operator-85c4c74445-v89f8?previous",
+              "summary": "Collected bounded previous logs for Pod kafka-observability/kafka-observability-cluster-entity-operator-85c4c74445-v89f8.",
+              "tool": "pod_logs"
+            }
+          ],
+          "request": {
+            "container": "topic-operator",
+            "limit": 100,
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": "kafka-observability-cluster-entity-operator-85c4c74445-v89f8",
+            "namespace": "kafka-observability",
+            "previous": true,
+            "range_seconds": 86400,
+            "since_seconds": 86400,
+            "tail_lines": null
+          },
+          "sequence": 15,
+          "started_at": "2026-09-27T17:43:22.959362+00:00",
+          "status": "succeeded",
+          "title": "Read Pod logs kafka-observability-cluster-entity-operator-85c4c74445-v89f8 in kafka-observability",
+          "tool": "pod_logs",
+          "tool_call_id": "call_g0kLh2ERxVuEDf9P9rtkM7HO"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkanodepools.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLUSTER:.metadata.labels.strimzi.io*cluster,REPLICAS:.spec.replicas,ROLES:.spec.roles[*],NODE_IDS:.status.nodeIds[*],STATUS_REPLICAS:.status.replicas,OBSERVED_GEN:.status.observedGeneration,CONDITIONS:.status.conditions[*].type,COND_STATUS:.status.conditions[*].status' --all-namespaces",
+          "completed_at": "2026-09-27T17:43:35.865804+00:00",
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAMESPACE:.metadata.namespace",
+              "NAME:.metadata.name",
+              "CLUSTER:.metadata.labels.strimzi.io*cluster",
+              "REPLICAS:.spec.replicas",
+              "ROLES:.spec.roles[*]",
+              "NODE_IDS:.status.nodeIds[*]",
+              "STATUS_REPLICAS:.status.replicas",
+              "OBSERVED_GEN:.status.observedGeneration",
+              "CONDITIONS:.status.conditions[*].type",
+              "COND_STATUS:.status.conditions[*].status"
+            ],
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": null,
+            "output": "wide",
+            "resource": "kafkanodepools.kafka.strimzi.io"
+          },
+          "sequence": 16,
+          "started_at": "2026-09-27T17:43:35.692346+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAMESPACE             NAME   CLUSTER   REPLICAS   ROLES               NODE_IDS   STATUS_REPLICAS   OBSERVED_GEN   CONDITIONS   COND_STATUS\nkafka-observability   sno    <none>    1          controller,broker   0          1                 1              <none>       <none>",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_hOEp5LeVwFbkDcGUdL5W2Wpx"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 '--output=custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,OWNER_KIND:.metadata.ownerReferences[*].kind,NODE:.spec.nodeName' --namespace=kafka-observability",
+          "completed_at": "2026-09-27T17:43:42.139065+00:00",
+          "duration_ms": 227,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "columns": [
+              "NAME:.metadata.name",
+              "PHASE:.status.phase",
+              "READY:.status.containerStatuses[*].ready",
+              "RESTARTS:.status.containerStatuses[*].restartCount",
+              "OWNER_KIND:.metadata.ownerReferences[*].kind",
+              "NODE:.spec.nodeName"
+            ],
+            "field_selector": null,
+            "label_selector": null,
+            "name": null,
+            "namespace": "kafka-observability",
+            "output": "wide",
+            "resource": "pods"
+          },
+          "sequence": 17,
+          "started_at": "2026-09-27T17:43:41.911592+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                                                           PHASE     READY       RESTARTS   OWNER_KIND      NODE\nkafka-observability-cluster-entity-operator-85c4c74445-v89f8   Running   true,true   23,22      ReplicaSet      sno1\nkafka-observability-cluster-kafka-exporter-858785db56-bznkf    Running   true        45         ReplicaSet      sno1\nkafka-observability-cluster-sno-0                              Running   true        11         StrimziPodSet   sno1",
+          "title": "Read cluster resources",
+          "tool": "oc_get",
+          "tool_call_id": "call_4zydQ5g1csaDKXl1yYb6vPG6"
+        }
+      ],
+      "guidance_next_checks": [],
+      "investigation_gaps": [],
+      "limitations": [
+        "Cluster sno.192-168-0-200.sslip.io \u2014 pod_logs: The Pod name is required for this read tool. (diagnostic ref 6160fff65495)",
+        "cluster-10d8a4e2-4138-4e2c-a511-4d608c8ba43b: Log specialist failed; this excerpt was retained but not analyzed."
+      ],
+      "preferred_evidence_view": null,
+      "presentation": null,
+      "reads": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-discovery-6c469d26-f014-42dd-bbde-7fe12868ca85"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "discovery_query": "Kafka",
+            "limit": "100"
+          },
+          "tool": "discover_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkas.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkanodepools.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkatopics.kafka.strimzi.io --chunk-size=200 --output=json --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster --output=json --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.strimzi.io*component-type,PHASE:.status.phase,READY:.status.conditions[*].type,NODE:.spec.nodeName,RESTARTS:.status.containerStatuses[*].restartCount' --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkas.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.conditions[*].type,STATUS:.status.conditions[*].status,MESSAGE:.status.conditions[*].message,KAFKA_VERSION:.status.kafkaVersion,REPLICAS:.status.kafkaNodePools[*].replicas,OBSERVED_GEN:.status.observedGeneration' --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkatopics.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLUSTER:.metadata.labels.strimzi.io*cluster,PARTITIONS:.spec.partitions,REPLICAS:.spec.replicas,READY:.status.conditions[*].type,STATUS:.status.conditions[*].status,MESSAGE:.status.conditions[*].message' --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-d9586365-c5fe-43b7-ba4c-a02f99ebeb6a"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "limit": "100",
+            "namespace": "kafka-observability"
+          },
+          "tool": "pod_health_summary"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason,LAST_EXIT:.status.containerStatuses[*].lastState.terminated.exitCode,STARTED:.status.containerStatuses[*].state.running.startedAt,NODE:.spec.nodeName' --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get events --chunk-size=200 --output=wide --field-selector=involvedObject.kind=Pod --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_events"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": "6160fff65495",
+          "evidence_ids": [],
+          "failure_category": "read_failed",
+          "observations": 0,
+          "status": "denied_or_unavailable",
+          "target": {
+            "container": "None",
+            "limit": "100",
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": "None",
+            "namespace": "kafka-observability",
+            "previous": "True",
+            "range_seconds": "86400",
+            "since_seconds": "86400",
+            "tail_lines": "None"
+          },
+          "tool": "pod_logs"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 --selector=strimzi.io/cluster=kafka-observability-cluster '--output=custom-columns=NAME:.metadata.name,CONTAINERS:.spec.containers[*].name,OWNERS:.metadata.ownerReferences[*].kind,OWNER_NAMES:.metadata.ownerReferences[*].name,CREATED:.metadata.creationTimestamp,STARTED:.status.containerStatuses[*].state.running.startedAt,RESTARTS:.status.containerStatuses[*].restartCount,LAST_REASON:.status.containerStatuses[*].lastState.terminated.reason,LAST_FINISHED:.status.containerStatuses[*].lastState.terminated.finishedAt' --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-1640ffce-f20a-49ac-a170-bdb2e47c564d"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "container": "kafka-observability-cluster-kafka-exporter",
+            "limit": "100",
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": "kafka-observability-cluster-kafka-exporter-858785db56-bznkf",
+            "namespace": "kafka-observability",
+            "previous": "True",
+            "range_seconds": "86400",
+            "since_seconds": "86400",
+            "tail_lines": "None"
+          },
+          "tool": "pod_logs"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-10d8a4e2-4138-4e2c-a511-4d608c8ba43b"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "container": "topic-operator",
+            "limit": "100",
+            "log_activity": "all",
+            "log_backend": "kubernetes",
+            "log_mode": "analyze",
+            "log_routing": "auto",
+            "name": "kafka-observability-cluster-entity-operator-85c4c74445-v89f8",
+            "namespace": "kafka-observability",
+            "previous": "True",
+            "range_seconds": "86400",
+            "since_seconds": "86400",
+            "tail_lines": "None"
+          },
+          "tool": "pod_logs"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get kafkanodepools.kafka.strimzi.io --chunk-size=200 '--output=custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,CLUSTER:.metadata.labels.strimzi.io*cluster,REPLICAS:.spec.replicas,ROLES:.spec.roles[*],NODE_IDS:.status.nodeIds[*],STATUS_REPLICAS:.status.replicas,OBSERVED_GEN:.status.observedGeneration,CONDITIONS:.status.conditions[*].type,COND_STATUS:.status.conditions[*].status' --all-namespaces",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s get pods --chunk-size=200 '--output=custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,OWNER_KIND:.metadata.ownerReferences[*].kind,NODE:.spec.nodeName' --namespace=kafka-observability",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_get"
+        }
+      ],
+      "recommended_next_checks": [],
+      "stop_reason": "complete",
+      "suggested_followup_actions": []
+    }
+  },
+  "render_status": 200,
+  "tools": [
+    "discover_resources",
+    "oc_events",
+    "oc_get",
+    "pod_health_summary",
+    "pod_logs"
+  ],
+  "shell_calls": 0,
+  "failed_operations": [
+    {
+      "tool": "pod_logs",
+      "status": "denied_or_unavailable",
+      "error": "The Pod name is required for this read tool.",
+      "stderr": null
+    }
+  ],
+  "finished_at": "2026-09-27T17:44:03.966772+00:00"
+}

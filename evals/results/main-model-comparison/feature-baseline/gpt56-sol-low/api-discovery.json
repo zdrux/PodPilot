@@ -1,0 +1,1710 @@
+{
+  "scenario": "api-discovery",
+  "question": "Use oc_api_resources to discover the APIs installed for Kafka, Argo CD and service mesh. Report resource names, API groups/versions and namespaced scope. Distinguish an installed API from a deployed or healthy application. Do not change anything.",
+  "reasoning_effort": "low",
+  "started_at": "2026-09-27T17:44:41.718085+00:00",
+  "conversation_id": "692ed3b6-a291-4fb2-9b1f-fad3295f5742",
+  "run_status": "succeeded",
+  "result": {
+    "answer": "**PodPilot reached this model profile's configured input-token limit.** The oversized model request was not sent; operations completed earlier in the turn are unaffected.\n\n## Investigation result\n\nThe model provider did not return a complete technical explanation, so PodPilot preserved the verified observations below instead of displaying an empty response.\n\n## Observed evidence\n\n- **discover resources:** Discovered 43 policy-filtered API resource types relevant to service mesh istio maistra servicemesh control plane member roll gateway virtual service destination rule.\n\n## Still unverified\n\nThese observations require a complete evidence-backed interpretation before a root cause can be confirmed.",
+    "activity": {
+      "conclusion_status": "probable",
+      "evidence_ledger": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io",
+          "completed_at": "2026-09-27T17:44:42.794534+00:00",
+          "content_filtered": true,
+          "duration_ms": 174,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 1,
+          "started_at": "2026-09-27T17:44:42.620716+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_DwOFlhRkulboCLvLXWG9JDWp"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io",
+          "completed_at": "2026-09-27T17:44:44.382317+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 2,
+          "started_at": "2026-09-27T17:44:44.208863+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_PEVisWfJXrcosxcROMY6FnIX"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=maistra.io",
+          "completed_at": "2026-09-27T17:44:48.443193+00:00",
+          "duration_ms": 230,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "api_group": "maistra.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 3,
+          "started_at": "2026-09-27T17:44:48.213623+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME   SHORTNAMES   APIVERSION   NAMESPACED   KIND   VERBS   CATEGORIES",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_OU15cIGr2CfoNUFU1G4GAwH6"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:44:50.657773+00:00",
+          "duration_ms": 13,
+          "evidence_ids": [
+            "cluster-discovery-e7c228c1-f959-4c9e-87ae-beb4797e4277"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:44:50.657246+00:00",
+              "data": {
+                "absence_supported": false,
+                "count": 43,
+                "evidence_type": "api_resource_types_only",
+                "limitations": [
+                  "API discovery does not search namespaces or object instances and cannot establish software absence."
+                ],
+                "matched_count": 43,
+                "policy": "dynamic API discovery with sensitive resource types excluded; object authorization is not implied",
+                "query": "service mesh istio maistra servicemesh control plane member roll gateway virtual service destination rule",
+                "resources": [
+                  {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "DestinationRule",
+                    "namespaced": true,
+                    "resource": "destinationrules",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "VirtualService",
+                    "namespaced": true,
+                    "resource": "virtualservices",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "Gateway",
+                    "namespaced": true,
+                    "resource": "gateways.networking.istio.io",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "ServiceEntry",
+                    "namespaced": true,
+                    "resource": "serviceentries",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "gateway.networking.k8s.io/v1",
+                    "kind": "Gateway",
+                    "namespaced": true,
+                    "resource": "gateways.gateway.networking.k8s.io",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "sailoperator.io/v1",
+                    "kind": "Istio",
+                    "namespaced": false,
+                    "resource": "istios",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "security.istio.io/v1",
+                    "kind": "RequestAuthentication",
+                    "namespaced": true,
+                    "resource": "requestauthentications",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "namespaced": true,
+                    "resource": "services",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  }
+                ],
+                "truncated": false
+              },
+              "id": "cluster-discovery-e7c228c1-f959-4c9e-87ae-beb4797e4277",
+              "source": "kubernetes:api-discovery",
+              "summary": "Discovered 43 policy-filtered API resource types relevant to service mesh istio maistra servicemesh control plane member roll gateway virtual service destination rule.",
+              "tool": "discover_resources"
+            }
+          ],
+          "request": {
+            "discovery_query": "service mesh istio maistra servicemesh control plane member roll gateway virtual service destination rule",
+            "limit": 100
+          },
+          "sequence": 4,
+          "started_at": "2026-09-27T17:44:50.644665+00:00",
+          "status": "succeeded",
+          "title": "Discover resources",
+          "tool": "discover_resources",
+          "tool_call_id": "call_UxP5G5YuM9ctd4ig4BUR3Wfp"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=sailoperator.io",
+          "completed_at": "2026-09-27T17:44:54.412754+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "api_group": "sailoperator.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 5,
+          "started_at": "2026-09-27T17:44:54.240581+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                SHORTNAMES    APIVERSION           NAMESPACED   KIND               VERBS                                                        CATEGORIES\nistiocnis                         sailoperator.io/v1   false        IstioCNI           delete,deletecollection,get,list,patch,create,update,watch   istio-io\nistiorevisions      istiorev      sailoperator.io/v1   false        IstioRevision      delete,deletecollection,get,list,patch,create,update,watch   istio-io\nistiorevisiontags   istiorevtag   sailoperator.io/v1   false        IstioRevisionTag   delete,deletecollection,get,list,patch,create,update,watch   istio-io\nistios                            sailoperator.io/v1   false        Istio              delete,deletecollection,get,list,patch,create,update,watch   istio-io\nztunnels                          sailoperator.io/v1   false        ZTunnel            delete,deletecollection,get,list,patch,create,update,watch   istio-io",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_Sa1ZeVxffJcQOBJha0PM1Yjx"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=networking.istio.io",
+          "completed_at": "2026-09-27T17:44:58.158673+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "networking.istio.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 6,
+          "started_at": "2026-09-27T17:44:57.986357+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME               SHORTNAMES   APIVERSION                     NAMESPACED   KIND              VERBS                                                        CATEGORIES\ndestinationrules   dr           networking.istio.io/v1         true         DestinationRule   delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nenvoyfilters                    networking.istio.io/v1alpha3   true         EnvoyFilter       delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\ngateways           gw           networking.istio.io/v1         true         Gateway           delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nproxyconfigs                    networking.istio.io/v1beta1    true         ProxyConfig       delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-i\n...[compacted]...\nWorkloadEntry     delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io\nworkloadgroups     wg           networking.istio.io/v1         true         WorkloadGroup     delete,deletecollection,get,list,patch,create,update,watch   istio-io,networking-istio-io",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_AfZ2PsACss8755G99p5oUHdy"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io",
+          "completed_at": "2026-09-27T17:45:01.258724+00:00",
+          "content_filtered": true,
+          "duration_ms": 174,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 7,
+          "started_at": "2026-09-27T17:45:01.084863+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_ONk0MUsyisNgl5DPHLaWHz8L"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io",
+          "completed_at": "2026-09-27T17:45:03.378589+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 8,
+          "started_at": "2026-09-27T17:45:03.206355+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_OWsbuobjH3xrTejU2EkxbAfp"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=security.istio.io",
+          "completed_at": "2026-09-27T17:45:06.873741+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "api_group": "security.istio.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 9,
+          "started_at": "2026-09-27T17:45:06.701717+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                     SHORTNAMES   APIVERSION             NAMESPACED   KIND                    VERBS                                                        CATEGORIES\nauthorizationpolicies    ap           security.istio.io/v1   true         AuthorizationPolicy     delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io\npeerauthentications      pa           security.istio.io/v1   true         PeerAuthentication      delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io\nrequestauthentications   ra           security.istio.io/v1   true         RequestAuthentication   delete,deletecollection,get,list,patch,create,update,watch   istio-io,security-istio-io",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_tPffYeYSCqV5AG1Vt34EjSNE"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=telemetry.istio.io",
+          "completed_at": "2026-09-27T17:45:10.155803+00:00",
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "api_group": "telemetry.istio.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 10,
+          "started_at": "2026-09-27T17:45:09.982328+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME          SHORTNAMES   APIVERSION              NAMESPACED   KIND        VERBS                                                        CATEGORIES\ntelemetries   telemetry    telemetry.istio.io/v1   true         Telemetry   delete,deletecollection,get,list,patch,create,update,watch   istio-io,telemetry-istio-io",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_qbVBp1pqKw5JawwsZI5wA8sF"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T17:45:14.125594+00:00",
+          "duration_ms": 7,
+          "evidence_ids": [
+            "cluster-discovery-6d4c8f0c-f607-400e-8a81-3eb8d636dc22"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T17:45:14.125097+00:00",
+              "data": {
+                "absence_supported": false,
+                "count": 50,
+                "evidence_type": "api_resource_types_only",
+                "limitations": [
+                  "API discovery does not search namespaces or object instances and cannot establish software absence."
+                ],
+                "matched_count": 60,
+                "policy": "dynamic API discovery with sensitive resource types excluded; object authorization is not implied",
+                "query": "Kafka Strimzi Argo CD argoproj Istio service mesh resources",
+                "resources": [
+                  {
+                    "apiVersion": "argoproj.io/v1beta1",
+                    "kind": "ArgoCD",
+                    "namespaced": true,
+                    "resource": "argocds",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "Kafka",
+                    "namespaced": true,
+                    "resource": "kafkas",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "networking.istio.io/v1",
+                    "kind": "ServiceEntry",
+                    "namespaced": true,
+                    "resource": "serviceentries",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "argoproj.io/v1alpha1",
+                    "kind": "AnalysisRun",
+                    "namespaced": true,
+                    "resource": "analysisruns",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "sailoperator.io/v1",
+                    "kind": "Istio",
+                    "namespaced": false,
+                    "resource": "istios",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "argoproj.io/v1alpha1",
+                    "kind": "Rollout",
+                    "namespaced": true,
+                    "resource": "rollouts",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "namespaced": true,
+                    "resource": "services",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "image.openshift.io/v1",
+                    "kind": "ImageStream",
+                    "namespaced": true,
+                    "resource": "imagestreams",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  }
+                ],
+                "truncated": true
+              },
+              "id": "cluster-discovery-6d4c8f0c-f607-400e-8a81-3eb8d636dc22",
+              "source": "kubernetes:api-discovery",
+              "summary": "Discovered 50 policy-filtered API resource types relevant to Kafka Strimzi Argo CD argoproj Istio service mesh resources.",
+              "tool": "discover_resources"
+            }
+          ],
+          "request": {
+            "discovery_query": "Kafka Strimzi Argo CD argoproj Istio service mesh resources",
+            "limit": 100
+          },
+          "sequence": 11,
+          "started_at": "2026-09-27T17:45:14.118724+00:00",
+          "status": "succeeded",
+          "title": "Discover resources",
+          "tool": "discover_resources",
+          "tool_call_id": "call_8lJ7a5EhN56OeYpKiKynKlH5"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=extensions.istio.io",
+          "completed_at": "2026-09-27T17:45:18.386075+00:00",
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "request": {
+            "api_group": "extensions.istio.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": null
+          },
+          "sequence": 12,
+          "started_at": "2026-09-27T17:45:18.213756+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                SHORTNAMES   APIVERSION                     NAMESPACED   KIND               VERBS                                                        CATEGORIES\ntrafficextensions                extensions.istio.io/v1alpha1   true         TrafficExtension   delete,deletecollection,get,list,patch,create,update,watch   istio-io,extensions-istio-io\nwasmplugins                      extensions.istio.io/v1alpha1   true         WasmPlugin         delete,deletecollection,get,list,patch,create,update,watch   istio-io,extensions-istio-io",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_UEykuDTMPHjUFqolbCSv8nYK"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:22.797253+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 13,
+          "started_at": "2026-09-27T17:45:22.624778+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_icNwuaWlv4OPT35auZcWU6Mw"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:24.864105+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 14,
+          "started_at": "2026-09-27T17:45:24.691145+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_Rph9CkFYvrbpo8vxalQ3Hd4c"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:27.542474+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 15,
+          "started_at": "2026-09-27T17:45:27.370230+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_zQQ4rr0ksJSt1AOaa9hk880s"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:29.665582+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 16,
+          "started_at": "2026-09-27T17:45:29.493458+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_mQgYE59iXwfVJuMgiuMgQ8lu"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:31.802844+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 17,
+          "started_at": "2026-09-27T17:45:31.629719+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_AgaqqMBAGsJ7vx81qcEVnk1b"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:34.488214+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 18,
+          "started_at": "2026-09-27T17:45:34.315404+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_9zDIIUDJrQ9y5TQG7SnL7tcW"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:36.978627+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 19,
+          "started_at": "2026-09-27T17:45:36.806076+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_G61j6QfgvvI90pRmHCNu7dTe"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:39.390049+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 20,
+          "started_at": "2026-09-27T17:45:39.216879+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_70V2MOR3lGmumNiWBMPomjM9"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:41.473353+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 21,
+          "started_at": "2026-09-27T17:45:41.300888+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_ZlDJGQgPhBI8SYwx6qjXhUPl"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:45.492793+00:00",
+          "content_filtered": true,
+          "duration_ms": 172,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 22,
+          "started_at": "2026-09-27T17:45:45.320363+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_KQLRtzY9btjrMQX27KLXpjNo"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:47.138811+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 23,
+          "started_at": "2026-09-27T17:45:46.966294+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_s6ahjMabG1iYKy8V5Y8uqw0G"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:50.087694+00:00",
+          "content_filtered": true,
+          "duration_ms": 174,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 24,
+          "started_at": "2026-09-27T17:45:49.914028+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_oQYjvpgDGphdgjjut0vkZRHa"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:53.030750+00:00",
+          "content_filtered": true,
+          "duration_ms": 192,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 25,
+          "started_at": "2026-09-27T17:45:52.838612+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_k5D795aBt1jEwmc8xgyuKl1d"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:54.852071+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 26,
+          "started_at": "2026-09-27T17:45:54.679274+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_CeLTWPwCy5WZs7YvaWY0eC5l"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:56.598434+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 27,
+          "started_at": "2026-09-27T17:45:56.425205+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_FiawmQGuKyBjKmHYmUhvsHrM"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:45:58.792507+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 28,
+          "started_at": "2026-09-27T17:45:58.619741+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_fupSaqXqPMG9Erf3bYISBrfH"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:00.450495+00:00",
+          "content_filtered": true,
+          "duration_ms": 175,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 29,
+          "started_at": "2026-09-27T17:46:00.275779+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_d1Hfqzj8uvpXEpanizRbzjL2"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:02.725682+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 30,
+          "started_at": "2026-09-27T17:46:02.552909+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_KtDYPU7wBuVJirI29DLfETC6"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:05.107348+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 31,
+          "started_at": "2026-09-27T17:46:04.934616+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_zZjVCClE6M3YBNco8r57doQY"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:09.406765+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 32,
+          "started_at": "2026-09-27T17:46:09.234136+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_F96ESEL33EG0rkrgj7zeqUty"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:11.078297+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 33,
+          "started_at": "2026-09-27T17:46:10.905656+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_4jjlTrD8TOAXxJ4sCofOIvDs"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:13.448190+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "kafka.strimzi.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 34,
+          "started_at": "2026-09-27T17:46:13.275534+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                 SHORTNAMES   APIVERSION            NAMESPACED   KIND                VERBS                                                        CATEGORIES\nkafkabridges         kb           kafka.strimzi.io/v1   true         KafkaBridge         delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnectors      kctr         kafka.strimzi.io/v1   true         KafkaConnector      delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkaconnects        kc           kafka.strimzi.io/v1   true         KafkaConnect        delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkamirrormaker2s   kmm2         kafka.strimzi.io/v1   true         KafkaMirrorMaker2   delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkanodepools       knp          kafka.strimzi.io/v1   true         KafkaNodePool       delete,deletecolle\n...[compacted]...\nkt           kafka.strimzi.io/v1   true         KafkaTopic          delete,deletecollection,get,list,patch,create,update,watch   strimzi\nkafkausers           ku           kafka.strimzi.io/v1   true         KafkaUser           delete,deletecollection,get,list,patch,create,update,watch   strimzi",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_K1deOGmLkX4czzP4yiPfpAq5"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "completed_at": "2026-09-27T17:46:16.005290+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "request": {
+            "api_group": "argoproj.io",
+            "cluster_id": "00000000-0000-0000-0000-000000000001",
+            "namespaced": true
+          },
+          "sequence": 35,
+          "started_at": "2026-09-27T17:46:15.832487+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                          SHORTNAMES         APIVERSION             NAMESPACED   KIND                         VERBS                                                        CATEGORIES\nanalysisruns                  ar                 argoproj.io/v1alpha1   true         AnalysisRun                  delete,deletecollection,get,list,patch,create,update,watch   \nanalysistemplates             at                 argoproj.io/v1alpha1   true         AnalysisTemplate             delete,deletecollection,get,list,patch,create,update,watch   \napplications                  app,apps           argoproj.io/v1alpha1   true         Application                  delete,deletecollection,get,list,patch,create,update,watch   \napplicationsets               appset,appsets     argoproj.io/v1alpha1   true         ApplicationSet               delete,deletecollection,get,list,patch,create,update,watch   \nappproject\n...[compacted]...\nargoproj.io/v1alpha1   true         RolloutManager               delete,deletecollection,get,list,patch,create,update,watch   \nrollouts                      ro                 argoproj.io/v1alpha1   true         Rollout                      delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Discover APIs",
+          "tool": "oc_api_resources",
+          "tool_call_id": "call_XQCe8ab9OYmltXcikBxN67VP"
+        }
+      ],
+      "guidance_next_checks": [],
+      "investigation_gaps": [],
+      "limitations": [
+        "The final model answer had an configured input-token limit; PodPilot preserved the successfully collected evidence in a deterministic cited answer.",
+        "PodPilot stopped the model request before transmission because its estimated input-token count (46324) exceeds the configured maximum (45568). Narrow the collected evidence or increase the model profile limit only when the provider model supports it."
+      ],
+      "preferred_evidence_view": null,
+      "presentation": null,
+      "reads": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=maistra.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-discovery-e7c228c1-f959-4c9e-87ae-beb4797e4277"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "discovery_query": "service mesh istio maistra servicemesh control plane member roll gateway virtual service destination rule",
+            "limit": "100"
+          },
+          "tool": "discover_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=sailoperator.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=networking.istio.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=security.istio.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=telemetry.istio.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-discovery-6d4c8f0c-f607-400e-8a81-3eb8d636dc22"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "discovery_query": "Kafka Strimzi Argo CD argoproj Istio service mesh resources",
+            "limit": "100"
+          },
+          "tool": "discover_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=extensions.istio.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=kafka.strimzi.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc --request-timeout=30s api-resources --output=wide --api-group=argoproj.io --namespaced=true",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "oc_api_resources"
+        }
+      ],
+      "recommended_next_checks": [],
+      "selected_check_label": null,
+      "suggested_followup_actions": []
+    }
+  },
+  "render_status": 200,
+  "tools": [
+    "discover_resources",
+    "oc_api_resources"
+  ],
+  "shell_calls": 0,
+  "failed_operations": [],
+  "finished_at": "2026-09-27T17:46:17.920485+00:00"
+}

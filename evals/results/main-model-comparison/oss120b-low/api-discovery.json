@@ -1,0 +1,69 @@
+{
+  "scenario": "api-discovery",
+  "question": "Use oc api-resources to discover the APIs installed for Kafka, Argo CD and service mesh. Report resource names, API groups/versions and namespaced scope. Distinguish an installed API from a deployed or healthy application. Do not change anything.",
+  "reasoning_effort": "low",
+  "started_at": "2026-09-27T18:00:56.008162+00:00",
+  "conversation_id": "22009325-afbd-4d55-9acf-28f43e49e6d1",
+  "run_status": "succeeded",
+  "result": {
+    "answer": "**Installed API groups (read\u2011only discovery)**  \n\n| Feature | API Group (Version) | Resource Kind(s) shown by `oc api-resources` | Namespaced? | Remarks |\n|---------|---------------------|----------------------------------------------|-------------|---------|\n| **Kafka (Strimzi)** | `core.strimzi.io/v1` | `StrimziPodSet` (and other Strimzi CRDs that would appear if the operator is installed, e.g. `Kafka`, `KafkaTopic`, `KafkaConnect`, etc.) | **Yes** | The presence of the *Strimzi* API group indicates the **Kafka operator\u2019s API** is installed in the cluster. It does **not** guarantee that any Kafka clusters or topics are actually created or healthy. |\n| **Argo\u202fCD** | `argoproj.io/v1alpha1` (core Argo\u202fCD objects) <br> `argoproj.io/v1beta1` (Argo\u202fCD CR) | `Application`, `AppProject`, `ApplicationSet`, `AnalysisRun`, `AnalysisTemplate`, `Experiment`, `Rollout`, `RolloutManager`, `NotificationConfiguration`, `ClusterAnalysisTemplate`, `NamespaceManagement`, etc. | **Yes** (most) <br> `ClusterAnalysisTemplate` is cluster\u2011scoped | The `argoproj.io` API groups are installed when the Argo\u202fCD operator (or the Helm chart) is present. This only tells us the **Argo\u202fCD API** is available; it does not confirm any particular Argo\u202fCD instance (e.g. an `ArgoCD` CR) is deployed or that its applications are healthy. |\n| **Service Mesh (Istio)** | `extensions.istio.io/v1alpha1` | `TrafficExtension`, `WasmPlugin` | **Yes** | The `extensions.istio.io` group appears when the **Istio operator / Service Mesh Control Plane** is installed. It does not prove that an Istio control plane is running or that any mesh resources (e.g., `Gateway`, `VirtualService`) are present. |\n| **Gateway API (often used with Service Mesh)** | `gateway.networking.k8s.io/v1` | `GatewayClass`, `Gateway`, `BackendTLSPolicy`, `GRPCRoute`, etc. | Mixed \u2013 `GatewayClass` is cluster\u2011scoped, others are namespaced | Presence of the Gateway API indicates the cluster has the **gateway\u2011api** CRDs installed (often a prerequisite for modern Service Meshes). |\n\n### How the result distinguishes **installed APIs** from **deployed/healthy applications**\n\n| Observation | What it proves | What it *does not* prove |\n|-------------|----------------|--------------------------|\n| An API group appears in `oc api-resources` (e.g., `core.strimzi.io/v1`) | The **CRDs** for that group are registered in the API server \u2192 the operator\u2019s API is installed and can accept resources of those kinds. | That any concrete resource (e.g., a `Kafka` CR) exists, that the operator\u2019s controller pods are running, or that the managed service (Kafka broker, Argo\u202fCD UI, Istio pilot) is healthy. |\n| A namespaced resource kind is listed (e.g., `Application` in `argoproj.io/v1alpha1`) | Users can create objects of that kind in any namespace (subject to RBAC). | That an `Application` CR has been created, is reconciled, or is in a \u201cReady\u201d state. |\n| A cluster\u2011scoped resource kind appears (e.g., `ClusterAnalysisTemplate`) | The cluster can hold a single instance of that kind at the cluster level. | That the corresponding controller is active or that the resource\u2019s status is healthy. |\n\n### Summary\n\n- **Kafka** \u2013 The **Strimzi** API group (`core.strimzi.io/v1`) is installed, confirming the Kafka operator\u2019s CRDs are present. No evidence yet about actual Kafka clusters or their health.  \n- **Argo\u202fCD** \u2013 The **Argo\u202fCD** API groups (`argoproj.io/v1alpha1`, `argoproj.io/v1beta1`) are installed, showing the Argo\u202fCD operator\u2019s CRDs are available. Deployment of an `ArgoCD` custom resource and the health of its components are not verified here.  \n- **Service Mesh** \u2013 The **Istio** extension API group (`extensions.istio.io/v1alpha1`) and the **Gateway API** (`gateway.networking.k8s.io/v1`) are present, indicating the Service Mesh control plane\u2019s CRDs are registered. This does not confirm that the mesh control plane pods are running or that traffic routing rules are correctly configured.\n\nThese findings answer the request using only read\u2011only discovery (`oc api-resources`) without making any changes to the cluster.",
+    "activity": {
+      "conclusion_status": "agent_reported",
+      "diagnostics": [],
+      "evidence_ledger": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc api-resources --output=wide",
+          "completed_at": "2026-09-27T18:01:00.680611+00:00",
+          "content_filtered": true,
+          "duration_ms": 173,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "sequence": 1,
+          "started_at": "2026-09-27T18:01:00.507583+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NAME                                  SHORTNAMES                                                                             APIVERSION                                    NAMESPACED   KIND                                 VERBS                                                        CATEGORIES\nbindings                                                                                                                     v1                                            true         Binding                              create                                                       \ncomponentstatuses                     cs                                                                                     v1                                            false        ComponentStatus                      get,list                                                     \nconfigmaps                            cm\n...[compacted]...\neate,update,watch   \noverlappingrangeipreservations                                                                                               whereabouts.cni.cncf.io/v1alpha1              true         OverlappingRangeIPReservation        delete,deletecollection,get,list,patch,create,update,watch",
+          "title": "Api-resources resources",
+          "tool": "execute_shell",
+          "tool_call_id": "chatcmpl-tool-94226190eac0800e"
+        }
+      ],
+      "guidance_next_checks": [],
+      "investigation_gaps": [],
+      "limitations": [],
+      "preferred_evidence_view": null,
+      "presentation": null,
+      "reads": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "oc api-resources --output=wide",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "execute_shell"
+        }
+      ],
+      "recommended_next_checks": [],
+      "stop_reason": "complete",
+      "suggested_followup_actions": []
+    }
+  },
+  "render_status": 200,
+  "tools": [
+    "execute_shell"
+  ],
+  "shell_calls": 1,
+  "failed_operations": [],
+  "finished_at": "2026-09-27T18:01:27.092369+00:00"
+}

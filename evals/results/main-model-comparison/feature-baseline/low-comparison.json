@@ -1,0 +1,241 @@
+{
+  "build": "podpilot-191",
+  "reasoning_effort": "low",
+  "scoring": "Manual answer-quality review; see low-comparison.md",
+  "retries_replacing_cases": false,
+  "models": {
+    "oss120b-low": {
+      "scores": {
+        "fail": 5,
+        "partial": 2,
+        "pass": 2
+      },
+      "strict_pass_percent": 22.2,
+      "median_seconds": 86.1,
+      "tool_counts": {
+        "pod_health_summary": 1,
+        "oc_describe": 3,
+        "oc_events": 4,
+        "pod_logs": 4,
+        "oc_can_i": 10,
+        "oc_get": 19,
+        "oc_api_resources": 5,
+        "discover_resources": 1,
+        "oc_top": 2,
+        "oc_explain": 2
+      },
+      "operations": 51,
+      "shell_calls": 0,
+      "write_operations": 0,
+      "cases": [
+        {
+          "scenario": "fixture-diagnosis",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "1547619b-c1da-4e6f-99aa-a361fe46c330",
+          "reasoning_effort": "low",
+          "seconds": 126.4,
+          "operations": 10
+        },
+        {
+          "scenario": "pod-inventory",
+          "grade": "partial",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "bd0b01e4-1486-4ca9-910f-1ceef5814d38",
+          "reasoning_effort": "low",
+          "seconds": 106.4,
+          "operations": 6
+        },
+        {
+          "scenario": "kafka",
+          "grade": "partial",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "61219ad7-bef0-4752-96dd-61ea02f1d41d",
+          "reasoning_effort": "low",
+          "seconds": 86.2,
+          "operations": 6
+        },
+        {
+          "scenario": "utilization",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "88e9709e-82ca-4a10-aaac-bf18c7426010",
+          "reasoning_effort": "low",
+          "seconds": 56.1,
+          "operations": 2
+        },
+        {
+          "scenario": "schema",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "10cb9ec4-0250-4066-97ec-0ba11fada9c8",
+          "reasoning_effort": "low",
+          "seconds": 56.1,
+          "operations": 2
+        },
+        {
+          "scenario": "permissions",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "73d44618-f2a8-4501-827f-3ddf01c1dba5",
+          "reasoning_effort": "low",
+          "seconds": 41.1,
+          "operations": 6
+        },
+        {
+          "scenario": "other-kinds",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "4a67dc92-9b81-4158-b064-7d549eacf308",
+          "reasoning_effort": "low",
+          "seconds": 86.1,
+          "operations": 7
+        },
+        {
+          "scenario": "network",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "e10ce798-eb47-45d1-a2d5-67563416098b",
+          "reasoning_effort": "low",
+          "seconds": 86.2,
+          "operations": 8
+        },
+        {
+          "scenario": "api-discovery",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "05b732fc-89ca-40d2-89bc-74ecfe693701",
+          "reasoning_effort": "low",
+          "seconds": 41.0,
+          "operations": 4
+        }
+      ]
+    },
+    "gpt56-sol-low": {
+      "scores": {
+        "partial": 1,
+        "fail": 2,
+        "pass": 6
+      },
+      "strict_pass_percent": 66.7,
+      "median_seconds": 76.0,
+      "tool_counts": {
+        "pod_health_summary": 5,
+        "oc_get": 93,
+        "oc_describe": 7,
+        "pod_logs": 5,
+        "discover_resources": 3,
+        "oc_events": 1,
+        "oc_top": 2,
+        "oc_explain": 2,
+        "oc_can_i": 5,
+        "http_probe": 1,
+        "oc_api_resources": 33
+      },
+      "operations": 157,
+      "shell_calls": 0,
+      "write_operations": 0,
+      "cases": [
+        {
+          "scenario": "fixture-diagnosis",
+          "grade": "partial",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "960fa631-18bd-447c-ba1e-4ca6c7892acd",
+          "reasoning_effort": "low",
+          "seconds": 91.3,
+          "operations": 23
+        },
+        {
+          "scenario": "pod-inventory",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "157fe466-fa44-4cdb-b3a2-415b60c3f8bf",
+          "reasoning_effort": "low",
+          "seconds": 86.3,
+          "operations": 36
+        },
+        {
+          "scenario": "kafka",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "996e7560-d95d-47a6-ad2b-6d5e88002ae0",
+          "reasoning_effort": "low",
+          "seconds": 96.2,
+          "operations": 17
+        },
+        {
+          "scenario": "utilization",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "78f8130f-9052-4ba5-af0e-597d02b5d328",
+          "reasoning_effort": "low",
+          "seconds": 16.0,
+          "operations": 2
+        },
+        {
+          "scenario": "schema",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "639b953d-190b-4770-8804-928fbae5925b",
+          "reasoning_effort": "low",
+          "seconds": 21.0,
+          "operations": 6
+        },
+        {
+          "scenario": "permissions",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "e0b07628-a7cb-4053-af52-ce8e8f45035f",
+          "reasoning_effort": "low",
+          "seconds": 15.9,
+          "operations": 4
+        },
+        {
+          "scenario": "other-kinds",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "9deaa6d7-975b-4ae5-8bfb-57b42334b7c7",
+          "reasoning_effort": "low",
+          "seconds": 76.0,
+          "operations": 22
+        },
+        {
+          "scenario": "network",
+          "grade": "pass",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "bbe5183f-c0fc-4a5c-baed-576c4c1ac7e2",
+          "reasoning_effort": "low",
+          "seconds": 56.1,
+          "operations": 12
+        },
+        {
+          "scenario": "api-discovery",
+          "grade": "fail",
+          "run_status": "succeeded",
+          "render_status": 200,
+          "conversation_id": "692ed3b6-a291-4fb2-9b1f-fad3295f5742",
+          "reasoning_effort": "low",
+          "seconds": 96.2,
+          "operations": 35
+        }
+      ]
+    }
+  }
+}

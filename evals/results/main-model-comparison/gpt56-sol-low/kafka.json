@@ -1,0 +1,422 @@
+{
+  "scenario": "kafka",
+  "question": "Is Kafka installed in this cluster? Discover its APIs and inspect the actual Kafka clusters and supporting node pools, topics and Pods if available. Report namespaces, names, readiness, broker topology and any observed problems. Explain what you verified and any gaps. Do not change anything.",
+  "reasoning_effort": "low",
+  "started_at": "2026-09-27T18:03:37.962103+00:00",
+  "conversation_id": "258dfcdf-d812-4084-8cfb-b683120bdeba",
+  "run_status": "succeeded",
+  "result": {
+    "answer": "## Conclusion\n\nYes\u2014Kafka is installed and running via **Strimzi**.\n\n### APIs verified\n\nAPI discovery found these namespaced Strimzi `kafka.strimzi.io/v1` resources:\n\n- `Kafka`\n- `KafkaNodePool`\n- `KafkaTopic`\n\nThe Strimzi Cluster Operator deployment `openshift-operators/strimzi-cluster-operator-v0.51.0` was also observed with **1/1 ready and available** replica.\n\n## Kafka inventory\n\n| Namespace | Kafka cluster | Readiness | Version | Metadata version |\n|---|---|---:|---:|---:|\n| `kafka-observability` | `kafka-observability-cluster` | **Ready=True** | 4.2.0 | `4.2-IV1` |\n\nIts reported and observed generations are both 1, so the operator has reconciled the current specification. The internal plaintext bootstrap endpoint is:\n\n`kafka-observability-cluster-kafka-bootstrap.kafka-observability.svc:9092`\n\nExactly **1 Kafka cluster** was returned cluster-wide.\n\n## Broker/controller topology\n\nOne node pool was found:\n\n| Namespace | Node pool | Replicas | Roles | Node IDs | Storage |\n|---|---|---:|---|---|---|\n| `kafka-observability` | `sno` | 1 desired / 1 reported | broker, controller | `0` | 10 Gi persistent claim, class `kafka-observability-local`, `deleteClaim: false` |\n\nThis is a **single-node KRaft topology**: node 0 serves as both broker and controller. The Kafka Pod `kafka-observability-cluster-sno-0` is Running and Ready on node `sno1`.\n\nOperational implication: topic replication is 1 and there is no broker/controller redundancy. Loss or maintenance of that sole broker interrupts Kafka availability, although retained persistent storage may preserve data.\n\n## Topics\n\nAll **4 KafkaTopic resources** are in `kafka-observability`, belong to `kafka-observability-cluster`, have matching observed/current generations, and report **Ready=True**:\n\n| Topic | Partitions | Replicas |\n|---|---:|---:|\n| `podpilot-audit-large` | 4 | 1 |\n| `podpilot-metrics-test` | 1 | 1 |\n| `podpilot-orders-small` | 2 | 1 |\n| `podpilot-payments-medium` | 3 | 1 |\n\n## Pods and observed issues\n\nA complete health scan evaluated all **3 Pods** carrying the cluster label and found **zero current anomalies**; all were Running/Ready. These comprise the Kafka broker/controller, entity operator, and Kafka exporter.\n\nHistorical restart counts are notable:\n\n- Kafka Pod: **11** restarts\n- Entity Operator topic-operator container: **23** restarts\n- Entity Operator user-operator container: **22** restarts\n\nThe entity-operator containers most recently terminated with exit code 1 before restarting around `2026-09-27 12:34 UTC`; the Pods are currently Ready. No warning events were returned during the namespace event check. Thus there is no observed current outage, but the synchronized historical restarts indicate a past disruption or node/workload restart. Existing evidence does not establish its cause.\n\n## Verification scope and gaps\n\nVerified through cluster-wide API discovery and object listing:\n\n- Strimzi API availability\n- all visible Kafka, KafkaNodePool, and KafkaTopic instances\n- Kafka and node-pool status/topology\n- topic readiness and partition/replica configuration\n- operator deployment availability\n- health of all three cluster-labeled Pods\n- warning events in the Kafka namespace\n\nGaps:\n\n- No active producer/consumer test or direct Kafka protocol probe was performed.\n- Current readiness does not prove end-to-end message flow.\n- Historical restart cause was not determined from the bounded object/event evidence; logs were not required to answer installation and current inventory status.\n- Findings are limited to resources visible under the signed-in operator\u2019s RBAC, though all attempted reads succeeded.\n\nNo changes were made.",
+    "activity": {
+      "conclusion_status": "agent_reported",
+      "diagnostics": [],
+      "evidence_ledger": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T18:03:40.802535+00:00",
+          "duration_ms": 651,
+          "evidence_ids": [
+            "cluster-discovery-ec1c6e41-d627-4f5a-b696-102eca1abd2b"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T18:03:40.801560+00:00",
+              "data": {
+                "absence_supported": false,
+                "count": 21,
+                "evidence_type": "api_resource_types_only",
+                "limitations": [
+                  "API discovery does not search namespaces or object instances and cannot establish software absence."
+                ],
+                "matched_count": 21,
+                "policy": "dynamic API discovery with sensitive resource types excluded; object authorization is not implied",
+                "query": "Kafka Strimzi KafkaNodePool KafkaTopic",
+                "resources": [
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaNodePool",
+                    "namespaced": true,
+                    "resource": "kafkanodepools",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "KafkaTopic",
+                    "namespaced": true,
+                    "resource": "kafkatopics",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "kafka.strimzi.io/v1",
+                    "kind": "Kafka",
+                    "namespaced": true,
+                    "resource": "kafkas",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "config.openshift.io/v1",
+                    "kind": "Node",
+                    "namespaced": false,
+                    "resource": "nodes.config.openshift.io",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "metrics.k8s.io/v1beta1",
+                    "kind": "NodeMetrics",
+                    "namespaced": false,
+                    "resource": "nodes.metrics.k8s.io",
+                    "verbs": [
+                      "get",
+                      "list"
+                    ]
+                  },
+                  {
+                    "apiVersion": "v1",
+                    "kind": "Node",
+                    "namespaced": false,
+                    "resource": "nodes.core",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "argoproj.io/v1alpha1",
+                    "kind": "AnalysisTemplate",
+                    "namespaced": true,
+                    "resource": "analysistemplates",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  },
+                  {
+                    "apiVersion": "v1",
+                    "kind": "Endpoints",
+                    "namespaced": true,
+                    "resource": "endpoints",
+                    "verbs": [
+                      "create",
+                      "delete",
+                      "deletecollection",
+                      "get",
+                      "list",
+                      "patch",
+                      "update",
+                      "watch"
+                    ]
+                  }
+                ],
+                "truncated": false
+              },
+              "id": "cluster-discovery-ec1c6e41-d627-4f5a-b696-102eca1abd2b",
+              "source": "kubernetes:api-discovery",
+              "summary": "Discovered 21 policy-filtered API resource types relevant to Kafka Strimzi KafkaNodePool KafkaTopic.",
+              "tool": "discover_resources"
+            }
+          ],
+          "request": {
+            "discovery_query": "Kafka Strimzi KafkaNodePool KafkaTopic",
+            "limit": 100
+          },
+          "sequence": 1,
+          "started_at": "2026-09-27T18:03:40.151956+00:00",
+          "status": "succeeded",
+          "title": "Discover resources",
+          "tool": "discover_resources",
+          "tool_call_id": "call_8lRCUFhYPSBEHOkYFzFdQC9o"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\nprintf '%s\\n' '=== Kafka clusters ==='\noc get kafkas.kafka.strimzi.io -A -o json | jq -r '.items[] | {namespace:.metadata.namespace,name:.metadata.name,generation:.metadata.generation,observedGeneration:.status.observedGeneration,conditions:.status.conditions,kafkaVersion:.status.kafkaVersion,kafkaMetadataVersion:.status.kafkaMetadataVersion,listeners:.st\n...[compacted]...\n'.items[] | {namespace:$ns,lastTimestamp:(.eventTime // .lastTimestamp),reason,message,involvedObject:.involvedObject}'; done",
+          "completed_at": "2026-09-27T18:03:50.653083+00:00",
+          "content_filtered": true,
+          "duration_ms": 1434,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "sequence": 2,
+          "started_at": "2026-09-27T18:03:49.218682+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "=== Kafka clusters ===\n{\n  \"namespace\": \"kafka-observability\",\n  \"name\": \"kafka-observability-cluster\",\n  \"generation\": 1,\n  \"observedGeneration\": 1,\n  \"conditions\": [\n    {\n      \"lastTransitionTime\": \"2026-09-02T01:44:10.952768715Z\",\n      \"status\": \"True\",\n      \"type\": \"Ready\"\n    }\n  ],\n  \"kafkaVersion\": \"4.2.0\",\n  \"kafkaMetadataVersion\": \"4.2-IV1\",\n  \"listeners\": [\n    {\n      \"addresses\": [\n        {\n          \"host\": \"kafka-observability-cluster-kafka-bootstrap.kafka-observability.svc\",\n          \"port\": 9092\n        }\n      ],\n      \"bootstrapServers\": \"kafka-observability-cluster-kafka-bootstrap.kafka-observability.svc:9092\",\n      \"name\": \"plain\"\n    }\n  ],\n  \"nodePools\": [\n    {\n      \"name\": \"sno\"\n    }\n  ]\n}\n=== Node pools ===\n{\n  \"namespace\": \"kafka-observability\",\n  \"name\": \"sno\",\n  \"clusterLabel\": \"kafka-observability-cluster\",\n  \"replicas\": 1,\n  \"roles\": [\n    \"controll\n...[compacted]...\n\"openshift-operators\",\n  \"name\": \"strimzi-cluster-operator-v0.51.0\",\n  \"replicas\": 1,\n  \"readyReplicas\": 1,\n  \"availableReplicas\": 1,\n  \"images\": [\n    \"quay.io/strimzi/operator@sha256:ef3e406aa09449dd0241d53cdc81e15e58bf59b51f2425fb64384a179d676b1d\"\n  ]\n}\n=== Warning events in Kafka namespaces ===",
+          "title": "Run multiple commands",
+          "tool": "execute_shell",
+          "tool_call_id": "call_fwFteMjc8CTL4YDCqvLr3MqH"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "completed_at": "2026-09-27T18:03:53.387896+00:00",
+          "duration_ms": 36,
+          "evidence_ids": [
+            "cluster-3f2a3911-8e80-4de7-a91b-fe03b6abc117"
+          ],
+          "limitations": [],
+          "observations": [
+            {
+              "cluster_id": "00000000-0000-0000-0000-000000000001",
+              "cluster_name": "sno.192-168-0-200.sslip.io",
+              "collected_at": "2026-09-27T18:03:53.354040+00:00",
+              "data": {
+                "anomalies": [],
+                "anomaliesComplete": true,
+                "anomalyCount": 0,
+                "apiVersion": "v1",
+                "byReason": {},
+                "bySeverity": {},
+                "findingsComplete": true,
+                "findingsCount": 0,
+                "healthSummaryVersion": 2,
+                "kind": "Pod",
+                "labelSelector": "strimzi.io/cluster=kafka-observability-cluster",
+                "objects": [],
+                "returnedAnomalyCount": 0,
+                "scanComplete": true,
+                "scanLimit": 2000,
+                "scannedCount": 3,
+                "scope": "kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster"
+              },
+              "id": "cluster-3f2a3911-8e80-4de7-a91b-fe03b6abc117",
+              "source": "kubernetes:v1:Pod/health:kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster",
+              "summary": "Detected no Pod health anomalies after evaluating 3 Pods in kafka-observability matching label selector strimzi.io/cluster=kafka-observability-cluster.",
+              "tool": "pod_health_summary"
+            }
+          ],
+          "request": {
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "limit": 100,
+            "namespace": "kafka-observability"
+          },
+          "sequence": 3,
+          "started_at": "2026-09-27T18:03:53.351825+00:00",
+          "status": "succeeded",
+          "title": "Check Pod health in kafka-observability",
+          "tool": "pod_health_summary",
+          "tool_call_id": "call_neEf0FdhU8THd97rWtnFK8NE"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\nprintf '%s\\n' 'NODEPOOLS'\noc get kafkanodepools.kafka.strimzi.io -A -o json | jq -c '.items[]|{ns:.metadata.namespace,name:.metadata.name,cluster:.metadata.labels[\"strimzi.io/cluster\"],replicas:.spec.replicas,roles:.spec.roles,storage:.spec.storage,statusReplicas:.status.replicas,nodeIds:.status.nodeIds,conditions:.status.conditions}'\nprintf '%s\\n' 'TOPIC\n...[compacted]...\natus.containerStatuses[]?.restartCount]|add//0),node:.spec.nodeName,owners:[.metadata.ownerReferences[]?|(.kind+\"/\"+.name)]}'",
+          "completed_at": "2026-09-27T18:03:58.947239+00:00",
+          "content_filtered": true,
+          "duration_ms": 495,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "sequence": 4,
+          "started_at": "2026-09-27T18:03:58.452086+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "NODEPOOLS\n{\"ns\":\"kafka-observability\",\"name\":\"sno\",\"cluster\":\"kafka-observability-cluster\",\"replicas\":1,\"roles\":[\"controller\",\"broker\"],\"storage\":{\"class\":\"kafka-observability-local\",\"deleteClaim\":false,\"size\":\"10Gi\",\"type\":\"persistent-claim\"},\"statusReplicas\":1,\"nodeIds\":[0],\"conditions\":[]}\nTOPICS\n{\"ns\":\"kafka-observability\",\"name\":\"podpilot-audit-large\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-audit-large\",\"partitions\":4,\"replicas\":1,\"conditions\":[{\"lastTransitionTime\":\"2026-09-02T02:02:53.005025439Z\",\"status\":\"True\",\"type\":\"Ready\"}],\"observedGeneration\":1,\"generation\":1}\n{\"ns\":\"kafka-observability\",\"name\":\"podpilot-metrics-test\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-metrics-test\",\"partitions\":1,\"replicas\":1,\"conditions\":[{\"lastTransitionTime\":\"2026-09-02T01:43:23.474323533Z\",\"status\":\"True\",\"type\":\"Ready\"}],\"observedGeneration\":1,\"generati\n...[compacted]...\ne\":\"sno1\",\"owners\":[\"ReplicaSet/kafka-observability-cluster-kafka-exporter-858785db56\"]}\n{\"name\":\"kafka-observability-cluster-sno-0\",\"component\":\"kafka\",\"nodePool\":\"sno\",\"phase\":\"Running\",\"ready\":1,\"containers\":1,\"restarts\":11,\"node\":\"sno1\",\"owners\":[\"StrimziPodSet/kafka-observability-cluster-sno\"]}",
+          "title": "Run multiple commands",
+          "tool": "execute_shell",
+          "tool_call_id": "call_rg1L5UMN57AXPtqkRhoSf0rM"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\noc get pods -n kafka-observability -l strimzi.io/cluster=kafka-observability-cluster -o json | jq -c '.items[]|{name:.metadata.name,created:.metadata.creationTimestamp,startTime:.status.startTime,conditions:[.status.conditions[]|select(.type==\"Ready\")|{status,lastTransitionTime}],containers:[.status.containerStatuses[]|{name,restartCount,state,lastState}]\n...[compacted]...\n-c '.items[]|{time:(.eventTime//.lastTimestamp),reason,message,object:(.involvedObject.kind+\"/\"+.involvedObject.name),count}'",
+          "completed_at": "2026-09-27T18:04:03.383983+00:00",
+          "content_filtered": true,
+          "duration_ms": 394,
+          "executed": true,
+          "exit_code": 0,
+          "filter_reasons": [
+            "Only part of the command output is shown."
+          ],
+          "filtered_fields": [],
+          "operation_kind": "read",
+          "sequence": 5,
+          "started_at": "2026-09-27T18:04:02.989832+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "{\"name\":\"kafka-observability-cluster-entity-operator-85c4c74445-v89f8\",\"created\":\"2026-09-02T01:43:16Z\",\"startTime\":\"2026-09-02T01:43:16Z\",\"conditions\":[{\"status\":\"True\",\"lastTransitionTime\":\"2026-09-27T12:34:43Z\"}],\"containers\":[{\"name\":\"topic-operator\",\"restartCount\":23,\"state\":{\"running\":{\"startedAt\":\"2026-09-27T12:34:16Z\"}},\"lastState\":{\"terminated\":{\"containerID\":\"cri-o://9d6bb7f3143116a8b89c3802f5a14a39189373e1e5e5e06a74cb8bea51a22bf4\",\"exitCode\":1,\"finishedAt\":\"2026-09-27T12:34:16Z\",\"reason\":\"Error\",\"startedAt\":\"2026-09-27T12:34:08Z\"}}},{\"name\":\"user-operator\",\"restartCount\":22,\"state\":{\"running\":{\"startedAt\":\"2026-09-27T12:34:17Z\"}},\"lastState\":{\"terminated\":{\"containerID\":\"cri-o://383d1474fadecd00ed8e06226495083cfd9326673b21757d204b62d7b7c42ebc\",\"exitCode\":1,\"finishedAt\":\"2026-09-27T12:34:17Z\",\"reason\":\"Error\",\"startedAt\":\"2026-09-27T12:34:12Z\"}}}]}\n{\"name\":\"kafka-observability-\n...[compacted]...\nervability-cluster-sno-0\",\"created\":\"2026-09-02T01:42:51Z\",\"startTime\":\"2026-09-02T01:42:52Z\",\"conditions\":[{\"status\":\"True\",\"lastTransitionTime\":\"2026-09-27T12:34:34Z\"}],\"containers\":[{\"name\":\"kafka\",\"restartCount\":11,\"state\":{\"running\":{\"startedAt\":\"2026-09-27T12:34:10Z\"}},\"lastState\":{}}]}\nEVENTS",
+          "title": "Run multiple commands",
+          "tool": "execute_shell",
+          "tool_call_id": "call_5gcoakh0MjcdCT1mwJzUhdIQ"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\noc get kafkatopics.kafka.strimzi.io -A -o json | jq -c '{count:(.items|length),items:[.items[]|{namespace:.metadata.namespace,name:.metadata.name,cluster:.metadata.labels[\"strimzi.io/cluster\"],topicName:(.status.topicName//.spec.topicName//.metadata.name),partitions:.spec.partitions,replicas:.spec.replicas,ready:([.status.conditions[]?|select(.type==\"Read\n...[compacted]...\nion}]}'\noc get kafkas.kafka.strimzi.io -A --no-headers | wc -l\noc get kafkanodepools.kafka.strimzi.io -A --no-headers | wc -l",
+          "completed_at": "2026-09-27T18:04:07.088925+00:00",
+          "duration_ms": 545,
+          "executed": true,
+          "exit_code": 0,
+          "operation_kind": "read",
+          "sequence": 6,
+          "started_at": "2026-09-27T18:04:06.543452+00:00",
+          "status": "completed",
+          "stderr_excerpt": "",
+          "stdout_excerpt": "{\"count\":4,\"items\":[{\"namespace\":\"kafka-observability\",\"name\":\"podpilot-audit-large\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-audit-large\",\"partitions\":4,\"replicas\":1,\"ready\":\"True\",\"generation\":1,\"observedGeneration\":1},{\"namespace\":\"kafka-observability\",\"name\":\"podpilot-metrics-test\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-metrics-test\",\"partitions\":1,\"replicas\":1,\"ready\":\"True\",\"generation\":1,\"observedGeneration\":1},{\"namespace\":\"kafka-observability\",\"name\":\"podpilot-orders-small\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-orders-small\",\"partitions\":2,\"replicas\":1,\"ready\":\"True\",\"generation\":1,\"observedGeneration\":1},{\"namespace\":\"kafka-observability\",\"name\":\"podpilot-payments-medium\",\"cluster\":\"kafka-observability-cluster\",\"topicName\":\"podpilot-payments-medium\",\"partitions\":3,\"replicas\":1,\"ready\":\"True\",\"generation\":1,\"observedGeneration\":1}]}\n1\n1",
+          "title": "Run multiple commands",
+          "tool": "execute_shell",
+          "tool_call_id": "call_1QAuIo5D2HEy8WMmHsL6LSsQ"
+        }
+      ],
+      "guidance_next_checks": [],
+      "investigation_gaps": [],
+      "limitations": [],
+      "preferred_evidence_view": null,
+      "presentation": null,
+      "reads": [
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-discovery-ec1c6e41-d627-4f5a-b696-102eca1abd2b"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "discovery_query": "Kafka Strimzi KafkaNodePool KafkaTopic",
+            "limit": "100"
+          },
+          "tool": "discover_resources"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\nprintf '%s\\n' '=== Kafka clusters ==='\noc get kafkas.kafka.strimzi.io -A -o json | jq -r '.items[] | {namespace:.metadata.namespace,name:.metadata.name,generation:.metadata.generation,observedGeneration:.status.observedGeneration,conditions:.status.conditions,kafkaVersion:.status.kafkaVersion,kafkaMetadataVersion:.status.kafkaMetadataVersion,listeners:.status.listeners,nodePools:.status.kafkaNodePools}'\nprintf '%s\\n' '=== Node pools ==='\noc get kafkanodepools.kafka.strimzi.io -A -o json | jq -r '.items[] | {namespace:.metadata.namespace,name:.metadata.name,clusterLabel:.metadata.labels[\"strimzi.io/cluster\"],replicas:.spec.replicas,roles:.spec.roles,storage:.spec.storage,resources:.spec.resources,status:.status}'\nprintf '%s\\n' '=== Topics ==='\noc get kafkatopics.kafka.strimzi.io -A -o json | jq -r '.items[] | {namespace:.metadata.namespace,name:.metadata.name,clusterLabel:.metadata.labels[\"strimzi.io/cluster\"],partitions:.spec.partitions,replicas:.spec.replicas,topicName:.spec.topicName,conditions:.status.conditions,observedGeneration:.status.observedGeneration}'\nprintf '%s\\n' '=== Strimzi-owned / labeled pods ==='\noc get pods -A -o json | jq -r '.items[] | select((.metadata.labels[\"strimzi.io/cluster\"] // \"\") != \"\" or (.metadata.labels[\"app.kubernetes.io/part-of\"] // \"\") == \"strimzi\") | {namespace:.metadata.namespace,name:.metadata.name,uid:.metadata.uid,cluster:.metadata.labels[\"strimzi.io/cluster\"],kind:.metadata.labels[\"strimzi.io/kind\"],pool:.metadata.labels[\"strimzi.io/pool-name\"],node:.spec.nodeName,phase:.status.phase,conditions:.status.conditions,containers:[.status.containerStatuses[]? | {name,ready,restartCount,state,lastState}],owners:.metadata.ownerReferences}'\nprintf '%s\\n' '=== Strimzi operators ==='\noc get deploy -A -o json | jq -r '.items[] | select((.metadata.name|ascii_downcase|contains(\"strimzi\")) or ([.spec.template.spec.containers[].image]|join(\" \")|ascii_downcase|contains(\"strimzi\"))) | {namespace:.metadata.namespace,name:.metadata.name,replicas:.spec.replicas,readyReplicas:.status.readyReplicas,availableReplicas:.status.availableReplicas,images:[.spec.template.spec.containers[].image]}'\nprintf '%s\\n' '=== Warning events in Kafka namespaces ==='\nfor ns in $(oc get kafkas.kafka.strimzi.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}{\"\\n\"}{end}' | sort -u); do oc get events -n \"$ns\" --field-selector type=Warning -o json | jq -r --arg ns \"$ns\" '.items[] | {namespace:$ns,lastTimestamp:(.eventTime // .lastTimestamp),reason,message,involvedObject:.involvedObject}'; done",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "execute_shell"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "diagnostic_ref": null,
+          "evidence_ids": [
+            "cluster-3f2a3911-8e80-4de7-a91b-fe03b6abc117"
+          ],
+          "failure_category": null,
+          "observations": 1,
+          "status": "succeeded",
+          "target": {
+            "label_selector": "strimzi.io/cluster=kafka-observability-cluster",
+            "limit": "100",
+            "namespace": "kafka-observability"
+          },
+          "tool": "pod_health_summary"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\nprintf '%s\\n' 'NODEPOOLS'\noc get kafkanodepools.kafka.strimzi.io -A -o json | jq -c '.items[]|{ns:.metadata.namespace,name:.metadata.name,cluster:.metadata.labels[\"strimzi.io/cluster\"],replicas:.spec.replicas,roles:.spec.roles,storage:.spec.storage,statusReplicas:.status.replicas,nodeIds:.status.nodeIds,conditions:.status.conditions}'\nprintf '%s\\n' 'TOPICS'\noc get kafkatopics.kafka.strimzi.io -A -o json | jq -c '.items[]|{ns:.metadata.namespace,name:.metadata.name,cluster:.metadata.labels[\"strimzi.io/cluster\"],topicName:(.status.topicName//.spec.topicName//.metadata.name),partitions:.spec.partitions,replicas:.spec.replicas,conditions:.status.conditions,observedGeneration:.status.observedGeneration,generation:.metadata.generation}'\nprintf '%s\\n' 'PODS'\noc get pods -n kafka-observability -l strimzi.io/cluster=kafka-observability-cluster -o json | jq -c '.items[]|{name:.metadata.name,component:.metadata.labels[\"strimzi.io/component-type\"],nodePool:.metadata.labels[\"strimzi.io/pool-name\"],phase:.status.phase,ready:([.status.containerStatuses[]?|select(.ready==true)]|length),containers:([.status.containerStatuses[]?]|length),restarts:([.status.containerStatuses[]?.restartCount]|add//0),node:.spec.nodeName,owners:[.metadata.ownerReferences[]?|(.kind+\"/\"+.name)]}'",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "execute_shell"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\noc get pods -n kafka-observability -l strimzi.io/cluster=kafka-observability-cluster -o json | jq -c '.items[]|{name:.metadata.name,created:.metadata.creationTimestamp,startTime:.status.startTime,conditions:[.status.conditions[]|select(.type==\"Ready\")|{status,lastTransitionTime}],containers:[.status.containerStatuses[]|{name,restartCount,state,lastState}]}'\nprintf '%s\\n' EVENTS\noc get events -n kafka-observability --field-selector type=Warning -o json | jq -c '.items[]|{time:(.eventTime//.lastTimestamp),reason,message,object:(.involvedObject.kind+\"/\"+.involvedObject.name),count}'",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "execute_shell"
+        },
+        {
+          "cluster_id": "00000000-0000-0000-0000-000000000001",
+          "cluster_name": "sno.192-168-0-200.sslip.io",
+          "command": "set -euo pipefail\noc get kafkatopics.kafka.strimzi.io -A -o json | jq -c '{count:(.items|length),items:[.items[]|{namespace:.metadata.namespace,name:.metadata.name,cluster:.metadata.labels[\"strimzi.io/cluster\"],topicName:(.status.topicName//.spec.topicName//.metadata.name),partitions:.spec.partitions,replicas:.spec.replicas,ready:([.status.conditions[]?|select(.type==\"Ready\")|.status]|first//\"Unknown\"),generation:.metadata.generation,observedGeneration:.status.observedGeneration}]}'\noc get kafkas.kafka.strimzi.io -A --no-headers | wc -l\noc get kafkanodepools.kafka.strimzi.io -A --no-headers | wc -l",
+          "diagnostic_ref": null,
+          "evidence_ids": [],
+          "exit_code": 0,
+          "failure_category": null,
+          "operation_kind": "read",
+          "status": "completed",
+          "tool": "execute_shell"
+        }
+      ],
+      "recommended_next_checks": [],
+      "stop_reason": "complete",
+      "suggested_followup_actions": []
+    }
+  },
+  "render_status": 200,
+  "tools": [
+    "discover_resources",
+    "execute_shell",
+    "pod_health_summary"
+  ],
+  "shell_calls": 4,
+  "failed_operations": [],
+  "finished_at": "2026-09-27T18:04:24.242013+00:00"
+}
