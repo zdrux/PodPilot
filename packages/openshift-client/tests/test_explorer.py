@@ -1195,7 +1195,9 @@ def test_workload_health_summary_scans_each_controller_kind_with_namespace() -> 
     data = result.observations[0].data
     assert data["scannedByKind"] == {"Deployment": 1, "StatefulSet": 1, "DaemonSet": 1}
     assert data["anomalyCount"] == 2
-    assert {item["kind"] for item in data["anomalies"]} == {"Deployment", "DaemonSet"}
+    assert {item["kind"] for item in data["rows"]} == {"Deployment", "DaemonSet"}
+    assert data["healthyCount"] == 1
+    assert data["scanComplete"] is True
     assert all(
         resource.calls == [{"limit": 100, "namespace": "payments"}]
         for resource in resources_by_kind.values()
@@ -1431,3 +1433,72 @@ def test_application_log_volume_routes_to_registered_loki_reader():
 
     assert reader.intents == [intent]
     assert result.observations[0].source.endswith("application_log_volume")
+
+
+def test_workload_pages_are_compact_and_preserve_coverage():
+    objects = [FakeObject(payload={
+        "metadata": {"name": f"web-{i:02}", "namespace": "demo", "annotations": {"ignored": "x" * 10000}},
+        "spec": {"replicas": 1},
+        "status": {"readyReplicas": 0, "updatedReplicas": 1},
+    }) for i in range(25)]
+    target = KubernetesReadOnlyExplorer(dynamic_client=SimpleNamespace(resources=SimpleNamespace(
+        get=lambda **kw: FakeResource(objects))), core_api=FakeCore())
+    first = target.execute(ReadIntent(tool="workload_health_summary", kind="Deployment", limit=10)).observations[0].data
+    second = target.execute(ReadIntent(tool="workload_health_summary", kind="Deployment", limit=10, offset=10)).observations[0].data
+    assert first["anomalyCount"] == 25
+    assert first["nextOffset"] == 10 and second["nextOffset"] == 20
+    assert first["rows"][0]["name"] == "web-00" and second["rows"][0]["name"] == "web-10"
+    assert "annotations" not in str(first)
+    assert len(str({key: value for key, value in first.items() if key != "findingsRows"})) < 6000
+    assert len(first["findingsRows"]) == 25
+    assert first["findingsRows"][-1]["name"] == "web-24"
+    assert first["findingsComplete"] is True
+
+
+def test_workload_partial_permission_does_not_claim_healthy():
+    from kubernetes.client.exceptions import ApiException
+    def resource(**kwargs):
+        if kwargs["kind"] == "StatefulSet":
+            raise ApiException(status=403)
+        return FakeResource([])
+    target = KubernetesReadOnlyExplorer(dynamic_client=SimpleNamespace(resources=SimpleNamespace(get=resource)), core_api=FakeCore())
+    result = target.execute(ReadIntent(tool="workload_health_summary"))
+    assert result.observations[0].data["scanComplete"] is False
+    assert "403" in str(result.observations[0].data["unavailableKinds"])
+    assert "partial" in result.observations[0].summary.lower()
+
+
+def test_workload_all_mode_includes_scaled_zero_without_failure():
+    resource = FakeResource([FakeObject(payload={"metadata": {"name": "paused", "namespace": "demo"},
+        "spec": {"replicas": 0}, "status": {}})])
+    target = KubernetesReadOnlyExplorer(dynamic_client=SimpleNamespace(resources=SimpleNamespace(get=lambda **kw: resource)), core_api=FakeCore())
+    data = target.execute(ReadIntent(tool="workload_health_summary", kind="Deployment", unhealthy_only=False)).observations[0].data
+    assert data["healthyCount"] == 1 and data["anomalyCount"] == 0
+    assert data["rows"][0]["desired"] == 0 and data["rows"][0]["reasons"] == []
+
+
+def test_health_collects_all_api_pages_with_small_preview():
+    class Pages:
+        def get(self, **kwargs):
+            second = kwargs.get("_continue") == "second"
+            return SimpleNamespace(items=[FakeObject(payload={
+                "metadata": {"namespace": "demo", "name": f"item-{i}"},
+                "spec": {"replicas": 1}, "status": {"phase": "Pending"},
+            }) for i in range(25 if second else 22)], metadata={"continue": "" if second else "second"})
+    target, _, _ = explorer(Pages())
+    for tool in ("pod_health_summary", "workload_health_summary"):
+        result = target.execute(ReadIntent(tool=tool, kind="Deployment" if tool.startswith("workload") else None, limit=10))
+        data = result.observations[0].data
+        assert data["scannedCount"] == 47
+        assert data["findingsCount"] == 47
+        assert data["scanComplete"] is True
+        assert data["findingsComplete"] is True
+        assert len(data.get("rows", data.get("anomalies"))) == 10
+
+
+def test_health_storage_ceiling_is_explicit():
+    rows, complete = KubernetesReadOnlyExplorer._retained_health_rows([
+        {"name": str(i), "reasons": ["x" * 8000] * 8} for i in range(100)
+    ])
+    assert complete is False
+    assert 0 < len(rows) < 100

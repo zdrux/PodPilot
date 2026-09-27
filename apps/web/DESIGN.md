@@ -87,14 +87,14 @@ new component. The default dark palette below documents the intended roles; the
 Classic, Light, Medium Light, CIBC Red, and Orange themes provide equivalent values in
 `styles.css`.
 
-Orange is an optional DemandKit-inspired comparison theme defined in `static/orange.css`.
+Orange is an optional comparison theme defined in `static/orange.css`.
 Select it from Appearance in the sidebar; the existing browser preference persists
 the choice across routes and reloads. Classic remains the default. Orange uses a
 neutral light canvas, white bordered panels, orange selection fills, and a darker
 orange for readable links and primary actions. Green, amber, and red retain their
 operational meanings. Its shared sidebar is 292px on desktop, 252px below 1180px,
 and 224px below 840px, with 48px primary navigation rows and outline icons.
-All themes share the DemandKit outline SVG navigation icons, including folder icons
+All themes share the shared outline SVG navigation icons, including folder icons
 for connector headings. Icon colors follow each theme.
 Connector categories use folder icons and branch lines down to individual instances;
 the add action shares the Connectors row outline while remaining a separate link.
@@ -470,12 +470,96 @@ back to the bottom resumes following, and sending a new message shows that turn.
 
 ### Grafana Compact theme
 
-`static/compact.css` adds the optional `grafana-compact` palette and density preset
+`static/compact.css` defines the shared density and optional `grafana-compact` palette
 through Appearance. It follows the supplied Grafana sidebar reference: charcoal
 surfaces, regular-weight system sans-serif text (Inter when available, Segoe UI on
 Windows), muted outline icons, blue links and an orange active-navigation marker.
 Desktop navigation uses a 240px rail, 30px rows, 16px icons and flat submenus with
 reduced margins. The rail narrows to 210px below 840px; below 640px navigation stacks
 above the content with 36px rows. Headings and buttons also use tighter spacing.
-Other themes retain their geometry. The selected theme persists across reloads
+All themes share this geometry. The selected palette persists across reloads
 and routes, and the compact stylesheet participates in the shared asset hash.
+
+Compact navigation retains subtle vertical tree guides and horizontal branches
+between sections, folder groups and child links. Cluster and connector status
+dots have a dedicated 9px gap to their text; the tighter stacked-label spacing
+must not override the horizontal status-to-label spacing.
+
+Cluster Management, Cluster memory and Model settings occupy a separate fixed
+administration navigation group above Appearance and identity. The workspace,
+conversation and connector tree scrolls independently. Preserve configuration-admin
+visibility checks and active-link highlighting in every theme.
+
+### Complete health tables
+
+Controller health findings render from current-turn normalized evidence, with
+cluster, scope, timestamp, total count and explicit partial-coverage status. Keep
+all retained rows in the DOM for copy/CSV. Tables are open by default and scroll
+internally above 20 rows with sticky headers and a keyboard-focusable region;
+ResizeObserver recalculates the first-20-row height across widths and themes.
+Initial tool calls send summaries/previews. Follow-up history includes the full
+displayed tables while their parent assistant message remains in the recent
+context window (default 10 messages), subject to the overall provider budget.
+
+### Sidebar session scope and resizing
+
+Session entries use two rows: title, then cluster tags and timestamp on one line.
+Tags reuse the composer `cluster-picker-chip` styling, one per selected cluster;
+long names ellipsize with full names in tooltips. Missing clusters are labeled unavailable. Timestamp labels retain EST
+without the numeric offset suffix. On desktop, the sidebar edge is a keyboard-
+accessible resize separator (arrows adjust, Home/double-click resets), persisted
+locally across navigation and reload. Width is bounded to 200–480px and 45vw;
+mobile uses the existing stacked layout with no resize handle.
+
+The desktop resize edge has a persistent 6×48px rounded grip centered vertically,
+with a 12px drag target and accent hover/focus feedback.
+
+Health findings reuse answer-table code chips for resource names/reasons, bold
+namespace labels, and Pod readiness/restart columns. Recognizable duplicate model
+health inventories are replaced by the complete evidence table; narrative and
+unrelated or recommendation tables remain. Initial model prose is retained in
+storage; displayed history follows the same suppression rule as the UI.
+
+Session cluster chips share title font sizing and fit their text; extra sidebar
+width does not stretch chip borders. Typographic hyphens are normalized only
+when matching redundant model inventories to evidence names.
+
+### Pinned Connectors menu
+
+Connectors is a collapsed disclosure above Cluster Management in the fixed admin
+navigation, preserving configuration-admin and incident-feature visibility gates.
+It opens a sidebar-width upward overlay with Manage connectors and Add connector
+first, then the existing grouped instance tree. Cap height to available viewport
+space and scroll internally; do not move the sessions tree. Escape restores focus
+to the toggle; outside click, focus leaving, and child navigation dismiss it.
+On mobile the panel expands inline instead of overlaying the stacked navigation.
+
+### Shared typography and layout
+
+All palettes use the Grafana typography: Inter/Segoe UI/Arial, 13px body text,
+regular-weight navigation, 12px session names and chips, and compact headings and
+button labels. Shared rules are applied after palette styles in compact.css.
+Theme-specific colors stay independent; spacing, layout, dimensions and typography
+use the Grafana standard. Palette styles must not override geometry or fonts. Orange is named
+simply Orange throughout the interface.
+
+### Malformed fenced code in table cells
+
+Normalize a closed multiline code fence embedded in a recognized pipe-table cell
+into escaped inline-code lines separated by safe breaks. Require the closing row
+delimiter; preserve valid standalone fenced examples. JSON and other code remain
+literal text, including HTML and pipe characters, so later prose and tables are
+not swallowed by an accidental code block.
+
+
+Pod health retains its model-authored answer and evidence timeline without an
+additional automatic findings table. Follow-up history uses that same answer;
+it does not append a hidden Pod table. Controller findings keep the complete
+scrolling evidence table and matching history projection.
+
+Theme geometry regression coverage compares all seven palettes in Chrome at
+1200px, 800px and 600px, including navigation descendants, headings and controls.
+Sidebar resizing and the pinned Connectors disclosure use the same shared rules.
+
+Session cluster badges match session titles at 12px and regular (400) weight;
+retain the palette-colored border and background without inherited composer boldness.

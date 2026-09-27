@@ -87,16 +87,71 @@ def _pretty_json_markdown(value: str) -> str:
     return "".join(paragraphs)
 
 
+def _repair_table_cell_fences(value: str) -> str:
+    """Convert closed multiline fences inside pipe-table cells to safe inline code lines.
+
+    Ordinary fenced examples are left untouched. A repair requires a recognized
+    table and a matching closing fence followed by the remaining row delimiter.
+    """
+    lines = value.splitlines(keepends=True)
+    result: list[str] = []
+    table = False
+    outer_fence: str | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        standalone = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if outer_fence:
+            if re.match(r"^ {0,3}" + re.escape(outer_fence[0]) + "{" + str(len(outer_fence)) + r",}[ \t]*$", line.rstrip("\r\n")):
+                outer_fence = None
+            result.append(line)
+            index += 1
+            continue
+        if standalone:
+            outer_fence = standalone.group(1)
+            table = False
+        elif re.match(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$", line):
+            table = True
+        elif table:
+            opening = re.match(r"^(\s*\|.*\|[ \t]*)(`{3,}|~{3,})(?:[\w+-]+)?[ \t]*$", line.rstrip("\r\n"))
+            if opening:
+                fence = opening.group(2)
+                for end in range(index + 1, min(len(lines), index + 201)):
+                    closing = re.match(r"^[ \t]*" + re.escape(fence) + r"[ \t]*(\|.*)$", lines[end].rstrip("\r\n"))
+                    if not closing:
+                        continue
+                    cells = []
+                    for raw in lines[index + 1:end]:
+                        raw = raw.rstrip("\r\n")
+                        if not raw:
+                            cells.append("")
+                            continue
+                        delimiter = "`" * (max((len(run) for run in re.findall(r"`+", raw)), default=0) + 1)
+                        cells.append(delimiter + " " + raw.replace("|", "\\|") + " " + delimiter)
+                    result.append(opening.group(1) + "<br>".join(cells) + " " + closing.group(1) + "\n")
+                    index = end + 1
+                    break
+                else:
+                    result.append(line)
+                    index += 1
+                continue
+            if not line.lstrip().startswith("|"):
+                table = False
+        result.append(line)
+        index += 1
+    return "".join(result)
+
+
 def render_safe_markdown(value: object) -> Markup:
     """Render CommonMark while keeping raw HTML escaped."""
 
-    return Markup(_renderer.render(_pretty_json_markdown(str(value or ""))))
+    return Markup(_renderer.render(_pretty_json_markdown(_repair_table_cell_fences(str(value or "")))))
 
 
 def render_safe_prose_markdown(value: object) -> Markup:
     """Render narrative CommonMark without interpreting pipe-delimited text as tables."""
 
-    return Markup(_prose_renderer.render(_pretty_json_markdown(str(value or ""))))
+    return Markup(_prose_renderer.render(_pretty_json_markdown(_repair_table_cell_fences(str(value or "")))))
 
 
 def render_incident_prose_markdown(
@@ -236,7 +291,7 @@ def split_markdown_tables(
 ) -> list[dict[str, object]]:
     """Split Markdown into ordered prose and bounded native-table presentation blocks."""
 
-    source = _pretty_json_markdown(str(value or ""))
+    source = _pretty_json_markdown(_repair_table_cell_fences(str(value or "")))
     if not source:
         return []
     tokens = _renderer.parse(source)

@@ -18,6 +18,7 @@
 <body class="saas-app {% block body_class %}{% endblock %}">
   <div class="shell">
     <aside class="sidebar" aria-label="Primary navigation">
+      <div class="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="200" aria-valuemax="480" aria-valuenow="240" tabindex="0" title="Drag to resize; arrow keys adjust; double-click to reset"></div>
       <a class="brand" href="/ask?new=1" aria-label="PodPilot home">
         <span class="brand-mark" aria-hidden="true">P</span>
         <span>
@@ -50,7 +51,10 @@
               <li class="{% if conversation is defined and conversation and item.id == conversation.id %}active{% endif %}">
                 <a class="nav-session-link" href="/ask/{{ item.id }}" title="{{ item.title }}">
                   <strong>{{ item.title }}</strong>
-                  <small>{{ item.updated_at | est_time('%b %d · %H:%M') }}</small>
+                  <span class="session-meta">
+                    {% if item.cluster_tags %}<span class="session-cluster-tags">{% for cluster_name in item.cluster_tags %}<span class="cluster-picker-chip session-cluster-tag" title="{{ cluster_name }}">{{ cluster_name }}</span>{% endfor %}</span>{% endif %}
+                    <small>{{ item.updated_at | est_time('%b %d · %H:%M') }}</small>
+                  </span>
                 </a>
                 <form class="delete-chat-form nav-session-delete" data-delete-url="/api/v1/adhoc-conversations/{{ item.id }}/delete">
                   <button type="submit" title="Delete conversation" aria-label="Delete conversation: {{ item.title }}">
@@ -103,6 +107,7 @@
               <li class="{% if incident is defined and incident and item.id == incident.id %}active{% endif %}">
                 <a class="nav-session-link" href="/incidents/{{ item.id }}" title="{{ item.title }}">
                   <strong>{{ item.title }}</strong>
+                  {% if item.cluster_tags %}<span class="session-cluster-tags">{% for cluster_name in item.cluster_tags %}<span class="session-cluster-tag" title="{{ cluster_name }}">{{ cluster_name }}</span>{% endfor %}</span>{% endif %}
                   <small>{{ item.alert_state | capitalize }} · {{ item.updated_at | est_time('%b %d · %H:%M') }}</small>
                 </a>
               </li>
@@ -113,14 +118,21 @@
           {% endif %}
         </div>
         {% endif %}
-        {% if user is defined and user.can_manage_configuration %}
-        <p class="nav-label section-gap admin-section-label">Manage</p>
+      </nav>
+
+      {% if user is defined and user.can_manage_configuration %}
+      <nav class="sidebar-admin-nav" aria-label="Administration">
         {% if incidents_enabled %}
-        <div class="nav-tree expanded">
-          <div class="nav-connector-heading">
-            <a class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" href="/settings/connectors"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg>Connectors</a>
-            <a class="nav-connector-add" href="/settings/connectors?new=1" aria-label="Add connector">+</a>
-          </div>
+        <details class="connector-admin-menu">
+          <summary class="nav-link {% if request.url.path == '/settings/connectors' %}active{% endif %}" aria-controls="connector-admin-panel">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg>
+            Connectors <span class="connector-menu-chevron" aria-hidden="true">⌃</span>
+          </summary>
+          <div class="connector-admin-panel" id="connector-admin-panel" aria-label="Connectors">
+            <div class="nav-connector-heading connector-menu-actions">
+              <a class="nav-link" href="/settings/connectors">Manage connectors</a>
+              <a class="nav-connector-add" href="/settings/connectors?new=1" aria-label="Add connector">+</a>
+            </div>
           <div class="nav-subtree nav-connector-subtree" aria-label="Connector instances">
             {% for kind, label in [('cluster','Incident Clusters'),('github','GitHub'),('argocd','Argo CD')] %}
             <section class="nav-connector-group" aria-labelledby="nav-connector-group-{{ kind }}">
@@ -148,7 +160,8 @@
             </section>
             {% endfor %}
           </div>
-        </div>
+          </div>
+        </details>
         {% endif %}
         <a class="nav-link {% if request.url.path == '/settings/clusters' %}active{% endif %}" href="/settings/clusters">
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16v7H4zM4 14h16v7H4zM8 6.5h.01M8 17.5h.01"/></svg>
@@ -162,8 +175,8 @@
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>
           Model settings
         </a>
-        {% endif %}
       </nav>
+      {% endif %}
 
       <div class="sidebar-theme-control">
         <span class="sidebar-theme-label">Appearance</span>
@@ -183,7 +196,7 @@
           <button type="button" data-theme-option="cibc-red" aria-label="Use CIBC Red theme" aria-pressed="false" title="CIBC Red">
             <img src="{{ url_for('static', path='/icons/cibc-diamond.svg') }}" alt="" aria-hidden="true">
           </button>
-          <button type="button" data-theme-option="orange" aria-label="Use Orange theme" aria-pressed="false" title="Orange · DemandKit layout">
+          <button type="button" data-theme-option="orange" aria-label="Use Orange theme" aria-pressed="false" title="Orange">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"></rect><path d="M9 3v18M13 8h4M13 12h4M13 16h4"></path></svg>
           </button>
           <button type="button" data-theme-option="grafana-compact" aria-label="Use Grafana Compact theme" aria-pressed="false" title="Grafana Compact">

@@ -817,3 +817,10 @@ entire pool when another user's work is queued. Conversation ownership, status/S
 per-user submission rate limits, ContextVar-scoped raw-response capture, read budgets, provider
 timeouts, and ServiceAccount RBAC apply independently to every run. Raising concurrency increases
 model cost and Kubernetes/provider request pressure and must not be treated as expanded authority.
+
+
+Remote Ask telemetry applies the registered cluster TLS policy to both Kubernetes
+Route discovery and subsequent Thanos/Loki requests (application, infrastructure,
+and audit tenants). Explicit TLS-ignore takes precedence over a stored custom CA;
+otherwise the custom CA augments system trust. System-cluster telemetry continues
+to use its internal service CA. This policy is scoped to the selected cluster.

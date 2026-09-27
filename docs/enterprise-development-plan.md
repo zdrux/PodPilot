@@ -1,6 +1,6 @@
 # Enterprise development goal
 
-Status: development increment delivered and verified, 2026-09-09. Branch: `codex/demandkit-orange-restyle`.
+Status: development increment delivered and verified, 2026-09-09.
 
 ## Accepted product decisions
 

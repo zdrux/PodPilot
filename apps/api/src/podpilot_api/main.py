@@ -248,6 +248,7 @@ def _read_only_proxy_allows(
 async def _build_delegated_read_only_explorer(
     *, proxy_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
     telemetry_tls_verify: bool, settings: Settings, telemetry_is_system: bool = False,
+    telemetry_custom_ca_pem: str | None = None,
 ) -> KubernetesReadOnlyExplorer:
     """Build a brokered explorer without blocking the broker's ASGI event loop."""
 
@@ -257,6 +258,7 @@ async def _build_delegated_read_only_explorer(
         telemetry_api_url=telemetry_api_url,
         token_provider=token_provider,
         telemetry_tls_verify=telemetry_tls_verify,
+        telemetry_custom_ca_pem=telemetry_custom_ca_pem,
         settings=settings,
         telemetry_is_system=telemetry_is_system,
     )
@@ -265,7 +267,7 @@ async def _build_delegated_read_only_explorer(
 def _remote_observability_adapters(
     *, api_url: str, tls_verify: bool, settings: Settings,
     token: str | None = None, token_provider: Callable[[], str] | None = None,
-    system_cluster: bool = False,
+    system_cluster: bool = False, custom_ca_pem: str | None = None,
 ) -> dict[str, object]:
     """Build bounded telemetry readers using the selected cluster identity."""
 
@@ -301,9 +303,11 @@ def _remote_observability_adapters(
             **credential,
         )
     else:
+        # Apply the registered cluster policy to discovery and telemetry requests.
+        verify = tls_context(custom_ca_pem) if tls_verify and custom_ca_pem else tls_verify
         metric_source = ThanosQueryClient.for_remote_cluster(
             api_url=api_url,
-            api_tls_verify=tls_verify,
+            api_tls_verify=verify,
             timeout_seconds=settings.thanos_timeout_seconds,
             max_series=settings.thanos_max_series,
             max_points_per_series=settings.adhoc_metrics_max_points_per_series,
@@ -312,7 +316,7 @@ def _remote_observability_adapters(
         )
         log_metric_source = LokiQueryClient.for_remote_cluster(
             api_url=api_url,
-            api_tls_verify=tls_verify,
+            api_tls_verify=verify,
             route_name=settings.loki_route_name,
             timeout_seconds=settings.loki_timeout_seconds,
             max_series=settings.loki_max_series,
@@ -320,7 +324,7 @@ def _remote_observability_adapters(
         )
         audit_source = LokiQueryClient.for_remote_cluster(
             api_url=api_url,
-            api_tls_verify=tls_verify,
+            api_tls_verify=verify,
             route_name=settings.loki_route_name,
             tenant="audit",
             timeout_seconds=settings.loki_timeout_seconds,
@@ -348,6 +352,7 @@ def _remote_observability_adapters(
 def _make_delegated_read_only_explorer(
     *, api_url: str, telemetry_api_url: str, token_provider: Callable[[], str],
     telemetry_tls_verify: bool, settings: Settings, telemetry_is_system: bool = False,
+    telemetry_custom_ca_pem: str | None = None,
 ) -> KubernetesReadOnlyExplorer:
     """Build one delegated reader; only its Kubernetes capability varies by mode."""
 
@@ -367,6 +372,7 @@ def _make_delegated_read_only_explorer(
             api_url=telemetry_api_url,
             token_provider=token_provider,
             tls_verify=telemetry_tls_verify,
+            custom_ca_pem=telemetry_custom_ca_pem,
             settings=settings,
             system_cluster=telemetry_is_system,
         ),
@@ -419,7 +425,7 @@ def _format_est_time(value: object, pattern: str = "%H:%M") -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     eastern = parsed.astimezone(timezone(timedelta(hours=-4)))
-    return f"{eastern.strftime(pattern)} EST (-4)"
+    return f"{eastern.strftime(pattern)} EST"
 
 
 def _format_reply_duration(duration_ms: int) -> str:
@@ -1402,7 +1408,7 @@ def _agent_final_answer_quality_issue(content: str) -> str | None:
     if set(payload) == {"toolset"}:
         return "toolset_arguments_as_answer"
     if payload.get("name") in {
-        "execute_shell", "discover_resources", "discover_inventory", "pod_health_summary",
+        "execute_shell", "discover_resources", "discover_inventory", "pod_health_summary", "workload_health_summary",
         "http_probe", "query_audit_events", "query_metrics", "pod_logs",
     } and "arguments" in payload:
         return "tool_call_as_answer"
@@ -2330,6 +2336,62 @@ def _inventory_citations_have_material_details(
     return False
 
 
+def _health_findings_tables(evidence: list[dict[str, object]], activity: dict[str, object]) -> list[dict[str, object]]:
+    """Build controller tables; Pod findings stay in the model-authored answer."""
+    ids = {str(eid) for entry in activity.get("reads", [])
+           if entry.get("status") == "succeeded" for eid in entry.get("evidence_ids", [])}
+    latest = {}
+    for item in evidence:
+        data = item.get("data") or {}
+        if str(item.get("id")) not in ids or item.get("tool") != "workload_health_summary" or "findingsRows" not in data:
+            continue
+        key = (item.get("cluster_id"), item.get("tool"), data.get("kind"), data.get("scope"), data.get("labelSelector"), data.get("unhealthyOnly", True))
+        rows = [dict(row) for row in data["findingsRows"]]
+        latest[key] = {
+            "evidence_id": item["id"], "cluster": item.get("cluster_name") or "Current cluster",
+            "scope": data.get("scope"), "collected_at": item.get("collected_at"),
+            "rows": rows, "count": len(rows),
+            "matched": data.get("matchedCount", data.get("anomalyCount", 0)),
+            "scanned": data.get("scannedCount", 0),
+            "complete": data.get("scanComplete") is True and data.get("findingsComplete") is True,
+            "unavailable": data.get("unavailableKinds") or [],
+            "title": "Controller health findings",
+        }
+    return list(latest.values())
+
+
+def _without_repeated_health_tables(blocks: list[dict[str, object]], tables: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Replace only recognizable inventories of already displayed health findings."""
+    def display_name(value: object) -> str:
+        # Models may typeset Kubernetes's ASCII hyphens as nonbreaking/en/em dashes.
+        # This comparison is only for redundant display tables, never API coordinates.
+        return str(value).strip().strip("`*").translate(str.maketrans({
+            "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
+        }))
+
+    names = {display_name(row.get("name")) for table in tables for row in table["rows"]}
+    if not names:
+        return blocks
+    kept = []
+    for block in blocks:
+        if block.get("type") != "answer_table":
+            kept.append(block)
+            continue
+        labels = [str(col["label"]).lower() for col in block["columns"]]
+        name_columns = [i for i, label in enumerate(labels)
+                        if label in {"name", "pod", "deployment", "statefulset", "daemonset", "workload"}
+                        or label.endswith(" name") or label == "workload (pod)"]
+        health_columns = any(re.search(r"phase|status|ready|replica|reason|issue|severity|restart", label) for label in labels)
+        diagnostic_columns = any(re.search(r"action|recommend|command|hypothes|cause|time|change|step", label) for label in labels)
+        duplicate = health_columns and not diagnostic_columns and any(
+            block["rows"] and all(display_name(row["cells"][i]) in names for row in block["rows"])
+            for i in name_columns
+        )
+        if not duplicate:
+            kept.append(block)
+    return kept
+
+
 def _compact_provider_value(
     value: object, *, string_limit: int = 2_000, list_limit: int = 24, depth: int = 0
 ) -> object:
@@ -2344,7 +2406,7 @@ def _compact_provider_value(
             str(key)[:128]: _compact_provider_value(
                 item, string_limit=string_limit, list_limit=list_limit, depth=depth + 1
             )
-            for key, item in list(value.items())[:64]
+            for key, item in list(value.items())[:64] if key != "findingsRows"
         }
     if isinstance(value, (list, tuple)):
         return [
@@ -4228,13 +4290,20 @@ def _deterministic_resource_health_answer(
     ]
     if not observations:
         return None
+    # Continuation calls rescan the same scope; count its latest observation once.
+    latest_by_scope = {}
+    for item in observations:
+        key = (item.get("cluster_id") or item.get("cluster_name"), item.get("tool"),
+               item["data"].get("kind"), item["data"].get("scope"))
+        latest_by_scope[key] = item
+    coverage = list(latest_by_scope.values())
     anomaly_total = sum(
-        int(item["data"].get("anomalyCount") or 0) for item in observations
+        int(item["data"].get("anomalyCount") or 0) for item in coverage
     )
     scanned_total = sum(
-        int(item["data"].get("scannedCount") or 0) for item in observations
+        int(item["data"].get("scannedCount") or 0) for item in coverage
     )
-    scans_complete = all(item["data"].get("scanComplete") is True for item in observations)
+    scans_complete = all(item["data"].get("scanComplete") is True for item in coverage)
     unavailable = sorted({
         str(kind)
         for item in observations
@@ -4282,7 +4351,15 @@ def _deterministic_resource_health_answer(
     multi_cluster = len(cluster_names) > 1
     for observation in observations:
         cluster = str(observation.get("cluster_name") or "current")
-        for anomaly in observation["data"].get("anomalies") or []:
+        data = observation["data"]
+        anomalies = data.get("anomalies") or []
+        if observation.get("tool") == "workload_health_summary" and "rows" in data:
+            anomalies = [
+                {**row, "state": f"{row.get('ready', 0)}/{row.get('desired', 0)} Ready",
+                 "issues": [{"reason": reason} for reason in row.get("reasons", [])]}
+                for row in data["rows"] if row.get("reasons")
+            ]
+        for anomaly in anomalies:
             if not isinstance(anomaly, dict):
                 continue
             reasons = sorted({
@@ -4298,6 +4375,7 @@ def _deterministic_resource_health_answer(
                 str(anomaly.get("state") or "Unknown"),
                 ", ".join(reasons) or "Unknown",
             ))
+    rows = list(dict.fromkeys(rows))
     if rows:
         if multi_cluster:
             lines.extend([
@@ -4317,9 +4395,7 @@ def _deterministic_resource_health_answer(
                 f"| {kind} | `{namespace}` | `{name}` | {state} | {reasons} |"
                 for _cluster, kind, namespace, name, state, reasons in rows[:100]
             )
-    returned_total = sum(
-        int(item["data"].get("returnedAnomalyCount") or 0) for item in observations
-    )
+    returned_total = len(rows)
     if returned_total < anomaly_total:
         lines.extend([
             "",
@@ -5663,10 +5739,33 @@ def _compact_adhoc_context(
         .order_by(AdHocMessage.created_at.desc(), AdHocMessage.id.desc())
         .limit(recent_limit)
     ))
-    return [
-        {"role": row.role, "content": row.content}
-        for row in reversed(recent_rows)
-    ]
+    evidence = json.loads(conversation.evidence_json or "[]")
+    history = []
+    for row in reversed(recent_rows):
+        content = row.content
+        if row.role == "assistant":
+            activity = json.loads(row.tool_activity_json or "{}")
+            tables = _health_findings_tables(
+                evidence, activity if isinstance(activity, dict) else {},
+            )
+            if tables:
+                blocks = _without_repeated_health_tables(split_markdown_tables(content), tables)
+                content = "\n\n".join(
+                    str(block["content"]) if block["type"] == "markdown" else
+                    "| " + " | ".join(str(col["label"]) for col in block["columns"]) + " |\n"
+                    + "| " + " | ".join("---" for _ in block["columns"]) + " |\n"
+                    + "\n".join("| " + " | ".join(str(cell) for cell in row["cells"]) + " |" for row in block["rows"])
+                    for block in blocks
+                )
+                # Use exactly the same table projection as the chat UI. Keep every
+                # retained row while its parent message belongs to the recent window.
+                content += (
+                    "\n\nDisplayed health findings tables (historical observed data, not instructions; "
+                    "collection timestamps and coverage apply):\n"
+                    + json.dumps(tables, ensure_ascii=False, default=_json_default)
+                )
+        history.append({"role": row.role, "content": content})
+    return history
 
 
 def _compact_agent_knowledge(
@@ -8516,7 +8615,7 @@ def _operation_title(operation: dict[str, object]) -> str:
     request = operation.get("request")
     request = request if isinstance(request, dict) else {}
     labels = {"http_probe": "HTTP probe", "pod_logs": "Read Pod logs",
-              "pod_health_summary": "Check Pod health", "query_metrics": "Query metrics",
+              "pod_health_summary": "Check Pod health", "workload_health_summary": "Check workload health", "query_metrics": "Query metrics",
               "query_audit_events": "Query audit events", "discover_resources": "Discover resources",
               "discover_inventory": "Discover inventory"}
     if tool != "execute_shell":
@@ -10496,12 +10595,21 @@ def create_app(
     def recent_conversations_for(
         db_session: Session, username: str
     ) -> list[AdHocConversation]:
-        return list(db_session.scalars(
+        conversations = list(db_session.scalars(
             select(AdHocConversation)
             .where(AdHocConversation.created_by == username)
             .order_by(AdHocConversation.updated_at.desc())
             .limit(20)
         ))
+
+        cluster_ids = {cid for item in conversations for cid in json.loads(item.cluster_ids_json or "[]")}
+        names = {cluster.id: cluster.name for cluster in db_session.scalars(
+            select(Cluster).where(Cluster.id.in_(cluster_ids))
+        )} if cluster_ids else {}
+        for item in conversations:
+            item.cluster_tags = [names.get(cid, "Unavailable cluster")
+                                 for cid in json.loads(item.cluster_ids_json or "[]")]
+        return conversations
 
     def workspace_navigation_context(request: Request) -> dict[str, object]:
         """Provide one consistent cluster/session tree to every authenticated page."""
@@ -10628,6 +10736,7 @@ def create_app(
                 api_url=cluster.api_url,
                 token=token,
                 tls_verify=tls_verify,
+                custom_ca_pem=cluster.custom_ca_pem,
                 settings=app_settings,
             ),
         )
@@ -11171,6 +11280,11 @@ def create_app(
                 "When no current defect is established, keep the no-change conclusion concise and "
                 "give only the few evidence-gathering steps needed to resolve the remaining uncertainty. "
                 "Do not expand it into a hypothetical controller, Service, or architecture redesign. "
+                "Use workload_health_summary for Deployment, StatefulSet and DaemonSet availability; "
+                "prefer its bounded replica rows over constructing JSON in shell JSONPath. "
+                "Health collectors automatically retain all findings within scan/storage bounds for a UI table. "
+                "When tableDelivery is present, summarize counts, patterns and coverage; do not repeat the "
+                "inventory as Markdown or paginate only to populate the UI. Fetch details when needed for diagnosis. "
                 "The pod_health_summary tool can efficiently scan for Pods outside Running or Succeeded, "
                 "plus Running Pods with unhealthy container or readiness state. It is available when useful, "
                 "but shell observations and other collected evidence remain valid inputs to your answer. "
@@ -11676,7 +11790,7 @@ def create_app(
                     ),
                 )
                 if tool_call.name in {
-                    "discover_resources", "discover_inventory", "pod_health_summary",
+                    "discover_resources", "discover_inventory", "pod_health_summary", "workload_health_summary",
                     "http_probe", "query_audit_events", "query_metrics", "pod_logs",
                 }:
                     collector_cluster_id = ""
@@ -11715,6 +11829,10 @@ def create_app(
                             raise ValueError(
                                 "the typed collector is unavailable for this cluster connection"
                             )
+                        if tool_call.name == "workload_health_summary":
+                            collector_arguments.setdefault("limit", 10)
+                            if not 1 <= int(collector_arguments["limit"]) <= 20:
+                                raise ValueError("workload_health_summary limit must be 1–20")
                         intent = normalize_read_intent(ReadIntent(
                             tool=tool_call.name,
                             **collector_arguments,
@@ -12508,6 +12626,7 @@ def create_app(
                                 telemetry_api_url=cluster.api_url,
                                 token_provider=token_provider,
                                 telemetry_tls_verify=cluster.tls_verify,
+                                telemetry_custom_ca_pem=cluster.custom_ca_pem,
                                 settings=app_settings,
                                 telemetry_is_system=cluster.is_system,
                             )
@@ -13883,7 +14002,9 @@ def create_app(
             )
             answer_blocks: list[dict[str, object]] | None = None
             if row.role == "assistant":
-                answer_blocks = split_markdown_tables(row.content)
+                answer_blocks = _without_repeated_health_tables(
+                    split_markdown_tables(row.content), _health_findings_tables(evidence, activity_view),
+                )
                 if (
                     # An agent's tables may carry its causal timeline or dependency
                     # inventory. Metric cards only replace legacy ranking tables,
@@ -13914,6 +14035,7 @@ def create_app(
                 "prefer_metric_card": prefer_metric_card,
                 "resource_presentation": resource_presentation,
                 "answer_blocks": answer_blocks,
+                "health_tables": _health_findings_tables(evidence, activity_view) if row.role == "assistant" else [],
                 "created_at": row.created_at,
             })
         response = templates.TemplateResponse(
@@ -14843,6 +14965,7 @@ def create_app(
                 return grant[0].token if grant is not None else ""
             adapters = _remote_observability_adapters(
                 api_url=cluster.api_url, tls_verify=cluster.tls_verify,
+                custom_ca_pem=cluster.custom_ca_pem,
                 settings=app_settings.model_copy(update={"thanos_timeout_seconds": 8.0, "loki_timeout_seconds": 8.0}), system_cluster=cluster.is_system,
                 token_provider=current_token,
             )

@@ -1,4 +1,4 @@
-/* Grafana-inspired density, scoped to its own selectable theme. */
+/* Shared Grafana layout and typography; theme palettes remain selectable. */
 .sidebar-theme-options { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 html[data-theme="grafana-compact"] {
   color-scheme: dark;
@@ -40,53 +40,80 @@ html[data-theme="grafana-compact"] {
   --green: var(--theme-success);
   --orange: var(--theme-warning);
 }
-html[data-theme="grafana-compact"] body { font-family: Inter, "Segoe UI", Arial, sans-serif; font-size: 13px; line-height: 1.45; }
-html[data-theme="grafana-compact"] .saas-app .shell { grid-template-columns: 240px minmax(0, 1fr); }
-html[data-theme="grafana-compact"] .saas-app .sidebar { padding: 0 8px 10px; background: var(--theme-nav); }
-html[data-theme="grafana-compact"] .saas-app .brand { min-height: 44px; gap: 9px; margin: 0 -8px 8px; padding: 8px 14px; border-bottom: 1px solid var(--theme-border); }
-html[data-theme="grafana-compact"] .brand-mark { width: 23px; height: 23px; font-size: 14px; border: 0; box-shadow: none; color: #ff9830; background: transparent; }
-html[data-theme="grafana-compact"] .brand strong { font-size: 14px; font-weight: 500; letter-spacing: 0; }
-html[data-theme="grafana-compact"] .brand small { display: none; }
-html[data-theme="grafana-compact"] .saas-app .nav-list { gap: 2px; }
-html[data-theme="grafana-compact"] .nav-label { margin: 12px 8px 4px; font-size: 10px; font-weight: 500; letter-spacing: .045em; }
-html[data-theme="grafana-compact"] .saas-app .nav-link { min-height: 30px; gap: 9px; padding: 5px 8px; border-radius: 3px; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--theme-muted); }
+html[data-theme] body { font-family: Inter, "Segoe UI", Arial, sans-serif; font-size: 13px; line-height: 1.45; }
+html[data-theme] .saas-app .shell { grid-template-columns: 240px minmax(0, 1fr); }
+html[data-theme] .saas-app .sidebar { padding: 0 8px 10px; }
+
+html[data-theme="grafana-compact"] .saas-app .sidebar { background: var(--theme-nav); }
+html[data-theme] .saas-app .brand { min-height: 44px; gap: 9px; margin: 0 -8px 8px; padding: 8px 14px; border-bottom: 1px solid var(--theme-border); }
+html[data-theme] .brand-mark { width: 23px; height: 23px; font-size: 14px; border: 0; }
+
+html[data-theme="grafana-compact"] .brand-mark { box-shadow: none; color: #ff9830; background: transparent; }
+html[data-theme] .brand strong { font-size: 14px; font-weight: 500; letter-spacing: 0; }
+html[data-theme] .brand small { display: none; }
+html[data-theme] .saas-app .nav-list { gap: 2px; }
+html[data-theme] .nav-label { margin: 12px 8px 4px; font-size: 10px; font-weight: 500; letter-spacing: .045em; }
+html[data-theme] .saas-app .nav-link { min-height: 30px; gap: 9px; padding: 5px 8px; border-radius: 3px; font-size: 13px; line-height: 18px; font-weight: 400; }
+
+html[data-theme="grafana-compact"] .saas-app .nav-link { color: var(--theme-muted); }
+
 html[data-theme="grafana-compact"] .saas-app .nav-link:hover { background: var(--theme-surface-soft); color: var(--theme-text); }
+
 html[data-theme="grafana-compact"] .saas-app .nav-link.active { border-color: transparent; background: var(--theme-surface-soft); color: var(--theme-text); box-shadow: inset 2px 0 #ff9830; }
-html[data-theme="grafana-compact"] .nav-icon { flex-basis: 16px; width: 16px; height: 16px; color: var(--theme-subtle); }
-html[data-theme="grafana-compact"] .nav-subtree { margin: 0 0 4px 16px; padding: 2px 0 2px 8px; border: 0; border-radius: 0; background: transparent; }
-html[data-theme="grafana-compact"] .nav-subtree-heading { padding: 3px 4px; font-size: 10px; font-weight: 500; letter-spacing: .02em; }
-html[data-theme="grafana-compact"] .nav-session-list { gap: 0; }
-html[data-theme="grafana-compact"] .nav-session-list li { border-radius: 3px; }
-html[data-theme="grafana-compact"] .nav-session-link { gap: 1px; padding: 5px 4px 5px 8px; }
-html[data-theme="grafana-compact"] .nav-session-link strong { font-size: 12px; line-height: 18px; font-weight: 400; }
-html[data-theme="grafana-compact"] .nav-session-link small { font-size: 10px; line-height: 14px; }
-html[data-theme="grafana-compact"] .nav-connector-subtree { gap: 3px; }
-html[data-theme="grafana-compact"] .nav-connector-group + .nav-connector-group { padding-top: 3px; border: 0; }
-html[data-theme="grafana-compact"] .nav-connector-group-heading { padding: 4px 4px 2px; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; }
-html[data-theme="grafana-compact"] .nav-folder-icon { width: 14px; height: 14px; }
-html[data-theme="grafana-compact"] .nav-more-link { padding: 4px 8px; font-size: 11px; font-weight: 400; }
+html[data-theme] .nav-icon { flex-basis: 16px; width: 16px; height: 16px; }
+
+html[data-theme="grafana-compact"] .nav-icon { color: var(--theme-subtle); }
+html[data-theme] .nav-subtree { margin: 0 0 4px 16px; padding: 2px 0 2px 8px; border: 0; border-radius: 0; }
+
+html[data-theme="grafana-compact"] .nav-subtree { background: transparent; }
+html[data-theme] .nav-subtree-heading { padding: 3px 4px; font-size: 10px; font-weight: 500; letter-spacing: .02em; }
+html[data-theme] .nav-session-list { gap: 0; }
+html[data-theme] .nav-session-list li { border-radius: 3px; }
+html[data-theme] .nav-session-link { --session-name-size: 12px; gap: 1px; padding: 5px 4px 5px 8px; }
+html[data-theme] .nav-session-link strong { font-size: 12px; line-height: 18px; font-weight: 400; }
+html[data-theme] .nav-session-link small { font-size: 10px; line-height: 14px; }
+html[data-theme] .nav-connector-subtree { gap: 3px; }
+html[data-theme] .nav-connector-group + .nav-connector-group { padding-top: 3px; border: 0; }
+html[data-theme] .nav-connector-group-heading { padding: 4px 4px 2px; font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+html[data-theme] .nav-folder-icon { width: 14px; height: 14px; }
+html[data-theme] .nav-more-link { padding: 4px 8px; font-size: 11px; font-weight: 400; }
+html[data-theme] .nav-connector-add,
+html[data-theme] .nav-subtree-heading a { width: 24px; height: 24px; border: 0; }
+
 html[data-theme="grafana-compact"] .nav-connector-add,
-html[data-theme="grafana-compact"] .nav-subtree-heading a { width: 24px; height: 24px; border: 0; background: transparent; }
-html[data-theme="grafana-compact"] .identity-card { padding: 8px 4px 0; gap: 8px; }
-html[data-theme="grafana-compact"] .avatar { width: 26px; height: 26px; font-size: 12px; }
-html[data-theme="grafana-compact"] .identity-copy strong { font-size: 12px; font-weight: 500; }
-html[data-theme="grafana-compact"] .sidebar-theme-control { padding: 8px 0; gap: 5px; }
-html[data-theme="grafana-compact"] .sidebar-theme-label { font-size: 10px; font-weight: 400; }
-html[data-theme="grafana-compact"] .page-header { margin-bottom: 16px; padding-bottom: 12px; }
-html[data-theme="grafana-compact"] .page-header h1 { font-size: 22px; line-height: 1.25; font-weight: 500; }
-html[data-theme="grafana-compact"] .panel-header { padding: 12px 16px; }
-html[data-theme="grafana-compact"] .panel-header h2 { font-size: 15px; font-weight: 500; }
-html[data-theme="grafana-compact"] .eyebrow { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
-html[data-theme="grafana-compact"] .button { min-height: 30px; padding: 5px 10px; font-size: 12px; border-radius: 4px; }
-html[data-theme="grafana-compact"] .ask-panel > .panel-header { padding: 10px 14px; }
+html[data-theme="grafana-compact"] .nav-subtree-heading a { background: transparent; }
+html[data-theme] .identity-card { padding: 8px 4px 0; gap: 8px; }
+html[data-theme] .avatar { width: 26px; height: 26px; font-size: 12px; }
+html[data-theme] .identity-copy strong { font-size: 12px; font-weight: 500; }
+html[data-theme] .sidebar-theme-control { padding: 8px 0; gap: 5px; }
+html[data-theme] .sidebar-theme-label { font-size: 10px; font-weight: 400; }
+html[data-theme] .page-header { margin-bottom: 16px; padding-bottom: 12px; }
+html[data-theme] .page-header h1 { font-size: 22px; line-height: 1.25; font-weight: 500; }
+html[data-theme] .panel-header { padding: 12px 16px; }
+html[data-theme] .panel-header h2 { font-size: 15px; font-weight: 500; }
+html[data-theme] .eyebrow { font-size: 10px; letter-spacing: .035em; font-weight: 500; }
+html[data-theme] .button { min-height: 30px; padding: 5px 10px; font-size: 12px; border-radius: 4px; }
+html[data-theme] .ask-panel > .panel-header { padding: 10px 14px; }
 @media (max-width: 840px) {
-  html[data-theme="grafana-compact"] .saas-app .shell { grid-template-columns: 210px minmax(0, 1fr); }
+  html[data-theme] .saas-app .shell { grid-template-columns: 210px minmax(0, 1fr); }
 }
 @media (max-width: 640px) {
-  html[data-theme="grafana-compact"] .saas-app .shell { grid-template-columns: minmax(0, 1fr); }
-  html[data-theme="grafana-compact"] .saas-app .sidebar { padding: 0 8px 8px; }
-  html[data-theme="grafana-compact"] .saas-app .nav-link { min-height: 36px; }
+  html[data-theme] .saas-app .shell { grid-template-columns: minmax(0, 1fr); }
+  html[data-theme] .saas-app .sidebar { padding: 0 8px 8px; }
+  html[data-theme] .saas-app .nav-link { min-height: 36px; }
 }
 
-html[data-theme="grafana-compact"] .nav-label.section-gap { margin-top: 8px; padding-top: 8px; }
-html[data-theme="grafana-compact"] .activity-sidebar-header { padding: 12px 14px; }
+html[data-theme] .nav-label.section-gap { margin-top: 8px; padding-top: 8px; }
+html[data-theme] .activity-sidebar-header { padding: 12px 14px; }
+
+/* Keep the compact spacing while making parent/child relationships visible. */
+html[data-theme] .nav-subtree { border-left: 1px solid var(--theme-border-strong); }
+html[data-theme] .nav-subtree > .nav-session-list > li,
+html[data-theme] .nav-connector-group { position: relative; }
+html[data-theme] .nav-subtree > .nav-session-list > li::before,
+html[data-theme] .nav-connector-group::before { content: ""; position: absolute; left: -8px; top: 14px; width: 8px; border-top: 1px solid var(--theme-border-strong); pointer-events: none; }
+html[data-theme] .nav-connector-list { margin-left: 11px; padding-left: 8px; border-left: 1px solid var(--theme-border); }
+html[data-theme] .nav-connector-list > li { position: relative; }
+html[data-theme] .nav-connector-list > li::before { content: ""; position: absolute; left: -8px; top: 14px; width: 8px; border-top: 1px solid var(--theme-border); pointer-events: none; }
+html[data-theme] .nav-session-link.nav-cluster-link,
+html[data-theme] .nav-session-link.nav-connector-link { column-gap: 9px; }

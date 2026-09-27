@@ -1,5 +1,89 @@
 window.PodPilotPage.register("app.js", (page) => {
 (() => {
+  // Keep all rows available to exports, but show at most twenty at once.
+  document.querySelectorAll(".resource-table-wrap").forEach((wrap) => {
+    const table = wrap.querySelector("table");
+    if (!table) return;
+    const sizeTable = () => {
+      const rows = table.tBodies[0]?.rows;
+      if (!rows || rows.length <= 20) { wrap.style.maxHeight = "none"; return; }
+      const top = table.getBoundingClientRect().top;
+      const bottom = rows[19].getBoundingClientRect().bottom;
+      if (bottom > top) wrap.style.maxHeight = `${Math.ceil(bottom - top) + 2}px`;
+      wrap.tabIndex = 0;
+      wrap.setAttribute("role", "region");
+      if (!wrap.hasAttribute("aria-label")) wrap.setAttribute("aria-label", `Scrollable table: ${rows.length} rows`);
+    };
+    const observer = new ResizeObserver(sizeTable);
+    observer.observe(table);
+    page.cleanup(() => observer.disconnect());
+    sizeTable();
+  });
+  const connectorMenu = document.querySelector(".connector-admin-menu");
+  if (connectorMenu) {
+    const summary = connectorMenu.querySelector("summary");
+    const positionMenu = () => {
+      connectorMenu.style.setProperty("--connector-menu-height", `${Math.max(60, summary.getBoundingClientRect().top - 14)}px`);
+    };
+    page.on(connectorMenu, "toggle", positionMenu);
+    page.on(window, "resize", positionMenu);
+    page.on(document, "click", (event) => {
+      if (!connectorMenu.contains(event.target) || event.target.closest(".connector-admin-panel a")) connectorMenu.open = false;
+    });
+    page.on(document, "keydown", (event) => {
+      if (event.key === "Escape" && connectorMenu.open) {
+        connectorMenu.open = false;
+        summary.focus();
+        event.preventDefault();
+      }
+    });
+    page.on(document, "focusin", (event) => {
+      if (!connectorMenu.contains(event.target)) connectorMenu.open = false;
+    });
+    positionMenu();
+  }
+  const sidebarGrip = document.querySelector(".sidebar-resizer");
+  const sidebar = document.querySelector(".sidebar");
+  const sidebarWidthKey = "podpilot-sidebar-width";
+  if (sidebarGrip && sidebar) {
+    const maxWidth = () => Math.min(480, Math.floor(window.innerWidth * .45));
+    const applyWidth = (width) => {
+      const value = Math.max(200, Math.min(maxWidth(), Math.round(width)));
+      document.documentElement.style.setProperty("--sidebar-user-width", `${value}px`);
+      sidebarGrip.setAttribute("aria-valuenow", String(value));
+      sidebarGrip.setAttribute("aria-valuemax", String(maxWidth()));
+      try { localStorage.setItem(sidebarWidthKey, String(value)); } catch (_) {}
+    };
+    let dragging = false;
+    page.on(sidebarGrip, "pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      sidebarGrip.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    page.on(sidebarGrip, "pointermove", (event) => {
+      if (dragging) applyWidth(event.clientX - sidebar.getBoundingClientRect().left);
+    });
+    page.on(sidebarGrip, "pointerup", () => { dragging = false; });
+    page.on(sidebarGrip, "lostpointercapture", () => { dragging = false; });
+    const resetWidth = () => {
+      document.documentElement.style.removeProperty("--sidebar-user-width");
+      try { localStorage.removeItem(sidebarWidthKey); } catch (_) {}
+      sidebarGrip.setAttribute("aria-valuenow", String(Math.round(sidebar.getBoundingClientRect().width)));
+    };
+    page.on(sidebarGrip, "dblclick", resetWidth);
+    page.on(sidebarGrip, "keydown", (event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        applyWidth(sidebar.getBoundingClientRect().width + (event.key === "ArrowRight" ? 10 : -10));
+      } else if (event.key === "Home") { event.preventDefault(); resetWidth(); }
+    });
+    sidebarGrip.setAttribute("aria-valuenow", String(Math.round(sidebar.getBoundingClientRect().width)));
+    page.on(window, "resize", () => {
+      const saved = parseInt(document.documentElement.style.getPropertyValue("--sidebar-user-width"), 10);
+      if (window.innerWidth > 640 && Number.isFinite(saved)) applyWidth(saved);
+    });
+  }
   const themePreferenceKey = "podpilot-color-theme";
   const supportedThemes = new Set(["classic", "dark", "light", "medium-light", "cibc-red", "orange", "grafana-compact"]);
   let activeTheme = supportedThemes.has(document.documentElement.dataset.theme)
@@ -1029,7 +1113,7 @@ window.PodPilotPage.register("app.js", (page) => {
       ...(includeDate ? {year: "numeric", month: "2-digit", day: "2-digit"} : {}),
       hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
       timeZone: "America/Toronto",
-    })} EST (-4)`;
+    })} EST`;
   };
   let lastLiveOperationsSnapshot = null;
   const updateLiveOperations = (operations) => {

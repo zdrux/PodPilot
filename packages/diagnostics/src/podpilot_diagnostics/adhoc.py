@@ -230,6 +230,8 @@ class ReadIntent(BaseModel):
     since_seconds: int | None = Field(default=None, ge=1, le=2_592_000)
     watch_seconds: int = Field(default=10, ge=1, le=15)
     limit: int = Field(default=20, ge=1, le=1000)
+    unhealthy_only: bool = True
+    offset: int = Field(default=0, ge=0, le=100000)
 
     @classmethod
     def __get_pydantic_json_schema__(cls, core_schema, handler):
@@ -474,6 +476,8 @@ class ReadIntent(BaseModel):
                 raise ValueError("discover_inventory does not accept selectors or field filters")
         elif self.discovery_query:
             raise ValueError("discovery_query is valid only for discover_resources or discover_inventory")
+        if self.tool != "workload_health_summary" and (not self.unhealthy_only or self.offset):
+            raise ValueError("unhealthy_only and offset apply only to workload_health_summary")
         health_summary_tools = {
             "pod_health_summary", "node_health_summary",
             "cluster_operator_health_summary", "machine_health_summary",

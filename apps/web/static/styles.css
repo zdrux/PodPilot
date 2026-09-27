@@ -51,9 +51,9 @@ a { color: inherit; }
 .nav-session-list li { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 3px; border-radius: 8px; }
 .nav-session-list li:hover, .nav-session-list li.active { background: rgba(69, 212, 232, .07); }
 .nav-session-list li.active { box-shadow: inset 2px 0 var(--cyan); }
-.nav-session-link { min-width: 0; display: grid; gap: 3px; padding: 8px 6px 8px 9px; text-decoration: none; }
+.nav-session-link { --session-name-size: 11px; min-width: 0; display: grid; gap: 3px; padding: 8px 6px 8px 9px; text-decoration: none; }
 .nav-session-link strong, .nav-session-link small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-session-link strong { color: #b9c7d8; font-size: 11px; font-weight: 650; }
+.nav-session-link strong { color: #b9c7d8; font-size: var(--session-name-size); font-weight: 650; }
 .nav-session-link small { color: var(--subtle); font-size: 9px; }
 .nav-session-delete { margin: 0; }
 .nav-session-delete button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; color: #718097; background: transparent; cursor: pointer; }
@@ -3083,4 +3083,43 @@ html[data-theme] .connector-step-heading .cluster-signin-step-number, html[data-
 html[data-theme] .ask-page .operation-event.operation-write > .operation-event-button {
   box-shadow: 0 7px 15px -7px color-mix(in srgb, var(--theme-write-glow) 48%, transparent),
     inset 0 -1px color-mix(in srgb, var(--theme-write-glow) 42%, transparent);
+}
+
+/* Keep configuration navigation visible independently of the scrolling tree. */
+.saas-app .sidebar > .nav-list { flex: 1 1 auto; min-height: 0; }
+.sidebar-admin-nav { flex: 0 0 auto; display: grid; gap: 2px; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--theme-border); }
+.sidebar-admin-nav + .sidebar-theme-control { flex-shrink: 0; margin-top: 0; }
+.sidebar > .identity-card { flex-shrink: 0; }
+
+/* Complete findings remain in the DOM for copying/export; constrain only the viewport. */
+.resource-table-wrap { overflow: auto; max-height: 860px; overscroll-behavior: contain; }
+.resource-table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--theme-panel, #1b2b3d); }
+.health-findings { margin: 12px 0; }
+.health-findings .resource-result-toolbar p { margin: 4px 0; }
+
+.session-meta { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.session-meta > small { flex: 0 0 auto; }
+.session-cluster-tags { display: flex; flex: 0 1 auto; gap: 3px; min-width: 0; overflow: hidden; }
+.session-cluster-tags .session-cluster-tag { flex: 0 1 auto; min-width: 0; max-width: 100%; font-size: var(--session-name-size); font-weight: 400; }
+.sidebar-resizer { display: none; }
+@media (min-width: 641px) {
+  html[style*="--sidebar-user-width"] .saas-app .shell { grid-template-columns: min(var(--sidebar-user-width), 45vw) minmax(0, 1fr) !important; }
+  .sidebar-resizer { display: block; position: absolute; right: -6px; top: 0; bottom: 0; width: 12px; z-index: 20; cursor: col-resize; touch-action: none; }
+  .sidebar-resizer::after { content: ""; position: absolute; top: 50%; left: 3px; width: 6px; height: 48px; transform: translateY(-50%); border-radius: 999px; background: color-mix(in srgb, var(--theme-muted, #8b9bb0) 45%, var(--theme-nav, #111d2c)); box-shadow: 0 0 0 2px var(--theme-nav, #111d2c); transition: background .15s ease; }
+  .sidebar-resizer:hover::after, .sidebar-resizer:focus-visible::after { background: var(--theme-accent, #699bff); }
+  .sidebar-resizer:focus-visible { outline: none; }
+  .sidebar-resizer:focus-visible::after { outline: 2px solid var(--theme-accent, #699bff); outline-offset: 3px; }
+}
+
+/* Pinned connector navigation overlays the independently scrolling workspace tree. */
+.connector-admin-menu { position: relative; min-width: 0; }
+.connector-admin-menu > summary { list-style: none; cursor: pointer; }
+.connector-admin-menu > summary::-webkit-details-marker { display: none; }
+.connector-menu-chevron { margin-left: auto; transition: transform .15s ease; }
+.connector-admin-menu[open] .connector-menu-chevron { transform: rotate(180deg); }
+.connector-admin-panel { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 30; padding: 8px; max-height: min(var(--connector-menu-height, 60vh), 60vh); overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--theme-border, #35465f); border-radius: 8px; background: var(--theme-nav, #111d2c); box-shadow: 0 -8px 28px rgba(0,0,0,.3); }
+.connector-menu-actions { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--theme-border, #35465f); }
+.connector-admin-menu > summary:focus-visible { outline: 2px solid var(--theme-accent, #699bff); outline-offset: -2px; }
+@media (max-width: 640px) {
+  .connector-admin-panel { position: static; margin-top: 6px; max-height: 50dvh; }
 }

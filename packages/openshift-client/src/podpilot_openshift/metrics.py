@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import ssl
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,9 +71,9 @@ class ThanosQueryClient:
         token: str | None = None,
         token_provider: Callable[[], str] | None = None,
         ca_path: Path | None = None,
-        tls_verify: bool = True,
+        tls_verify: bool | ssl.SSLContext = True,
         route_discovery_url: str | None = None,
-        route_discovery_tls_verify: bool = True,
+        route_discovery_tls_verify: bool | ssl.SSLContext = True,
         timeout_seconds: float = 8.0,
         max_series: int = 20,
         max_points_per_series: int = 300,
@@ -104,7 +105,7 @@ class ThanosQueryClient:
         api_url: str,
         token: str | None = None,
         token_provider: Callable[[], str] | None = None,
-        api_tls_verify: bool = True,
+        api_tls_verify: bool | ssl.SSLContext = True,
         **kwargs: Any,
     ) -> "ThanosQueryClient":
         """Discover and query the supported external Thanos Route on one cluster."""
@@ -188,7 +189,7 @@ class ThanosQueryClient:
             if not token:
                 raise MonitoringQueryError("The monitoring bearer token is unavailable.")
             base_url = self._resolve_base_url(token)
-            verify: bool | str = self._tls_verify
+            verify: bool | str | ssl.SSLContext = self._tls_verify
             if self._tls_verify and self._ca_path is not None:
                 verify = str(self._ca_path)
             with httpx.Client(

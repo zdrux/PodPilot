@@ -2651,6 +2651,17 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             ("namespace", "label_selector", "limit"),
             (),
         )
+        workload_tool = collector_tool(
+            "workload_health_summary",
+            "Read compact Deployment, StatefulSet and DaemonSet replica health; prefer over shell "
+            "JSONPath for workload availability. Defaults to unhealthy only, 10 rows. Inspect "
+            "scanComplete. All findings are retained for the UI automatically; offset pages are only for deeper analysis. "
+            "Empty partial results never prove health or absence.",
+            ("namespace", "kind", "unhealthy_only", "limit", "offset"), (),
+        )
+        workload_properties = workload_tool["function"]["parameters"]["properties"]
+        workload_properties["kind"] = {"type": "string", "enum": ["Deployment", "StatefulSet", "DaemonSet"]}
+        workload_properties["limit"] = {"type": "integer", "minimum": 1, "maximum": 20, "default": 10}
         discovery_tool = collector_tool(
             "discover_resources",
             "Find exact Kubernetes API coordinates for an unfamiliar resource concept or a failed "
@@ -2758,6 +2769,7 @@ class OpenAIChatCompletionsProvider(OpenAIResponsesProvider):
             discovery_tool,
             inventory_tool,
             pod_health_tool,
+            workload_tool,
             http_probe_tool,
             audit_tool,
             logs_tool,

@@ -1,5 +1,115 @@
 # PodPilot Project Status
 
+## Multiline table-cell code repair (implemented, not deployed)
+
+A saved troubleshooting response contained triple-backtick JSON inside table cells,
+which broke the table and swallowed later prose as code. Rendering now repairs
+closed cell fences into safe inline-code lines before parsing. Ordinary code
+blocks stay unchanged. All 20 Markdown tests pass, including JSON/HTML/pipe
+escaping, following sections, multiple tables and fenced examples.
+
+## Shared theme typography (implemented, not deployed)
+
+All themes now share Grafana font family, sizing, weights and line heights while
+preserving their colors and layout. Orange naming no longer references the prior
+external design inspiration.
+
+## Pinned Connectors navigation (implemented, not deployed)
+
+Connectors joins fixed administration navigation as a collapsed disclosure. Its
+upward, scrollable panel contains Manage connectors, Add connector and existing
+groups/instances. Outside click, Escape and child navigation dismiss it. Mobile
+expands inline. Existing role and feature visibility rules are preserved.
+
+## Typographic duplicate matching and session chip sizing (SNO build 182)
+
+Live duplicate inventory reproduced: model names used Unicode nonbreaking hyphens.
+Display-only matching now normalizes typographic dashes without changing evidence
+or API names. Session chips share title font sizing and no longer grow to fill
+available width.
+
+Build `podpilot-182` deploys API/migrate at
+`sha256:74c25061160293efadbd43fd71341f385240447f64122f3d6b6fecf5d8a4e779`.
+Rollout succeeded; all three containers ready, health endpoints 200 and public
+route OAuth redirect (scoped lab TLS bypass).
+
+## Health table presentation (SNO build 181)
+
+Health evidence tables reuse answer-table resource/reason accents and bold namespace
+labels. Pod rows retain container readiness and restart counts. Recognizable model
+health inventory tables listing already displayed names are suppressed, preserving
+prose and diagnostic/recommendation or unrelated tables. Follow-up history uses
+the same suppression and includes the complete evidence table. Tool executions
+and their activity records are unchanged.
+
+Build `podpilot-181` includes these table changes, aligned session tags and the
+visible sidebar resize grip. API/migrate use
+`sha256:a8d28d2c0a6a5258ef9cc98cbc7f4d74baa7a4bb898e83a4aedd268ccb60e679`.
+Rollout succeeded with all three containers ready, live/ready HTTP 200 and the
+public route OAuth redirect (scoped lab TLS bypass on the route probe).
+
+## Session tag alignment (SNO build 181)
+
+Session tags reuse the composer chip styling and share a line with the timestamp,
+keeping entries to two rows. Long names ellipsize with full-name tooltips.
+
+## Session sidebar refinements (SNO build 180)
+
+Session links show their selected cluster tags. Displayed timestamps omit the
+numeric timezone suffix. The desktop sidebar supports pointer/keyboard resizing
+with local persistence and reset; mobile retains its stacked layout.
+
+Build `podpilot-180` deploys these changes and follow-up table context to API/migrate
+at `sha256:ebdb98d9eed78e1ac8beaabc7393234b3a880600b0e39719e621edb72c91de57`.
+All three containers are ready; live/ready return 200 and the public route returns
+the OAuth redirect (scoped lab TLS bypass for the route probe).
+
+## Follow-up table context (SNO build 180)
+
+Ordinary follow-up chat history now appends the full evidence-backed health tables
+to assistant messages in the recent context window (default 10 messages). It
+uses the same table projection as the UI, including coverage and timestamps.
+Initial collector responses remain compact. Tables age out with their parent
+message; existing redaction and global input-budget rules remain in effect.
+Regression coverage verifies 47 rows and exclusion of an older table.
+
+## Complete health findings and scrolling tables (SNO build 179)
+
+Ask exposes `workload_health_summary` for Deployment, StatefulSet and DaemonSet
+health. Pod and controller collectors automatically follow Kubernetes API pages
+within configured scan bounds, retaining every normalized finding from that scan
+for the UI (2 MB storage ceiling per observation). No model-driven pagination is
+needed to fill the table. The model sees aggregate counts/reasons and bounded
+previews; `findingsRows` is excluded from provider compaction. Explicit offsets
+remain available for targeted deeper analysis, with live rescan semantics.
+
+Current-turn evidence tables display counts, cluster, scope, collection time and
+coverage. Scan, permission or storage limits are explicitly marked partial.
+Above 20 rows, tables scroll with sticky headers; copy/CSV include every retained
+row. Agent summaries need not reproduce the inventory. Existing historical
+answers without retained findings remain unchanged. API/provider/explorer tests
+pass (516 tests), including 47 findings across API pages and provider isolation.
+A Chrome check confirmed all 47 rows, first-20 viewport, sticky header and access
+to the last row by scrolling.
+CSV/email checks include all 47 rows. Live namespace probes retained all five
+Pod and five controller findings with preview limit one. Build `podpilot-179`
+is deployed to API/migrate at
+`sha256:6fa0ee4ae285ef6662eae0340b13dc8ff76f8c8daa7e5345fd4272625853e28f`.
+Migration completed, all three containers are ready, live/ready return 200 and
+the route returns the OAuth redirect (lab route probe used scoped TLS bypass).
+
+
+
+## Sidebar refinements (SNO build 178)
+
+Build `podpilot-178` deploys pinned administration links above Appearance/account
+controls across all themes, plus compact-theme folder guides and 9px spacing
+between status indicators and labels. API and migration are pinned to
+`sha256:7c4d9d7e8b94d27d4d3a2b2f873b4ab1b3e2b14d557bb619955bd7f267dbea30`.
+All three containers are ready; live/ready return 200 and the public route returns
+the OAuth redirect. Deployed stylesheet/template hashes match the browser-verified
+working tree on `codex/grafana-compact-theme`.
+
 
 ## Grafana Compact appearance (SNO build 177)
 
@@ -1353,3 +1463,48 @@ decision in `docs/decisions.md`, and update this file in the same change.
 - System boundaries: `docs/architecture.md` and `docs/security.md`.
 - Product scope and acceptance criteria: `docs/prd.md`.
 - Fast file ownership map: `docs/codebase-map.md`.
+
+
+Remote telemetry TLS correction (local, not deployed): propagate the selected
+cluster custom CA through delegated Ask readers, legacy remote readers, and
+technology detection. Retain explicit TLS-ignore for discovery and queries,
+including infrastructure and audit Loki tenants. Regression checks cover both
+TLS modes with/without a custom CA and preserve internal service-CA behavior.
+
+
+Deployed the current workspace in SNO binary build `podpilot-183`. API and migrate
+use `sha256:482aadb96417021ef68a36ba4b9e222d6a1f38320db0306ea9ab8dc179f4c3ed`.
+Rollout completed; live/ready and authorized model settings returned HTTP 200.
+Database revision matches image head `0030_requester_write_approval`; the public
+Route returned its expected HTTP 302 login redirect (scoped lab certificate
+verification bypass for that public-route smoke probe). Includes remote telemetry
+TLS/custom-CA propagation, pending sidebar/theme updates, and Markdown table repair.
+
+
+Pod health presentation (local, not deployed): automatic evidence-derived tables
+are now limited to workload_health_summary controller findings. Pod health keeps
+its model-authored answer, tool activity and stored evidence; recent follow-up
+history no longer appends a hidden Pod findings table. Controller rendering and
+full controller-table history are unchanged.
+
+
+Shared theme layout (local, not deployed): Grafana typography and geometry now
+apply to every palette, including compact sidebar spacing, tree indentation,
+icons, headers and controls. Removed Orange-specific geometry overrides while
+retaining its colors. Chrome theme-parity checks passed for all seven palettes
+at desktop/tablet/mobile widths alongside resizing and Connectors navigation.
+
+
+Deployed theme geometry unification and Pod automatic-table removal in SNO build
+`podpilot-184`. API and migrate both use
+`sha256:9f62951320468a2fd530db391b213373fc971049b353f005445420a6adf2612c`.
+Rollout succeeded; live/ready and authorized model settings returned HTTP 200.
+Database matches image head `0030_requester_write_approval`; public Route returned
+HTTP 302 to login (scoped lab certificate bypass used for this route smoke check).
+
+
+Deployed session cluster-tag regular font weight in SNO build `podpilot-185`.
+API and migrate use `sha256:8685afd4d56371343c2ff6f2d6fabea25220453ed725b4f909fb6f85dce93a6e`.
+Rollout, live/ready, authorized model-settings and migration-head checks passed.
+Verified deployed CSS contains font-weight 400 for session cluster tags. Public
+route returned the expected login redirect (scoped lab TLS bypass for smoke probe).

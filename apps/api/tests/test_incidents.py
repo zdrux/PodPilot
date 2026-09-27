@@ -1630,14 +1630,15 @@ def test_incident_navigation_persists_sessions_and_caps_recent_incidents(client)
     assert 'SNO incidents' in connectors.text
     assert 'Webhook receivers' not in connectors.text
     assert 'Cluster registry' not in connectors.text
-    assert 'class="nav-label section-gap admin-section-label">Manage</p>' in connectors.text
+    assert 'class="connector-admin-menu"' in connectors.text
+    assert 'href="/settings/connectors">Manage connectors</a>' in connectors.text
 
     assert 'href="/incidents/00000000-0000-0000-0000-000000000010"' in connectors.text
     assert len(set(re.findall(r'href="/incidents/([0-9a-f-]{36})"', connectors.text))) == 5
 
     base_template = (Path(__file__).parents[2] / 'web/templates/base.html').read_text(encoding='utf-8')
     assert base_template.index('href="/delegated/connect"') < base_template.index('href="/incidents"')
-    assert base_template.index('href="/incidents"') < base_template.index('>Manage</p>')
+    assert base_template.index('href="/incidents"') < base_template.index('class="connector-admin-menu"')
 
     investigator = client.get('/incidents', headers={'x-forwarded-user':'sre'})
     assert investigator.status_code == 200

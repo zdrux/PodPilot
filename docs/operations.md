@@ -2046,3 +2046,20 @@ redaction. Disabling redaction does not enable denied cluster access. Audit and
 operation-ledger redaction remain enabled, and existing saved chats are not
 rewritten. Arbitrary transformed/unlabelled values are not guaranteed to be
 recognized by output redaction; see `docs/security.md` for the exposure boundary.
+
+
+### Ask health collection and table limits
+
+Pod and controller health helpers follow API continuation tokens automatically
+up to their configured object scan limit. Every finding within that scan is
+retained for the operator table, subject to an explicit 2 MB per-observation
+storage ceiling. These normalized `findingsRows` remain in conversation evidence;
+initial collector payloads omit them and retain bounded previews plus counts and
+reason summaries. On ordinary chat follow-ups, the full displayed health tables
+are appended to their assistant messages within the latest configured history
+window (10 messages by default), using the same evidence projection as the UI.
+Tables age out with their parent message. Existing redaction and overall provider
+input-budget handling still apply. The controller tool defaults to 10 preview rows (maximum 20); this is
+not a UI result limit. Partial scan/access/storage coverage is displayed in the
+table. Tables use a 20-row scrolling viewport and export all retained rows.
+Older conversations without these fields keep their original answer tables.

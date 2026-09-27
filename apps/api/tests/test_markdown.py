@@ -249,3 +249,43 @@ def test_table_list_repair_preserves_code_and_rejects_attributes_and_malformed_l
     assert '<ul><li>' in rendered
     assert '<img' not in rendered and '<script>' not in rendered
     assert '&lt;script&gt;' in rendered
+
+
+def test_multiline_fences_inside_table_cells_do_not_swallow_following_sections():
+    from podpilot_api.markdown import split_markdown_tables, render_safe_table_markdown, render_safe_markdown
+    source = '''| Pod | Primary problem | Details |
+|---|---|---|
+| web-a | Error | ```json
+{
+  "exitCode": 28,
+  "message": "<script>alert(1)</script> | `literal`"
+}
+``` |
+| web-b | Missing configuration | ```
+{"reason": "CreateContainerConfigError"}
+``` |
+| web-c | Pending | No status |
+
+### Explanation
+
+Normal **prose**.
+
+| Step | Action |
+|---|---|
+| 1 | Inspect configuration |
+'''
+    blocks = split_markdown_tables(source)
+    tables = [b for b in blocks if b["type"] == "answer_table"]
+    assert [b["row_count"] for b in tables] == [3, 1]
+    assert len(tables[0]["rows"][0]["cells"]) == 3
+    rendered = str(render_safe_table_markdown(tables[0]["rows"][0]["cells"][2]))
+    assert "exitCode" in rendered and "&lt;script&gt;" in rendered
+    assert "<script>" not in rendered
+    assert "<h3>Explanation</h3>" in str(render_safe_markdown(source))
+    assert any(b["type"] == "markdown" and "Normal **prose**" in b["content"] for b in blocks)
+
+
+def test_valid_fenced_table_example_is_not_repaired():
+    from podpilot_api.markdown import _repair_table_cell_fences
+    source = "````markdown\n| Name | Details |\n|---|---|\n| example | ```\n{}\n``` |\n````\n"
+    assert _repair_table_cell_fences(source) == source

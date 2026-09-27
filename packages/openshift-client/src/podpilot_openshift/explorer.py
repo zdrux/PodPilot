@@ -539,7 +539,7 @@ def _machine_health_anomaly(
     })
 
 
-def _workload_health_anomaly(kind: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+def _workload_health_anomaly(kind: str, raw: dict[str, Any], *, include_healthy: bool = False) -> dict[str, Any] | None:
     metadata = raw.get("metadata") or {}
     spec = raw.get("spec") or {}
     status = raw.get("status") or {}
@@ -589,7 +589,7 @@ def _workload_health_anomaly(kind: str, raw: dict[str, Any]) -> dict[str, Any] |
             issues.append(_condition_issue(
                 f"{condition_type}{bad_status}", severity="critical", condition=condition,
             ))
-    if not issues:
+    if not issues and not include_healthy:
         return None
     return _sanitize({
         "kind": kind,
@@ -602,7 +602,7 @@ def _workload_health_anomaly(kind: str, raw: dict[str, Any]) -> dict[str, Any] |
         "updated": updated,
         "severity": (
             "critical" if any(item["severity"] == "critical" for item in issues)
-            else "warning"
+            else "warning" if issues else "healthy"
         ),
         "issues": issues[:12],
     })
@@ -2018,6 +2018,19 @@ class KubernetesReadOnlyExplorer:
             collected_at=collected_at, unavailable_kinds=unavailable,
         )
 
+    @staticmethod
+    def _retained_health_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        """Persist normalized findings separately from the model preview, bounded at 2 MB."""
+        retained = []
+        size = 0
+        for row in rows:
+            safe = _sanitize(row)
+            size += len(json.dumps(safe).encode("utf-8"))
+            if size > 2_000_000:
+                break
+            retained.append(safe)
+        return retained, len(retained) == len(rows)
+
     def _workload_health_summary(self, intent: ReadIntent) -> ReadResult:
         namespace = _safe_identifier(intent.namespace, "namespace", required=False)
         collected_at = datetime.now(timezone.utc)
@@ -2035,10 +2048,15 @@ class KubernetesReadOnlyExplorer:
                 scanned, complete, kind_detected = self._collect_health_objects(
                     api_version="apps/v1", kind=kind, namespace=namespace,
                     evaluator=lambda raw, _now, selected_kind=kind: (
-                        _workload_health_anomaly(selected_kind, raw)
+                        _workload_health_anomaly(selected_kind, raw, include_healthy=True)
                     ),
                     collected_at=collected_at,
                 )
+            except ApiException as exc:
+                if exc.status not in {403, 404}:
+                    raise
+                scanned, complete, kind_detected = 0, False, []
+                unavailable.append(f"apps/v1 {kind}: HTTP {exc.status}")
             except ResourceNotFoundError:
                 scanned, complete, kind_detected = 0, False, []
                 unavailable.append(f"apps/v1 {kind}")
@@ -2048,13 +2066,56 @@ class KubernetesReadOnlyExplorer:
             detected.extend(kind_detected)
         scope = namespace or "cluster"
         summary_kind = intent.kind or "Workload"
-        return self._health_summary_result(
-            intent=intent, tool="workload_health_summary", summary_kind=summary_kind,
-            scope=scope, source=f"kubernetes:apps/v1:Workload/health:{scope}",
-            scanned=scanned_total, scan_complete=all_complete, detected=detected,
-            collected_at=collected_at, scanned_by_kind=scanned_by_kind,
-            unavailable_kinds=unavailable,
-        )
+        unhealthy = [item for item in detected if item["issues"]]
+        selected = unhealthy if intent.unhealthy_only else detected
+        selected.sort(key=lambda item: (item["kind"], item["namespace"] or "", item["name"]))
+        full_rows = []
+        for item in selected:
+            row = {key: item[key] for key in ("kind", "namespace", "name", "desired", "ready", "available", "updated")}
+            row["reasons"] = list(dict.fromkeys(
+                issue.get("conditionReason") or issue["reason"] for issue in item["issues"]))[:8]
+            full_rows.append(row)
+        retained, findings_complete = self._retained_health_rows(full_rows)
+        rows = []
+        size = 0
+        for row in full_rows[intent.offset:]:
+            encoded = len(json.dumps(row).encode("utf-8"))
+            if len(rows) >= min(intent.limit, 20) or (rows and size + encoded > 6000):
+                break
+            rows.append(row)
+            size += encoded
+        next_offset = intent.offset + len(rows) if intent.offset + len(rows) < len(selected) else None
+        limitations = []
+        if unavailable:
+            limitations.append("Unavailable workload APIs: " + ", ".join(unavailable) + ".")
+        if not all_complete:
+            limitations.append("Partial scan; narrow namespace/kind. Unscanned resources are not known healthy.")
+        if next_offset is not None:
+            limitations.append("More matching rows exist; continue with nextOffset and the same scope. Pages rescan live state and are not a snapshot.")
+        if not findings_complete:
+            limitations.append("The retained findings reached the 2 MB storage ceiling; narrow the scope for omitted rows.")
+        reason_counts = {}
+        for row in full_rows:
+            for reason in row["reasons"]:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        data = {
+            "findingsRows": retained, "findingsComplete": findings_complete,
+            "findingsCount": len(retained), "byReason": dict(sorted(reason_counts.items())[:20]),
+            "tableDelivery": "All retained findings are displayed automatically; rows is only a model preview. Do not reproduce the inventory table.",
+            "kind": summary_kind, "scope": scope, "scannedCount": scanned_total,
+            "scannedByKind": scanned_by_kind, "scanComplete": all_complete and not unavailable,
+            "scanLimitPerKind": self._max_search_scan_objects, "unavailableKinds": unavailable,
+            "healthyCount": len(detected) - len(unhealthy), "anomalyCount": len(unhealthy),
+            "unhealthyOnly": intent.unhealthy_only, "matchedCount": len(selected),
+            "returnedCount": len(rows), "offset": intent.offset, "nextOffset": next_offset,
+            "rows": rows,
+        }
+        return ReadResult((AdHocObservation(
+            id=f"cluster-{uuid4()}", tool="workload_health_summary",
+            summary=f"Evaluated {scanned_total} workloads in {scope}; {len(unhealthy)} have health anomalies. "
+                    + ("Coverage is partial." if not data["scanComplete"] else "Coverage is complete."),
+            source=f"kubernetes:apps/v1:Workload/health:{scope}", collected_at=collected_at, data=data,
+        ),), tuple(limitations))
 
     def _pod_health_summary(self, intent: ReadIntent) -> ReadResult:
         """Scan bounded Pod pages and retain anomaly-first, compact evidence."""
@@ -2156,6 +2217,16 @@ class KubernetesReadOnlyExplorer:
             if detected else
             f"Detected no Pod health anomalies after evaluating {scanned} Pods in {scope}."
         )
+        full_rows, findings_complete = self._retained_health_rows([
+            {"kind": "Pod", "namespace": item.get("namespace"), "name": item.get("name"),
+             "state": item.get("phase"), "severity": item.get("severity"),
+             "readyContainers": item.get("readyContainers"), "totalContainers": item.get("totalContainers"),
+             "restartCount": item.get("restartCount"),
+             "reasons": list(dict.fromkeys(str(issue.get("reason") or "Unknown") for issue in item.get("issues", [])))}
+            for item in detected
+        ])
+        if not findings_complete:
+            limitations.append("The retained findings reached the 2 MB storage ceiling; narrow the scope for omitted rows.")
         observation = AdHocObservation(
             id=f"cluster-{uuid4()}",
             tool="pod_health_summary",
@@ -2166,6 +2237,9 @@ class KubernetesReadOnlyExplorer:
                 "apiVersion": "v1",
                 "kind": "Pod",
                 "healthSummaryVersion": 2,
+                "findingsRows": full_rows, "findingsComplete": findings_complete,
+                "findingsCount": len(full_rows),
+                "tableDelivery": "All retained findings are displayed automatically; anomalies is only a model preview. Do not reproduce the inventory table.",
                 "scope": scope,
                 "labelSelector": intent.label_selector,
                 "scannedCount": scanned,
