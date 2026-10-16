@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /opt/app-root/src
 
 COPY requirements.lock ./requirements.lock
-RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock
+RUN python -m pip install --no-cache-dir --progress-bar off --require-hashes -r requirements.lock
 
 COPY pyproject.toml ./pyproject.toml
 COPY apps/api ./apps/api
