@@ -66,7 +66,7 @@ Status: development increment delivered and verified, 2026-09-09.
   (`after`, `through`, `limit`) and redaction. This is a pull-export foundation;
   push emission, retention/immutability guarantees and Teams delivery are pending.
 - Migration 0028 stores delegated inventory snapshots. Auto-detect is available
-  in shared and personal cluster details; requires a live user cluster session.
+  to configuration administrators in shared cluster details and requires a live user cluster session.
   It collects bounded workload, CRD, Service/Route and CI/CD references, preserves
   denied/partial scope, and marks endpoint candidates unverified. Deployed adapters
   verify configured metrics/Loki adapters using bounded delegated queries and show

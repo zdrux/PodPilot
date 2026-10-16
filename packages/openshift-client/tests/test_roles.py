@@ -39,6 +39,19 @@ def test_resolver_can_explicitly_classify_unassigned_user_as_delegated() -> None
     assert resolver.resolve("outsider") is Role.DELEGATED_OPERATOR
 
 
+def test_empty_role_mappings_can_default_authenticated_user_to_investigator() -> None:
+    reader = FakeGroupReader({})
+    resolver = OpenShiftGroupRoleResolver(
+        reader,
+        cache_seconds=0,
+        role_groups=((Role.READ_WRITE, ()), (Role.INVESTIGATOR, ())),
+        default_role=Role.INVESTIGATOR,
+    )
+
+    assert resolver.resolve("authenticated-user") is Role.INVESTIGATOR
+    assert reader.calls == 0
+
+
 def test_resolver_needs_no_group_reads_when_all_elevated_mappings_are_empty() -> None:
     reader = FakeGroupReader({})
     resolver = OpenShiftGroupRoleResolver(

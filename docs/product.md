@@ -17,15 +17,13 @@ or Action mode before the first message, and that mode plus the selected cluster
 Both modes use the same autonomous investigation loop, typed collectors, and shell-backed `oc`
 capability. The broker gives Investigator mode a read-only Kubernetes capability and gives Action
 mode the user's full Kubernetes capability; product usefulness must not otherwise differ by mode.
-Users may maintain private cluster metadata alongside administrator-managed shared entries.
 Cluster sign-ins belong to the PodPilot browser session rather than a conversation: users may add
 more clusters later, remove one sign-in, or remove all sign-ins without deleting durable chats.
-The Workspace sidebar lists every enabled cluster visible to the user and marks its current
+The Workspace sidebar lists every enabled administrator-managed shared cluster and marks its current
 browser-session login state. Selecting a connected cluster opens a fresh composer preselected for
 that cluster; selecting a disconnected cluster first opens the existing username/password login
-flow and then returns to that preselection. The cluster-tree add control opens a dedicated **My
-clusters** page where users manage only their private ad hoc entries. Shared registry administration
-is a separate administrator-only **Cluster Management** page under the Manage section.
+flow and then returns to that preselection. Cluster registration is available only through the
+administrator-only **Cluster Management** page under the Manage section.
 Cluster Health is not part of the active navigation or remote access model.
 The **Show my access** starter runs deterministic cluster-wide Kubernetes
 SelfSubjectAccessReview checks for common workload resources and renders exactly one permission

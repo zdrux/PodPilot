@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, aliased
 from starlette.concurrency import run_in_threadpool
 from starlette.background import BackgroundTask
@@ -793,21 +793,17 @@ def _can_use_action_mode(user: AuthContext) -> bool:
     return user.role in {Role.READ_WRITE, Role.BREAKGLASS}
 
 
+def _default_application_role(settings: Settings) -> Role | None:
+    """Open dashboard read-only when no Investigator allowlist is configured."""
+    return Role.INVESTIGATOR if not settings.role_investigator_groups else None
+
+
 def _visible_clusters(username: str):
-    return or_(Cluster.visibility == "shared", Cluster.owner == username)
+    return Cluster.visibility == "shared"
 
 
 def _can_edit_cluster(user: AuthContext, cluster: Cluster | None = None) -> bool:
-    if _can_manage_configuration(user):
-        return True
-    return bool(
-        cluster is None
-        or (
-            cluster.visibility == "private"
-            and cluster.owner == user.username
-            and not cluster.is_system
-        )
-    )
+    return _can_manage_configuration(user)
 
 
 def _delegated_session_id(request: Request) -> str:
@@ -10398,11 +10394,11 @@ def create_app(
             ])),
             (Role.INVESTIGATOR, tuple(app_settings.role_investigator_groups)),
         ),
-        default_role=None,
-        management_groups=tuple([
-            *app_settings.configuration_admin_groups,
-            *app_settings.role_breakglass_groups,
-        ]),
+        # An empty Investigator group list intentionally opens read-only
+        # PodPilot access to every identity authenticated by OpenShift. Write
+        # roles remain group-derived and therefore fail closed when empty.
+        default_role=_default_application_role(app_settings),
+        management_groups=tuple(app_settings.configuration_admin_groups),
     )
     alerts = alert_source or _make_alert_source(app_settings)
     workloads = workload_source or _make_workload_source(app_settings)
@@ -14506,52 +14502,21 @@ def create_app(
     async def personal_cluster_settings(
         request: Request, user: AuthContext = Depends(current_user)
     ):
-        if not _can_ask(user) or not app_settings.delegated_access_enabled:
-            raise HTTPException(
-                status_code=403,
-                detail="Personal cluster management requires an authorized PodPilot role.",
-            )
-        csrf_token, csrf_is_new = _csrf_token(request)
-        edit_id = request.query_params.get("edit", "").strip()
-        with Session(request.app.state.engine) as db_session:
-            rows = list(db_session.scalars(
-                select(Cluster).where(
-                    Cluster.visibility == "private",
-                    Cluster.owner == user.username,
-                    Cluster.is_system.is_(False),
-                ).order_by(Cluster.environment, Cluster.name)
-            ))
-            recent_conversations = recent_conversations_for(db_session, user.username)
-        clusters_view = [_cluster_summary(item) for item in rows]
-        selected = next((item for item in clusters_view if item["id"] == edit_id), None)
-        response = templates.TemplateResponse(
-            request=request,
-            name="personal_clusters.html",
-            context={
-                "user": user,
-                "clusters": clusters_view,
-                "selected": selected,
-                "recent_conversations": recent_conversations,
-                "csrf_token": csrf_token,
-            },
+        raise HTTPException(
+            status_code=403,
+            detail="Cluster registration is restricted to PodPilot configuration administrators.",
         )
-        if csrf_is_new:
-            response.set_cookie(
-                CSRF_COOKIE, csrf_token, secure=app_settings.auth_mode == "proxy",
-                httponly=True, samesite="strict", max_age=28_800,
-            )
-        return response
 
     @app.post("/api/v1/clusters")
     async def save_cluster(
         request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if not (
-            _can_ask(user) if app_settings.delegated_access_enabled
-            else _can_manage_configuration(user)
-        ):
-            raise HTTPException(status_code=403, detail="Cluster registration requires a PodPilot role.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Cluster registration requires configuration-administrator access.",
+            )
         form = await _urlencoded(request)
         cluster_id = form.get("cluster_id", "").strip()
         name = redact_text(form.get("name", "").strip())[:253]
@@ -14564,15 +14529,13 @@ def create_app(
         tags = _parse_tags(form.get("tags_json", "{}"), field_name="Cluster tags")
         tls_verify = form.get("tls_verify", "true").strip().lower() == "true"
         environment = redact_text(form.get("environment", "default").strip()).casefold()[:64]
-        visibility = form.get("visibility", "private").strip().casefold()
+        visibility = form.get("visibility", "shared").strip().casefold()
         if not name:
             raise HTTPException(status_code=422, detail="Cluster name is required.")
         if not environment or not _TAG_VALUE.fullmatch(environment):
             raise HTTPException(status_code=422, detail="A valid cluster environment is required.")
-        if visibility not in {"private", "shared"}:
-            raise HTTPException(status_code=422, detail="Select private or shared cluster visibility.")
-        if visibility == "shared" and not _can_manage_configuration(user):
-            raise HTTPException(status_code=403, detail="Only configuration administrators may save shared clusters.")
+        if visibility != "shared":
+            raise HTTPException(status_code=422, detail="PodPilot supports only shared cluster registrations.")
         if app_settings.delegated_access_enabled and token:
             raise HTTPException(status_code=422, detail="PodPilot does not store cluster bearer tokens.")
         if token and not (8 <= len(token) <= 16_384):
@@ -14615,7 +14578,7 @@ def create_app(
                     custom_ca_pem=custom_ca_pem,
                     environment=environment,
                     visibility=visibility,
-                    owner=user.username if visibility == "private" else None,
+                    owner=None,
                     is_enabled=True,
                     is_system=False,
                     status="not_tested",
@@ -14635,7 +14598,7 @@ def create_app(
                 cluster.custom_ca_pem = custom_ca_pem
                 cluster.environment = environment
                 cluster.visibility = visibility
-                cluster.owner = user.username if visibility == "private" else None
+                cluster.owner = None
                 cluster.is_enabled = True
                 cluster.status = "not_tested"
                 cluster.last_error = None
@@ -14823,11 +14786,11 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if not (
-            _can_ask(user) if app_settings.delegated_access_enabled
-            else _can_manage_configuration(user)
-        ):
-            raise HTTPException(status_code=403, detail="Cluster testing requires a PodPilot role.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Cluster testing requires configuration-administrator access.",
+            )
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
@@ -14909,11 +14872,11 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if not (
-            _can_ask(user) if app_settings.delegated_access_enabled
-            else _can_manage_configuration(user)
-        ):
-            raise HTTPException(status_code=403, detail="Cluster management requires a PodPilot role.")
+        if not _can_manage_configuration(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Cluster management requires configuration-administrator access.",
+            )
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
@@ -14951,10 +14914,10 @@ def create_app(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
-        if not _can_ask(user):
+        if not _can_manage_configuration(user):
             raise HTTPException(
                 status_code=403,
-                detail="Private cluster deletion requires an authorized PodPilot role.",
+                detail="Legacy private cluster deletion requires configuration-administrator access.",
             )
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
@@ -14963,11 +14926,10 @@ def create_app(
             if (
                 cluster.is_system
                 or cluster.visibility != "private"
-                or cluster.owner != user.username
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only your own private cluster entries can be deleted here.",
+                    detail="Only legacy private cluster entries can be deleted here.",
                 )
             cluster_name = cluster.name
             credential_key = cluster.credential_key
@@ -14989,11 +14951,10 @@ def create_app(
             if (
                 cluster.is_system
                 or cluster.visibility != "private"
-                or cluster.owner != user.username
             ):
                 raise HTTPException(
                     status_code=403,
-                    detail="Only your own private cluster entries can be deleted here.",
+                    detail="Only legacy private cluster entries can be deleted here.",
                 )
             db_session.delete(cluster)
             db_session.add(AuditEvent(

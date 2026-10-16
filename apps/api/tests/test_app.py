@@ -62,6 +62,7 @@ from podpilot_api.main import (
     _deterministic_provider_failure_answer,
     _deterministic_resource_detail_answer,
     _deterministic_route_tls_answer,
+    _default_application_role,
     _explicit_router_pod_metric_inquiry,
     _format_est_time,
     _summarize_tool_activity,
@@ -164,6 +165,13 @@ from podpilot_openshift.metrics import ThanosQueryClient
 from podpilot_openshift.workloads import WorkloadEvidenceError
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_empty_investigator_allowlist_opens_authenticated_read_only_access() -> None:
+    assert _default_application_role(Settings(role_investigator_groups=[])) is Role.INVESTIGATOR
+    assert _default_application_role(
+        Settings(role_investigator_groups=["restricted-readers"])
+    ) is None
 
 
 def test_collection_analysis_expands_only_small_complete_inventory() -> None:
@@ -11519,9 +11527,9 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert "data-tag-editor" in edited.text
         assert "single word" in edited.text
         assert "production" in edited.text
-        assert f'data-action-url="/api/v1/clusters/{cluster_id}/delete"' in edited.text
-        assert ">Delete</button>" in edited.text
-        assert f'/api/v1/clusters/{cluster_id}/disable' not in edited.text
+        assert f'data-action-url="/api/v1/clusters/{cluster_id}/disable"' in edited.text
+        assert ">Disable</button>" in edited.text
+        assert f'/api/v1/clusters/{cluster_id}/delete' not in edited.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -11538,7 +11546,7 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
     engine.dispose()
 
 
-def test_owner_deletes_private_secret_backed_cluster_and_credential(tmp_path: Path) -> None:
+def test_cluster_registration_rejects_private_visibility(tmp_path: Path) -> None:
     cluster_credentials = MemoryCredentialStore()
     app, settings = make_app(
         tmp_path,
@@ -11555,7 +11563,7 @@ def test_owner_deletes_private_secret_backed_cluster_and_credential(tmp_path: Pa
             "x-forwarded-user": "ada",
             "x-podpilot-csrf": csrf.group(1),
         }
-        saved = client.post(
+        rejected = client.post(
             "/api/v1/clusters",
             headers=headers,
             data={
@@ -11565,34 +11573,9 @@ def test_owner_deletes_private_secret_backed_cluster_and_credential(tmp_path: Pa
                 "visibility": "private",
             },
         )
-        assert saved.status_code == 200
-        cluster_id = saved.json()["cluster_id"]
-
-        engine = build_engine(settings)
-        with Session(engine) as db_session:
-            cluster = db_session.get(Cluster, cluster_id)
-            assert cluster is not None and cluster.credential_key is not None
-            credential_key = cluster.credential_key
-        engine.dispose()
-        assert cluster_credentials.get(credential_key) == "sha256~private-delete-token"
-
-        deleted = client.post(
-            f"/api/v1/clusters/{cluster_id}/delete",
-            headers=headers,
-        )
-        assert deleted.status_code == 200
-        assert deleted.json()["status"] == "deleted"
-        assert deleted.json()["detail"].startswith("Private cluster deleted")
-        assert credential_key not in cluster_credentials.values
-
-    engine = build_engine(settings)
-    with Session(engine) as db_session:
-        assert db_session.get(Cluster, cluster_id) is None
-        event = db_session.scalar(select(AuditEvent).where(
-            AuditEvent.action == "cluster.delete"
-        ))
-        assert event is not None
-    engine.dispose()
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"] == "PodPilot supports only shared cluster registrations."
+        assert cluster_credentials.values == {}
 
 
 def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
@@ -12797,8 +12780,8 @@ def test_delegated_session_adds_and_removes_individual_cluster_sign_ins(
         assert 'class="cluster-session-status connected"' in ask_page.text
         assert 'class="cluster-session-status disconnected"' in ask_page.text
         assert 'aria-label="Available clusters"' in ask_page.text
-        assert 'aria-label="Add a personal cluster"' in ask_page.text
-        assert 'href="/clusters/personal?new=1"' in ask_page.text
+        assert 'aria-label="Add a personal cluster"' not in ask_page.text
+        assert 'href="/clusters/personal?new=1"' not in ask_page.text
         assert "Select cluster(s) first" in ask_page.text
         ask_checkboxes = re.findall(
             r'<input[^>]+data-cluster-checkbox[^>]+>', ask_page.text
@@ -14769,74 +14752,98 @@ def test_investigator_configuration_admin_can_edit_management_forms(tmp_path: Pa
         assert "Read-only access" not in memory_page.text
 
 
-def test_users_manage_private_cluster_metadata_without_stored_tokens(tmp_path: Path) -> None:
+def test_cluster_registration_is_configuration_admin_only_and_shared(tmp_path: Path) -> None:
     app, settings = make_app(
         tmp_path,
         assignments={"ivy": Role.INVESTIGATOR, "grace": Role.INVESTIGATOR},
+        configuration_admins={"grace"},
         source=FakeAlertSource(),
         settings_overrides={"delegated_access_enabled": True},
     )
+    legacy_private_id = "53000000-0000-0000-0000-000000000001"
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        now = datetime.now(timezone.utc)
+        db_session.add(Cluster(
+            id=legacy_private_id,
+            name="Legacy Ivy private",
+            api_url="https://api.legacy-private.example:6443",
+            tags_json="{}",
+            environment="dev",
+            visibility="private",
+            owner="ivy",
+            is_enabled=True,
+            is_system=False,
+            status="not_tested",
+            created_by="ivy",
+            updated_by="ivy",
+            created_at=now,
+            updated_at=now,
+        ))
+        db_session.commit()
+    engine.dispose()
+
     with TestClient(app) as client:
-        admin_page = client.get(
+        denied_page = client.get(
             "/settings/clusters", headers={"x-forwarded-user": "ivy"}
         )
-        assert admin_page.status_code == 403
+        assert denied_page.status_code == 403
         page = client.get("/clusters/personal", headers={"x-forwarded-user": "ivy"})
-        assert page.status_code == 200
-        assert "<h1>My clusters</h1>" in page.text
-        assert "Cluster Management" not in page.text
-        assert 'data-redirect-base="/clusters/personal"' in page.text
-        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert page.status_code == 403
+
+        ask_page = client.get("/ask?new=1", headers={"x-forwarded-user": "ivy"})
+        assert "Legacy Ivy private" not in ask_page.text
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', ask_page.text)
         assert csrf is not None
-        created = client.post(
+        denied = client.post(
             "/api/v1/clusters",
             headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
             data={
-                "name": "Ivy ad-hoc DEV",
+                "name": "Ivy cluster",
                 "environment": "dev",
-                "visibility": "private",
-                "api_url": "https://api.adhoc-dev.example:6443",
+                "visibility": "shared",
+                "api_url": "https://api.ivy.example:6443",
                 "tls_verify": "false",
                 "tags_json": '{"team":"payments"}',
+            },
+        )
+        assert denied.status_code == 403
+
+        admin_page = client.get(
+            "/settings/clusters?new=1", headers={"x-forwarded-user": "grace"}
+        )
+        admin_csrf = re.search(
+            r'name="podpilot-csrf" content="([^"]+)"', admin_page.text
+        )
+        assert admin_page.status_code == 200 and admin_csrf is not None
+        assert "Legacy Ivy private" in admin_page.text
+        cleaned = client.post(
+            f"/api/v1/clusters/{legacy_private_id}/delete",
+            headers={"x-forwarded-user": "grace", "x-podpilot-csrf": admin_csrf.group(1)},
+        )
+        assert cleaned.status_code == 200
+        created = client.post(
+            "/api/v1/clusters",
+            headers={"x-forwarded-user": "grace", "x-podpilot-csrf": admin_csrf.group(1)},
+            data={
+                "name": "Shared DEV",
+                "environment": "dev",
+                "visibility": "shared",
+                "api_url": "https://api.shared-dev.example:6443",
+                "tls_verify": "true",
+                "tags_json": '{"team":"platform"}',
             },
         )
         assert created.status_code == 200
         cluster_id = created.json()["cluster_id"]
 
-        own_page = client.get(
-            f"/clusters/personal?edit={cluster_id}",
-            headers={"x-forwarded-user": "ivy"},
-        )
-        other_page = client.get("/clusters/personal", headers={"x-forwarded-user": "grace"})
-        assert "Ivy ad-hoc DEV" in own_page.text
-        assert f'data-action-url="/api/v1/clusters/{cluster_id}/delete"' in own_page.text
-        assert ">Delete</button>" in own_page.text
-        assert "Ivy ad-hoc DEV" not in other_page.text
-        denied = client.post(
-            f"/api/v1/clusters/{cluster_id}/disable",
-            headers={"x-forwarded-user": "grace", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert denied.status_code == 403
-
-        removed = client.post(
-            f"/api/v1/clusters/{cluster_id}/delete",
-            headers={"x-forwarded-user": "ivy", "x-podpilot-csrf": csrf.group(1)},
-        )
-        assert removed.status_code == 200
-        assert removed.json()["status"] == "deleted"
-        assert "Ivy ad-hoc DEV" not in client.get(
-            "/clusters/personal", headers={"x-forwarded-user": "ivy"}
-        ).text
-
     engine = build_engine(settings)
     with Session(engine) as db_session:
         cluster = db_session.get(Cluster, cluster_id)
-        assert cluster is None
-        event = db_session.scalar(select(AuditEvent).where(
-            AuditEvent.action == "cluster.delete"
-        ))
-        assert event is not None
-        assert json.loads(event.details_json)["cluster_id"] == cluster_id
+        assert cluster is not None
+        assert cluster.visibility == "shared"
+        assert cluster.owner is None
+        assert db_session.get(Cluster, legacy_private_id) is None
     engine.dispose()
 
 

@@ -512,6 +512,13 @@ def test_remote_ldap_group_config_only_maps_elevated_roles() -> None:
     assert "configuration_admin_groups" in runtime["data"]
 
 
+def test_base_runtime_opens_investigator_access_to_authenticated_users() -> None:
+    runtime = yaml.safe_load(
+        (ROOT / "deploy" / "openshift" / "workload" / "runtime-config.yaml").read_text()
+    )
+    assert runtime["data"]["role_investigator_groups"] == "[]"
+
+
 def test_secret_flags_are_exposed_through_runtime_config() -> None:
     workload = ROOT / "deploy" / "openshift" / "workload"
     runtime = yaml.safe_load((workload / "runtime-config.yaml").read_text())

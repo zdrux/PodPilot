@@ -335,13 +335,13 @@ cluster IDs—never the token. After the applicable preview and approval control
 can therefore issue CREATE, PATCH, APPLY, and DELETE requests when the remote user's RBAC permits
 them, while Investigator conversations receive broker HTTP 403 responses for those operations
 without receiving the bearer token itself.
-The picker reads shared entries plus the current user's private entries. Credentials are submitted
+The picker reads enabled shared entries managed by configuration administrators. Credentials are submitted
 for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
 the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
-Owners can permanently delete private registry entries; this revokes matching live delegated
-connections while historical conversations retain their immutable cluster references. Shared
-entries remain disable-only so their lifecycle stays under configuration-administrator control.
+Legacy private registry entries are not available to users; configuration administrators may delete
+them for cleanup. Shared entries remain disable-only so historical conversations retain their
+immutable cluster references and lifecycle stays under configuration-administrator control.
 
 Active workload and remote overlays enable delegated access and deploy a tokenless runner. The
 Pod-level `podpilot-investigator` service account is not bound to `cluster-reader`; its custom
@@ -353,9 +353,12 @@ No active deployment reads a remote cluster-token Secret; TLS policy is stored p
 
 The current Pod contains the API, OAuth proxy, and tokenless runner. The OpenShift OAuth proxy is the
 only network-facing container and forwards authenticated requests to FastAPI on
-`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username, resolves Investigator or Read-Write
-from deployment-configured OpenShift groups, resolves configuration administration independently,
-and denies unmatched users. The landing route redirects to Ask; Cluster Health is not active.
+`127.0.0.1:8080`. FastAPI accepts the proxy-supplied username and resolves Read-Write from
+deployment-configured OpenShift groups. Investigator access is group-restricted when an
+Investigator allowlist is configured; when that list is empty, every OAuth-authenticated OpenShift
+user receives Investigator access. Configuration administration is resolved independently. An
+empty Read-Write list grants no write access. The landing route redirects to Ask; Cluster Health is
+not active.
 The API persists schema state in SQLite on the `podpilot-data` PVC. An init container
 runs Alembic before the application starts. The Service exposes only proxy port
 4180, and the edge-terminated Route redirects HTTP to HTTPS.
@@ -402,9 +405,9 @@ Schema-validated interpretation is displayed separately from deterministic facts
 Provider failure preserves the deterministic investigation and records a bounded,
 credential-free error.
 
-The Ask-only cluster registry stores API origins, environment, ownership/visibility,
-tags, lifecycle state, and per-cluster TLS policy in SQLite. Shared entries are managed
-by configuration administrators; each user may also maintain private entries. The
+The Ask-only cluster registry stores API origins, environment, visibility, tags, lifecycle state,
+and per-cluster TLS policy in SQLite. Active entries are shared and managed only by configuration
+administrators. The
 registry never stores a remote-cluster credential. At conversation connect time the API
 exchanges the user's environment credentials with every selected cluster and keeps only
 the resulting tokens in the in-memory delegated-session vault.

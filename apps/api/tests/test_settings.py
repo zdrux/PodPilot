@@ -8,6 +8,10 @@ def test_chat_message_limit_defaults_to_supported_maximum() -> None:
     assert Settings(_env_file=None).chat_max_chars == 4000
 
 
+def test_investigator_group_allowlist_defaults_to_open() -> None:
+    assert Settings(_env_file=None).role_investigator_groups == []
+
+
 def test_external_approval_and_bypass_settings_are_removed():
     assert "development_approval_bypass" not in Settings.model_fields
     assert "role_approver_groups" not in Settings.model_fields

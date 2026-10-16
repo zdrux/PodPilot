@@ -1383,3 +1383,22 @@ Consequences: Operators get a current Application matrix with Confirmed, Incompl
 states while connector credentials remain isolated. Discovery is process-local in this release;
 durable snapshots survive restarts, but queued work requires a future lease-backed worker before
 multiple replicas can execute it safely.
+
+## 2026-10-16 - Authenticated users default to read-only and cluster registration is centralized
+
+Context: Cluster access is already enforced with each user's delegated OpenShift identity and RBAC.
+Maintaining a second mandatory read-only group allowlist adds dashboard administration without
+strengthening cluster authorization. User-created API registrations also expand the set of origins
+that may receive credentials during delegated login.
+
+Decision: Treat an empty Investigator group list as open read-only PodPilot access for every identity
+authenticated by the OpenShift OAuth proxy. A nonempty list remains an allowlist. Read-Write and
+Breakglass remain explicit group mappings; empty elevated-role lists grant no elevated access.
+Restrict cluster registration and lifecycle operations to configuration administrators, allow only
+shared registrations, and exclude legacy private entries from user-visible selection. Read-Write
+and Breakglass roles do not implicitly grant configuration administration.
+
+Consequences: OpenShift authentication controls dashboard admission by default while the broker and
+cluster RBAC continue to bound all reads. Action access remains fail-closed. Operators centrally
+control every credential destination. Existing private metadata is inert for users and can be
+audited and deleted by a configuration administrator.

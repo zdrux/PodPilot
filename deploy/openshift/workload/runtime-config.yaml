@@ -46,7 +46,7 @@ data:
   agent_command_max_output_bytes: "262144"
   agent_heartbeat_seconds: "10"
   model_timeout_max_seconds: "240"
-  role_investigator_groups: '["podpilot-investigators"]'
+  role_investigator_groups: '[]'
   role_read_write_groups: '["podpilot-read-write"]'
   configuration_admin_groups: '["podpilot-configuration-admins"]'
   role_breakglass_groups: '["podpilot-breakglass"]'

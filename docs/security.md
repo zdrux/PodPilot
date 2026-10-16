@@ -154,8 +154,12 @@ local development. Rotate any credential exposed in source control or chat.
 All deployed Ask sessions use the selected user's OpenShift identity on every selected cluster.
 PodPilot has two execution entitlements: Investigator is permanently read-only; Read-Write may
 choose **Investigate · read-only** or **Action · my cluster permissions** when creating a
-conversation. Cluster selection and mode are immutable for that conversation. Unmatched users are
-denied. Configuration administration is a separate group-derived capability.
+conversation. Cluster selection and mode are immutable for that conversation. When
+`PODPILOT_ROLE_INVESTIGATOR_GROUPS` is empty, every identity authenticated by the OpenShift OAuth
+proxy receives Investigator access; a nonempty list restricts access to its members. Read-Write
+and Breakglass remain explicit group-derived roles and an empty Read-Write list grants nobody
+write access. Configuration administration is a separate group-derived capability.
+Read-Write and Breakglass membership never implies configuration administration.
 
 Users submit one username/password pair for clusters in one declared environment at a time.
 PodPilot performs the challenging-client OAuth exchange against each exact registered origin,
@@ -202,15 +206,15 @@ to analyze sensitive values locally and return non-sensitive findings while
 redaction is enabled. Legacy typed diagnostic collectors keep their existing
 Secret denylist; delegated Secret work uses the brokered runner.
 
-The cluster registry stores API metadata only. Shared entries are configuration-admin managed;
-each authorized user may also create private entries visible only to that owner and configuration
-administrators. Entries carry an environment, HTTPS API origin, tags, optional public CA bundle,
-and a per-entry TLS verification choice. Users may disable certificate and hostname verification;
-the UI and conversation mark that interception risk and saves/tests are audited. There is no
-deployment-wide TLS policy override and no stored remote bearer token.
-The administrative Cluster Management route is configuration-admin only. Personal cluster routes
-query and mutate only `visibility=private` entries owned by the authenticated user; removing one
-revokes its in-memory delegated connection before deleting its metadata and retains an audit record.
+The cluster registry stores API metadata only. Active entries are shared and configuration-admin
+managed. Entries carry an environment, HTTPS API origin, tags, optional public CA bundle, and a
+per-entry TLS verification choice. Only a configuration administrator may disable certificate and
+hostname verification; the UI and conversation mark that interception risk and saves/tests are
+audited. There is no deployment-wide TLS policy override and no stored remote bearer token.
+The Cluster Management route and cluster mutation APIs are configuration-admin only. Users cannot
+register personal/private clusters. Legacy private entries are excluded from user-visible cluster
+selection and may be deleted only by a configuration administrator, which revokes any in-memory
+delegated connection and retains an audit record.
 
 The runtime system cluster follows the same delegated-user path. PodPilot uses the internal API and
 OAuth service origins plus projected public CA bundles, but never substitutes the Pod service
@@ -406,9 +410,9 @@ Standalone Ask conversations also pin an immutable cluster-ID selection and exec
 mode. The browser cannot change either value on a continuation request. Normal code loads
 only entries visible to the owner, refuses disabled or disconnected targets, obtains the
 user token from the in-memory delegated-session vault, and attributes retained evidence
-to the source cluster. Shared cluster metadata requires configuration-administrator
-capability; users may create, update, test, and permanently delete their own private entries.
-Deletion removes any credential held by the configured credential store before removing the
+to the source cluster. Shared cluster metadata requires configuration-administrator capability;
+users cannot create, update, test, disable, or delete cluster entries. Legacy private-entry
+deletion removes any credential held by the configured credential store before removing the
 registry metadata, revokes live delegated connections for that cluster, and retains historical
 conversation records. Shared entries remain disable-only. These operations require CSRF and
 content-free audit metadata and never return a bearer token.

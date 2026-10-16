@@ -7,15 +7,15 @@ Current releases must verify that the base grants no legacy remote cluster-crede
 Secret access. The optional incident-response component may grant get/patch on its one
 dedicated incident credential Secret; it must not grant cluster operations to the runtime.
 Every Ask conversation is bound to user-delegated cluster tokens, Investigator cannot
-select Action, Read-Write can select either immutable mode, private clusters are owner-isolated,
-and both TLS-verified and explicitly unverified per-cluster login paths are visibly audited.
-Verify the Workspace cluster tree is owner-filtered, reflects current in-memory connection state,
+select Action, Read-Write can select either immutable mode, and both TLS-verified and explicitly
+unverified per-cluster login paths are visibly audited. Verify an empty Investigator group list
+admits every OAuth-authenticated user as read-only while an empty Read-Write list grants Action to
+nobody. Verify the Workspace cluster tree contains only enabled shared entries and reflects current in-memory connection state,
 preselects exactly one connected cluster in a fresh composer, and sends an unconnected selection
 through login before returning to that composer. Configuration administrators must receive a
-separate **Cluster Management** navigation entry, while authorized users retain the ad hoc cluster
-add control. The add control must open the separate **My clusters** route; non-admin users must be
-denied from Cluster Management and must be unable to view, edit, test, or delete another user's
-private entries.
+separate **Cluster Management** navigation entry. Non-admin users must have no cluster-add control
+and must be unable to register, edit, test, disable, or delete cluster entries. Legacy private
+entries must not appear in user cluster selection and may be deleted only by configuration admins.
 Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
 selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
 the same result shape across repeated runs.

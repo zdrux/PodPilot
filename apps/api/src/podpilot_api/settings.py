@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     proxy_user_header: str = "x-forwarded-user"
     role_cache_seconds: int = Field(default=30, ge=0, le=300)
     role_investigator_groups: list[str] = Field(
-        default_factory=lambda: ["podpilot-investigators"]
+        default_factory=list
     )
     role_read_write_groups: list[str] = Field(
         default_factory=lambda: ["podpilot-read-write"]

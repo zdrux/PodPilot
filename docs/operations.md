@@ -397,12 +397,12 @@ provider and credentials are healthy.
   `oauth-openshift` service, are the verified in-cluster endpoints used when a delegated user
   selects PodPilot's system cluster. The API and service CA paths come from
   `PODPILOT_SERVICE_ACCOUNT_CA_PATH` and `PODPILOT_SERVICE_CA_PATH`.
-- Users manage private entries and configuration administrators manage shared entries under
-  **Clusters**. Save and run **Test OAuth discovery**; a tokenless entry reports successful
+- Configuration administrators manage the shared cluster registry under **Cluster Management**.
+  Save and run **Test OAuth discovery**; a tokenless entry reports successful
   TLS and OAuth discovery without asking for a user's credentials.
-- Owners may permanently delete their private entries from **Clusters**. PodPilot deletes any
-  stored credential and revokes live delegated connections before removing the registry entry;
-  historical conversations remain available. Shared entries use **Disable** instead.
+- Users cannot add, edit, test, disable, or delete cluster entries. Legacy private entries are
+  unavailable to users and may be permanently deleted by a configuration administrator. Shared
+  entries use **Disable** so historical conversations remain available.
 
 - Conversation execution selects the delegated read-only or role-authorized Action loop; the
   checked-in workload manifests deploy the runner.
@@ -415,8 +415,8 @@ provider and credentials are healthy.
 - `PODPILOT_AGENT_HEARTBEAT_SECONDS`, default `10`; controls silent runner polling and in-flight
   model/command progress updates persisted to the active Ask run. It does not emit periodic
   container-log heartbeat messages.
-- TLS verification is stored per cluster. Users may disable certificate and hostname verification
-  for private entries; configuration administrators make that choice for shared entries.
+- TLS verification is stored per cluster. Only configuration administrators may disable
+  certificate and hostname verification for a shared entry.
 
 The current deployment uses these variables:
 
@@ -427,14 +427,18 @@ The current deployment uses these variables:
 - `PODPILOT_AUTH_MODE=proxy`
 - `PODPILOT_ROLE_CACHE_SECONDS`, default `30`
 - `PODPILOT_ROLE_INVESTIGATOR_GROUPS`, JSON array defaulting to
-  `["podpilot-investigators"]`
+  `[]`. When empty, every user authenticated by the OpenShift OAuth proxy receives
+  Investigator/read-only PodPilot access. When nonempty, only members receive that base access.
 - `PODPILOT_ROLE_READ_WRITE_GROUPS`, JSON array defaulting to `["podpilot-read-write"]`
+  and always fail-closed: an empty list grants Action access to nobody.
 - `PODPILOT_CONFIGURATION_ADMIN_GROUPS`, an orthogonal capability array defaulting to
-  `["podpilot-configuration-admins"]`
+  `["podpilot-configuration-admins"]`. Read-Write and Breakglass membership does not imply this
+  capability; users needing both must belong to both configured groups.
 - `PODPILOT_ROLE_BREAKGLASS_GROUPS`, JSON array defaulting to `["podpilot-breakglass"]`;
   arrays may contain multiple existing groups or be empty, but the same group
-  cannot map to more than one role; all arrays may be empty, leaving every
-  authenticated user at Viewer
+  cannot map to more than one execution role. If every execution-role array is empty,
+  every authenticated user receives Investigator/read-only access and nobody receives
+  Action or Breakglass access.
 - the **Manage** navigation and its Clusters, Model settings, and Cluster memory
   pages are available only to configuration administrators; the API
   applies the same authorization to configuration reads and writes
@@ -581,8 +585,8 @@ unavailable.
 
 ### Multi-cluster Ask and curated memory
 
-Configuration administrators manage shared OpenShift entries at `/settings/clusters`; authorized
-users manage their own private entries separately. Each entry stores an HTTPS API origin, exact
+Configuration administrators exclusively manage shared OpenShift entries at `/settings/clusters`.
+Users cannot register private entries. Each entry stores an HTTPS API origin, exact
 key/value tags, enabled state, and per-cluster TLS verification setting, but no bearer token. The
 runtime cluster is registered automatically. Users sign in to selected clusters and PodPilot keeps
 their OAuth tokens only in API-process memory for the delegated session.
