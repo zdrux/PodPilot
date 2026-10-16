@@ -10405,7 +10405,12 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
-    from podpilot_api.incident_models import FleetIncident, IncidentConnection, incident_enrolled
+    from podpilot_api.incident_models import (
+        ConnectorDiscovery,
+        FleetIncident,
+        IncidentConnection,
+        incident_enrolled,
+    )
     from podpilot_api.incidents import IncidentService, install_incidents
     def incident_model_context(engine):
         with Session(engine) as db_session:
@@ -14528,6 +14533,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         tags = _parse_tags(form.get("tags_json", "{}"), field_name="Cluster tags")
         tls_verify = form.get("tls_verify", "true").strip().lower() == "true"
+        is_enabled = form.get("is_enabled", "true").strip().lower() == "true"
         environment = redact_text(form.get("environment", "default").strip()).casefold()[:64]
         visibility = form.get("visibility", "shared").strip().casefold()
         if not name:
@@ -14549,14 +14555,6 @@ def create_app(
                 raise HTTPException(status_code=403, detail="That cluster entry is not editable by this user.")
             if cluster is not None and cluster.is_system:
                 raise HTTPException(status_code=409, detail="The runtime system cluster cannot be modified here.")
-            if (
-                cluster is not None and not cluster.is_enabled and not token
-                and not app_settings.delegated_access_enabled
-            ):
-                raise HTTPException(
-                    status_code=422,
-                    detail="A new bearer token is required when re-enabling a disabled cluster.",
-                )
             duplicate = db_session.scalar(select(Cluster).where(Cluster.name == name))
             if duplicate is not None and (cluster is None or duplicate.id != cluster.id):
                 raise HTTPException(status_code=409, detail="A cluster with that name already exists.")
@@ -14579,7 +14577,7 @@ def create_app(
                     environment=environment,
                     visibility=visibility,
                     owner=None,
-                    is_enabled=True,
+                    is_enabled=is_enabled,
                     is_system=False,
                     status="not_tested",
                     created_by=user.username,
@@ -14599,7 +14597,7 @@ def create_app(
                 cluster.environment = environment
                 cluster.visibility = visibility
                 cluster.owner = None
-                cluster.is_enabled = True
+                cluster.is_enabled = is_enabled
                 cluster.status = "not_tested"
                 cluster.last_error = None
                 cluster.updated_by = user.username
@@ -14633,9 +14631,15 @@ def create_app(
                     "token_rotated": bool(token and not app_settings.delegated_access_enabled),
                     "environment": environment,
                     "visibility": visibility,
+                    "visible_in_cluster_list": is_enabled,
                 }, sort_keys=True),
             ))
             db_session.commit()
+        if not is_enabled:
+            await _revoke_delegated_connections(
+                request.app,
+                request.app.state.delegated_vault.pop_cluster(cluster_id),
+            )
         return JSONResponse({"status": "saved", "cluster_id": cluster_id})
 
     @app.post("/api/v1/clusters/{cluster_id}/rename", include_in_schema=False)
@@ -14666,6 +14670,11 @@ def create_app(
             previous_name = cluster.name
             previous_tags = _parse_tags(cluster.tags_json, field_name="Stored cluster tags")
             previous_environment = cluster.environment
+            previous_is_enabled = cluster.is_enabled
+            is_enabled = (
+                form.get("is_enabled", "true").strip().lower() == "true"
+                if "is_enabled" in form else previous_is_enabled
+            )
             environment = (
                 redact_text(form["environment"].strip()).casefold()[:64]
                 if "environment" in form else previous_environment
@@ -14682,6 +14691,7 @@ def create_app(
             cluster.name = name
             cluster.environment = environment
             cluster.tags_json = json.dumps(tags, sort_keys=True)
+            cluster.is_enabled = is_enabled
             cluster.updated_by = user.username
             cluster.updated_at = now
             db_session.add(AuditEvent(
@@ -14696,15 +14706,23 @@ def create_app(
                     "name": name,
                     "previous_tag_keys": sorted(previous_tags),
                     "tag_keys": sorted(tags),
+                    "previous_visible_in_cluster_list": previous_is_enabled,
+                    "visible_in_cluster_list": is_enabled,
                 }, sort_keys=True),
             ))
             db_session.commit()
+        if not is_enabled:
+            await _revoke_delegated_connections(
+                request.app,
+                request.app.state.delegated_vault.pop_cluster(cluster_id),
+            )
         return JSONResponse({
             "status": "saved",
             "cluster_id": cluster_id,
             "name": name,
             "environment": environment,
             "tags": tags,
+            "visible_in_cluster_list": is_enabled,
             "detail": "Runtime cluster metadata saved.",
         })
 
@@ -14725,7 +14743,10 @@ def create_app(
             if not _can_edit_cluster(user, cluster):
                 raise HTTPException(status_code=403, detail="This cluster is not editable by this user.")
             if not cluster.is_enabled:
-                raise HTTPException(status_code=409, detail="Enable the cluster before discovery.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Make the cluster visible in the Cluster list before discovery.",
+                )
         connection = request.app.state.delegated_vault.get(
             session_id=session_id, owner=user.username, cluster_id=cluster_id,
         )
@@ -14797,8 +14818,6 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Cluster entry not found.")
             if not _can_edit_cluster(user, cluster):
                 raise HTTPException(status_code=403, detail="That cluster entry is not available to this user.")
-            if not cluster.is_enabled:
-                raise HTTPException(status_code=409, detail="Enable and save the cluster before testing it.")
             cluster_snapshot = _cluster_summary(cluster)
             credential_key = cluster.credential_key
             is_system = cluster.is_system
@@ -14867,76 +14886,68 @@ def create_app(
             ),
         })
 
-    @app.post("/api/v1/clusters/{cluster_id}/disable")
-    async def disable_cluster(
-        cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
-    ) -> JSONResponse:
-        _verify_csrf(request)
-        if not _can_manage_configuration(user):
-            raise HTTPException(
-                status_code=403,
-                detail="Cluster management requires configuration-administrator access.",
-            )
-        with Session(request.app.state.engine) as db_session:
-            cluster = db_session.get(Cluster, cluster_id)
-            if cluster is None:
-                raise HTTPException(status_code=404, detail="Cluster entry not found.")
-            if not _can_edit_cluster(user, cluster):
-                raise HTTPException(status_code=403, detail="That cluster entry is not editable by this user.")
-            if cluster.is_system:
-                raise HTTPException(status_code=409, detail="The runtime system cluster cannot be disabled.")
-            credential_key = cluster.credential_key
-            if credential_key and not app_settings.delegated_access_enabled:
-                try:
-                    await run_in_threadpool(cluster_credentials.delete, credential_key)
-                except CredentialStoreError as exc:
-                    raise HTTPException(status_code=503, detail=str(exc)) from exc
-            cluster.is_enabled = False
-            cluster.status = "disabled"
-            cluster.last_error = None
-            cluster.updated_by = user.username
-            cluster.updated_at = datetime.now(timezone.utc)
-            db_session.add(AuditEvent(
-                actor=user.username,
-                action="cluster.disable",
-                outcome="disabled",
-                details_json=json.dumps({"cluster_id": cluster_id}, sort_keys=True),
-            ))
-            db_session.commit()
-        await _revoke_delegated_connections(
-            request.app,
-            request.app.state.delegated_vault.pop_cluster(cluster_id),
-        )
-        return JSONResponse({"status": "disabled", "cluster_id": cluster_id})
-
     @app.post("/api/v1/clusters/{cluster_id}/delete")
-    async def delete_personal_cluster(
+    async def delete_cluster(
         cluster_id: str, request: Request, user: AuthContext = Depends(current_user)
     ) -> JSONResponse:
         _verify_csrf(request)
         if not _can_manage_configuration(user):
             raise HTTPException(
                 status_code=403,
-                detail="Legacy private cluster deletion requires configuration-administrator access.",
+                detail="Cluster deletion requires configuration-administrator access.",
             )
         with Session(request.app.state.engine) as db_session:
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
                 raise HTTPException(status_code=404, detail="Cluster entry not found.")
-            if (
-                cluster.is_system
-                or cluster.visibility != "private"
-            ):
+            if cluster.is_system:
                 raise HTTPException(
-                    status_code=403,
-                    detail="Only legacy private cluster entries can be deleted here.",
+                    status_code=409,
+                    detail="The runtime system cluster cannot be deleted. Hide it from the Cluster list instead.",
                 )
             cluster_name = cluster.name
             credential_key = cluster.credential_key
+            visibility = cluster.visibility
+            linked_connections = list(db_session.scalars(
+                select(IncidentConnection).where(IncidentConnection.cluster_id == cluster_id)
+            ))
+            linked_connection_ids = [item.id for item in linked_connections]
+            has_incident_history = db_session.scalar(
+                select(func.count()).select_from(FleetIncident).where(
+                    FleetIncident.cluster_id == cluster_id
+                )
+            ) or 0
+            if linked_connection_ids:
+                has_incident_history += db_session.scalar(
+                    select(func.count()).select_from(FleetIncident).where(
+                        FleetIncident.source_id.in_(linked_connection_ids)
+                    )
+                ) or 0
+            if has_incident_history or any(item.kind != "cluster" for item in linked_connections):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This cluster is referenced by incident history or another connector. "
+                        "Remove those dependencies before deleting the cluster."
+                    ),
+                )
+            incident_credential_keys = [
+                key
+                for item in linked_connections
+                for key in (item.credential_key, item.webhook_key)
+                if key
+            ]
 
         if credential_key:
             try:
                 await run_in_threadpool(cluster_credentials.delete, credential_key)
+            except CredentialStoreError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if incident_credential_keys:
+            try:
+                incident_store = incident_service.credentials()
+                for key in incident_credential_keys:
+                    await run_in_threadpool(incident_store.delete, key)
             except CredentialStoreError as exc:
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -14948,14 +14959,38 @@ def create_app(
             cluster = db_session.get(Cluster, cluster_id)
             if cluster is None:
                 raise HTTPException(status_code=404, detail="Cluster entry not found.")
-            if (
-                cluster.is_system
-                or cluster.visibility != "private"
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Only legacy private cluster entries can be deleted here.",
+            if cluster.is_system:
+                raise HTTPException(status_code=409, detail="The runtime system cluster cannot be deleted.")
+            current_connections = list(db_session.scalars(
+                select(IncidentConnection).where(IncidentConnection.cluster_id == cluster_id)
+            ))
+            current_connection_ids = [item.id for item in current_connections]
+            current_history_count = db_session.scalar(
+                select(func.count()).select_from(FleetIncident).where(
+                    FleetIncident.cluster_id == cluster_id
                 )
+            ) or 0
+            if current_connection_ids:
+                current_history_count += db_session.scalar(
+                    select(func.count()).select_from(FleetIncident).where(
+                        FleetIncident.source_id.in_(current_connection_ids)
+                    )
+                ) or 0
+            if current_history_count or any(item.kind != "cluster" for item in current_connections):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "This cluster gained an incident or connector dependency while deletion "
+                        "was in progress. Remove that dependency and retry."
+                    ),
+                )
+            if current_connection_ids:
+                db_session.execute(delete(ConnectorDiscovery).where(
+                    ConnectorDiscovery.connector_id.in_(current_connection_ids)
+                ))
+                db_session.execute(delete(IncidentConnection).where(
+                    IncidentConnection.id.in_(current_connection_ids)
+                ))
             db_session.delete(cluster)
             db_session.add(AuditEvent(
                 actor=user.username,
@@ -14964,14 +14999,15 @@ def create_app(
                 details_json=json.dumps({
                     "cluster_id": cluster_id,
                     "name": cluster_name,
-                    "visibility": "private",
+                    "visibility": visibility,
+                    "incident_connector_count": len(current_connection_ids),
                 }, sort_keys=True),
             ))
             db_session.commit()
         return JSONResponse({
             "status": "deleted",
             "cluster_id": cluster_id,
-            "detail": "Private cluster deleted. Historical conversations were retained.",
+            "detail": "Cluster deleted from PodPilot. Historical conversations retain an unavailable cluster reference.",
         })
 
     @app.get("/settings/model", response_class=HTMLResponse)

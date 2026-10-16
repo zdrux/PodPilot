@@ -1402,3 +1402,19 @@ Consequences: OpenShift authentication controls dashboard admission by default w
 cluster RBAC continue to bound all reads. Action access remains fail-closed. Operators centrally
 control every credential destination. Existing private metadata is inert for users and can be
 audited and deleted by a configuration administrator.
+
+## 2026-10-16 - Cluster list visibility is independent from permanent deletion
+
+Context: Soft-disable made stale registrations accumulate and prevented administrators from hiding
+the runtime system cluster. Operators need a reversible way to control the public picker and a
+separate destructive action for registrations that should no longer exist.
+
+Decision: Present the existing cluster availability flag as **Visible in Cluster list** for every
+registry row, including the system row. Hiding removes the target from new user selection and
+revokes its live delegated sessions without deleting metadata. Replace the remote-cluster Disable
+action with permanent Delete. Delete revokes sessions, removes stored credentials and the registry
+row, retains historical chat references as unavailable, and rejects the runtime system row.
+
+Consequences: List curation is reversible and no longer overloaded with deletion. Non-system
+deletion is explicit and audited. Incident history or non-cluster connector dependencies block
+deletion until those relationships are removed; unused cluster incident connectors are cleaned up.

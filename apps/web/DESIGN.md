@@ -304,7 +304,7 @@ card. Empty states belong inside the surface they describe.
 Primary actions use the accent fill and dark-on-accent text. Secondary actions use
 a raised neutral surface. Danger actions use danger text and a low-emphasis danger
 surface. Keep labels verb-led and specific: “Save metadata,” “Test connection,”
-or “Disable cluster,” not “Submit.”
+or “Delete cluster,” not “Submit.”
 
 ### Tables and dense lists
 

@@ -339,9 +339,10 @@ The picker reads enabled shared entries managed by configuration administrators.
 for one environment at a time and passwords are discarded after OAuth exchange. For the system entry,
 the API maps its `in-cluster://` marker to the internal Kubernetes API and OAuth services and uses
 the projected API/service CA bundles; it does not fall back to the Pod service-account identity.
-Legacy private registry entries are not available to users; configuration administrators may delete
-them for cleanup. Shared entries remain disable-only so historical conversations retain their
-immutable cluster references and lifecycle stays under configuration-administrator control.
+Configuration administrators may hide any entry, including the runtime system cluster, from the
+shared picker without deleting its metadata. They may permanently delete non-system entries;
+historical conversations retain their immutable cluster references and render a deleted target as
+unavailable. The runtime system row remains durable and can only be hidden.
 
 Active workload and remote overlays enable delegated access and deploy a tokenless runner. The
 Pod-level `podpilot-investigator` service account is not bound to `cluster-reader`; its custom
@@ -417,7 +418,7 @@ cluster IDs. Changing selection starts another conversation and preserves the ol
 The worker fans a question out across the selected enabled clusters within one shared
 25-unit weighted investigation ceiling, builds a separate Kubernetes client and discovery catalog for each,
 and attributes every observation, read record, citation, limitation, and comparison to its
-source cluster. A failed or disabled target becomes a cluster-specific limitation instead
+source cluster. A failed, hidden, or deleted target becomes a cluster-specific limitation instead
 of invalidating successful targets. This routing does not apply to Alertmanager, dashboard
 health, alert investigations, or remediation in this release. Typed Ask metrics use each
 remote cluster's delegated user token: PodPilot discovers the cluster's

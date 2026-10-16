@@ -746,7 +746,7 @@ class IncidentService:
             if value.kind == "cluster":
                 cluster = db.get(Cluster, value.cluster_id)
                 if not cluster or not cluster.is_enabled or cluster.visibility != "shared":
-                    raise HTTPException(422, "Select an enabled shared cluster.")
+                    raise HTTPException(422, "Select a visible shared cluster.")
             if value.kind == "cluster":
                 if value.monitoring_url:
                     value.monitoring_url = https_origin(value.monitoring_url)
@@ -1690,10 +1690,26 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         for alert in alerts:
             labels = alert.get("labels") or {}
             annotations = alert.get("annotations") or {}
-            key = (labels.get("alertname", "Unknown alert"), alert.get("status", "unknown"), alert.get("startsAt", ""))
+            alert_name = labels.get("alertname", "Unknown alert")
+            resource_name = labels.get("name", "")
+            reason = labels.get("reason", "")
+            key = (
+                alert_name,
+                alert.get("status", "unknown"),
+                alert.get("startsAt", ""),
+                resource_name,
+                reason,
+            )
             if key not in grouped_alerts:
+                display_name = alert_name
+                if resource_name and resource_name != alert_name:
+                    display_name += f" · {resource_name}"
+                if reason:
+                    display_name += f" ({reason})"
                 grouped_alerts[key] = {
-                    "name": key[0], "status": key[1], "started_at": key[2],
+                    "name": alert_name, "display_name": display_name,
+                    "resource_name": resource_name, "reason": reason,
+                    "status": key[1], "started_at": key[2],
                     "severity": labels.get("severity", "unknown"),
                     "summary": annotations.get("summary") or annotations.get("description") or "",
                     "count": 0,
@@ -2023,7 +2039,7 @@ def install_incidents(app, service, current_user, templates, csrf_token, verify_
         with Session(app.state.engine) as db:
             clusters = list(db.scalars(select(Cluster).where(Cluster.id.in_(ids))))
             if len(clusters) != len(ids) or any(c.visibility != "shared" or (value.enabled and not c.is_enabled) for c in clusters):
-                raise HTTPException(422, "Select enabled shared clusters from Cluster Management.")
+                raise HTTPException(422, "Select visible shared clusters from Cluster Management.")
             rows = list(db.scalars(select(IncidentConnection).where(IncidentConnection.kind == "cluster", IncidentConnection.cluster_id.in_(ids))))
             by_cluster = {row.cluster_id: row for row in rows}
             for cluster in clusters:

@@ -400,9 +400,11 @@ provider and credentials are healthy.
 - Configuration administrators manage the shared cluster registry under **Cluster Management**.
   Save and run **Test OAuth discovery**; a tokenless entry reports successful
   TLS and OAuth discovery without asking for a user's credentials.
-- Users cannot add, edit, test, disable, or delete cluster entries. Legacy private entries are
-  unavailable to users and may be permanently deleted by a configuration administrator. Shared
-  entries use **Disable** so historical conversations remain available.
+- Users cannot add, edit, test, hide, or delete cluster entries. Configuration administrators use
+  **Visible in Cluster list** to show or hide any entry, including the runtime system cluster.
+  Hiding retains metadata but removes the cluster from user selection and revokes live delegated
+  connections. **Delete** permanently removes a non-system registry row and its stored credentials;
+  historical conversations retain an unavailable cluster reference. The system row cannot be deleted.
 
 - Conversation execution selects the delegated read-only or role-authorized Action loop; the
   checked-in workload manifests deploy the runner.

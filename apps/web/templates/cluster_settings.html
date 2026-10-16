@@ -10,7 +10,7 @@
     <div class="panel-header"><div><p class="eyebrow">Registry</p><h2>Configured clusters</h2></div><span class="tag">{{ clusters | length }}</span></div>
     <ul class="model-profile-list cluster-registry-list">
     {% for cluster in clusters %}
-      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/settings/clusters?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if cluster.is_system %}<em>System</em>{% elif cluster.visibility == 'private' %}<em>Private</em>{% elif not cluster.is_enabled %}<em>Disabled</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{% if cluster.is_system %}Runtime OpenShift cluster{% else %}{{ cluster.api_url }}{% endif %}</small></a></li>
+      <li class="{% if selected and selected.id == cluster.id %}selected{% endif %}"><a href="/settings/clusters?edit={{ cluster.id }}"><span><strong>{{ cluster.name }}</strong>{% if cluster.is_system %}<em>System</em>{% elif cluster.visibility == 'private' %}<em>Private</em>{% endif %}{% if not cluster.is_enabled %}<em>Hidden</em>{% endif %}</span><b>{{ cluster.environment | upper }}</b><small>{% if cluster.is_system %}Runtime OpenShift cluster{% else %}{{ cluster.api_url }}{% endif %}</small></a></li>
     {% else %}<li class="side-empty">No cluster entries are configured.</li>{% endfor %}
     </ul>
   </aside>
@@ -33,6 +33,9 @@
           <small id="cluster-tags-help">Use a single word such as <code>azure</code> or a pair such as <code>region:toronto</code>. Tags scope cluster memory and Ask PodPilot guidance.</small>
           <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
         </label>
+        <label class="checkbox-field"><input type="checkbox" name="is_enabled_checkbox" {% if selected.is_enabled %}checked{% endif %}><span>Visible in Cluster list</span></label>
+        <input type="hidden" name="is_enabled" value="{{ 'true' if selected.is_enabled else 'false' }}">
+        <p class="muted-copy">Hidden clusters remain configured but cannot be selected or connected by users.</p>
         <p class="muted-copy">The display name, environment, and tags describe the cluster where PodPilot is running across the dashboard, cluster picker, Ask PodPilot, and future evidence. The projected service-account connection remains managed by the deployment.</p>
         <div class="form-actions"><button class="button primary" type="submit">Save metadata</button></div>
       </form>
@@ -65,10 +68,13 @@
         <small id="cluster-tags-help">Use a single word such as <code>production</code> or a pair such as <code>region:toronto</code>. Press Enter or comma to add it.</small>
         <small id="cluster-tags-error" class="field-error" data-tag-error role="alert" hidden></small>
       </label>
+      <label class="checkbox-field"><input type="checkbox" name="is_enabled_checkbox" {% if not selected or selected.is_enabled %}checked{% endif %}><span>Visible in Cluster list</span></label>
+      <input type="hidden" name="is_enabled" value="{{ 'true' if not selected or selected.is_enabled else 'false' }}">
+      <p class="muted-copy">Hidden clusters remain configured but cannot be selected or connected by users.</p>
       <label class="checkbox-field"><input type="checkbox" name="tls_verify_checkbox" {% if (selected and selected.tls_verify) or not selected %}checked{% endif %}><span>Verify TLS certificates and hostnames for the Kubernetes API and discovered telemetry endpoints</span></label>
       <input type="hidden" name="tls_verify" value="{{ 'true' if (selected and selected.tls_verify) or not selected else 'false' }}">
       {% if selected and not selected.tls_verify %}<div class="inline-warning">TLS verification is disabled for this credential-bearing connection.</div>{% endif %}
-      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test cluster connection</button>{% if selected.visibility == 'private' %}<button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/settings/clusters" data-confirm="Permanently delete this legacy private cluster? Historical conversations will be retained.">Delete legacy entry</button>{% else %}<button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/disable" data-action-kind="disable" data-confirm="Disable this shared cluster metadata? Historical conversations will be retained.">Disable</button>{% endif %}{% endif %}</div>
+      <div class="form-actions"><button class="button primary" type="submit">Save cluster</button>{% if selected %}<button class="button secondary cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/test" data-action-kind="test">Test cluster connection</button><button class="button danger cluster-action" type="button" data-action-url="/api/v1/clusters/{{ selected.id }}/delete" data-action-kind="delete" data-redirect-url="/settings/clusters" data-confirm="Permanently delete this cluster from PodPilot? Stored credentials and live connections will be removed. Historical conversations will retain an unavailable cluster reference.">Delete</button>{% endif %}</div>
       {% if selected and selected.last_error %}<div class="inline-warning">{{ selected.last_error }}</div>{% endif %}
       {% if selected and selected.last_tested_at %}<p class="muted-copy">Last tested {{ selected.last_tested_at | est_time('%Y-%m-%d %H:%M:%S') }}.</p>{% endif %}
     </form>

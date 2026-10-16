@@ -23,7 +23,9 @@ The Workspace sidebar lists every enabled administrator-managed shared cluster a
 browser-session login state. Selecting a connected cluster opens a fresh composer preselected for
 that cluster; selecting a disconnected cluster first opens the existing username/password login
 flow and then returns to that preselection. Cluster registration is available only through the
-administrator-only **Cluster Management** page under the Manage section.
+administrator-only **Cluster Management** page under the Manage section. Configuration
+administrators may hide any cluster, including the runtime system cluster, from this shared list
+and may permanently delete non-system registrations.
 Cluster Health is not part of the active navigation or remote access model.
 The **Show my access** starter runs deterministic cluster-wide Kubernetes
 SelfSubjectAccessReview checks for common workload resources and renders exactly one permission

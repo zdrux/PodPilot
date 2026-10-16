@@ -501,9 +501,14 @@ window.PodPilotPage.register("app.js", (page) => {
   if (clusterSettingsForm?.dataset.saveUrl) {
     const verifyCheckbox = clusterSettingsForm.querySelector('[name="tls_verify_checkbox"]');
     const verifyValue = clusterSettingsForm.querySelector('[name="tls_verify"]');
+    const visibilityCheckbox = clusterSettingsForm.querySelector('[name="is_enabled_checkbox"]');
+    const visibilityValue = clusterSettingsForm.querySelector('[name="is_enabled"]');
     const clusterTagEditor = setupTagEditor(clusterSettingsForm);
     verifyCheckbox?.addEventListener("change", () => {
       if (verifyValue) verifyValue.value = verifyCheckbox.checked ? "true" : "false";
+    });
+    visibilityCheckbox?.addEventListener("change", () => {
+      if (visibilityValue) visibilityValue.value = visibilityCheckbox.checked ? "true" : "false";
     });
     clusterSettingsForm.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -545,16 +550,15 @@ window.PodPilotPage.register("app.js", (page) => {
       button.textContent = button.dataset.actionKind === "test"
         ? "Testing…"
         : button.dataset.actionKind === "detect" ? "Detecting…"
-        : button.dataset.actionKind === "delete" ? "Deleting…" : "Disabling…";
+        : button.dataset.actionKind === "delete" ? "Deleting…" : "Working…";
       try {
         const payload = await sendSettingsRequest(button.dataset.actionUrl, "");
         const passed = payload.status === "ready";
         window.sessionStorage.setItem("podpilot-action-notice", JSON.stringify({
           tone: passed || ["disabled", "deleted"].includes(payload.status) ? "success" : "error",
           message: payload.detail || (
-            payload.status === "deleted" ? "Private cluster deleted."
-              : payload.status === "disabled" ? "Cluster disabled and token removed."
-                : "Cluster connection tested."
+            payload.status === "deleted" ? "Cluster deleted."
+              : "Cluster connection tested."
           ),
         }));
         if (button.dataset.redirectUrl) {

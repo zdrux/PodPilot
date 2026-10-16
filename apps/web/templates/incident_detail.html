@@ -45,7 +45,7 @@
   {% for run in runs %}
   <section class="incident-tab-panel incident-ledger-panel" id="incident-panel-run-{{ run.row.id }}" role="tabpanel" aria-labelledby="incident-tab-run-{{ run.row.id }}" data-incident-tab-panel{% if not loop.first %} hidden{% endif %}>
     <dl class="incident-ledger-summary" aria-label="Investigation summary">
-      <div><dt>Alert</dt><dd title="{% for alert in alert_groups %}{{ alert.name }}{% if not loop.last %}, {% endif %}{% else %}{{ incident.title }}{% endfor %}">{% for alert in alert_groups %}{{ alert.name }}{% if not loop.last %}, {% endif %}{% else %}{{ incident.title }}{% endfor %}</dd></div>
+      <div><dt>Alert</dt><dd title="{% for alert in alert_groups %}{{ alert.display_name }}{% if not loop.last %}, {% endif %}{% else %}{{ incident.title }}{% endfor %}">{% for alert in alert_groups %}{{ alert.display_name }}{% if not loop.last %}, {% endif %}{% else %}{{ incident.title }}{% endfor %}</dd></div>
       <div><dt>Alert state</dt><dd>{{ incident.alert_state | capitalize }}</dd></div>
       <div><dt>Investigation run</dt><dd>{{ run.row.status | replace('_', ' ') | capitalize }}</dd></div>
       <div><dt>Evidence retained</dt><dd>{{ run.evidence | length }} item{% if run.evidence | length != 1 %}s{% endif %}</dd></div>

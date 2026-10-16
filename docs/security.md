@@ -260,7 +260,7 @@ loads the new credential. Neither the snapshot nor either token value is logged,
 into the runner, or included in a manifest.
 
 PodPilot removes delegated tokens after 24 hours by default and attempts remote OAuth token
-revocation on expiry, replacement, cluster disable, logout, and graceful shutdown. The remote
+revocation on expiry, replacement, cluster hide/delete, logout, and graceful shutdown. The remote
 cluster's standard OAuth token TTL remains authoritative (normally 24 hours). Because no token is
 persisted, an API-process or node crash destroys PodPilot's only copy before it can revoke it; the
 remote token can then remain valid until the cluster TTL or administrator revocation. This is an
@@ -411,10 +411,11 @@ mode. The browser cannot change either value on a continuation request. Normal c
 only entries visible to the owner, refuses disabled or disconnected targets, obtains the
 user token from the in-memory delegated-session vault, and attributes retained evidence
 to the source cluster. Shared cluster metadata requires configuration-administrator capability;
-users cannot create, update, test, disable, or delete cluster entries. Legacy private-entry
-deletion removes any credential held by the configured credential store before removing the
-registry metadata, revokes live delegated connections for that cluster, and retains historical
-conversation records. Shared entries remain disable-only. These operations require CSRF and
+users cannot create, update, test, hide, or delete cluster entries. Hiding any cluster, including
+the system cluster, removes it from user selection and revokes live delegated connections without
+removing metadata. Deleting a non-system entry removes its credential and registry metadata,
+revokes live delegated connections, and retains historical conversation records with an unavailable
+cluster reference. The system entry cannot be deleted. These operations require CSRF and
 content-free audit metadata and never return a bearer token.
 
 Remote Kubernetes API TLS verification defaults on in portable deployments. A configuration administrator may explicitly disable

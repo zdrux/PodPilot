@@ -178,6 +178,9 @@ Reviewed SNO seed allowlist (severity must also be critical):
 The list seeds new cluster connectors, but Approvers may add or remove exact
 Prometheus alert names on each connector. Critical severity alone does not admit
 an alert; its exact name must also be configured.
+Incident detail summary cards append the alert's `name` and `reason` labels when
+present, so resource-specific signals such as `ClusterOperatorDown` identify the
+affected operator and reported reason without opening the retained payload.
 Unknown/non-admitted alerts return success with zero admitted entries. Queue
 saturation returns 503 for retry. Truncated notifications explicitly report
 incomplete coverage and cannot assert full group resolution. Missing alerts are

@@ -36,7 +36,7 @@
   <form data-incident-enrollment-form>
     <input type="search" data-incident-cluster-search placeholder="Filter clusters…" aria-label="Filter clusters">
     <div class="incident-cluster-options">
-    {% for cluster in clusters %}<label data-incident-cluster-option><input type="checkbox" name="cluster_ids" value="{{ cluster.id }}" {% if cluster.id in enrolled_cluster_ids %}disabled checked{% endif %}><span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment }}{% if cluster.id in enrolled_cluster_ids %} · Already enrolled{% endif %}</small></span></label>{% else %}<p>No enabled shared clusters. Add one in Cluster Management first.</p>{% endfor %}
+    {% for cluster in clusters %}<label data-incident-cluster-option><input type="checkbox" name="cluster_ids" value="{{ cluster.id }}" {% if cluster.id in enrolled_cluster_ids %}disabled checked{% endif %}><span><strong>{{ cluster.name }}</strong><small>{{ cluster.environment }}{% if cluster.id in enrolled_cluster_ids %} · Already enrolled{% endif %}</small></span></label>{% else %}<p>No visible shared clusters. Add or show one in Cluster Management first.</p>{% endfor %}
     </div>
     <p data-enrollment-feedback role="status"></p>
     <footer><a href="/settings/clusters?new=1">Register a new cluster</a><button class="button primary" type="submit">Add selected clusters</button></footer>

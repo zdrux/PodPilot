@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from podpilot_api.auth import Role, StaticRoleResolver
 from podpilot_api.database import build_engine
 from podpilot_api.knowledge import index_document
+from podpilot_api.incident_models import ConnectorDiscovery, IncidentConnection
 from podpilot_api.main import (
     _adhoc_answer_quality_issue,
     _adhoc_answer_advisories,
@@ -9394,6 +9395,7 @@ def make_app(
     diagnostic_executor: FakeDiagnosticExecutor | None = None,
     read_explorer: FakeReadExplorer | None = None,
     cluster_credential_store: MemoryCredentialStore | None = None,
+    incident_credential_store: MemoryCredentialStore | None = None,
     remote_read_explorer_factory=None,
     agent_runner=None,
     settings_overrides: dict[str, object] | None = None,
@@ -9432,6 +9434,7 @@ def make_app(
             cluster_credential_store,
             remote_read_explorer_factory,
             agent_runner,
+            incident_credential_store,
         ),
         settings,
     )
@@ -11527,9 +11530,10 @@ def test_approver_manages_secret_backed_cluster_without_returning_token(tmp_path
         assert "data-tag-editor" in edited.text
         assert "single word" in edited.text
         assert "production" in edited.text
-        assert f'data-action-url="/api/v1/clusters/{cluster_id}/disable"' in edited.text
-        assert ">Disable</button>" in edited.text
-        assert f'/api/v1/clusters/{cluster_id}/delete' not in edited.text
+        assert f'data-action-url="/api/v1/clusters/{cluster_id}/delete"' in edited.text
+        assert ">Delete</button>" in edited.text
+        assert f'/api/v1/clusters/{cluster_id}/disable' not in edited.text
+        assert "Visible in Cluster list" in edited.text
 
     engine = build_engine(settings)
     with Session(engine) as db_session:
@@ -11576,6 +11580,192 @@ def test_cluster_registration_rejects_private_visibility(tmp_path: Path) -> None
         assert rejected.status_code == 422
         assert rejected.json()["detail"] == "PodPilot supports only shared cluster registrations."
         assert cluster_credentials.values == {}
+
+
+def test_configuration_admin_hides_and_shows_shared_cluster_in_public_list(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    revoked_tokens: list[str] = []
+    monkeypatch.setattr(
+        "podpilot_api.main.OpenShiftDelegatedLoginClient",
+        lambda **_: SimpleNamespace(revoke=lambda token: revoked_tokens.append(token) or True),
+    )
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.READ_WRITE, "ivy": Role.INVESTIGATOR},
+        source=FakeAlertSource(),
+        settings_overrides={"delegated_access_enabled": True},
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters?new=1", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        hidden = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "name": "hidden-dev",
+                "environment": "dev",
+                "visibility": "shared",
+                "api_url": "https://api.hidden-dev.example:6443",
+                "tls_verify": "true",
+                "is_enabled": "false",
+                "tags_json": "{}",
+            },
+        )
+        assert hidden.status_code == 200
+        cluster_id = hidden.json()["cluster_id"]
+
+        ask = client.get("/ask?new=1", headers={"x-forwarded-user": "ivy"})
+        management = client.get(
+            f"/settings/clusters?edit={cluster_id}", headers={"x-forwarded-user": "ada"}
+        )
+        assert "hidden-dev" not in ask.text
+        assert "Hidden" in management.text
+        visibility_input = re.search(
+            r'<input type="checkbox" name="is_enabled_checkbox"[^>]*>', management.text
+        )
+        assert visibility_input is not None and "checked" not in visibility_input.group(0)
+
+        shown = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "cluster_id": cluster_id,
+                "name": "hidden-dev",
+                "environment": "dev",
+                "visibility": "shared",
+                "api_url": "https://api.hidden-dev.example:6443",
+                "tls_verify": "true",
+                "is_enabled": "true",
+                "tags_json": "{}",
+            },
+        )
+        assert shown.status_code == 200
+        assert "hidden-dev" in client.get(
+            "/ask?new=1", headers={"x-forwarded-user": "ivy"}
+        ).text
+
+        session_id = app.state.delegated_vault.new_session_id()
+        app.state.delegated_vault.put(
+            session_id=session_id,
+            owner="ivy",
+            cluster_id=cluster_id,
+            remote_username="ivy",
+            remote_uid="ivy-uid",
+            token="sha256~hide-revoke-token",
+        )
+        hidden_again = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "cluster_id": cluster_id,
+                "name": "hidden-dev",
+                "environment": "dev",
+                "visibility": "shared",
+                "api_url": "https://api.hidden-dev.example:6443",
+                "tls_verify": "true",
+                "is_enabled": "false",
+                "tags_json": "{}",
+            },
+        )
+        assert hidden_again.status_code == 200
+        assert app.state.delegated_vault.get(
+            session_id=session_id, owner="ivy", cluster_id=cluster_id
+        ) is None
+        assert revoked_tokens == ["sha256~hide-revoke-token"]
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        cluster = db_session.get(Cluster, cluster_id)
+        assert cluster is not None and cluster.is_enabled is False
+        events = list(db_session.scalars(select(AuditEvent).where(
+            AuditEvent.action.in_(["cluster.create", "cluster.update"])
+        ).order_by(AuditEvent.id)))
+        assert [json.loads(event.details_json)["visible_in_cluster_list"] for event in events] == [
+            False,
+            True,
+            False,
+        ]
+    engine.dispose()
+
+
+def test_configuration_admin_permanently_deletes_shared_cluster_and_credential(
+    tmp_path: Path,
+) -> None:
+    cluster_credentials = MemoryCredentialStore()
+    incident_credentials = MemoryCredentialStore()
+    app, settings = make_app(
+        tmp_path,
+        assignments={"ada": Role.READ_WRITE},
+        source=FakeAlertSource(),
+        cluster_credential_store=cluster_credentials,
+        incident_credential_store=incident_credentials,
+    )
+
+    with TestClient(app) as client:
+        page = client.get("/settings/clusters?new=1", headers={"x-forwarded-user": "ada"})
+        csrf = re.search(r'name="podpilot-csrf" content="([^"]+)"', page.text)
+        assert csrf is not None
+        headers = {"x-forwarded-user": "ada", "x-podpilot-csrf": csrf.group(1)}
+        created = client.post(
+            "/api/v1/clusters",
+            headers=headers,
+            data={
+                "name": "delete-shared",
+                "environment": "dev",
+                "visibility": "shared",
+                "api_url": "https://api.delete-shared.example:6443",
+                "token": "sha256~delete-shared-token",
+                "tls_verify": "true",
+                "is_enabled": "true",
+                "tags_json": "{}",
+            },
+        )
+        cluster_id = created.json()["cluster_id"]
+
+        engine = build_engine(settings)
+        with Session(engine) as db_session:
+            credential_key = db_session.get(Cluster, cluster_id).credential_key
+            db_session.add(IncidentConnection(
+                id="54000000-0000-0000-0000-000000000001",
+                kind="cluster",
+                name="delete-shared",
+                cluster_id=cluster_id,
+                enabled=False,
+                config_json="{}",
+                credential_key="connection-delete-shared",
+                webhook_key="webhook-delete-shared",
+            ))
+            db_session.add(ConnectorDiscovery(
+                connector_id="54000000-0000-0000-0000-000000000001",
+                status="completed",
+                requested_by="ada",
+                result_json="{}",
+            ))
+            db_session.commit()
+        engine.dispose()
+        incident_credentials.set("incident-token", "connection-delete-shared")
+        incident_credentials.set("webhook-token", "webhook-delete-shared")
+        assert cluster_credentials.get(credential_key) == "sha256~delete-shared-token"
+
+        deleted = client.post(f"/api/v1/clusters/{cluster_id}/delete", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json()["status"] == "deleted"
+        assert credential_key not in cluster_credentials.values
+        assert incident_credentials.values == {}
+
+    engine = build_engine(settings)
+    with Session(engine) as db_session:
+        assert db_session.get(Cluster, cluster_id) is None
+        assert db_session.get(IncidentConnection, "54000000-0000-0000-0000-000000000001") is None
+        assert db_session.get(ConnectorDiscovery, "54000000-0000-0000-0000-000000000001") is None
+        event = db_session.scalar(select(AuditEvent).where(AuditEvent.action == "cluster.delete"))
+        assert event is not None
+        assert json.loads(event.details_json)["visibility"] == "shared"
+    engine.dispose()
 
 
 def test_default_remote_cluster_reader_includes_authenticated_metrics_adapter(
@@ -11678,6 +11868,7 @@ def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
             "name": "toronto-sno-lab",
             "environment": "hci",
             "tags": {"azure": "", "environment": "dev", "region": "toronto"},
+            "visible_in_cluster_list": True,
             "detail": "Runtime cluster metadata saved.",
         }
 
@@ -11691,6 +11882,51 @@ def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
         assert "toronto-sno-lab" in ask.text
         assert 'name="environment" required maxlength="64" value="hci"' in updated_page.text
         assert "<b>HCI</b>" in updated_page.text
+        assert re.search(
+            r'<input type="checkbox" name="is_enabled_checkbox"[^>]*checked',
+            updated_page.text,
+        )
+
+        hidden = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
+            headers=headers,
+            data={
+                "name": "toronto-sno-lab",
+                "environment": "hci",
+                "tags_json": '{"azure":"","environment":"dev","region":"toronto"}',
+                "is_enabled": "false",
+            },
+        )
+        assert hidden.status_code == 200
+        assert hidden.json()["visible_in_cluster_list"] is False
+        assert "toronto-sno-lab" not in client.get(
+            "/ask?new=1", headers={"x-forwarded-user": "ivy"}
+        ).text
+        hidden_management = client.get(
+            f"/settings/clusters?edit={SYSTEM_CLUSTER_ID}",
+            headers={"x-forwarded-user": "ada"},
+        )
+        assert "System</em><em>Hidden" in hidden_management.text
+
+        system_delete = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/delete",
+            headers=headers,
+        )
+        assert system_delete.status_code == 409
+        assert "cannot be deleted" in system_delete.json()["detail"]
+
+        shown = client.post(
+            f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
+            headers=headers,
+            data={
+                "name": "toronto-sno-lab",
+                "environment": "hci",
+                "tags_json": '{"azure":"","environment":"dev","region":"toronto"}',
+                "is_enabled": "true",
+            },
+        )
+        assert shown.status_code == 200
+        assert shown.json()["visible_in_cluster_list"] is True
 
         invalid_environment = client.post(
             f"/api/v1/clusters/{SYSTEM_CLUSTER_ID}/metadata",
@@ -11738,6 +11974,8 @@ def test_approver_updates_runtime_cluster_display_name_environment_and_tags(
             "previous_name": "test-cluster",
             "previous_tag_keys": ["connection", "environment"],
             "tag_keys": ["azure", "environment", "region"],
+            "previous_visible_in_cluster_list": True,
+            "visible_in_cluster_list": True,
         }
     engine.dispose()
 

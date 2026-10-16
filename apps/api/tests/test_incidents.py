@@ -246,6 +246,21 @@ def test_alert_policy_and_truncation(client):
     assert 'truncated' in page.text
 
 
+def test_incident_summary_card_displays_alert_resource_and_reason(client):
+    sid = source(client)
+    body = notification(name='ClusterOperatorDown')
+    body['alerts'][0]['labels'].update({'name': 'insights', 'reason': 'UploadFailed'})
+    iid = send(client, sid, body).json()['incident_id']
+
+    page = client.get(f'/incidents/{iid}', headers={'x-forwarded-user':'sre'})
+
+    assert page.status_code == 200
+    assert (
+        '<dt>Alert</dt><dd title="ClusterOperatorDown · insights (UploadFailed)">'
+        'ClusterOperatorDown · insights (UploadFailed)</dd>'
+    ) in page.text
+
+
 def test_cluster_connector_accepts_custom_alert_names(client):
     sid = source(client)
     response = client.post('/api/v1/incident-connections', headers=admin_headers(client), json={

@@ -14,8 +14,10 @@ nobody. Verify the Workspace cluster tree contains only enabled shared entries a
 preselects exactly one connected cluster in a fresh composer, and sends an unconnected selection
 through login before returning to that composer. Configuration administrators must receive a
 separate **Cluster Management** navigation entry. Non-admin users must have no cluster-add control
-and must be unable to register, edit, test, disable, or delete cluster entries. Legacy private
-entries must not appear in user cluster selection and may be deleted only by configuration admins.
+and must be unable to register, edit, test, hide, or delete cluster entries. Visibility changes
+must cover remote and system clusters, immediately affect user selection, revoke live delegated
+connections when hiding, and retain metadata. Permanent deletion must reject the system cluster,
+remove non-system credentials and registry metadata, and preserve historical chats as unavailable.
 Verify **Show my access** produces one cluster-attributed SelfSubjectAccessReview matrix per
 selected cluster, reports all-namespace permissions without resource-list ceilings, and returns
 the same result shape across repeated runs.
@@ -345,8 +347,8 @@ global/explicit-cluster/all-required-tag and namespace scope, restricted-entry
 authorization, content-free audit details, and guidance-only eligible memory in standalone
 Ask prompts. Tests must prove restricted or mismatched memory is absent from prompts.
 Cluster registry gates must cover configuration-admin authorization, CSRF, HTTPS-origin validation,
-secret-backed token non-disclosure/rotation/removal, runtime-cluster immutability, soft
-disable, and audited connection tests. Multi-cluster conversations must pin one to ten IDs,
+secret-backed token non-disclosure/rotation/removal, runtime-cluster delete protection, system and
+remote list visibility, permanent non-system deletion, and audited connection tests. Multi-cluster conversations must pin one to ten IDs,
 retain prior sessions when selection changes, share the 25-unit weighted ceiling, attribute every
 observation and limitation, and preserve partial results. TLS verification must default on;
 the explicit off setting must be visible, audited, cluster-specific, and documented as a
