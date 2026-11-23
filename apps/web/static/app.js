@@ -144,6 +144,27 @@ window.PodPilotPage.register("app.js", (page) => {
   }
 
   const csrf = document.querySelector('meta[name="podpilot-csrf"]')?.content;
+  document.querySelectorAll("[data-copilot-action]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!csrf) return;
+      const button = form.querySelector("button");
+      const status = document.querySelector("[data-copilot-status]");
+      if (button) button.disabled = true;
+      if (status) status.textContent = "Contacting GitHub…";
+      try {
+        const response = await page.fetch(form.dataset.copilotAction, {
+          method: "POST", credentials: "same-origin", headers: {"X-PodPilot-CSRF": csrf},
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || "Copilot connection failed.");
+        window.location.assign(payload.url);
+      } catch (error) {
+        if (status) status.textContent = error.message;
+        if (button) button.disabled = false;
+      }
+    });
+  });
   const toast = document.querySelector("#action-toast");
   let toastTimeoutId = null;
   const showToast = (message, tone = "error", timeout = 8000) => {
@@ -714,7 +735,10 @@ window.PodPilotPage.register("app.js", (page) => {
   };
   const updateAskSubmitAvailability = () => {
     if (!askSubmit || askSubmit.type !== "submit") return;
-    const ready = executionMode?.value === "action"
+    const copilotModel = adhocForm.querySelector('[name="copilot_model"]');
+    const ready = copilotModel?.value
+      ? executionMode?.value !== "action" && (copilotModel.tagName === "SELECT" || adhocForm.dataset.copilotReady === "true")
+      : executionMode?.value === "action"
       ? adhocForm.dataset.actionModelReady === "true"
       : adhocForm.dataset.readOnlyModelReady === "true";
     const hasSelectedCluster = Boolean(
@@ -749,6 +773,20 @@ window.PodPilotPage.register("app.js", (page) => {
     };
     executionMode.addEventListener("change", updateModeAvailability);
     updateModeAvailability();
+  }
+  const copilotModelSelect = adhocForm?.querySelector('[data-copilot-model]');
+  if (copilotModelSelect) {
+    const updateCopilotMode = () => {
+      const actionOption = executionMode?.querySelector('option[value="action"]');
+      if (actionOption) actionOption.disabled = Boolean(copilotModelSelect.value);
+      if (copilotModelSelect.value && executionMode) {
+        executionMode.value = "read_only";
+        executionMode.dispatchEvent(new Event("change"));
+      }
+      updateAskSubmitAvailability();
+    };
+    copilotModelSelect.addEventListener("change", updateCopilotMode);
+    updateCopilotMode();
   }
   if (clusterPicker) {
     const checkboxes = Array.from(clusterPicker.querySelectorAll("[data-cluster-checkbox]"));

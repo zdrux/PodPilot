@@ -5,6 +5,14 @@ Update when: identities, permissions, model data flow, storage, telemetry, or re
 
 ## Enterprise development controls (2026-09-09)
 
+The [personal GitHub Copilot PoC](github-copilot.md) preserves proxy authentication
+and restricts account linking and use to `configuration_admin_groups`. A dedicated,
+resourceName-restricted Secret holds personal access/refresh tokens; the database
+and browser receive no GitHub tokens. The configured absolute lifetime bounds
+automatic renewal. Empty-mode SDK requests cannot execute tools and proposed
+reads pass through the existing delegated read-only broker. This integration is
+single-replica until distributed token-refresh coordination exists.
+
 Action chat uses requester self-approval only. No external approver or development
 bypass can authorize writes. A command-scoped ephemeral capability links each
 actual brokered write to its owner, live run, selected cluster and delegated browser

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     configuration_admin_groups: list[str] = Field(
         default_factory=lambda: ["podpilot-configuration-admins"]
     )
+    copilot_client_id: str = ""
+    copilot_client_secret: str = Field(default="", repr=False)
+    copilot_redirect_uri: str = ""
+    copilot_connection_lifetime_seconds: int = Field(default=2_592_000, ge=3600, le=15_552_000)
+    copilot_credential_store: Literal["memory", "kubernetes"] = "memory"
+    copilot_secret_namespace: str = "ai-ops"
+    copilot_secret_name: str = "podpilot-copilot-credentials"
     role_breakglass_groups: list[str] = Field(default_factory=lambda: ["podpilot-breakglass"])
     secret_access_enabled: bool = True
     secret_chat_redaction_enabled: bool = True
@@ -142,6 +149,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_role_group_mapping(self) -> "Settings":
+        if self.copilot_redirect_uri:
+            from urllib.parse import urlparse
+            redirect = urlparse(self.copilot_redirect_uri)
+            if (redirect.scheme != "https" or not redirect.hostname or redirect.username
+                    or redirect.password or redirect.query or redirect.fragment
+                    or redirect.path != "/api/v1/copilot/callback"):
+                raise ValueError("Copilot redirect URI must be the public HTTPS /api/v1/copilot/callback endpoint")
         role_groups = (
             self.role_investigator_groups,
             self.role_read_write_groups,

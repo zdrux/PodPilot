@@ -174,6 +174,10 @@
           <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg>
           Model settings
         </a>
+        <a class="nav-link {% if request.url.path == '/settings/copilot' %}active{% endif %}" href="/settings/copilot">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12a4 4 0 0 1 4-4h4a4 4 0 0 1 0 8h-2M16 12a4 4 0 0 1-4 4H8a4 4 0 0 1 0-8h2"/></svg>
+          Personal Copilot
+        </a>
       </nav>
       {% endif %}
 

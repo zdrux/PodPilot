@@ -34,6 +34,48 @@ spec:
           command: ["python", "-m", "alembic"]
           args: ["-c", "apps/api/alembic.ini", "upgrade", "head"]
           env: &podpilot-env
+            - name: PODPILOT_COPILOT_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_client_id
+                  optional: true
+            - name: PODPILOT_COPILOT_CONNECTION_LIFETIME_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_connection_lifetime_seconds
+                  optional: true
+            - name: PODPILOT_COPILOT_CREDENTIAL_STORE
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_credential_store
+                  optional: true
+            - name: PODPILOT_COPILOT_SECRET_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_secret_namespace
+                  optional: true
+            - name: PODPILOT_COPILOT_SECRET_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_secret_name
+                  optional: true
+            - name: PODPILOT_COPILOT_REDIRECT_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: podpilot-runtime
+                  key: copilot_redirect_uri
+                  optional: true
+            - name: PODPILOT_COPILOT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: podpilot-copilot-oauth
+                  key: client_secret
+                  optional: true
             - name: PODPILOT_ENVIRONMENT
               valueFrom:
                 configMapKeyRef:

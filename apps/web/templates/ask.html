@@ -480,16 +480,38 @@
     {% endif %}
 
     <div class="ask-composer">
-      {% if not model_ready %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after a configuration administrator saves and tests a model profile with the required connection and tool-calling capabilities.</p></div>{% endif %}
+      {% if not model_ready and not (copilot_connection and copilot_connection.models and not conversation) %}<div class="chat-budget"><strong>Model profile not ready</strong><p>Ask PodPilot becomes available after a configuration administrator saves and tests a model profile with the required connection and tool-calling capabilities.</p></div>{% endif %}
       {% if not can_ask %}<div class="chat-budget"><strong>Investigator role required</strong><p>Viewers may read existing conversations but cannot start cluster collection.</p></div>{% endif %}
       {% if is_delegated_mode and not delegated_session_active %}
       <div class="chat-budget"><strong>Cluster session needs reconnection</strong><p>One or more in-memory cluster tokens are no longer available. <a href="/delegated/connect{% if conversation %}?next=/ask/{{ conversation.id }}&amp;retry={{ missing_delegated_cluster_ids | join(',') }}{% endif %}">Reconnect the missing clusters</a> to continue this conversation, or <a href="/ask?new=1">start a new conversation</a> with the clusters that are still connected.</p></div>
       {% endif %}
       {% if can_ask %}
+      {% if copilot_available or (conversation and conversation.copilot_model) %}
+      <div class="chat-budget">
+        {% if conversation and conversation.copilot_model %}
+        <strong>Personal GitHub Copilot · {{ conversation.copilot_model }} · Read-only</strong>
+        {% if not user.can_manage_configuration %}<p>Your current OpenShift groups do not permit personal Copilot. Start a new conversation with a shared model.</p>
+        {% elif not copilot_ready %}<p><a href="/settings/copilot">Reconnect GitHub Copilot and refresh models</a> to continue.</p>{% endif %}
+        {% elif copilot_available %}<a href="/settings/copilot">Manage your GitHub Copilot connection</a>{% endif %}
+        {% if copilot_selected_model %}<p>Redacted investigation evidence is sent to your Copilot subscription. Corporate policy and usage limits apply.</p>{% endif %}
+      </div>
+      {% endif %}
       <form class="chat-form adhoc-chat-form" method="post"
+        data-copilot-ready="{{ 'true' if copilot_ready else 'false' }}"
         data-read-only-model-ready="{{ 'true' if read_only_model_ready else 'false' }}"
         data-action-model-ready="{{ 'true' if action_model_ready else 'false' }}"
         data-chat-url="{% if conversation %}/api/v1/adhoc-conversations/{{ conversation.id }}/messages{% else %}/api/v1/adhoc-conversations{% endif %}">
+        {% if conversation and conversation.copilot_model %}
+        <input type="hidden" name="copilot_model" value="{{ conversation.copilot_model }}">
+        {% elif not conversation and copilot_available %}
+        <label>Investigation model
+          <select name="copilot_model" data-copilot-model>
+            <option value="">Shared configured model</option>
+            {% if copilot_connection %}{% for model in copilot_connection.models %}<option value="{{ model.id }}" {% if model.id == copilot_selected_model %}selected{% endif %}>GitHub Copilot · {{ model.name }}</option>{% endfor %}{% endif %}
+          </select>
+          <small>Copilot selections use your subscription, send redacted evidence to GitHub Copilot, and allow read-only investigations.</small>
+        </label>
+        {% endif %}
         <label class="composer-prompt-label" for="adhoc-message">Question or symptom</label>
         <div class="composer-input-wrap">
           <textarea id="adhoc-message" name="message" rows="2" data-min-rows="2" data-max-rows="10" maxlength="{{ chat_max_chars }}" required placeholder="{% if active_run %}Compose your next message while PodPilot investigates…{% else %}Include a namespace, Pod, Service, node, or other known scope…{% endif %}" {% if is_delegated_mode and not delegated_session_active %}disabled{% endif %}></textarea>

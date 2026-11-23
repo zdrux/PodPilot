@@ -10405,6 +10405,13 @@ def create_app(
     credentials = credential_store or _make_credential_store(app_settings)
     cluster_credentials = cluster_credential_store or _make_cluster_credential_store(app_settings)
     provider = model_provider or OpenAIProviderRouter()
+    from podpilot_api.copilot import CopilotProvider, CopilotService
+    from podpilot_api.copilot_routes import install_copilot
+    copilot_service = CopilotService(app_settings, lambda username: bool(
+        getattr(resolver, "can_manage", lambda _: False)(username)))
+    copilot_provider = CopilotProvider(copilot_service)
+    if isinstance(provider, OpenAIProviderRouter):
+        provider.copilot = copilot_provider
     from podpilot_api.incident_models import (
         ConnectorDiscovery,
         FleetIncident,
@@ -10677,8 +10684,15 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.settings = app_settings
+        application.state.copilot = copilot_service
         application.state.incident_service = incident_service
         application.state.engine = build_engine(app_settings)
+        def copilot_audit(owner, action, outcome):
+            with Session(application.state.engine) as db_session:
+                db_session.add(AuditEvent(actor=owner, action="copilot." + action,
+                    outcome=outcome, details_json='{"personal": true}'))
+                db_session.commit()
+        copilot_service.audit = copilot_audit
         application.state.delegated_vault = DelegatedSessionVault(
             lifetime_seconds=app_settings.delegated_session_lifetime_seconds
         )
@@ -10996,6 +11010,20 @@ def create_app(
         return response
 
     current_user = auth_dependency(app_settings, resolver)
+    install_copilot(app, copilot_service, current_user, templates, _csrf_token,
+                    _verify_csrf, recent_conversations_for)
+
+    async def copilot_ask_context(request, user, conversation=None):
+        selected = (conversation.copilot_model if conversation else
+                    request.query_params.get("copilot_model", "")) or ""
+        connection = None
+        if user.can_manage_configuration and copilot_service.enabled:
+            connection = await run_in_threadpool(copilot_service.view,
+                copilot_service.owner_key(user.username), user.username)
+        ready = bool(connection and selected in {m["id"] for m in connection["models"]})
+        return {"copilot_available": user.can_manage_configuration and copilot_service.enabled,
+                "copilot_connection": connection, "copilot_selected_model": selected,
+                "copilot_ready": ready}
     templates.env.globals["incidents_enabled"] = app_settings.incidents_enabled
     install_incidents(app, incident_service, current_user, templates, _csrf_token, _verify_csrf)
 
@@ -11020,13 +11048,17 @@ def create_app(
         agent_targets: dict[str, tuple[str, AgentClusterConnection | None]],
         agent_readers: dict[str, ReadOnlyExplorer | Callable[[], ReadOnlyExplorer]],
         read_only: bool,
+        model_backend: ModelProvider | None = None,
         retained_tool_ledger: list[dict[str, object]] | None = None,
         run_deadline: float | None = None,
     ) -> str:
-        if profile.api_type != "chat-completions":
+        agent_provider = model_backend or provider
+        if profile.api_type not in {"chat-completions", "github-copilot"}:
             raise ModelProviderError(
                 "Agentic investigation requires a Chat Completions model profile."
             )
+        if profile.api_type == "github-copilot" and not read_only:
+            raise ModelProviderError("Personal GitHub Copilot supports read-only investigations only.")
         log_analyst = AskLogAnalyst()
         target_catalog = [
             {
@@ -11232,9 +11264,9 @@ def create_app(
                     "agent_thinking", "The agent is choosing its next action."
                 )
             model_started = asyncio.get_running_loop().time()
-            step_method = provider.next_agent_step
+            step_method = agent_provider.next_agent_step
             if finalization_attempts:
-                finalizer = getattr(provider, "finalize_agent_step", None)
+                finalizer = getattr(agent_provider, "finalize_agent_step", None)
                 if callable(finalizer):
                     step_method = finalizer
             step_profile = profile
@@ -11698,7 +11730,7 @@ def create_app(
                         collector_limitations.extend(str(item) for item in result.limitations)
                         collector_evidence, log_limitations = await log_analyst.process(
                             collector_evidence, intent=intent, question=question,
-                            provider=provider, profile=profile, api_key=api_key, progress=progress,
+                            provider=agent_provider, profile=profile, api_key=api_key, progress=progress,
                             deadline=run_deadline,
                         )
                         collector_limitations.extend(log_limitations)
@@ -12311,6 +12343,12 @@ def create_app(
                 )
             profile_id = profile.id if profile_snapshot else None
             credential_key = profile.credential_key if profile_snapshot else None
+            if conversation.copilot_model:
+                if conversation.execution_mode != "read_only" or not app_settings.delegated_access_enabled:
+                    raise ModelProviderError("Personal GitHub Copilot supports read-only investigations only.")
+                profile_snapshot = await run_in_threadpool(copilot_service.profile,
+                    conversation.copilot_connection_id, username, conversation.copilot_model)
+                profile_id, credential_key, profile_status = None, conversation.copilot_connection_id, "ready"
             db_session.commit()
 
         activity: list[dict[str, object]] = []
@@ -12338,7 +12376,8 @@ def create_app(
                     profile_id,
                     profile_snapshot.api_type,
                 )
-                api_key = await run_in_threadpool(credentials.get, credential_key)
+                api_key = (credential_key if profile_snapshot.api_type == "github-copilot" else
+                           await run_in_threadpool(credentials.get, credential_key))
                 if not api_key:
                     raise ModelProviderError("The configured model token is unavailable.")
                 if profile_snapshot is not None:
@@ -12468,6 +12507,7 @@ def create_app(
                         earlier_context_summary=context_summary,
                         profile=profile_snapshot,
                         api_key=api_key,
+                        model_backend=copilot_provider if profile_snapshot.api_type == "github-copilot" else None,
                         include_raw_response=include_raw_response,
                         progress=progress,
                         enrichment_evidence=enrichment_evidence,
@@ -13188,9 +13228,18 @@ def create_app(
                 detail="Wait for the current PodPilot investigation to finish.",
             )
         active_profile = _active_profile(db_session)
+        if conversation.copilot_model:
+            if not app_settings.delegated_access_enabled:
+                raise HTTPException(409, "Personal Copilot requires the delegated read-only cluster broker.")
+            if conversation.execution_mode != "read_only":
+                raise HTTPException(403, "Personal GitHub Copilot supports read-only investigations only.")
+            try:
+                copilot_service.profile(conversation.copilot_connection_id, username, conversation.copilot_model)
+            except ModelProviderError as exc:
+                raise HTTPException(403, str(exc)) from None
         reasoning_effort = _preferred_reasoning_effort(
             db_session, username, active_profile
-        )
+        ) if not conversation.copilot_model else None
         run_id = run_id or str(uuid4())
         events = [{
             "seq": 0,
@@ -13640,13 +13689,15 @@ def create_app(
             selected_cluster_ids = requested_cluster_ids
         else:
             selected_cluster_ids = []
+        copilot_context = await copilot_ask_context(request, user)
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
+                **copilot_context,
                 "user": user, "conversation": None, "messages": [], "evidence_by_id": {},
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile),
+                "model_ready": copilot_context["copilot_ready"] or _profile_is_usable(profile),
                 "read_only_model_ready": _profile_is_usable(profile),
                 "action_model_ready": _profile_is_usable(profile),
                 "reasoning_efforts": reasoning_efforts,
@@ -13856,14 +13907,16 @@ def create_app(
                 "answer_blocks": answer_blocks,
                 "created_at": row.created_at,
             })
+        copilot_context = await copilot_ask_context(request, user, conversation)
         response = templates.TemplateResponse(
             request=request, name="ask.html", context={
+                **copilot_context,
                 "user": user, "conversation": conversation, "messages": messages,
                 "evidence_by_id": evidence_by_id,
                 "recent_conversations": recent, "csrf_token": csrf_token,
                 "chat_max_chars": app_settings.chat_max_chars,
                 "chat_read_budget": app_settings.adhoc_max_reads_per_turn,
-                "model_ready": _profile_is_usable(profile),
+                "model_ready": copilot_context["copilot_ready"] if conversation.copilot_model else _profile_is_usable(profile),
                 "read_only_model_ready": _profile_is_usable(profile),
                 "action_model_ready": _profile_is_usable(profile),
                 "reasoning_efforts": reasoning_efforts,
@@ -13952,6 +14005,20 @@ def create_app(
                 detail="Your PodPilot role is restricted to read-only investigations.",
             )
         execution_mode = requested_mode
+        copilot_model = form.get("copilot_model", "").strip()
+        copilot_connection_id = None
+        if copilot_model:
+            if not user.can_manage_configuration:
+                raise HTTPException(403, "GitHub Copilot requires configuration-administrator access.")
+            if execution_mode != "read_only":
+                raise HTTPException(403, "Personal GitHub Copilot supports read-only investigations only.")
+            if not app_settings.delegated_access_enabled:
+                raise HTTPException(409, "Personal Copilot requires the delegated read-only cluster broker.")
+            copilot_connection_id = copilot_service.owner_key(user.username)
+            try:
+                await run_in_threadpool(copilot_service.profile, copilot_connection_id, user.username, copilot_model)
+            except ModelProviderError as exc:
+                raise HTTPException(409, str(exc)) from None
         if app_settings.delegated_access_enabled:
             delegated_session_id = _delegated_session_id(request)
             connected_ids = {
@@ -13970,7 +14037,7 @@ def create_app(
                 return RedirectResponse(f"/delegated/connect?{query}", status_code=303)
         with Session(request.app.state.engine) as db_session:
             profile = _active_profile(db_session)
-            if app_settings.delegated_access_enabled and not _profile_is_usable(profile):
+            if app_settings.delegated_access_enabled and not copilot_model and not _profile_is_usable(profile):
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -13979,7 +14046,7 @@ def create_app(
                         else "The active model profile is not ready for read-only Investigate mode."
                     ),
                 )
-            if "reasoning_effort" in form:
+            if "reasoning_effort" in form and not copilot_model:
                 _save_reasoning_preference(
                     db_session,
                     username=user.username,
@@ -14000,6 +14067,8 @@ def create_app(
                 cluster_ids_json=json.dumps(requested_cluster_ids),
                 execution_mode=execution_mode,
                 delegated_session_id=delegated_session_id,
+                copilot_connection_id=copilot_connection_id,
+                copilot_model=copilot_model or None,
             )
             db_session.add(conversation)
             run_id = _queue_adhoc_run(
@@ -14035,6 +14104,16 @@ def create_app(
                     status_code=404,
                     detail="That PodPilot conversation does not exist.",
                 )
+            if conversation.copilot_model:
+                if not user.can_manage_configuration:
+                    raise HTTPException(403, "GitHub Copilot requires configuration-administrator access.")
+                new_connection = copilot_service.owner_key(user.username)
+                try:
+                    await run_in_threadpool(copilot_service.profile, new_connection,
+                                            user.username, conversation.copilot_model)
+                except ModelProviderError as exc:
+                    raise HTTPException(409, str(exc)) from None
+                conversation.copilot_connection_id = new_connection
             if conversation.delegated_session_id:
                 session_id = _delegated_session_id(request)
                 connected_ids = {
@@ -14051,7 +14130,7 @@ def create_app(
                         ),
                     )
                 conversation.delegated_session_id = session_id
-            if "reasoning_effort" in form:
+            if "reasoning_effort" in form and not conversation.copilot_model:
                 _save_reasoning_preference(
                     db_session,
                     username=user.username,

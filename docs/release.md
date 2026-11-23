@@ -24,6 +24,12 @@ the same result shape across repeated runs.
 
 ## Release Surfaces
 
+The optional personal Copilot PoC requires migration `0031_personal_copilot` and
+the [Copilot gates](github-copilot.md#validation-and-limits): admin-only access,
+token persistence/rotation/expiry, cross-user denial, read-only broker execution,
+and a real corporate OAuth/model-discovery/investigation smoke test. Keep one API
+replica and leave client configuration empty until the live integration is verified.
+
 Action writes require requester self-approval for each exact broker request,
 with expiry, session ownership, single-use consumption and attributed audit events.
 Read-only mode must still deny mutation. Incident flows must expose no approval

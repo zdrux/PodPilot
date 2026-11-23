@@ -1,5 +1,9 @@
 # PodPilot Operations
 
+Personal GitHub Copilot setup, runtime configuration, credential persistence and
+expiry, operator workflow and PoC limits are documented in
+[GitHub Copilot](github-copilot.md). OpenShift proxy authentication remains in place.
+
 ## Managing incident history
 
 Configuration administrators can use **Delete incident…** on the incident detail

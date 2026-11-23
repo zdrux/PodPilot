@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Personal GitHub Copilot · PodPilot{% endblock %}
+{% block body_class %}admin-config-page{% endblock %}
+{% block content %}
+<div class="admin-config-frame">
+  <header class="topbar admin-config-header"><div><p class="eyebrow">Administration · Personal connection</p><h1>GitHub Copilot</h1><p class="subtitle">Use your corporate Copilot subscription for read-only investigations.</p></div></header>
+  <section class="notice evidence-notice"><div><strong>Your account, your usage</strong><p>OpenShift remains your PodPilot sign-in. GitHub authorization connects only your personal Copilot subscription. Redacted investigation evidence is sent to Copilot and usage is charged according to your subscription and corporate policy.</p><p>{% if persistent_credentials %}Credentials are stored in PodPilot's dedicated Kubernetes Secret and survive restarts.{% else %}This development runtime stores credentials in memory; a restart requires reconnection.{% endif %} Your connection expires after {{ '%g' | format(connection_lifetime_days) }} days. Expiring GitHub access tokens renew automatically when GitHub supplies a valid refresh token. Disconnect removes PodPilot's stored credentials; revoke the app in GitHub settings to remove its authorization there.</p></div></section>
+  <section class="panel settings-panel">
+    <div class="panel-header"><h2>{% if connection %}Connected as {{ connection.login }}{% else %}Connect your account{% endif %}</h2></div>
+    {% if not copilot_enabled %}
+    <p>Configure the GitHub OAuth client ID, client secret and HTTPS callback URI in the runtime before connecting.</p>
+    {% else %}
+    <div class="topbar-actions">
+      <form data-copilot-action="/api/v1/copilot/connect"><button class="button primary" type="submit">{% if connection %}Reconnect GitHub{% else %}Connect GitHub Copilot{% endif %}</button></form>
+      {% if connection %}
+      <form data-copilot-action="/api/v1/copilot/models/refresh"><button class="button secondary" type="submit">Refresh available models</button></form>
+      <form data-copilot-action="/api/v1/copilot/disconnect"><button class="button secondary" type="submit">Disconnect</button></form>
+      {% endif %}
+    </div>
+    {% if connection %}
+      <p>Reconnect by {{ connection.expires_at | est_time }}.</p>
+      <h3>Available models</h3>
+      {% if connection.models %}<ul class="model-profile-list">{% for model in connection.models %}<li><a href="/ask?copilot_model={{ model.id | urlencode }}"><strong>{{ model.name }}</strong><small>{{ model.id }} · Read-only investigation</small></a></li>{% endfor %}</ul>
+      {% else %}<p>Refresh available models to check your subscription and corporate policy before starting an investigation.</p>{% endif %}
+    {% endif %}
+    {% endif %}
+    <p role="status" aria-live="polite" data-copilot-status></p>
+  </section>
+</div>
+{% endblock %}
