@@ -9,9 +9,6 @@ WORKDIR /opt/app-root/src
 
 COPY requirements.lock ./requirements.lock
 RUN python -m pip install --no-cache-dir --progress-bar off --require-hashes -r requirements.lock
-RUN COPILOT_CLI_EXTRACT_DIR=/opt/copilot-runtime python -m copilot download-runtime --in-process
-ENV COPILOT_CLI_EXTRACT_DIR=/opt/copilot-runtime \
-    COPILOT_SKIP_CLI_DOWNLOAD=1
 
 COPY pyproject.toml ./pyproject.toml
 COPY apps/api ./apps/api

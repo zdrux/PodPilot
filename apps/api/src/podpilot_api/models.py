@@ -241,8 +241,6 @@ class AdHocConversation(Base):
         String(32), nullable=False, default="read_only"
     )
     delegated_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    copilot_connection_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    copilot_model: Mapped[str | None] = mapped_column(String(253), nullable=True)
     evidence_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     context_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     summarized_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

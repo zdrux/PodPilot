@@ -49,10 +49,4 @@ data:
   role_investigator_groups: '[]'
   role_read_write_groups: '["podpilot-read-write"]'
   configuration_admin_groups: '["podpilot-configuration-admins"]'
-  copilot_client_id: ""
-  copilot_redirect_uri: ""
-  copilot_connection_lifetime_seconds: "2592000"
-  copilot_credential_store: "kubernetes"
-  copilot_secret_namespace: "ai-ops"
-  copilot_secret_name: "podpilot-copilot-credentials"
   role_breakglass_groups: '["podpilot-breakglass"]'

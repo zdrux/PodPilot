@@ -489,9 +489,6 @@ frozenlist==1.8.0 \
     # via
     #   aiohttp
     #   aiosignal
-github-copilot-sdk==1.0.35 \
-    --hash=sha256:a13f2f791e8531e298d7e2b3e04d0232a10b45c9cd4036bcd83c3d69fd94f29a
-    # via -r requirements.in
 greenlet==3.5.5 \
     --hash=sha256:03115c2e0a371999bf8ae616aa8d653f96641d4705c457aebaa187276e9f7537 \
     --hash=sha256:03551ed792cb1b4fc0277a0c60dfd8c343894a0ba06fe60dcd22f568b433da39 \
@@ -591,9 +588,7 @@ httpcore2==2.12.0 \
 httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
-    # via
-    #   -r requirements.in
-    #   github-copilot-sdk
+    # via -r requirements.in
 httpx2==2.12.0 \
     --hash=sha256:7631fe9887a8a2275f4a2540e053aa670fcc50742864a9ae7c66e609fdcf12cf \
     --hash=sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36
@@ -1115,7 +1110,6 @@ pydantic==2.13.4 \
     --hash=sha256:c40756b57adaa8b1efeeced5c196f3f3b7c435f90e84ea7f443901bec8099ef6
     # via
     #   fastapi
-    #   github-copilot-sdk
     #   openai
     #   pydantic-settings
 pydantic-core==2.46.4 \
@@ -1247,9 +1241,7 @@ pydantic-settings==2.15.0 \
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
-    # via
-    #   github-copilot-sdk
-    #   kubernetes
+    # via kubernetes
 python-dotenv==1.2.3 \
     --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9 \
     --hash=sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35

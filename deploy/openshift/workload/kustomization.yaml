@@ -9,4 +9,3 @@ resources:
   - network-policy.yaml
   - model-credentials.yaml
   - model-credentials-rbac.yaml
-  - copilot-credentials.yaml

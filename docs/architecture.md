@@ -100,12 +100,6 @@ Update when: ownership boundaries, data flow, integrations, or trust boundaries 
 
 ## Overview
 
-The optional [personal GitHub Copilot PoC](github-copilot.md) adds an owner-scoped,
-configuration-admin-only model adapter for read-only Ask. OpenShift proxy identity
-and the delegated cluster broker remain authoritative; the SDK has no execution
-tools. Personal credentials and refresh tokens persist in a dedicated Kubernetes
-Secret with a configurable absolute connection lifetime (30 days by default).
-
 PodPilot converts OpenShift operational signals into evidence-backed troubleshooting
 investigations. Deterministic clients gather cluster resources, events, logs,
 PromQL results, alert rules, and active alerts. Diagnostic tools normalize and

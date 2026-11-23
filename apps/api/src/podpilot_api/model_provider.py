@@ -102,7 +102,7 @@ class ModelProfileConfig:
     embedding_model: str | None
     timeout_seconds: float
     max_output_tokens: int
-    api_type: Literal["responses", "chat-completions", "github-copilot"] = "responses"
+    api_type: Literal["responses", "chat-completions"] = "responses"
     tls_mode: Literal["system", "custom_ca", "insecure", "plaintext"] = "system"
     custom_ca_pem: str | None = None
     max_input_tokens: int = 128_000
@@ -3313,13 +3313,8 @@ class OpenAIProviderRouter:
     def __init__(self) -> None:
         self.responses = OpenAIResponsesProvider()
         self.chat_completions = OpenAIChatCompletionsProvider()
-        self.copilot = None
 
     def _provider(self, profile: ModelProfileConfig) -> ModelProvider:
-        if profile.api_type == "github-copilot":
-            if self.copilot is None:
-                raise ModelProviderError("GitHub Copilot is not configured.")
-            return self.copilot
         return self.chat_completions if profile.api_type == "chat-completions" else self.responses
 
     def probe(self, profile, api_key):
